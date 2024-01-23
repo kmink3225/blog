@@ -1,6 +1,6 @@
 ---
 title: "Data Share"
-subtitle: DAG Creation, Bash Operator, Task Performance Subject, 
+subtitle: Python Operator with Xcom, Bash Operator with Xcom, Xcom between Python Operator and Bash Operator, Xcom between Python Operator and Email Operator, Global Share Variable 
 description: |
   template
 categories:
@@ -33,18 +33,19 @@ draft: False
 
 ::: {#Korean .tab-pane .fade .show .active role="tabpanel" aria-labelledby="Korean-tab"}
 
-# Python 오퍼레이터 With Xcom
-
-## Xcom Definition
+# Xcom Definition
 
 * Xcom stands for Cross Communication.
-* Airflow DAG 안 Task 간 데이터 공유를 위해 사용되는 기술 (Dag 안에 있는 task끼리만 data 공유)
-    * 예를 들여, Task1의 수행 중 내용이나 결과를 Task2에서 사용 또는 입력으로 주고 싶은 경우
+* Airflow DAG 안 Task 간 작은 데이터 (or Message) 공유를 위해 사용되는 기술 (1개의 Dag 안에 있는 task끼리만 data 공유)
+    * 예를 들어, Task1의 수행 중 내용이나 결과를 Task2에서 사용 또는 입력으로 주고 싶은 경우
+    * task1 은 push, task2는 pull과 같은 tasks간 데이터 공유에 유용
 * 주로 작은 규모의 데이터 공유를 위해 사용
-    * Xcom 내용은 메타 DB의 xcom 테이블에 값이 저장됨
+    * Xcom 내용은 meta DB의 Xcom 테이블에 값이 저장됨    
     * 1GB 이상의 대용량 데이터 공유를 위해서는 외부 솔루션 사용 필요 (AWS의 S3, GCP의 GCS, HDFS (Hadoop File System) 등)
 
-# Python 오퍼레이터에서 Xcom 사용하기
+# Python 오퍼레이터 With Xcom
+
+## Python 오퍼레이터에서 Xcom 사용하기
 
 * 크게 두 가지 방법으로 Xcom 사용 가능
     1. **kwargs에 존재하는 ti (task_instance) 객체 활용
@@ -78,6 +79,19 @@ draft: False
         * key값과 task_ids둘다 줘야할 때
             * key값이 중복되는 xcom_push를 한 task가 여러 개 있을 때 
             선택적으로 원하는 task의 data를 가지고 오고 싶으면 해당 task의 task_ids를 명시적으로 적어줘야한다.
+        * 예를 들어,
+        ```markdown
+        # 5개의 tasks 존재하는
+        # task1: xcom_push(key='result1'...)
+        # task2: xcom_push(key='result1'...)
+        # task3: xcom_push(key='result2'...)
+        # task4: xcom_pull(key='result1'...)
+        # task5: xcom_pull(key='result1',task_ids=...)
+        ```
+        * task4가 수행이 될때 task1의 xcom을 가져우는게 아니라 가장 최신에 수행된 task2의 xcom을 가져오게 된다.
+        * task1의 xcom을 가지고 오고 싶을땐 task5와 같이 task1의 task_id를 task5의 task_ids에 명시해주면 된다.
+        * 가장 안전한 방법은 task의 key값과 task_ids를 명시적으로 적어주는 것이다. 아니면 tasks의 key값을 절대 중복이 되지않도록 적어주는 것이다.
+
     2. 파이썬 함수의 return 값 활용 
         * (1안)
         ```markdown
@@ -89,19 +103,21 @@ draft: False
         def xcom_pull_by_return(status, **kwargs):
             print(status)
         xcom_pull_by_return(xcom_push_by_return()) 
-        # xcom을 이용한 task의 flow 정해주는 또 다른 방식
-        # 암묵적인 task의 순서: xcom_push_by_return() >> xcom_pull_by_return()
-        # 위의 스크립트에서 xcom_pull() 또는 xcom_push()가 명시적으로 쓰이진 않았지만
-        # airflow에서는 **Task 데커레이터 사용시** 함수 입력/출력 관계만으로 
-        # Task flow 정의가 되고 custom 함수가 return을 하게 되면 자동으로 xcom에 data가 올라가게 된다.
         ```
+        * xcom을 이용한 task의 flow 정해주는 또 다른 방식
+        * 암묵적인 task의 순서: xcom_push_by_return() >> xcom_pull_by_return()
+        * 위의 스크립트에서 xcom_pull() 또는 xcom_push()가 명시적으로 쓰이지진 않았지만 airflow에서는 **Task 데커레이터 사용시** 함수 입력/출력 관계만으로 Task flow 정의가 된다. 즉, `xcom_pull_by_return(xcom_push_by_return()) ` = `xcom_push_by_return() >> xcom_pull_by_return() `
+        * **Task 데커레이터 사용시** custom 함수가 return을 하게 되면 자동으로 xcom에 data가 올라가게 된다.
+
         * (2안)
         ```markdown    
+
         @task(task_id='xcom_push_by_return')
         def xcom_push_return(**kwargs):
             transaction_value = 'status Good'
             return transaction_value
             # return 한 값은 자동으로 xcom에 key='return_value', task_ids=task_id 로 저장됨
+
         @task(task_id='xcom_pull_by_return')
         def xcom_pull_return_by_method(**kwargs):
             ti = kwargs['ti']
@@ -109,9 +125,11 @@ draft: False
             # ti.xcom_pull()을 이용하여 return 한 값을 꺼낼 때는 key를 명시하지 않아도 됨. (자동으로 key=return_value 를 찾음)
             # task_ids='xcom_push_by_return' return한 Task가 여러개 있을 때는 task_ids 를 지정
             print(pull_value)
+
         xcom_push_by_return() >> xcom_pull_by_return() # 2안에서는 task flow를 명시적으로 적어줘야함.
         ```
-        * 1안 DAG Full Exmaple
+* DAG Full Example
+    * 1안 DAG Full Exmaple
         ```markdown
         from airflow import DAG
         import pendulum
@@ -150,7 +168,7 @@ draft: False
             # 암묵적인 task flow는
             # xcom_push_result >>[xcom_pull_2, xcom_pull_1] 형태임
         ```
-        * 2안 DAG Full Example
+    * 2안 DAG Full Example
         ```markdown
         from airflow import DAG
         import pendulum
