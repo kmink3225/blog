@@ -338,14 +338,13 @@ SimpleHttp 오퍼레이터를 이용하여 공공데이터 키 발급받기
     * 유니폼 인터페이스(Uniform Interface): REST API는 표준화된 방법을 사용하여 서버의 리소스에 접근. 이는 HTTP 메서드를 활용하는데, 예를 들어 GET(읽기), POST(생성), PUT(수정), DELETE(삭제) 등이 있다.
     * 리소스 기반: REST API에서 '리소스'는 웹에서의 객체, 데이터 또는 서비스를 의미하며, 각 리소스는 고유한 URI(Uniform Resource Identifier)를 통해 식별됨.
   :::
-
   * SimpleHttpOperator를 이용해서 RestAPI를 호출
   * http://localhost:8080/provider/apache-airflow-providers-http 에서  [오퍼레이터 명세 확인하기](https://airflow.apache.org/docs/apache-airflow-providers-http/4.3.0/)
   * [python API click](https://airflow.apache.org/docs/apache-airflow-providers-http/4.3.0/_api/airflow/providers/http/index.html)
     * [http Operator click](https://airflow.apache.org/docs/apache-airflow-providers-http/4.3.0/_api/airflow/providers/http/operators/http/index.html) 의 자주 쓰는 parameters
       * http_conn_id (str) – The http connection to run the operator against: full url의 '**~.com**/나머지' 의 **~.com** 을 넣어줌
       * endpoint (str | None) – The relative part of the full url. (templated): full url의 '~.com/**나머지**' 의 **나머지**를 넣어줌
-      * method (str) – The HTTP method to use, default = “POST”: http의 4개 methods
+      * method (str) – The [HTTP method](../web/http_method.qmd) to use, default = “POST”: http의 4개 methods
         * GET: data 가져오기
         * POST: data insert
         * PUT: data 변경/update
@@ -369,11 +368,11 @@ SimpleHttp 오퍼레이터를 이용하여 공공데이터 키 발급받기
   * airflow web service >> Admin >> Plus button
   * Conn_id: 다른 conn 이름과 중복되지 않게 string으로 작성
 * Connection_type: HTTP
-* Host: openapi.seoul.go.kr
+* Host: openapi.seoul.go.kr (Open Data 명세를 보고 적음. http://openapi.seoul.go.kr:8088/(key:인증키)/(type)/(servicec)/(type)/(start_index)/(end_index)/(main_key 혹은 날짜) 중에서 **openapi.seoul.go.kr** 만 적으면 됨 )
 * token값에 의해 인증되는 방식이기 때문에 schema/login/password 필요없음
 * Port: 8088
 * Test 버튼 클릭시 “405:Method Not Allowed” 가 뜨지만 무방함
-
+![connection_registration](../../../../../images/airflow/connection_registration.PNG)
 
 ## SimpleHttpOperator 작성
 
@@ -383,7 +382,7 @@ with DAG(...) as dag:
   tb_cycle_station_info = SimpleHttpOperator(
     task_id ='tb_cycle_station_info',
     http_conn_id = 'openapi.seoul.go.kr',
-    endpoint ='{{var.value.apikey_openpai_seoul_go_kr}}/json/SebcKoreanRestaurantsKor/1/1000/',
+    endpoint ='{{var.value.apikey_openpai_seoul_go_kr}}/json/ListExhibitionOfSeoulMOAInfo/1/1000/',
     method ='GET',
     headers ={'Content-Type: 'application/json',
               charset': 'utf-8',
@@ -394,11 +393,11 @@ with DAG(...) as dag:
 
 ### DAG에 실제 API key값을 작성하면 문제가 되는 이슈
 
-* SimpleHttpOperator를 1000개의 DAGs 에 작성했는데 API 키가 바뀐다면?
+* SimpleHttpOperator를 1000개의 DAGs 에 작성했는데 API 키가 바뀐다면 1000개의 스크립트를 다 바꿔줘야하나?
 * DAG에다가 바로 인증키를 복붙하면 다른 사람들도 API키를 볼 수 있어 보안상의 문제가 될 수 있다.
 * 위의 2가지 문제를 해결하기 위해 global variable을 이용하여 적을 것.
   * API key를 variable을 이용하여 등록: airflow web service >> admin >> Variables
-    * key:value형태로 등록 가능
+    * key:value 형태로 등록 가능
     * 관리자가 DB에 들어가면 API Key값 볼 수 있음
 * Key에 아래 이름이 있을 경우 val 을 자동 마스킹처리하여 보여줌
   * 'access_token',
@@ -414,6 +413,48 @@ with DAG(...) as dag:
 * global variable 설정하면
   * 서울시 공공데이터 추출하는 DAG 이 여러 개 있어도 API 키를 하나로 관리 가능
   * API 키를 코드에 노출시키지 않음
+* DAG Full Example
+
+```markdown
+# Package Import
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from airflow.providers.http.operators.http import SimpleHttpOperator
+from airflow.decorators import task
+import pendulum
+
+with DAG(
+    dag_id='dags_simple_http_operator',
+    start_date=pendulum.datetime(2023, 4, 1, tz='Asia/Seoul'),
+    catchup=False,
+    schedule=None
+) as dag:
+
+    '''서울시립 전시 정보'''
+    seoul_exhibition_info = SimpleHttpOperator(
+        task_id='seoul_exhibition_info',
+        http_conn_id='openapi.seoul.go.kr',
+        endpoint='{{var.value.apikey_openapi_seoul_go_kr}}/json/ListExhibitionOfSeoulMOAInfo/1/1000/',
+        method='GET',
+        headers={'Content-Type': 'application/json',
+                        'charset': 'utf-8',
+                        'Accept': '*/*'
+                        }
+    )
+
+    # 이 task는 seoul_exhibition_info가 xcom 에 넣었던 data를 빼오는 것
+    @task(task_id='python_2')
+    def python_2(**kwargs):
+        ti = kwargs['ti']
+        rslt = ti.xcom_pull(task_ids='seoul_exhibition_info')
+        import json
+        from pprint import pprint
+
+        pprint(json.loads(rslt))
+        
+    seoul_exhibition_info >> python_2()
+
+```
 
 # Custom 오퍼레이터 만드는 방법
 
