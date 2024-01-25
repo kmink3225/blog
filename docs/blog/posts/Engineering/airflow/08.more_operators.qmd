@@ -559,7 +559,6 @@ hello_task=HelloOperator(
 * 이런 메카니즘으로, 생성자에 `task_id`를 명시해서 적어줄 필요 없음
 * 그리고, 가지고 온 `name`값을 `self.name`에 할당
 
-
 ![Airflow Custom Operator Example](../../../../../images/airflow/custom_operator.PNG)
 
 # Custom 오퍼레이터 개발
@@ -573,20 +572,34 @@ class SeoulApiToCsvOperator(BaseOperator):
   template_fields = (' endpoint', ' path','file_ name','base_dt')
   
   def __init__(self , dataset_nm , path , file_name , base_dt=None , **kwargs):
-    #  dataset_nm , path , file_name , base_dt를 user로부터 받음
+    # 생성자의 인자s: dataset_nm , path , file_name , base_dt를 user로부터 받겠다는 것을 명시
     super().__init__(**kwargs)
-    self.http_conn_id = 'openapi.seoul.go.kr' #hard coding
+    self.http_conn_id = 'openapi.seoul.go.kr' #hard coding: 무조건 이 값을 사용
     self.path = path
     self.file_name = file_name
-    self.endpoint = '{{var.value.apikey_openapi_seoul_go_kr}}/json/' + datset_nm
+    self.endpoint = '{{var.value.apikey_openapi_seoul_go_kr}}/json/' + datset_nm # template 문법 적용하여 variable 값을 호출
     self.base_dt =base_dt
-    # template 문법이 적용될 수 있도록 self.path 을 path로, 
-    # self.file_name을 file_name로 
-    # self.endpoint 을 '{{var.value.apikey_openapi_seoul_go_kr}}/json/' + datset_nm로,
-    # self.base_dt을 base_dt로 지정
+    # template 문법이 적용될 수 있도록 self.path 을 path로, self.file_name을 file_name로, self.endpoint 을 '{{var.value.apikey_openapi_seoul_go_kr}}/json/' + datset_nm로, self.base_dt을 base_dt로 지정
 ```
-* dag full example
+* 위의 생성자에 들어갈 parameters 의 갯수는 operator 객체를 만들때 입력받아야 하는 인자들을 의미한다. 
+* 예를 들어, 아래와 같이 클래스 object를 생성해서 아래의 4가지 인자만 입력받아도 task는 생성이 된다.
+  * `task_id`는 `__init__()`의 `**kwars`에 할당
+  * `dataset_nm`은 `__init__()`의 `dataset_nm`에 할당
+  * `path`는 `__init__()`의 `path` 에 할당
+  * `file_name`은 `__init__()`의 `file_name`에 할당
+  * `base_dt`는 `none`으로 되어있기 때문에 값을 입력안해줘도 되고 값을 입력해주면 `__init__()`의 `base_dt`에 할당됨
 
+  ```markdown
+  seoul_task = SeoulApiToCsvOperator(
+    task_id='xxxx',
+    dataset_nm='xxxx',
+    path='xxxx',
+    file_name='xxxx'
+  )
+  ```
+
+* Class full example
+  * 위치: `airflow/plugins/operators/seoul_api_to_csv_operator.py`
 ```markdown
 from airflow.models.baseoperator import BaseOperator
 from airflow.hooks.base import BaseHook
@@ -608,11 +621,16 @@ class SeoulApiToCsvOperator(BaseOperator):
     url:8080/endpoint
     endpoint=apikey/type/dataset_nm/start/end
     즉, url:8080/apikey/type/dataset_nm/start/end 로 줬어야 했다.
+    execute logic의 concept
+     - 모든 데이터를 다 가져와야 함
+     - seoul open api양식에 맞게 데이터의 시작행과 끝행 입력하는 번거러움을 없앰    
     '''
         import os
         
-        connection = BaseHook.get_connection(self.http_conn_id)
-        self.base_url = f'http://{connection.host}:{connection.port}/{self.endpoint}'
+        connection = BaseHook.get_connection(self.http_conn_id) #airflow webservice ui 화면에서 만들었던 connection 정보를 get_connection()로 가져올 수 있음
+        self.base_url = f'http://{connection.host}:{connection.port}/{self.endpoint}' #connection.host & connection.port: user가 입력했던 host와 port정보 호출
+
+        # 데이터의 start행과 end행 처리는 아래의 while loop으로 처리
 
         total_row_df = pd.DataFrame()
         start_row = 1
@@ -625,10 +643,11 @@ class SeoulApiToCsvOperator(BaseOperator):
             if len(row_df) < 1000:
                 break
             else:
-                start_row = end_row + 1
-                end_row += 1000
-
-        if not os.path.exists(self.path):
+                start_row = end_row + 1 #1, 1001, 2001, ...
+                end_row += 1000 #1000, 2000, 3000, ...
+        
+        # len(row_df)가 1000 미만이면 데이터 다 받은 것 아래의 조건문을 탐
+        if not os.path.exists(self.path): #directory 유/무검사
             os.system(f'mkdir -p {self.path}')
         total_row_df.to_csv(self.path + '/' + self.file_name, encoding='utf-8', index=False)
 
@@ -640,12 +659,14 @@ class SeoulApiToCsvOperator(BaseOperator):
                    'charset': 'utf-8',
                    'Accept': '*/*'
                    }
+        
+        #요청할 url 주소 완성
+        request_url = f'{base_url}/{start_row}/{end_row}/' 
 
-        request_url = f'{base_url}/{start_row}/{end_row}/'
         if self.base_dt is not None:
             request_url = f'{base_url}/{start_row}/{end_row}/{self.base_dt}'
-        response = requests.get(request_url, headers) # response는 dictionary형태의 string으로 들어옴
-        contents = json.loads(response.text) # json.loads() string이 dictionary로 반환됨
+        response = requests.get(request_url, headers) # request library의 get함수 사용. response는 dictionary형태의 string으로 들어옴
+        contents = json.loads(response.text) # json.loads()이 string을 dictionary로 반환함. 즉 contents에는 dictionary type
 
         key_nm = list(contents.keys())[0]
         row_data = contents.get(key_nm).get('row')
@@ -654,6 +675,95 @@ class SeoulApiToCsvOperator(BaseOperator):
         return row_df
 
 ```
+
+* dictionary data example: 1행
+  * key: 'ListExhibitionOfSeoulMOAInfo'
+  * value: {'RESULT': {'CODE': 'INFO-000',...}}
+  * `key_nm = list(contents.keys())[0]`의 값은 `'ListExhibitionOfSeoulMOAInfo'`
+  * `row_data = contents.get(key_nm).get('row')` 은 `key_nm`의 value 호출. 이것은 다시 dictionary type이기 때문에 다시 key값 `row`에 해당되는 값을 호출
+  * 그 다음 데이터프래임으로 만듦
+
+```markdown
+{'ListExhibitionOfSeoulMOAInfo': {'RESULT': {'CODE': 'INFO-000',
+                                             'MESSAGE': '정상 처리되었습니다'},
+                                  'list_total_count': 738,
+                                  'row': [{'DP_ARTIST': '박미나, Sasa[44]',
+                                           'DP_ART_CNT': '180여 점',
+                                           'DP_ART_PART': '회화, 설치, 아카이브, 사운드, '
+                                                          '영상 등',
+                                           'DP_DATE': '2024-01-24',
+                                           'DP_END': '2024-03-31',
+                                           'DP_EVENT': '',
+                                           'DP_EX_NO': '1255383',
+                                           'DP_HOMEPAGE': 'https://semaaa.seoul.go.kr/front/main.do',
+                                           'DP_INFO': '<p>《이력서: 박미나와 '
+                                                      'Sasa[44]》는 사물과 정보를 '
+                                                      '조사-수집-분석하는 방법론을 발전시켜 온 '
+                                                      '박미나와 Sasa[44]의 2인전입니다. '
+                                                      '두 작가는 2002년 첫 협업 전시를 '
+                                                      '시작으로 생산과 소비, 원본과 복제의 전후 '
+                                                      '관계에 대한 문제의식을 공유했고, '
+                                                      '현재까지도 실험적 관계 설정을 통해 개인 '
+                                                      '작업과 공동 작업을 병행하고 있습니다. '
+                                                      '이번 전시는 박미나와 Sasa[44]가 '
+                                                      '지난 20여 년간 따로, 또 함께 선보인 '
+                                                      '전시와 그 기록들을 이력서의 형식을 빌려 '
+                                                      '하나의 전시로 '
+                                                      '재구성합니다.</p><p><br></p><p>이력서는 '
+                                                      '한 사람이 거쳐 온 학업, 직업, 경험 등 '
+                                                      '개인의 활동을 기록하는 문서의 양식입니다. '
+                                                      '개인의 경험은 사회적 인식을 반영하는 '
+                                                      '항목에 맞춰 정보로 조직되고, 타인에게 '
+                                                      '나의 공적 서사를 전시하는 수단으로 '
+                                                      '쓰입니다. 이력서가 정보를 구조화하는 '
+                                                      '하나의 체계이듯, 박미나와 '
+                                                      'Sasa[44]는 자료 수집과 조사 연구를 '
+                                                      '기반으로 자신들의 작업 세계를 직조하는 '
+                                                      '체계적인 방법론을 설계해왔습니다. 박미나가 '
+                                                      '회화의 색채를 물감 유통 체계와 연결 짓고 '
+                                                      '회화의 동시대적 조건을 탐구한다면, '
+                                                      'Sasa[44]는 시대의 지표가 되는 각종 '
+                                                      '자료를 수집하고 피처링, 샘플링, 매시업 '
+                                                      '등 대중음악의 방법을 전유해 새로운 의미의 '
+                                                      '층위를 '
+                                                      '발생시킵니다.</p><p><br></p><p>전시는 '
+                                                      '이력서의 양식에 따라 ‘전시 이력’과 '
+                                                      '‘참고문헌’으로 나뉩니다. ‘전시 '
+                                                      '이력’에서는 박미나와 Sasa[44]의 '
+                                                      '주요 전시를 가로지르며 초기작과 대표작, '
+                                                      '미발표작 140여 점을 살펴볼 수 '
+                                                      '있습니다. 각각의 작업들은 과거의 전시와 '
+                                                      '현재를 매개하는 장치이면서, 작업 간의 '
+                                                      '연계를 강조하는 분류와 배치에 의해 새로운 '
+                                                      '의미를 드러냅니다. ‘참고문헌’은 '
+                                                      '2001년부터 2022년까지 발행된 국내외 '
+                                                      '신문, 잡지 등의 연속간행물 중 박미나와 '
+                                                      'Sasa[44]가 언급된 1,259개의 '
+                                                      '기사를 수집하여 한 권의 책과 사운드 '
+                                                      '작업으로 재구성하였습니다. 이 전시는 '
+                                                      '박미나와 Sasa[44]의 작업 세계를 '
+                                                      '경유하여 수집과 아카이브, 기록의 의미를 '
+                                                      '탐구하고 새로운 방식으로 자료 수집과 '
+                                                      '연구의 과정을 포착해 보려는 '
+                                                      '시도입니다.</p>',
+                                           'DP_LNK': 'https://sema.seoul.go.kr/kr/whatson/exhibition/detail?exNo=1255383',
+                                           'DP_MAIN_IMG': 'http://sema.seoul.go.kr/common/imageView?FILE_PATH=%2Fex%2FEXI01%2F2023%2F&FILE_NM=20231226080317_f421712f05eb4e75a9e63d0de2a61f8b_2b1155dcb3954a43b4cc090868e3f111',
+                                           'DP_NAME': '이력서: 박미나와 Sasa[44]',
+                                           'DP_PLACE': '서울시립 미술아카이브',
+                                           'DP_SEQ': '000738',
+                                           'DP_SPONSOR': '서울시립미술관',
+                                           'DP_START': '2023-12-21',
+                                           'DP_SUBNAME': '',
+                                           'DP_VIEWCHARGE': '',
+                                           'DP_VIEWPOINT': '',
+                                           'DP_VIEWTIME': ''}]}}
+```
+
+
+# DAG Full Example
+
+* COVID19 data download
+* `seoul_api_to_csv_operator.py` 에서 class 상속 받아 custom operator 생성
 
 ```mardkown
 
@@ -671,7 +781,7 @@ with DAG(
     tb_corona19_count_status = SeoulApiToCsvOperator(
         task_id='tb_corona19_count_status',
         dataset_nm='TbCorona19CountStatus',
-        path='/opt/airflow/files/TbCorona19CountStatus/{{data_interval_end.in_timezone("Asia/Seoul") | ds_nodash }}',
+        path='/opt/airflow/files/TbCorona19CountStatus/{{data_interval_end.in_timezone("Asia/Seoul") | ds_nodash }}', # worker container 위치, files directory를 worker container와 연결시켜줘야함
         file_name='TbCorona19CountStatus.csv'
     )
     
@@ -699,6 +809,53 @@ with DAG(
     - ${AIRFLOW_PROJ_DIR:-.}/airflow/files:/opt/airflow/files
   ```
   * 실행 날짜로 저장된 directory명안에 csv를 vi editor로 열고 `se nu` 명령어로 건수를 확인
+
+# dags_seoul_api_corona.py error
+
+```markdown
+[2024-01-25, 10:57:24 UTC] {taskinstance.py:1824} ERROR - Task failed with exception
+Traceback (most recent call last):
+  File "/opt/airflow/plugins/operators/seoul_api_to_csv_operator.py", line 38, in execute
+    total_row_df.to_csv(self.path + '/' + self.file_name, encoding='utf-8', index=False)
+  File "/home/airflow/.local/lib/python3.7/site-packages/pandas/core/generic.py", line 3482, in to_csv
+    storage_options=storage_options,
+  File "/home/airflow/.local/lib/python3.7/site-packages/pandas/io/formats/format.py", line 1105, in to_csv
+    csv_formatter.save()
+  File "/home/airflow/.local/lib/python3.7/site-packages/pandas/io/formats/csvs.py", line 243, in save
+    storage_options=self.storage_options,
+  File "/home/airflow/.local/lib/python3.7/site-packages/pandas/io/common.py", line 707, in get_handle
+    newline="",
+FileNotFoundError: [Errno 2] No such file or directory: '/opt/airflow/files/TbCorona19CountStatus/20240125/TbCorona19CountStatus.csv'
+[2024-01-25, 10:57:24 UTC] {taskinstance.py:1350} INFO - Marking task as FAILED. dag_id=dags_seoul_api_corona, task_id=tb_corona19_count_status, execution_date=20240125T105722, start_date=20240125T105724, end_date=20240125T105724
+[2024-01-25, 10:57:24 UTC] {standard_task_runner.py:109} ERROR - Failed to execute job 493 for task tb_corona19_count_status ([Errno 2] No such file or directory: '/opt/airflow/files/TbCorona19CountStatus/20240125/TbCorona19CountStatus.csv'; 33640)
+[2024-01-25, 10:57:24 UTC] {local_task_job_runner.py:225} INFO - Task exited with return code 1
+[2024-01-25, 10:57:24 UTC] {taskinstance.py:2651} INFO - 0 downstream tasks scheduled from follow-on schedule check
+```
+
+* `FileNotFoundError: [Errno 2] No such file or directory: '/opt/airflow/files/TbCorona19CountStatus/20240125/TbCorona19CountStatus.csv'` 발생시 
+* csv를 저장하려는데 저장할 디렉토리가 없어서 발생하는 에러:  `seoul_api_to_csv_operator` 파일의 36번째 라인에서 디렉토리를 미리 생성할 수 있도록 하고 있는데, 저 명령이 제대로 실행이 안됐을 가능성이 있음.
+* 저 명령문이 진짜 제대로 실행되지 않았는지 확인해보기 위해 dag 수행 후 실패가 발생했을때 worker 컨테이너 안에 들어가서 /opt/airflow/files/TbCorona19CountStatus/{연월일} 디렉토리가 잘 생성됐는지 확인해야함. 
+* 저 디렉토리가 없다면 36번째 라인이 제대로 실행되지 않은 것
+* 워커 컨테이너로 들어가는 것은 wsl 터미널에서 `sudo docker exec -it {worker컨테이어id} bash` 치면 들어갈 수 있음
+* 실행 결과 `TbCorona19CountStatus` directory 없음
+  ![os.system(f'mkdir -p {self.path}') error](../../../../../images/airflow/seoul_api_to_csv_operator.py_error.PNG)
+```markdown
+default@436d1afa88b7:/opt/airflow$ ls -al
+total 104
+drwxrwxr-x  1 airflow root  4096 Jan 24 23:07 .
+drwxr-xr-x  1 root    root  4096 May 16  2023 ..
+-rw-r--r--  1 default root     2 Jan 24 23:07 airflow-worker.pid
+-rw-------  1 default root 58175 Jan 24 23:07 airflow.cfg
+drwxr-xr-x  2 root    root  4096 Jan 18 05:52 config
+drwxr-xr-x  3 default root  4096 Jan 25 10:54 dags
+drwxr-xr-x  0 root    root     0 Jan 18 05:52 files
+drwxr-xr-x 27 default root  4096 Jan 25 10:57 logs
+drwxr-xr-x  7 default root  4096 Jan 18 05:49 plugins
+-rw-rw-r--  1 default root  4771 Jan 24 23:07 webserver_config.py
+```
+* `drwxr-xr-x  0 root    root     0 Jan 18 05:52 files` files에 root 권한이 있다. `/opt/airflow` 아래의 `files` 디렉토리의 owner가 root 권한으로 만들어져있다. `dags`나 `plugins` 같은 다른 디렉토리의 owner는 default 인데 files 만 root로 만들어진 이유는 아마도 WSL터미널에서 `files` 디렉토리를 생성할 때 `sudo mkdir files` 명령으로 만들었을 것. `sudo` 를 붙이면 root 권한을 빌려 만들면 `files` 디렉토리는 root owner 에 root group으로 생성된다. 따라서 도커 컨테이너도 files 디렉토리를 root owner로 연결된다. `/opt/airflow/files` 디렉토리가 root owner 이니 `default uid(1000)` 로는 권한이 없어서 디렉토리 생성이 불가능
+* WSL 터미널에서 `files` 디렉토리를 지우고 `sudo` 없이 그냥 `mkdir files` 디렉토리를 만들면됨.
+
 
 ## Summary
 
