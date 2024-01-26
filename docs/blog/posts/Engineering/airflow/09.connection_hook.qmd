@@ -327,6 +327,7 @@ volumes:
 * 고정 IP를 할당하려면 networks를 만들어서 할당해야 함.
 * networks 를 지정하지 않은 컨테이너들(airflow를 설치하면서 기본적으로 설치되는 containers)은 default network에 묶이게 됨
 * 따라서 동일 네트워크에 두고 싶은 컨테이너들은 모두 동일 netwworks 할당 필요
+* 기존 containers와 custom container를 모두 custom networks를 바라보게 지정 필요
 
 ```markdown
 networks:
@@ -406,7 +407,7 @@ networks:
   5c1f555d034f   none                     null      local
   ```
   * worker container는 "NetworkID": "eb43aaa125bcf1aac0fd512057de947abafd9397dd0d51cf7f49582c8c7d5eb9" 에서 앞 부분이 eb43aaa125bc 이기 때문에 airflow_network_custom을 사용하는 것을 볼 수 있다. (networks 지정 전에는 default에 있음)
-  * 원래 default network는 IP를 172.19.xxx.xxx 대역을 쓰기 때문에 network custom에서는 안전하게 172.29.xxx.xxx IP 주소가 충돌이 되지 않도록 29로 설정한다. 
+  * 원래 default network는 IP를 172.19.xxx.xxx 대역을 쓰기 때문에 networkd대역을 만들때는 179.19대역은 피해야 한다. network custom에서는 안전하게 172.29.xxx.xxx IP 주소가 충돌이 되지 않도록 29로 설정한다. 
 * Volume 현황 보기 : `sudo docker volume ls`
   ```markdown
   DRIVER    VOLUME NAME
@@ -522,7 +523,7 @@ with DAG(
 
 * `psycopg2.connect(host=ip, dbname=dbname, user=user, password=passwd, port=int(port))` : DB server와의 연결 (Session)
   * session: TCP/IP 기반의 connection
-* conn session에서 sql을 이용한 구체적인 query 내용은 두 번째 with문에서 기술
+* conn session (con object)에서 sql을 이용한 구체적인 query 내용은 두 번째 with문에서 기술
   ```markdown
    with closing(conn.cursor()) as cursor:
                 dag_id = kwargs.get('ti').dag_id # task instance object 에서 dag_id (property) 호출
@@ -533,10 +534,10 @@ with DAG(
                 cursor.execute(sql,(dag_id,task_id,run_id,msg))
                 conn.commit()
   ```
-    * cursor: client(worker)와 DB서버(container) 사이의 session안에서 client에서 query를 날리고 DB서버로부터 결과를 가져와주는 object. 그러므로 cursor (=conn.cursor())가 없으면 query 수행을 못함
+    * cursor: client(python로직을 호출하는 worker container)와 DB서버(container) 사이의 session(client와 DB 서버와의 connection 역할)안에서 client에서 query를 날리고 DB서버로부터 결과를 가져와주는 object. cursor에서 sql 수행. 그러므로 cursor (=conn.cursor())가 없으면 query 수행을 못함
     * `cursor.execute(sql,(dag_id,task_id,run_id,msg))` 실제 sql 실행하는 부분
-    * `py_opr_drct_insrt values` : 테이블 이름
-    * `values (%s,%s,%s,%s)` 4개의 값 binding
+    * `py_opr_drct_insrt` : 테이블 이름
+    * `values (%s,%s,%s,%s)` 4개의 값 binding: `dag_id`, `task_id`, `run_id`, `msg`. 즉, `cursor.execute(sql,(dag_id,task_id,run_id,msg))`의 dag_id,task_id,run_id,msg 과 연결
 * conn이 끝나면 첫 번째 with문의 closing()이 session을 닫아줌
 * 위의 코드가 아래의 코드와 같은 내용임
   ```markdown
@@ -772,6 +773,7 @@ with DAG(
 
 ::::
 
+* 왼쪽과 오른쪽 `conn` 객체와 `cursor`는 사실상 같음. 단지 만들어지는 과정만 달라짐.
 *  `op_args=['172.28.0.3', '5432', 'kmkim', 'kmkim', 'kmkim']` 와 같은 보안 사항이 오른 쪽 코드에서는 `op_kwargs={'postgres_conn_id':'conn-db-postgres-custom'}` 가려지게 된다.
 
 # Postgres Hook 으로 bulk_load 하기
