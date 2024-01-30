@@ -47,23 +47,27 @@ draft: False
 
 * Bases: airflow.models.baseoperator.BaseOperator, airflow.models.skipmixin.SkipMixin
   Sensor operators are derived from this class and inherit these attributes. Sensor operators keep executing at a time interval and succeed when a criteria is met and fail if and when they time out.
+  base operator를 상속했음.
 * parameter
-    * poke_interval (float) – Time in seconds that the job should wait in between each try: 특정 조건이 만족하는지 체크하는 주기로 초단위로 입력하면 된다. 60 = 1mins
-    * timeout (float) – Time, in seconds before the task times out and fails. task가 계속 false 가 나올때 task failure 로 규정할 maximum 시간 초단위로 입력. 보통 daily dag을 많이 만드므로 timeout도 보통 24시간 으로 입력한다. ex) 60*60*24
+    * poke_interval (float) – Time in seconds that the job should wait in between each try: sensor task의 특정 조건이 만족하는지 체크하는 주기로 **초단위**로 입력하면 된다. 60 = 1mins 은 1분 단위로 체크
+    * timeout (float) – Time, in seconds before the task times out and fails. task가 계속 false 가 나올때 task failure 로 규정할 maximum 시간. 초단위로 입력. 보통 daily dag을 많이 만드므로 timeout도 보통 24시간 으로 입력한다. ex) 60*60*24 (=24 시간)
     * soft_fail (bool) – Set to true to mark the task as SKIPPED on failure. timeout을 만났을 때 sensor task fail로 marking하지 말고 skip으로 marking하도록 설정
-    * mode (str) (**중요**) – How the sensor operates. Options are: { poke | reschedule }, default is poke. When set to poke the sensor is taking up a worker slot for its whole execution time and sleeps between pokes. Use this mode if the expected runtime of the sensor is short or if a short poke interval is required. Note that the sensor will hold onto a worker slot and a pool slot for the duration of the sensor’s runtime in this mode. When set to reschedule the sensor task frees the worker slot when the criteria is not yet met and it’s rescheduled at a later time. Use this mode if the time before the criteria is met is expected to be quite long. The poke interval should be more than one minute to prevent too much load on the scheduler.
+    * mode (str) (**중요**) – How the sensor operates. 'poke' 아니면 'reschedule' 로만 값을 넣을 수 있음. 중요하기 때문에 아래에서 따로 설명.
+      **Options are: { poke | reschedule }**, default is poke. When set to poke the sensor is taking up a worker slot for its whole execution time and sleeps between pokes. Use this mode if the expected runtime of the sensor is short or if a short poke interval is required. Note that the sensor will hold onto a worker slot and a pool slot for the duration of the sensor’s runtime in this mode. When set to reschedule the sensor task frees the worker slot when the criteria is not yet met and it’s rescheduled at a later time. Use this mode if the time before the criteria is met is expected to be quite long. The poke interval should be more than one minute to prevent too much load on the scheduler.
     * exponential_backoff (bool) – allow progressive longer waits between pokes by using exponential backoff algorithm. sensor task를 체크하는 주기가 $2^n$ 으로 늘어지기 된다. 즉, 2초, 4초, 8초, $\ldots$
-    * max_wait (datetime.timedelta | float | None) – maximum wait interval between pokes, can be timedelta or float seconds. exponential_backoff가 true 일 때 홠성화 되며 exponential_backoff 의 상한선을 의미
+    * max_wait (datetime.timedelta | float | None) 
+      * maximum wait interval between pokes, can be timedelta or float seconds. 
+      * exponential_backoff가 true 일 때만 홠성화 되며 exponential_backoff 의 상한선을 의미
     * silent_fail (bool) – If true, and poke method raises an exception different from AirflowSensorTimeout, AirflowTaskTimeout, AirflowSkipException and AirflowFailException, the sensor will log the error and continue its execution. Otherwise, the sensor task fails, and it can be retried based on the provided retries parameter.
 * `poke(context)[source]`: Function defined by the sensors while deriving this class should override.
-  * 재정의 하지 않으면 error 발생
+  * poke method를 재정의 하지 않으면 error 발생하게 되어 있음
 
     ```markdown
     [docs]    def poke(self, context: Context) -> bool | PokeReturnValue:
             """Function defined by the sensors while deriving this class should override."""
             raise AirflowException("Override me.")
     ```
-* execute(self, context: Context): 재정의할 필요없음. 이미 정의가 되어 있음
+* execute(self, context: Context): 재정의할 필요없음. 이미 정의가 되어 있음. overiding된 poke함수의 값이 있어야 밑의 while loop를 탈출하게 되어 있음. 다시 말해서, `poke_return = self.poke(context)`이 false를 반환하게 되면 infinite loop. 결국 `poke()` 가 중요
   ```markdown
   [docs]    def execute(self, context: Context) -> Any:
         started_at: datetime.datetime | float 
@@ -99,7 +103,7 @@ draft: False
 
   | Comparison          | Poke Mode    | Reschedule Mode   |
   |---------------------|-----------------|:------------------------|
-  | 원리                | DAG이 수행되는 내내 Running Slot(task가 수행될 때 차지하는 공간) 을 차지. sensor가 특정 조건을 체킹할때나 안할때나 항상 slot 차지.  다만 Slot 안에서 Sleep, active 를 반복   | 센서가 조건을 체킹하는 동작 시기에만 Slot을 차지. 그 외에는 Slot을 점유하지 않음 |
+  | 원리                | DAG이 수행되는 내내 Running Slot(task가 수행될 때 차지하는 공간) 을 차지. sensor가 특정 조건을 체킹할때나 안할때나 항상 slot 차지.  다만 Slot 안에서 Sleep, active 를 반복   | 센서가 조건을 체킹하는 동작 시기에만 Slot을 차지. 그 외에는 Slot을 점유하지 않음. slot을 들어갔다 나왔다를 반복 |
   | Wait에서의 Task 상태 | running (airflow web ui 에서 task bar가 연두색)           | up_for_reschedule  (task bar가 민트색) |
   | 유리한 적용 시점 |  짧은 센싱 간격 (interval, 초 단위)    | 긴 센싱 간격, 주로 분 단위 Reschedule될 때 (5분, 10분) 스케줄러의 부하 발생 |
 
@@ -108,7 +112,7 @@ draft: False
     * 모든 operator로 만들어진 Task는 특정 Pool에서 수행되며 Pool은 Slot이라는 것을 가지고 있음.
     * 기본적으로 Task 1개당 Slot 1개를 점유하며 Pool을 지정하지 않으면 default_pool에서 수행
     ![Poke Mode vs Reschedule Mode](../../../../../images/airflow/poke.PNG)
-    * airflow web ui >> admin >> pools
+    * `airflow web service ui >> admin >> pools`
       * pool: pool name
       * slots: 128개의 공간
       * Running Slots, Queued Slots, Schedulued Slots.
