@@ -37,6 +37,8 @@ draft: False
 
 ## Dataset의 필요성
 
+DAG간의 의존관계를 설정할 때 TriggerDagRun 과 ExternalTask Sensor를 이용한다. 그런데 이 2가지 방법을 이용하면 관리가 복잡해진다. 이를 해결하기 위해 고안된 기술이 dataset을 이용하여 DAG간의 의존관계를 설정하는 것이다. 어떤 상황에서 DAG 관리가 복잡해지고 dataset을 이용하면 어떻게 관리의 효율성이 증가하는지 다음의 cases를 통해 알아보자. 
+
 * case 1
 
 :::: {.columns}
@@ -62,7 +64,8 @@ digraph G {
 }
 ```
 
-* 위의 경우를 Task_1 뿐만 아니라 DAG_B의 task_k 에도 선행 의존관계가 걸리도록 External Task 센서를 하나 달도록 개선
+* 왼쪽 그림(요구사항) 에서, task3가 TriggerDagRun operator 으로 만들어진 task라 가정한다. task3가 DAG C의 task x를 trigger 한다고 가정한다. 이 경우를 변경하여 Task_1 뿐만 아니라 DAG_B의 task_k 에도 선행 의존관계가 걸려야 한다고 가정한다. 그렇게 하기위해서 External Task 센서를 하나 달아 개선해야 한다는 상황이 있다고 가정한다. 결국, task1과 task k가 성공적으로 끝나야 task3가 수행되고 이어서 DAG C의 task3가 돌아가야 하는 상황
+
 :::
 
 ::: {.column width="50%"}
@@ -98,8 +101,10 @@ digraph G {
 ```
 
 :::
-
+* 오른쪽 그림(해결책)은 왼쪽 그림을 개선하고자 만든 DAG의 의존관계, task3는 제거되어야 한다. 대신, DAG C를 external task sensor를 추가하도록 수정한다. sensor task1은 task1을 수행이 되고 sensor task2가 taskk의 수행이 성공적으로 완료가 된 후에 이 두 sensor task들이 taskx를 수행하도록 개선해야 한다.
 ::::
+
+* 이렇게 DAG을 관리할 때 추가적인 DAG의 의존관계 설정을 해야할 때 추가적인 task들이 생기게 되는 요구사항을 해결해야할 때 오른쪽 그림과 같이 복잡한 workflow가 생기게 되는 case가 발생할 수 있다. 또 다른 case는 case2와 같다.
 
 * case 2
 
@@ -117,13 +122,19 @@ digraph G {
     task_4 [shape=box];
     label= "DAG A";
   }
+  subgraph cluster {
+    rankdir=TB;
+    task_y [shape=box];    
+   label= "DAG Y";
+ }
   task_1 -> task_3;
-  task_4
+  task_y;
+  task_4;
   
 }
 ```
 
-* 위의 경우, Task_1이 완료되면 또 다른 dag 을 trigger 되고 싶은데 DAG A 를 수정해야할 경우
+* 왼쪽 그림(요구사항)에서, Task_1이 완료되면 또 다른 dag 을 trigger 되고 싶은데 DAG A 를 수정해야 할 경우이다. 다시 말해서, task1이 완료되면 또 다른 dag Y의 task y를 trigger하는 TriggerDagRun task4를 만들어 주고 싶도록 dag A를 수정해야하는 상황. 즉, task y는 task 1 과 task 4가 성공적으로 완료되어야만 수행되도록 설정해주고 싶은 상황. 뿐만 아니라 DAG A에 지속적인 변경사항 있을시 계속 workflow를 수정해야하는 문제점이 있다. 
 :::
 
 ::: {.column width="50%"}
@@ -139,16 +150,25 @@ digraph G {
     task_4 [shape=box];
    label= "DAG A";
  }
+  subgraph cluster {
+    rankdir=TB;
+    task_y [shape=box];    
+   label= "DAG Y";
+ }
     task_1 -> task_3;
     task_1 -> task_4;
+    task_4 -> task_y;
 }
 ```
 
 :::
 
+* 오른쪽 그림이 개선된 workflow
+
 ::::
 
-* TriggerDagRun 오퍼레이터와 ExternalTask 센서를 많이 사용하다보면 연결관리 에 많은 노력이 필요 (강한 연결)
+* 이렇게, TriggerDagRun 오퍼레이터와 ExternalTask 센서를 많이 사용하다보면 아래 그림과 같이 연결관리에 많은 노력이 필요
+* 특히, ExternalTask은 execution_delta, 즉 data_interval_start 차이를 정확하게 연결해야 작동하도록 되어 있기 때문에 매우 강한 연결이 전제가 된다. 즉, parameter 중 일부가 안맞거나 틀리게 되면 제대로 sensing이 안됨
 
 ```{dot}
 digraph G {
@@ -173,7 +193,8 @@ digraph G {
 }
 ```
 
-* 큐시스템과 같이 Job 수행이 완료된 Task 는 Push 하고 센싱이 필요한 task 은 큐 시스템을 구독하는 방식을 쓴다면 ? (약한 연결)
+* 위와 같은 복잡하고 rigid한 workflow를 개선한 것이 dataset을 이용한 방식이다.   
+* 큐시스템과 같이 Job 수행이 완료된 Task 는 Push 하고 센싱이 필요한 task 은 큐 시스템을 구독하는 방식을 쓴다면 더 유연한 workflow가 생성될 수 있다. (약한 연결)
 
 ```{dot}
 digraph G {
@@ -200,12 +221,125 @@ digraph G {
 }
 ```
 
+* DAG A가 작업이 끝났다라는 메시지를 큐에 넣고 DAG A가 완료되면 자동으로 DAG B가 triggering됨
+* 나중에 DAG F가 새로 생겨 DAG A가 끝났을 때 수행되도록 triggering 되어야 한다면 큐에 있는 메시지를 인식하고 돌아가도록 설정하면 된다. 
+* 그러므로, DAG A를 구독하는 후행 DAG들이 아무리 많더라도 큐에 저장된 메시지만 바라보게 만들면 된다. DAG A는 수정할 필요가 없게 된다. 
 * Produce / Consume 구조를 이용하여 Task 완료를 알리기 위해 특정 키 값으로 Produce 하고 해당 키를 Consume 하는 DAG 을 트리거 스케줄 할 수 있는 기능
-    * 실제 큐가 있는 것은 아니고 DB 에 Produce / Consume 내역을 기록
+  * produce: queue에 메세지를 넣는 행위. 다른 솔루션에서는 produce를 publish라고도 부름  
+  * consume: queue로부터 메세지를 읽거나 꺼내는 행위. 보통은 이 consume다른 솔루션에서는 subscribe라고도 많이 부름. airflow에서는 subscribe가 consume으로 사용된다.
+  * 선행 Dag이 produce하고 후행 Dag이 consume한다.
+  * 실제 큐가 있는 것은 아니고 DB 에 Produce / Consume 내역을 기록
+
+## DAG Full Example
+
+* dags_dataset_producer_1.py
+
+```markdown
+from airflow import Dataset #airflow의 dataset이라는 library 호출
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+import pendulum
+
+dataset_dags_dataset_producer_1 = Dataset("dags_dataset_producer_1")
+# Dataset의 인수값으로 string을 주는데 DAG이 큐에 메세지를 넣을 때 메세지가  dictionary형태로 저장이 되는데 그 키값을 input으로 넣게 된다. 
+
+
+with DAG(
+        dag_id='dags_dataset_producer_1',
+        schedule='0 7 * * *',
+        start_date=pendulum.datetime(2023, 4, 1, tz='Asia/Seoul'),
+        catchup=False
+) as dag:
+    bash_task = BashOperator(
+        task_id='bash_task',
+        outlets=[dataset_dags_dataset_producer_1], # outlets 인수는 baseOperator로부터 상속된다. 모든 operator는 outlets인수를 가지고 있다. outlets에 다가는 리스트 구조로 선언된다. queue에다가 publish되는 메세지는 dag안에 있는 task('bash_task')가 dataset_dags_dataset_producer_2 이름으로  publish된다.  dataset_dags_dataset_producer_2가 들어가 있다. 
+        bash_command='echo "producer_1 수행 완료"'
+    )
+```
+
+* dags_dataset_producer_2.py
+
+```markdown
+from airflow import Dataset
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+import pendulum
+
+dataset_dags_dataset_producer_2 = Dataset("dags_dataset_producer_2")
+
+with DAG(
+        dag_id='dags_dataset_producer_2',
+        schedule='0 7 * * *',
+        start_date=pendulum.datetime(2023, 4, 1, tz='Asia/Seoul'),
+        catchup=False
+) as dag:
+    bash_task = BashOperator(
+        task_id='bash_task',
+        outlets=[dataset_dags_dataset_producer_2], 
+        bash_command='echo "producer_2 수행 완료"'
+    )
+```
+
+
+* dags_dataset_consumer_1.py
+
+```markdown
+from airflow import Dataset 
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+import pendulum
+
+dataset_dags_dataset_producer_1 = Dataset("dags_dataset_producer_1") # dags_dataset_producer_1.py의 producer1의 키값 'dags_dataset_producer_1'을 넣어 호출하고 있음
+
+with DAG(
+        dag_id='dags_dataset_consumer_1',
+        schedule=[dataset_dags_dataset_producer_1], # 스케쥴이 다른 형식으로 들어가 있는데 dags_dataset_producer_1.py의 producer1 (정확히 말하면 task)을 구독하겠다는 뜻. 스케쥴은 없고 publish하고 있는 dag 수행이 끝나면 실행하겠다는 뜻.
+        start_date=pendulum.datetime(2023, 4, 1, tz='Asia/Seoul'),
+        catchup=False
+) as dag:
+    bash_task = BashOperator(
+        task_id='bash_task',
+        bash_command='echo {{ ti.run_id }} && echo "producer_1 이 완료되면 수행"'
+    )
+```
+
+* dags_dataset_consumer_2.py
+
+```markdown
+from airflow import Dataset
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+import pendulum
+
+dataset_dags_dataset_producer_1 = Dataset("dags_dataset_producer_1")
+dataset_dags_dataset_producer_2 = Dataset("dags_dataset_producer_2")
+# producer1,2 2개를 동시에 구독하고있음
+
+with DAG(
+        dag_id='dags_dataset_consumer_2',
+        schedule=[dataset_dags_dataset_producer_1, dataset_dags_dataset_producer_2],
+        start_date=pendulum.datetime(2023, 4, 1, tz='Asia/Seoul'),
+        catchup=False
+) as dag:
+    bash_task = BashOperator(
+        task_id='bash_task',
+        bash_command='echo {{ ti.run_id }} && echo "producer_1 와 producer_2 완료되면 수행"'
+    )
+```
+
+airflow web service에서 dag 상태를 확인할 때 초록색 긴막대기를 누르면 Dataset Events에서 구독 depndencies를 확인할 수 있다. Run ID도 특이하게 나오게 되는 것을 확인 할 수 있다. 
+
+## Dataset Workflow 
+
+Airflow Web Service의 dataset 메뉴를 클릭하면 publish와 subscribe의 의존관계를 graph로 볼 수 있다. 
+
+## DAG Dependencies
+
+Airflow Web Service의 Browse 메뉴의 Dag Dependencies를 클릭하면 Dag간의 의존관계를 볼 수 있다. 
 
 ## 정리
 
-* Dataset 은 Pub/sub 구조로 DAG 간 의존관계를 주는 방법
+* Dataset 은 Publish(produce)/subscribe(consume) 구조로 DAG 간 의존관계를 주는 방법
 * Unique 한 String 형태의 Key 값을 부여하여 Dataset Publish
 * Dataset 을 Consume 하는 DAG 은 스케줄을 별도로 주지 않고 리스트 형태로 구독할 Dataset 요소들을 명시
 * Dataset에 의해 시작된 DAG 의 Run_id 는 dataset_triggered__{trigger 된 시간 } 으로 표현됨
