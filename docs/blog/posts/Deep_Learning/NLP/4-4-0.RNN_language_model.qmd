@@ -1,0 +1,273 @@
+---
+title: "RNN 기반 언어 모델"
+subtitle: "순환 신경망을 이용한 다음 단어 예측"
+description: |
+  RNN을 활용한 언어 모델의 구조와 작동 원리를 다룬다. 이전 단어들로부터 다음 단어를 예측하는 과정과 Teacher Forcing 학습 기법, 그리고 실제 구현 시 고려사항들을 설명한다.
+categories:
+  - NLP
+  - Deep Learning
+author: Kwangmin Kim
+date: 2025-01-14
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False # 발행 시 False로 변경
+---
+
+# 요약
+
+이 문서는 RNN(순환 신경망)을 활용한 언어 모델의 기본 원리와 구현 방법을 설명한다. 언어 모델은 이전 단어들의 문맥을 바탕으로 다음에 올 단어를 예측하는 모델로, 자연어 생성과 이해에서 핵심적인 역할을 한다.
+
+주요 내용은 다음과 같다:
+
+* **RNN 언어 모델의 기본 구조**: 
+  - 이전 단어들로부터 다음 단어를 예측하는 순차적 구조
+  - 입력 길이가 가변적이며, 각 시점에서 현재 단어를 입력받아 다음 단어를 예측
+  - 수식: $x_1 \rightarrow c_1 \rightarrow y_1 \rightarrow x_2 \rightarrow c_2 \rightarrow y_2 \rightarrow \cdots$
+
+* **Teacher Forcing 학습 기법**:
+  - 훈련 시에는 실제 정답 토큰을 디코더 입력으로 사용하는 방법
+  - 예측값을 반복 사용할 때 발생하는 오류 누적과 불안정성 문제를 해결
+  - 훈련 과정과 테스트 과정의 차이점: 훈련시엔 실제값 사용, 테스트시엔 이전 예측값 사용
+
+* **모델 구조와 구현**:
+  - Embedding Layer, Hidden Layer, Output Layer로 구성
+  - Output Layer에서 전체 어휘 크기만큼의 벡터로 다중 클래스 분류 수행
+  - Softmax 함수를 통한 확률 분포 출력과 Cross Entropy Loss 사용
+
+RNN 언어 모델은 자연스러운 텍스트 생성의 기초가 되며, 번역기나 챗봇 등 다양한 NLP 애플리케이션에서 활용된다.
+
+
+
+# 텍스트 인코딩 및 벡터화
+
+```
+텍스트 벡터화
+├── 1. 전통적 방법 (통계 기반)
+│   ├── BoW
+│   ├── DTM
+│   └── TF-IDF
+│
+├── 2. 신경망 기반 (문맥 독립)
+│   ├── 문맥 독립적 임베딩
+│   │   └── Embedding Layer (딥러닝 모델 내 구성 요소)
+│   ├── Word2Vec (CBOW, Skip-gram)
+│   ├── FastText
+│   ├── GloVe
+│   └── 기타 모델: Swivel, LexVec 등
+│
+└── 3. 문맥 기반 임베딩 (Contextual Embedding)
+    ├── RNN 계열
+    │   ├── LSTM
+    │   ├── GRU
+    │   └── ELMo
+    └── Attention 메커니즘
+        ├── Basic Attention
+        ├── Self-Attention
+        └── Multi-Head Attention
+ 
+Transformer 이후 생성형 모델 발전 계열
+├── Transformer 구조 (Vaswani et al., 2017)
+├── BERT 시리즈 (Google,2018~)
+|   ├── BERT
+|   ├── RoBERTa
+|   └── ALBERT
+├── GPT 시리즈 (OpenAI,2018~)
+|   ├── GPT-1~4
+|   └── ChatGPT (OpenAI,2022~)
+├── 한국어 특화: KoBERT, KoGPT, KLU-BERT 등 (Kakao,2019~)
+└── 기타 발전 모델
+    ├── T5, XLNet, ELECTRA
+    └── PaLM, LaMDA, Gemini, Claude 등
+```
+
+# RNN 기반 언어 모델
+
+## 언어 모델의 정의와 목적
+
+언어 모델(Language Model)은 자연어의 확률적 성질을 모델링하는 것으로, 주어진 단어 시퀀스에 대해 다음 단어가 나올 확률을 예측한다. 수학적으로는 다음과 같이 표현할 수 있다:
+
+$$
+P(w_1, w_2, \ldots, w_n) = \prod_{i=1}^{n} P(w_i | w_1, w_2, \ldots, w_{i-1})
+$$
+
+여기서 $w_i$ 는 $i$ 번째 단어이고, $P(w_i | w_1, w_2, \ldots, w_{i-1})$ 는 이전 단어들이 주어졌을 때 현재 단어가 나올 조건부 확률이다.
+
+## RNN을 이용한 구현
+
+RNN 언어 모델은 위의 조건부 확률 분포를 신경망으로 근사한다. 각 시점에서 이전 단어들의 정보를 은닉 상태(hidden state)에 누적하고, 이를 바탕으로 다음 단어를 예측한다.
+
+### 모델 구조와 정보 흐름
+
+$$
+x_1 \rightarrow h_1 \rightarrow y_1 \rightarrow x_2 \rightarrow h_2 \rightarrow y_2 \rightarrow \cdots \rightarrow x_n \rightarrow h_n \rightarrow y_n
+$$
+
+각 시점 $t$ 에서의 계산 과정:
+
+1. **입력 임베딩**: $e_t = \text{Embedding}(x_t)$
+2. **은닉 상태 갱신**: $h_t = \tanh(W_{hh} h_{t-1} + W_{xh} e_t + b_h)$
+3. **출력 계산**: $o_t = W_{ho} h_t + b_o$
+4. **확률 분포**: $P(w_t | w_1, \ldots, w_{t-1}) = \text{softmax}(o_t)$
+
+여기서:
+- $W_{hh}$: 은닉 상태 간 연결 가중치
+- $W_{xh}$: 입력-은닉 상태 연결 가중치  
+- $W_{ho}$: 은닉 상태-출력 연결 가중치
+- $b_h, b_o$: 편향 벡터
+
+### 구체적인 예시
+
+예문: "what will the side effects of the drug be?"
+
+**추론 과정 (테스트 시)**:
+- $x_1 = \text{"what"}$ → $h_1$ 계산 → $P(\text{next word} | \text{"what"})$ → $y_1 = \text{"will"}$
+- $x_2 = \text{"will"}$ → $h_2$ 계산 → $P(\text{next word} | \text{"what will"})$ → $y_2 = \text{"the"}$
+- $x_3 = \text{"the"}$ → $h_3$ 계산 → $P(\text{next word} | \text{"what will the"})$ → $y_3 = \text{"side"}$
+- $x_4 = \text{"side"}$ → $h_4$ 계산 → $P(\text{next word} | \text{"what will the side"})$ → $y_4 = \text{"effects"}$
+
+이 과정에서 $h_t$ 는 시점 $t$까지의 모든 이전 단어들의 문맥 정보를 압축적으로 담고 있다.
+    
+## Teacher Forcing (교사 강요)
+
+### Teacher Forcing의 개념과 필요성
+
+Teacher Forcing은 시퀀스 생성 모델의 학습에서 디코더 입력으로 실제 정답 토큰을 사용하는 훈련 기법이다. 이 기법은 학습의 안정성과 효율성을 크게 향상시킨다.
+
+### 학습과 추론의 차이점
+
+**학습 시 (Teacher Forcing 적용)**:
+- 각 시점에서 실제 정답 단어를 입력으로 사용
+- 모든 시점의 손실을 병렬적으로 계산 가능
+- 안정적이고 빠른 학습
+
+**추론 시 (자기회귀적 생성)**:
+- 이전 시점의 예측 결과를 다음 시점의 입력으로 사용
+- 순차적으로 단어를 생성
+- 오류 누적 가능성 존재
+
+### 구체적인 학습 과정
+
+예문: "what will the side effects of the drug be?"
+
+**Teacher Forcing을 적용한 학습**:
+
+```
+입력 시퀀스: [<SOS>, what, will, the, side, effects, of, the, drug]
+목표 시퀀스: [what, will, the, side, effects, of, the, drug, be]
+```
+
+각 시점에서:
+- $t=1$: 입력 `<SOS>` → 예측 목표 `what`
+- $t=2$: 입력 `what` → 예측 목표 `will`  
+- $t=3$: 입력 `will` → 예측 목표 `the`
+- $t=4$: 입력 `the` → 예측 목표 `side`
+- $t=5$: 입력 `side` → 예측 목표 `effects`
+
+### Teacher Forcing의 장단점
+
+**장점**:
+- 학습 속도 향상: 모든 시점을 병렬 처리 가능
+- 학습 안정성: 올바른 문맥 정보 제공으로 gradient 안정화
+- 수렴 속도: 더 빠른 수렴과 안정적인 학습 곡선
+
+**단점**:
+- Exposure Bias: 학습 시와 추론 시의 입력 분포 차이
+- 추론 시 오류 누적: 잘못된 예측이 후속 예측에 영향
+- 일반화 문제: 실제 사용 환경과 학습 환경의 불일치
+
+### 실제 동작 예시
+
+**Papago, ChatGPT 등의 실제 서비스**에서는 다음과 같이 동작한다:
+
+```
+사용자 입력: "What will the"
+시스템 동작:
+1. "What" → 다음 단어 예측 → "will" (확률: 0.8)
+2. "What will" → 다음 단어 예측 → "the" (확률: 0.7)  
+3. "What will the" → 다음 단어 예측 → "weather" (확률: 0.6)
+4. 계속 진행...
+```
+
+## 모델 아키텍처와 구현
+
+### 전체 아키텍처
+
+RNN 언어 모델은 다음 세 가지 주요 구성 요소로 이루어진다:
+
+```
+Input → Embedding Layer → RNN Layer → Output Layer → Probability Distribution
+```
+
+### 각 레이어의 상세 구조
+
+#### Embedding Layer
+- **역할**: 단어 인덱스를 고정 크기의 벡터로 변환
+- **수식**: $e_t = E[w_t]$, 여기서 $E \in \mathbb{R}^{V \times d}$
+- **파라미터**: 
+  - $V$: 어휘 사전 크기 (Vocabulary size)
+  - $d$: 임베딩 차원수 (일반적으로 100-300차원)
+
+#### RNN Hidden Layer  
+- **역할**: 시퀀스의 문맥 정보를 누적하여 표현
+- **수식**: $h_t = \tanh(W_{hh} h_{t-1} + W_{xh} e_t + b_h)$
+- **파라미터**:
+  - $W_{hh} \in \mathbb{R}^{H \times H}$: 은닉 상태 간 가중치
+  - $W_{xh} \in \mathbb{R}^{H \times d}$: 입력-은닉 가중치
+  - $H$: 은닉 상태 차원수 (일반적으로 128-512차원)
+
+#### Output Layer
+- **역할**: 은닉 상태를 어휘 크기의 로짓 벡터로 변환
+- **수식**: $o_t = W_{ho} h_t + b_o$
+- **파라미터**: $W_{ho} \in \mathbb{R}^{V \times H}$, $b_o \in \mathbb{R}^{V}$
+
+#### Softmax & Loss
+- **확률 분포**: $P(w_t | w_{<t}) = \text{softmax}(o_t) = \frac{e^{o_t^{(i)}}}{\sum_{j=1}^{V} e^{o_t^{(j)}}}$
+- **손실 함수**: $\mathcal{L} = -\sum_{t=1}^{T} \log P(w_t^* | w_{<t})$
+
+### 계산 복잡도와 메모리 요구사항
+
+- **파라미터 수**: $|E| + |W_{hh}| + |W_{xh}| + |W_{ho}| = V \times d + H^2 + H \times d + V \times H$
+- **시간 복잡도**: $O(T \times (H^2 + H \times V))$ (시퀀스 길이 $T$에 대해)
+- **공간 복잡도**: $O(H + V)$ (배치 크기 1 기준)
+
+### 실제 구현 고려사항
+
+#### Perplexity (혼란도)
+언어 모델의 성능은 주로 Perplexity로 측정된다:
+
+$$\text{PPL} = \exp\left(-\frac{1}{T}\sum_{t=1}^{T} \log P(w_t | w_{<t})\right)$$
+
+낮은 Perplexity 값이 더 좋은 성능을 의미한다.
+
+#### 샘플링 기법
+추론 시 다음 단어 선택 방법:
+- **Greedy Decoding**: $\arg\max_w P(w | w_{<t})$
+- **Temperature Sampling**: $P(w) = \frac{e^{o_w/\tau}}{\sum_j e^{o_j/\tau}}$ (τ는 temperature)
+- **Top-k Sampling**: 상위 k개 후보 중에서 샘플링
+
+
+
+## 결론
+
+RNN 기반 언어 모델은 자연어 처리에서 텍스트 생성과 이해의 기초가 되는 중요한 모델이다. 이전 단어들의 순차적 정보를 활용하여 다음 단어를 예측하는 간단하면서도 효과적인 구조를 가지고 있다.
+
+* **핵심 특징 요약**:
+  - 가변 길이 입력을 처리할 수 있는 순환 구조
+  - 각 시점에서 이전 문맥 정보를 누적하여 다음 단어 예측
+  - Teacher Forcing을 통한 안정적인 학습 과정
+
+* **Teacher Forcing의 중요성**:
+  - 훈련 시 정답 토큰 사용으로 학습 안정성 확보
+  - 오류 누적 방지와 학습 효율성 향상
+  - 실제 서비스에서는 이전 예측값을 사용하는 자기회귀적 생성
+
+* **실용적 의의**:
+  - 기계 번역, 텍스트 요약, 대화 시스템 등에 광범위하게 활용
+  - 현대 언어 모델들의 기초 개념 제공
+  - Embedding-Hidden-Output 구조의 표준 패턴 확립
+
+RNN 언어 모델은 비교적 단순한 구조임에도 불구하고 자연어의 순차적 특성을 효과적으로 모델링할 수 있어, 이후 등장한 LSTM, GRU, Transformer 등 더 복잡한 모델들의 토대가 되었다. 현재도 많은 NLP 애플리케이션에서 기본 구성 요소로 활용되고 있으며, 언어 모델의 기본 원리를 이해하는 데 필수적인 개념이다.
