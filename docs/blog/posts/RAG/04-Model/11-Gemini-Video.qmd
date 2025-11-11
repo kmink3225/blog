@@ -1,0 +1,188 @@
+---
+title: "Gemini Video Analysis"
+subtitle: Gemini를 활용한 비디오 질의응답
+description: |
+  Google Gemini의 File API를 사용하여 비디오 파일에 대한 질의응답을 수행하는 방법을 다룬다.
+  비디오 업로드, 분석, 응답 생성까지의 전체 프로세스를 설명한다.
+categories:
+  - AI
+  - RAG
+  - LangChain
+author: Kwangmin Kim
+date: 03/25/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+
+**주요 흐름**
+
+1. `File API`를 사용하여 비디오 파일을 업로드합니다.
+2. `GenerateContent` 요청을 통해 비디오에 대한 질문을 요청합니다.
+3. 생성된 응답을 확인합니다.
+4. 업로드한 Video 파일을 삭제합니다.
+
+
+**중요:** 
+
+- 본 튜토리얼의 `File API` 는 인증 및 접근을 위해 `API keys`를 사용합니다. 
+
+- 업로드된 파일은 `API key`의 클라우드 프로젝트와 연결됩니다. 
+
+다른 `Gemini API` 와 달리, `API key`는 `File API`에 업로드한 데이터에 대한 접근 권한도 부여하므로 `API key`를 안전하게 보관하는 데 특별히 주의해야 합니다.
+
+**Reference**
+
+- [Gemini API(Cookbook) - Video](https://ai.google.dev/api/rest/v1/models/generateContent#media)
+
+**API KEY 발급**
+
+- [링크](https://makersuite.google.com/app/apikey?hl=ko) 에서 API KEY를 발급받아주세요.
+- 사용자의 Google API 키를 환경 변수 `GOOGLE_API_KEY`로 설정합니다.
+
+`.env` 파일에 아래와 같이 입력합니다.
+
+```
+GOOGLE_API_KEY=<사용자의 API KEY>
+```
+
+
+```{python}
+# LangSmith 추적 설정
+# !pip install langchain-teddynote
+from langchain_teddynote import logging
+
+# 프로젝트 이름 입력
+logging.langsmith("CH04-Models")
+```
+
+```{python}
+# LangSmith 추적 설정
+# !pip install langchain-teddynote
+from langchain_teddynote import logging
+
+# 프로젝트 이름 입력
+logging.langsmith("CH04-Gemini-Video")
+```
+
+## 비디오 업로드
+
+`Gemini API` 는 비디오 파일 형식을 직접 수용합니다. 
+
+**제한사항**
+
+- `File API`는 2GB 이하의 파일을 수용하며 프로젝트당 최대 20GB의 파일을 저장할 수 있습니다. 
+- 파일은 2일 동안 유지되며 API에서 **다운로드할 수 없습니다**. 
+
+본 예제는 테디노트 YouTube 채널에 게시된 비디오를 사용합니다. (다른 비디오로 교체하여 진행해도 좋습니다)
+
+- [🧑‍💻 #PDF 전처리 할 수 있는 건 다 해봤음.](https://youtu.be/O3qFWRObAXw)
+
+```{python}
+# 파일 다운로드 후 teddynote-sample-video.mp4 파일로 저장
+!wget "https://www.dropbox.com/scl/fi/ugue14fyo010jgc7wuh4g/teddynote-sample-video.mp4?rlkey=wcsiktklt7jgoibsluft3m6z9&st=prv4p2uu&dl=1" -qO teddynote-sample-video.mp4
+```
+
+아래 비디오 파일의 경로를 입력합니다.
+
+```{python}
+# 비디오 파일 이름 지정
+video_file_name = "teddynote-sample-video.mp4"
+```
+
+다음으로는 `File API`를 사용하여 비디오 파일을 업로드합니다.
+
+```{python}
+import google.generativeai as genai
+
+# 파일 업로드 진행 메시지 출력
+print(f"파일을 업로드 중입니다...")
+
+# 파일 업로드 및 파일 객체 반환
+video_file = genai.upload_file(path=video_file_name)
+
+# 업로드 완료 메시지 및 파일 URI 출력
+print(f"업로드 완료: {video_file.uri}")
+```
+
+파일을 업로드한 후, `files.get` 을 호출하여 API가 파일을 성공적으로 완료되었는지 확인할 수 있습니다. 
+
+`files.get`은  API 키가 속한 클라우드 프로젝트와 연관된 파일 API에 업로드된 파일을 확인할 수 있게 해줍니다. 
+
+```{python}
+import time
+
+# 비디오 파일 처리 상태 확인
+while video_file.state.name == "PROCESSING":
+    # 처리 완료 대기 메시지 출력
+    print("비디오 업로드 및 전처리가 완료될 때까지 잠시만 기다려주세요...")
+    # 10초 대기
+    time.sleep(10)
+    # 비디오 파일 상태 갱신
+    video_file = genai.get_file(video_file.name)
+
+# 처리 실패 시 예외 발생
+if video_file.state.name == "FAILED":
+    raise ValueError(video_file.state.name)
+
+# 처리 완료 메시지 출력
+print(
+    f"\n비디오 처리가 완료되었습니다!\n이제 대화를 시작할 수 있어요: " + video_file.uri
+)
+```
+
+비디오가 업로드된 후, `generate_content` 함수를 사용하여 Video 에 대한 질문을 요청할 수 있습니다.
+
+```{python}
+# 프롬프트
+prompt = "이 영상에 대해서 짧게 요약해 줄 수 있나요?"
+
+# 모델을 Gemini 1.5 Flash로 설정
+model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
+
+# LLM 답변 요청
+response = model.generate_content(
+    [prompt, video_file], request_options={"timeout": 600}
+)
+# 결과 출력
+print(response.text)
+```
+
+아래는 스트림 출력 예제입니다. (`stream=True` 옵션 추가)
+
+```{python}
+# 프롬프트 생성
+prompt = "이 영상에서 Gencon 관련 언급한 부분의 시간을 알려주고, 어떤 내용을 말했는지 알려주세요."
+
+# 모델을 Gemini 1.5 Flash로 설정
+model = genai.GenerativeModel(model_name="models/gemini-1.5-flash")
+
+# LLM 스트림 답변 요청
+response = model.generate_content(
+    [prompt, video_file], request_options={"timeout": 600}, stream=True
+)
+
+# 생성된 콘텐츠 출력
+for chunk in response:
+    print(chunk.text, end="", flush=True)
+```
+
+## 파일 삭제
+
+파일은 2일 후 자동으로 삭제되거나 `files.delete()`를 사용하여 수동으로 삭제할 수 있습니다.
+
+```{python}
+# 파일 삭제
+genai.delete_file(video_file.name)
+
+# 삭제 완료 메시지 출력
+print(f"영상을 삭제했습니다: {video_file.uri}")
+```
+
