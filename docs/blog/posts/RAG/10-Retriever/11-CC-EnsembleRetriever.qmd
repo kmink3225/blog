@@ -1,0 +1,125 @@
+---
+title: "Ensemble Retriever `Convex Combination(CC)` 추가"
+subtitle: 검색기
+description: |
+  문서 검색을 위한 다양한 Retriever 패턴과 최적화 기법을 다룬다.
+categories:
+  - AI
+  - RAG
+  - LangChain
+author: Kwangmin Kim
+date: 12/31/2024
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+
+[written by@teddynote](https://github.com/teddylee777/langchain-teddynote)
+
+- 참고글: [AutoRAG 가 게재한 알고리즘 방식의 차이 설명](https://velog.io/@autorag/%EB%9E%AD%EC%B2%B4%EC%9D%B8%EC%9D%98-Ensemble-Retriever-%EC%9D%B4%EA%B2%8C-%EB%8C%80%EC%B2%B4-%EB%AD%90%EC%A7%80)
+
+
+아래의 주석을 풀고 패키지를 업데이트 후 진행합니다.
+
+```{python}
+# 업데이트 후 진행
+# !pip install -qU langchain-teddynote
+```
+
+```{python}
+from dotenv import load_dotenv
+
+load_dotenv()
+```
+
+## 실험을 위한 사전 셋업
+
+```{python}
+from langchain.retrievers import EnsembleRetriever as OriginalEnsembleRetriever
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PDFPlumberLoader
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
+from langchain_teddynote.retrievers import KiwiBM25Retriever
+
+# 문서 로드(Load Documents)
+loader = PDFPlumberLoader("data/디지털정부혁신 추진계획.pdf")
+
+# 문서 분할(Split Documents): 테스트를 위하여 작은 Chunk Size로 설정
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=100, chunk_overlap=0)
+split_documents = loader.load_and_split(text_splitter)
+
+# 임베딩(Embedding) 생성
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+# FaissRetriever 생성
+faiss = FAISS.from_documents(
+    documents=split_documents, embedding=embeddings
+).as_retriever(search_kwargs={"k": 5})
+
+# KiwiBM25Retriever 생성(한글 형태소 분석기 + BM25 알고리즘)
+bm25 = KiwiBM25Retriever.from_documents(documents=split_documents, embedding=embeddings)
+bm25.k = 5
+
+# LangChain 버전의 EnsembleRetriever
+original_ensemble_retriever = OriginalEnsembleRetriever(retrievers=[faiss, bm25])
+```
+
+CC 방식과 RRF 방식의 EnsembleRetriever 생성
+
+```{python}
+from langchain_teddynote.retrievers import (
+    EnsembleRetriever,
+    EnsembleMethod,
+)
+
+# RRF 방식의 EnsembleRetriever (기본값으로 RRF 가 설정되어 있음)
+rrf_ensemble_retriever = EnsembleRetriever(
+    retrievers=[faiss, bm25], method=EnsembleMethod.RRF
+)
+
+# CC 방식의 EnsembleRetriever
+cc_ensemble_retriever = EnsembleRetriever(
+    retrievers=[faiss, bm25], method=EnsembleMethod.CC  # method 지정: CC
+)
+```
+
+## 검색 결과 비교
+
+```{python}
+def pretty_print(query):
+    for i, (original_doc, cc_doc, rrf_doc) in enumerate(
+        zip(
+            original_ensemble_retriever.invoke(query),
+            cc_ensemble_retriever.invoke(query),
+            rrf_ensemble_retriever.invoke(query),
+        )
+    ):
+        print(f"[{i}] [Original] Q: {query}", end="\n\n")
+        print(original_doc.page_content)
+        print("-" * 100)
+        print(f"[{i}] [RRF] Q: {query}", end="\n\n")
+        print(rrf_doc.page_content)
+        print("-" * 100)
+        print(f"[{i}] [CC] Q: {query}", end="\n\n")
+        print(cc_doc.page_content)
+        print("=" * 100, end="\n\n")
+```
+
+- 검색 결과에 `"Original"` 과 `"RRF"` 는 차이가 없어야 합니다. (LangChain 그대로 구현)
+- 검색 결과에 `"CC"` 는 `"RRF"` 와 차이가 있을 수 있습니다.
+
+`RRF` 와 `CC` 방식의 검색 결과 비교하여 문서에 적합한 방식을 차용하시길 바랍니다.
+
+```{python}
+# 검색 결과 비교
+pretty_print("디지털 트랜스포메이션이란 무엇인가요?")
+```
+

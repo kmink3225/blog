@@ -1,0 +1,653 @@
+---
+title: "FAISS"
+subtitle: 벡터 스토어
+description: |
+  임베딩 벡터를 저장하고 검색하는 벡터 데이터베이스를 다룬다.
+categories:
+  - AI
+  - RAG
+  - LangChain
+author: Kwangmin Kim
+date: 12/31/2024
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+
+Facebook AI Similarity Search (Faiss)는 밀집 벡터의 효율적인 유사도 검색과 클러스터링을 위한 라이브러리입니다.
+
+Faiss는 RAM에 맞지 않을 수도 있는 벡터 집합을 포함하여 모든 크기의 벡터 집합을 검색하는 알고리즘을 포함하고 있습니다.
+
+또한 평가와 매개변수 튜닝을 위한 지원 코드도 포함되어 있습니다.
+
+**참고**
+- [LangChain FAISS 문서](https://python.langchain.com/v0.2/docs/integrations/vectorstores/faiss/)
+- [FAISS 문서](https://faiss.ai/)
+
+
+```{python}
+# API 키를 환경변수로 관리하기 위한 설정 파일
+from dotenv import load_dotenv
+
+# API 키 정보 로드
+load_dotenv()
+```
+
+```{python}
+# LangSmith 추적을 설정합니다. https://smith.langchain.com
+# !pip install langchain-teddynote
+from langchain_teddynote import logging
+
+# 프로젝트 이름을 입력합니다.
+logging.langsmith("CH09-VectorStores")
+```
+
+샘플 데이터셋을 로드합니다.
+
+```{python}
+from langchain_community.document_loaders import TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+
+# 텍스트 분할
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=0)
+
+# 텍스트 파일을 load -> List[Document] 형태로 변환
+loader1 = TextLoader("data/nlp-keywords.txt")
+loader2 = TextLoader("data/finance-keywords.txt")
+
+# 문서 분할
+split_doc1 = loader1.load_and_split(text_splitter)
+split_doc2 = loader2.load_and_split(text_splitter)
+
+# 문서 개수 확인
+len(split_doc1), len(split_doc2)
+```
+
+## VectorStore 생성
+
+**주요 초기화 매개변수**
+
+1. 인덱싱 매개변수:
+   - `embedding_function` (Embeddings): 사용할 임베딩 함수
+
+2. 클라이언트 매개변수:
+   - `index` (Any): 사용할 FAISS 인덱스
+   - `docstore` (Docstore): 사용할 문서 저장소
+   - `index_to_docstore_id` (Dict[int, str]): 인덱스에서 문서 저장소 ID로의 매핑
+
+**참고**
+
+- FAISS는 고성능 벡터 검색 및 클러스터링을 위한 라이브러리입니다.
+- 이 클래스는 FAISS를 LangChain의 VectorStore 인터페이스와 통합합니다.
+- 임베딩 함수, FAISS 인덱스, 문서 저장소를 조합하여 효율적인 벡터 검색 시스템을 구축할 수 있습니다.
+
+```{python}
+import faiss
+from langchain_community.vectorstores import FAISS
+from langchain_community.docstore.in_memory import InMemoryDocstore
+from langchain_openai import OpenAIEmbeddings
+
+# 임베딩
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+# 임베딩 차원 크기를 계산
+dimension_size = len(embeddings.embed_query("hello world"))
+print(dimension_size)
+```
+
+```{python}
+# FAISS 벡터 저장소 생성
+db = FAISS(
+    embedding_function=embeddings,
+    index=faiss.IndexFlatL2(dimension_size),
+    docstore=InMemoryDocstore(),
+    index_to_docstore_id={},
+)
+```
+
+### FAISS 벡터 저장소 생성 (from_documents)
+
+`from_documents` 클래스 메서드는 문서 리스트와 임베딩 함수를 사용하여 FAISS 벡터 저장소를 생성합니다.
+
+**매개변수**
+
+- `documents` (List[Document]): 벡터 저장소에 추가할 문서 리스트
+- `embedding` (Embeddings): 사용할 임베딩 함수
+- `**kwargs`: 추가 키워드 인자
+
+**동작 방식**
+
+1. 문서 리스트에서 텍스트 내용(`page_content`)과 메타데이터를 추출합니다.
+2. 추출한 텍스트와 메타데이터를 사용하여 `from_texts` 메서드를 호출합니다.
+
+**반환값**
+
+- `VectorStore`: 문서와 임베딩으로 초기화된 벡터 저장소 인스턴스
+
+**참고**
+
+- 이 메서드는 `from_texts` 메서드를 내부적으로 호출하여 벡터 저장소를 생성합니다.
+- 문서의 `page_content`는 텍스트로, `metadata`는 메타데이터로 사용됩니다.
+- 추가적인 설정이 필요한 경우 `kwargs`를 통해 전달할 수 있습니다.
+
+```{python}
+# DB 생성
+db = FAISS.from_documents(documents=split_doc1, embedding=OpenAIEmbeddings())
+```
+
+```{python}
+# 문서 저장소 ID 확인
+db.index_to_docstore_id
+```
+
+```{python}
+# 저장된 문서의 ID: Document 확인
+db.docstore._dict
+```
+
+### FAISS 벡터 저장소 생성 (from_texts)
+
+`from_texts` 클래스 메서드는 텍스트 리스트와 임베딩 함수를 사용하여 FAISS 벡터 저장소를 생성합니다.
+
+**매개변수**
+
+- `texts` (List[str]): 벡터 저장소에 추가할 텍스트 리스트
+- `embedding` (Embeddings): 사용할 임베딩 함수
+- `metadatas` (Optional[List[dict]]): 메타데이터 리스트. 기본값은 None
+- `ids` (Optional[List[str]]): 문서 ID 리스트. 기본값은 None
+- `**kwargs`: 추가 키워드 인자
+
+**동작 방식**
+
+1. 제공된 임베딩 함수를 사용하여 텍스트를 임베딩합니다.
+2. 임베딩된 벡터와 함께 `__from` 메서드를 호출하여 FAISS 인스턴스를 생성합니다.
+
+**반환값**
+
+- `FAISS`: 생성된 FAISS 벡터 저장소 인스턴스
+
+**참고**
+
+- 이 메서드는 사용자 친화적인 인터페이스로, 문서 임베딩, 메모리 내 문서 저장소 생성, FAISS 데이터베이스 초기화를 한 번에 처리합니다.
+- 빠르게 시작하기 위한 편리한 방법입니다.
+
+**주의사항**
+
+- 대량의 텍스트를 처리할 때는 메모리 사용량에 주의해야 합니다.
+- 메타데이터나 ID를 사용하려면 텍스트 리스트와 동일한 길이의 리스트로 제공해야 합니다.
+
+```{python}
+# 문자열 리스트로 생성
+db2 = FAISS.from_texts(
+    ["안녕하세요. 정말 반갑습니다.", "제 이름은 테디입니다."],
+    embedding=OpenAIEmbeddings(),
+    metadatas=[{"source": "텍스트문서"}, {"source": "텍스트문서"}],
+    ids=["doc1", "doc2"],
+)
+```
+
+저장된 결과를 확인합니다. id 값은 지정한 id 값이 잘 들어가 있는지 확인합니다.
+
+```{python}
+# 저장된 내용
+db2.docstore._dict
+```
+
+### 유사도 검색 (Similarity Search)
+
+`similarity_search` 메서드는 주어진 쿼리와 가장 유사한 문서들을 검색하는 기능을 제공합니다.
+
+**매개변수**
+
+- `query` (str): 유사한 문서를 찾기 위한 검색 쿼리 텍스트
+- `k` (int): 반환할 문서 수. 기본값은 4
+- `filter` (Optional[Union[Callable, Dict[str, Any]]]): 메타데이터 필터링 함수 또는 딕셔너리. 기본값은 None
+- `fetch_k` (int): 필터링 전에 가져올 문서 수. 기본값은 20
+- `**kwargs`: 추가 키워드 인자
+
+**반환값**
+
+- `List[Document]`: 쿼리와 가장 유사한 문서 리스트
+
+**동작 방식**
+
+1. `similarity_search_with_score` 메서드를 내부적으로 호출하여 유사도 점수와 함께 문서를 검색합니다.
+2. 검색 결과에서 점수를 제외하고 문서만 추출하여 반환합니다.
+
+**주요 특징**
+
+- `filter` 매개변수를 사용하여 메타데이터 기반의 필터링이 가능합니다.
+- `fetch_k`를 통해 필터링 전 검색할 문서 수를 조절할 수 있어, 필터링 후 원하는 수의 문서를 확보할 수 있습니다.
+
+**사용 시 고려사항**
+
+- 검색 성능은 사용된 임베딩 모델의 품질에 크게 의존합니다.
+- 대규모 데이터셋에서는 `k`와 `fetch_k` 값을 적절히 조정하여 검색 속도와 정확도의 균형을 맞추는 것이 중요합니다.
+- 복잡한 필터링이 필요한 경우, `filter` 매개변수에 커스텀 함수를 전달하여 세밀한 제어가 가능합니다.
+
+**최적화 팁**
+
+- 자주 사용되는 쿼리에 대해서는 결과를 캐싱하여 반복적인 검색 속도를 향상시킬 수 있습니다.
+- `fetch_k`를 너무 크게 설정하면 검색 속도가 느려질 수 있으므로, 적절한 값을 실험적으로 찾는 것이 좋습니다.
+
+```{python}
+# 유사도 검색
+db.similarity_search("TF IDF 에 대하여 알려줘")
+```
+
+`k` 값에 검색 결과의 개수를 지정할 수 있습니다.
+
+```{python}
+# k 값 지정
+db.similarity_search("TF IDF 에 대하여 알려줘", k=2)
+```
+
+filter 에 metadata 정보를 활용하여 Filtering 할 수 있습니다.
+
+```{python}
+# filter 사용
+db.similarity_search(
+    "TF IDF 에 대하여 알려줘", filter={"source": "data/nlp-keywords.txt"}, k=2
+)
+```
+
+다음은 `filter` 에서 다른 `source` 를 사용하여 검색한 결과를 확인합니다.
+
+```{python}
+# filter 사용
+db.similarity_search(
+    "TF IDF 에 대하여 알려줘", filter={"source": "data/finance-keywords.txt"}, k=2
+)
+```
+
+### 문서(Document)로부터 추가 (add_documents)
+
+`add_documents` 메서드는 벡터 저장소에 문서를 추가하거나 업데이트하는 기능을 제공합니다.
+
+**매개변수**
+
+- `documents` (List[Document]): 벡터 저장소에 추가할 문서 리스트
+- `**kwargs`: 추가 키워드 인자
+
+**반환값**
+
+- `List[str]`: 추가된 텍스트의 ID 리스트
+
+**동작 방식**
+
+1. 문서에서 텍스트 내용과 메타데이터를 추출합니다.
+2. `add_texts` 메서드를 호출하여 실제 추가 작업을 수행합니다.
+
+**주요 특징**
+
+- 문서 객체를 직접 처리할 수 있어 편리합니다.
+- ID 처리 로직이 포함되어 있어 문서의 고유성을 보장합니다.
+- `add_texts` 메서드를 기반으로 동작하여 코드 재사용성을 높입니다.
+
+```{python}
+from langchain_core.documents import Document
+
+# page_content, metadata 지정
+db.add_documents(
+    [
+        Document(
+            page_content="안녕하세요! 이번엔 도큐먼트를 새로 추가해 볼께요",
+            metadata={"source": "mydata.txt"},
+        )
+    ],
+    ids=["new_doc1"],
+)
+```
+
+```{python}
+# 추가된 데이터를 확인
+db.similarity_search("안녕하세요", k=1)
+```
+
+### 텍스트로부터 추가 (add_texts)
+
+`add_texts` 메서드는 텍스트를 임베딩하고 벡터 저장소에 추가하는 기능을 제공합니다.
+
+**매개변수**
+
+- `texts` (Iterable[str]): 벡터 저장소에 추가할 텍스트 이터러블
+- `metadatas` (Optional[List[dict]]): 텍스트와 연관된 메타데이터 리스트 (선택적)
+- `ids` (Optional[List[str]]): 텍스트의 고유 식별자 리스트 (선택적)
+- `**kwargs`: 추가 키워드 인자
+
+**반환값**
+
+- `List[str]`: 벡터 저장소에 추가된 텍스트의 ID 리스트
+
+**동작 방식**
+
+1. 입력받은 텍스트 이터러블을 리스트로 변환합니다.
+2. `_embed_documents` 메서드를 사용하여 텍스트를 임베딩합니다.
+3. `__add` 메서드를 호출하여 임베딩된 텍스트를 벡터 저장소에 추가합니다.
+
+```{python}
+# 신규 데이터를 추가
+db.add_texts(
+    ["이번엔 텍스트 데이터를 추가합니다.", "추가한 2번째 텍스트 데이터 입니다."],
+    metadatas=[{"source": "mydata.txt"}, {"source": "mydata.txt"}],
+    ids=["new_doc2", "new_doc3"],
+)
+```
+
+```{python}
+# 추가된 데이터를 확인
+db.index_to_docstore_id
+```
+
+### 문서 삭제 (Delete Documents)
+
+`delete` 메서드는 벡터 저장소에서 지정된 ID에 해당하는 문서를 삭제하는 기능을 제공합니다.
+
+**매개변수**
+
+- `ids` (Optional[List[str]]): 삭제할 문서의 ID 리스트
+- `**kwargs`: 추가 키워드 인자 (이 메서드에서는 사용되지 않음)
+
+**반환값**
+
+- `Optional[bool]`: 삭제 성공 시 True, 실패 시 False, 구현되지 않은 경우 None
+
+**동작 방식**
+
+1. 입력된 ID의 유효성을 검사합니다.
+2. 삭제할 ID에 해당하는 인덱스를 찾습니다.
+3. FAISS 인덱스에서 해당 ID를 제거합니다.
+4. 문서 저장소에서 해당 ID의 문서를 삭제합니다.
+5. 인덱스와 ID 매핑을 업데이트합니다.
+
+**주요 특징**
+
+- ID 기반 삭제로 정확한 문서 관리가 가능합니다.
+- FAISS 인덱스와 문서 저장소 양쪽에서 삭제를 수행합니다.
+- 삭제 후 인덱스 재정렬을 통해 데이터 일관성을 유지합니다.
+
+**주의사항**
+
+- 삭제 작업은 되돌릴 수 없으므로 신중하게 수행해야 합니다.
+- 동시성 제어가 구현되어 있지 않아 다중 스레드 환경에서 주의가 필요합니다.
+
+```{python}
+# 삭제용 데이터를 추가
+ids = db.add_texts(
+    ["삭제용 데이터를 추가합니다.", "2번째 삭제용 데이터입니다."],
+    metadatas=[{"source": "mydata.txt"}, {"source": "mydata.txt"}],
+    ids=["delete_doc1", "delete_doc2"],
+)
+```
+
+```{python}
+# 삭제할 id 를 확인
+print(ids)
+```
+
+`delete` 는 ids 를 입력하여 삭제할 수 있습니다.
+
+```{python}
+# id 로 삭제
+db.delete(ids)
+```
+
+```{python}
+# 삭제된 결과를 출력
+db.index_to_docstore_id
+```
+
+## 저장 및 로드
+
+### 로컬 저장 (Save Local)
+
+`save_local` 메서드는 FAISS 인덱스, 문서 저장소, 그리고 인덱스-문서 ID 매핑을 로컬 디스크에 저장하는 기능을 제공합니다.
+
+**매개변수**
+
+- `folder_path` (str): 저장할 폴더 경로
+- `index_name` (str): 저장할 인덱스 파일 이름 (기본값: "index")
+
+**동작 방식**
+
+1. 지정된 폴더 경로를 생성합니다 (이미 존재하는 경우 무시).
+2. FAISS 인덱스를 별도의 파일로 저장합니다.
+3. 문서 저장소와 인덱스-문서 ID 매핑을 pickle 형식으로 저장합니다.
+
+**사용 시 고려사항**
+
+- 저장 경로에 대한 쓰기 권한이 필요합니다.
+- 대용량 데이터의 경우 저장 공간과 시간이 상당히 소요될 수 있습니다.
+- pickle 사용으로 인한 보안 위험을 고려해야 합니다.
+
+```{python}
+# 로컬 Disk 에 저장
+db.save_local(folder_path="faiss_db", index_name="faiss_index")
+```
+
+### 로컬에서 불러오기 (Load Local)
+
+`load_local` 클래스 메서드는 로컬 디스크에 저장된 FAISS 인덱스, 문서 저장소, 그리고 인덱스-문서 ID 매핑을 불러오는 기능을 제공합니다.
+
+**매개변수**
+
+- `folder_path` (str): 불러올 파일들이 저장된 폴더 경로
+- `embeddings` (Embeddings): 쿼리 생성에 사용할 임베딩 객체
+- `index_name` (str): 불러올 인덱스 파일 이름 (기본값: "index")
+- `allow_dangerous_deserialization` (bool): pickle 파일 역직렬화 허용 여부 (기본값: False)
+
+**반환값**
+
+- `FAISS`: 로드된 FAISS 객체
+
+**동작 방식**
+
+1. 역직렬화의 위험성을 확인하고 사용자의 명시적 허가를 요구합니다.
+2. FAISS 인덱스를 별도로 불러옵니다.
+3. pickle을 사용하여 문서 저장소와 인덱스-문서 ID 매핑을 불러옵니다.
+4. 불러온 데이터로 FAISS 객체를 생성하여 반환합니다.
+
+```{python}
+# 저장된 데이터를 로드
+loaded_db = FAISS.load_local(
+    folder_path="faiss_db",
+    index_name="faiss_index",
+    embeddings=embeddings,
+    allow_dangerous_deserialization=True,
+)
+```
+
+```{python}
+# 로드된 데이터를 확인
+loaded_db.index_to_docstore_id
+```
+
+### FAISS 객체 병합 (Merge From)
+
+`merge_from` 메서드는 현재 FAISS 객체에 다른 FAISS 객체를 병합하는 기능을 제공합니다.
+
+**매개변수**
+
+- `target` (FAISS): 현재 객체에 병합할 대상 FAISS 객체
+
+**동작 방식**
+
+1. 문서 저장소의 병합 가능 여부를 확인합니다.
+2. 기존 인덱스의 길이를 기준으로 새로운 문서들의 인덱스를 설정합니다.
+3. FAISS 인덱스를 병합합니다.
+4. 대상 FAISS 객체의 문서와 ID 정보를 추출합니다.
+5. 추출한 정보를 현재 문서 저장소와 인덱스-문서 ID 매핑에 추가합니다.
+
+**주요 특징**
+
+- 두 FAISS 객체의 인덱스, 문서 저장소, 인덱스-문서 ID 매핑을 모두 병합합니다.
+- 인덱스 번호의 연속성을 유지하면서 병합합니다.
+- 문서 저장소의 병합 가능 여부를 사전에 확인합니다.
+
+
+**주의사항**
+
+- 병합 대상 FAISS 객체와 현재 객체의 구조가 호환되어야 합니다.
+- 중복 ID 처리에 주의해야 합니다. 현재 구현에서는 중복 검사를 하지 않습니다.
+- 병합 과정에서 예외가 발생하면 부분적으로 병합된 상태가 될 수 있습니다.
+
+```{python}
+# 저장된 데이터를 로드
+db = FAISS.load_local(
+    folder_path="faiss_db",
+    index_name="faiss_index",
+    embeddings=embeddings,
+    allow_dangerous_deserialization=True,
+)
+```
+
+```{python}
+# 새로운 FAISS 벡터 저장소 생성
+db2 = FAISS.from_documents(documents=split_doc2, embedding=OpenAIEmbeddings())
+```
+
+```{python}
+# db 의 데이터 확인
+db.index_to_docstore_id
+```
+
+```{python}
+# db2 의 데이터 확인
+db2.index_to_docstore_id
+```
+
+`merge_from` 를 사용하여 2개의 db 를 병합합니다.
+
+```{python}
+# db + db2 를 병합
+db.merge_from(db2)
+```
+
+```{python}
+# 병합된 데이터 확인
+db.index_to_docstore_id
+```
+
+## 검색기로 변환 (as_retriever)
+
+`as_retriever` 메서드는 현재 벡터 저장소를 기반으로 `VectorStoreRetriever` 객체를 생성하는 기능을 제공합니다.
+
+**매개변수**
+
+- `**kwargs`: 검색 함수에 전달할 키워드 인자
+  - `search_type` (Optional[str]): 검색 유형 (`"similarity"`, `"mmr"`, `"similarity_score_threshold"`)
+  - `search_kwargs` (Optional[Dict]): 검색 함수에 전달할 추가 키워드 인자
+
+**반환값**
+
+- `VectorStoreRetriever`: 벡터 저장소 기반의 검색기 객체
+
+**주요 기능**
+
+1. 다양한 검색 유형 지원:
+   - `"similarity"`: 유사도 기반 검색 (기본값)
+   - `"mmr"`: Maximal Marginal Relevance 검색
+   - `"similarity_score_threshold"`: 임계값 기반 유사도 검색
+
+2. 검색 매개변수 커스터마이징:
+   - `k`: 반환할 문서 수
+   - `score_threshold`: 유사도 점수 임계값
+   - `fetch_k`: MMR 알고리즘에 전달할 문서 수
+   - `lambda_mult`: MMR 다양성 조절 파라미터
+   - `filter`: 문서 메타데이터 기반 필터링
+
+**사용 시 고려사항**
+
+- 검색 유형과 매개변수를 적절히 선택하여 검색 결과의 품질과 다양성을 조절할 수 있습니다.
+- 대규모 데이터셋에서는 `fetch_k`와 `k` 값을 조절하여 성능과 정확도의 균형을 맞출 수 있습니다.
+- 필터링 기능을 활용하여 특정 조건에 맞는 문서만 검색할 수 있습니다.
+
+**최적화 팁**
+
+- MMR 검색 시 `fetch_k`를 높이고 `lambda_mult`를 조절하여 다양성과 관련성의 균형을 맞출 수 있습니다.
+- 임계값 기반 검색을 사용하여 높은 관련성을 가진 문서만 반환할 수 있습니다.
+
+**주의사항**
+
+- 부적절한 매개변수 설정은 검색 성능이나 결과의 품질에 영향을 줄 수 있습니다.
+- 대규모 데이터셋에서 높은 `k` 값 설정은 검색 시간을 증가시킬 수 있습니다.
+
+기본 값으로 설정된 4개 문서를 유사도 검색을 수행하여 조회합니다.
+
+```{python}
+# 새로운 FAISS 벡터 저장소 생성
+db = FAISS.from_documents(
+    documents=split_doc1 + split_doc2, embedding=OpenAIEmbeddings()
+)
+```
+
+기본 검색기(retriever) 는 4개의 문서를 반환합니다.
+
+```{python}
+# 검색기로 변환
+retriever = db.as_retriever()
+# 검색 수행
+retriever.invoke("Word2Vec 에 대하여 알려줘")
+```
+
+다양성이 높은 더 많은 문서 검색
+
+- `k`: 반환할 문서 수 (기본값: 4)
+- `fetch_k`: MMR 알고리즘에 전달할 문서 수 (기본값: 20)
+- `lambda_mult`: MMR 결과의 다양성 조절 (0~1, 기본값: 0.5)
+
+```{python}
+# MMR 검색 수행
+retriever = db.as_retriever(
+    search_type="mmr", search_kwargs={"k": 6, "lambda_mult": 0.25, "fetch_k": 10}
+)
+retriever.invoke("Word2Vec 에 대하여 알려줘")
+```
+
+MMR 알고리즘을 위해 더 많은 문서를 가져오되 상위 2개만 반환
+
+```{python}
+# MMR 검색 수행, 상위 2개만 반환
+retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 2, "fetch_k": 10})
+retriever.invoke("Word2Vec 에 대하여 알려줘")
+```
+
+특정 임계값 이상의 유사도를 가진 문서만 검색
+
+```{python}
+# 임계값 기반 검색 수행
+retriever = db.as_retriever(
+    search_type="similarity_score_threshold", search_kwargs={"score_threshold": 0.8}
+)
+
+retriever.invoke("Word2Vec 에 대하여 알려줘")
+```
+
+가장 유사한 단일 문서만 검색
+
+```{python}
+# k=1 로 설정하여 가장 유사한 문서만 검색
+retriever = db.as_retriever(search_kwargs={"k": 1})
+
+retriever.invoke("Word2Vec 에 대하여 알려줘")
+```
+
+특정 메타데이터 필터 적용
+
+```{python}
+# 메타데이터 필터 적용
+retriever = db.as_retriever(
+    search_kwargs={"filter": {"source": "data/finance-keywords.txt"}, "k": 2}
+)
+retriever.invoke("ESG 에 대하여 알려줘")
+```
+
+

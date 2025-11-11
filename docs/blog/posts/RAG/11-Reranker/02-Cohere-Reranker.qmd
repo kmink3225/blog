@@ -1,0 +1,129 @@
+---
+title: "Cohere reranker"
+subtitle: 재순위화
+description: |
+  검색 결과의 관련성을 개선하는 Reranker 모델을 다룬다.
+categories:
+  - AI
+  - RAG
+  - LangChain
+author: Kwangmin Kim
+date: 12/31/2024
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+
+>[Cohere](https://cohere.ai/about)는 기업이 인간-기계 상호작용을 개선할 수 있도록 돕는 자연어 처리 모델을 제공하는 캐나다의 스타트업입니다.
+
+이 노트북은 `retriever`에서 [Cohere의 rerank endpoint](https://docs.cohere.com/docs/reranking)를 사용하는 방법을 보여줍니다. 
+
+
+```{python}
+# 설치
+# !pip install -qU cohere
+```
+
+## Cohere API 키 설정
+
+- [API 키 발급](https://dashboard.cohere.com/api-keys)
+- `.env` 파일에 `COHERE_API_KEY` 키 값에 API 키를 넣어주세요.
+
+**참고**
+- [공식 도큐먼트](https://docs.cohere.com/docs/the-cohere-platform?_gl=1*st323v*_gcl_au*MTA2ODUyNDMyNy4xNzE4MDMzMjY2*_ga*NTYzNTI5NDYyLjE3MTgwMzMyNjc.*_ga_CRGS116RZS*MTcyMTk4NzMxMi4xMS4xLjE3MjE5ODczNjIuMTAuMC4w)
+- [Reranker Model 리스트](https://docs.cohere.com/docs/rerank-2)
+
+```{python}
+# API KEY를 환경변수로 관리하기 위한 설정 파일
+from dotenv import load_dotenv
+
+# API KEY 정보로드
+load_dotenv()
+```
+
+```{python}
+# LangSmith 추적을 설정합니다. https://smith.langchain.com
+# !pip install langchain-teddynote
+from langchain_teddynote import logging
+
+# 프로젝트 이름을 입력합니다.
+logging.langsmith("Reranker")
+```
+
+## 사용법
+
+```{python}
+def pretty_print_docs(docs):
+    print(
+        f"\n{'-' * 100}\n".join(
+            [f"Document {i+1}:\n\n" + d.page_content for i, d in enumerate(docs)]
+        )
+    )
+```
+
+**Cohere 다국어 지원 모델**
+
+- Embedding: `embed-multilingual-v3.0`, `embed-multilingual-light-v3.0`, `embed-multilingual-v2.0`
+- Reranker: `rerank-multilingual-v3.0`, `rerank-multilingual-v2.0`
+
+```{python}
+from langchain_community.document_loaders import TextLoader
+from langchain_community.vectorstores import FAISS
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_cohere import CohereEmbeddings
+
+# 문서 로드
+documents = TextLoader("./data/appendix-keywords.txt").load()
+
+# 텍스트 분할기 초기화
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+
+# 문서 분할
+texts = text_splitter.split_documents(documents)
+
+# 검색기 초기화
+retriever = FAISS.from_documents(
+    texts, CohereEmbeddings(model="embed-multilingual-v3.0")
+).as_retriever(search_kwargs={"k": 10})
+
+# 질의문
+query = "Word2Vec 에 대해서 알려줘!"
+
+# 문서 검색
+docs = retriever.invoke(query)
+
+# 문서 출력
+pretty_print_docs(docs)
+```
+
+## CohereRerank을 사용한 재정렬
+이제 기본 `retriever`를 `ContextualCompressionRetriever`로 감싸보겠습니다. Cohere 재정렬 엔드포인트를 사용하여 반환된 결과를 재정렬하는 `CohereRerank`를 추가할 것입니다.
+CohereRerank에서 모델 이름을 지정하는 것이 필수임을 유의하십시오!
+
+```{python}
+from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+from langchain_cohere import CohereRerank
+
+# 문서 재정렬 모델 설정
+compressor = CohereRerank(model="rerank-multilingual-v3.0")
+
+# 문맥 압축 검색기 설정
+compression_retriever = ContextualCompressionRetriever(
+    base_compressor=compressor, base_retriever=retriever
+)
+
+# 압축된 문서 검색
+compressed_docs = compression_retriever.invoke("Word2Vec 에 대해서 알려줘!")
+
+# 압축된 문서 출력
+pretty_print_docs(compressed_docs)
+```
+
+

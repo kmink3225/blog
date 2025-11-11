@@ -1,0 +1,119 @@
+---
+title: "FlashRank reranker"
+subtitle: 재순위화
+description: |
+  검색 결과의 관련성을 개선하는 Reranker 모델을 다룬다.
+categories:
+  - AI
+  - RAG
+  - LangChain
+author: Kwangmin Kim
+date: 12/31/2024
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+
+>[FlashRank](https://github.com/PrithivirajDamodaran/FlashRank)는 기존 검색 및 `retrieval` 파이프라인에 재순위를 추가하기 위한 초경량 및 초고속 Python 라이브러리입니다. 이는 SoTA `cross-encoders`를 기반으로 합니다.
+
+이 노트북은 문서 압축 및 `retrieval`을 위해 [flashrank](https://github.com/PrithivirajDamodaran/FlashRank)를 사용하는 방법을 보여줍니다.
+
+
+## 환경설정
+
+```{python}
+# 설치
+# !pip install -qU flashrank
+```
+
+```{python}
+def pretty_print_docs(docs):
+    print(
+        f"\n{'-' * 100}\n".join(
+            [
+                f"Document {i+1}:\n\n{d.page_content}\nMetadata: {d.metadata}"
+                for i, d in enumerate(docs)
+            ]
+        )
+    )
+```
+
+## FlashrankRerank
+
+간단한 예시를 위한 데이터를 로드하고 retriever 를 생성합니다.
+
+```{python}
+from langchain_community.document_loaders import TextLoader
+from langchain_community.vectorstores import FAISS
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+
+# 문서 로드
+documents = TextLoader("./data/appendix-keywords.txt").load()
+
+# 텍스트 분할기 초기화
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+
+# 문서 분할
+texts = text_splitter.split_documents(documents)
+
+# 각 텍스트에 고유 ID 추가
+for idx, text in enumerate(texts):
+    text.metadata["id"] = idx
+    
+# 검색기 초기화
+retriever = FAISS.from_documents(
+    texts, OpenAIEmbeddings()
+).as_retriever(search_kwargs={"k": 10})
+
+# 질의문
+query = "Word2Vec 에 대해서 설명해줘."
+
+# 문서 검색
+docs = retriever.invoke(query)
+
+# 문서 출력
+pretty_print_docs(docs)
+```
+
+이제 기본 `retriever`를 `ContextualCompressionRetriever`로 감싸고, `FlashrankRerank`를 압축기로 사용해 봅시다.
+
+```{python}
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import FlashrankRerank
+from langchain_openai import ChatOpenAI
+
+# LLM 초기화
+llm = ChatOpenAI(temperature=0)
+
+# 문서 압축기 초기화
+compressor = FlashrankRerank(model="ms-marco-MultiBERT-L-12")
+
+# 문맥 압축 검색기 초기화
+compression_retriever = ContextualCompressionRetriever(
+    base_compressor=compressor, base_retriever=retriever
+)
+
+# 압축된 문서 검색
+compressed_docs = compression_retriever.invoke(
+    "Word2Vec 에 대해서 설명해줘."
+)
+
+# 문서 ID 출력
+print([doc.metadata["id"] for doc in compressed_docs])
+```
+
+reranker 가 적용된 후 결과를 비교합니다.
+
+```{python}
+# 문서 압축 결과 출력
+pretty_print_docs(compressed_docs)
+```
+
