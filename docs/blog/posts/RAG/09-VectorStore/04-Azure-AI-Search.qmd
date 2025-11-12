@@ -1,0 +1,792 @@
+---
+title: "Azure AI Search"
+subtitle: Azure 네이티브 벡터 스토어
+description: |
+  Azure AI Search를 활용한 하이브리드 검색 시스템 구축 방법을 다룬다.
+  벡터 검색과 전문 검색을 결합한 엔터프라이즈급 검색 솔루션을 설명한다.
+categories:
+  - AI
+  - RAG
+  - LangChain
+  - Azure
+author: Kwangmin Kim
+date: 04/18/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+## Azure AI Search란?
+
+Azure AI Search(이전 Azure Cognitive Search)는 Microsoft Azure에서 제공하는 완전 관리형 클라우드 검색 서비스다.
+
+**주요 특징:**
+- 벡터 검색 + 전문 검색(Full-Text Search) 하이브리드 지원
+- Azure 생태계와의 완벽한 통합
+- 엔터프라이즈급 보안 및 규정 준수
+- AI 기반 인덱싱 및 검색 기능
+- 확장 가능한 아키텍처
+
+**왜 Azure AI Search인가?**
+- **기업 환경에 최적화**: Azure 서비스들과 네이티브 통합
+- **하이브리드 검색**: 의미 검색(벡터) + 키워드 검색(전문검색) 동시 지원
+- **관리 편의성**: 인프라 관리 불필요, 자동 스케일링
+- **보안 및 규정 준수**: 엔터프라이즈급 보안 기능 내장
+
+## Azure AI Search vs 다른 VectorStore
+
+| 항목 | Azure AI Search | FAISS | Pinecone | Chroma |
+|------|----------------|-------|----------|--------|
+| **배포** | 클라우드 전용 | 로컬/클라우드 | 클라우드 전용 | 로컬/클라우드 |
+| **관리** | 완전 관리형 | 자체 관리 | 완전 관리형 | 자체 관리 |
+| **하이브리드 검색** | ✅ 네이티브 지원 | ❌ | ❌ | ❌ |
+| **Azure 통합** | ✅ 완벽 통합 | 수동 설정 | 수동 설정 | 수동 설정 |
+| **엔터프라이즈 보안** | ✅ 내장 | 수동 설정 | 기본 지원 | 수동 설정 |
+| **가격** | 사용량 기반 | 무료 (인프라 비용 별도) | 사용량 기반 | 무료 (인프라 비용 별도) |
+
+## Azure AI Search 아키텍처
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                 클라이언트 애플리케이션                     │
+│              (LangChain + Azure SDK)                    │
+└────────────────────┬────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│               Azure AI Search Service                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│  │ 벡터 인덱스    │  │  전문 인덱스  │  │ 시맨틱 검색   │    │
+│  └──────────────┘  └──────────────┘  └──────────────┘   │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │           하이브리드 검색 엔진                      │   │
+│  └──────────────────────────────────────────────────┘   │
+└────────────────────┬────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│                   데이터 소스                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│  │ Blob Storage │  │  Cosmos DB   │  │   SQL DB     │   │
+│  └──────────────┘  └──────────────┘  └──────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+## 설치 및 설정
+
+### 필수 패키지 설치
+
+```{python}
+# Azure AI Search SDK 설치
+# !pip install azure-search-documents
+# !pip install azure-identity
+# !pip install langchain-community
+# !pip install langchain-openai
+```
+
+### Azure AI Search 리소스 생성
+
+**Azure Portal에서 생성:**
+1. Azure Portal → "리소스 만들기" → "Azure AI Search" 검색
+2. 기본 정보 입력:
+   - 구독 선택
+   - 리소스 그룹 생성 또는 선택
+   - 서비스 이름 입력 (전역적으로 고유해야 함)
+   - 지역 선택
+3. 가격 책정 계층 선택:
+   - **Free**: 개발/테스트용 (50MB, 최대 3개 인덱스, $0/월)
+   - **Basic**: 소규모 프로젝트 (15GB, 최대 15개 인덱스, $73.73/월)
+   - **Standard S1**: 프로덕션용 (160GB, 최대 50개 인덱스, $245.28/월)
+   - **Standard S2**: 대규모 프로덕션 (512GB, 최대 200개 인덱스, $981.12/월)
+   - **Standard S3**: 엔터프라이즈 (1TB, 최대 200개 인덱스, $1,962.24/월)
+   - **Storage Optimized L1**: 스토리지 집약적 (2TB, 최대 10개 인덱스, $2,802.47/월)
+   - **Storage Optimized L2**: 대용량 스토리지 (4TB, 최대 10개 인덱스, $5,604.21/월)
+
+**엔드포인트 및 키 확인:**
+- 생성된 리소스 → "키" 메뉴
+- 엔드포인트 URL과 관리 키 복사
+
+### 환경 변수 설정
+
+```{python}
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# 환경 변수 설정
+AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
+AZURE_SEARCH_API_KEY = os.getenv("AZURE_SEARCH_API_KEY")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+```
+
+`.env` 파일 예시:
+```
+AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
+AZURE_SEARCH_API_KEY=your-admin-key
+AZURE_OPENAI_ENDPOINT=https://your-openai-resource.openai.azure.com
+AZURE_OPENAI_API_KEY=your-openai-key
+```
+
+## 기본 사용법
+
+### Azure OpenAI 임베딩 설정
+
+```{python}
+from langchain_openai import AzureOpenAIEmbeddings
+
+# Azure OpenAI 임베딩 모델 설정
+embeddings = AzureOpenAIEmbeddings(
+    azure_deployment="text-embedding-ada-002",
+    openai_api_version="2024-02-01",
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    api_key=AZURE_OPENAI_API_KEY
+)
+
+# 임베딩 테스트
+test_embedding = embeddings.embed_query("테스트 문장")
+print(f"임베딩 차원: {len(test_embedding)}")
+```
+
+### Azure AI Search 초기화
+
+```{python}
+from langchain_community.vectorstores.azuresearch import AzureSearch
+
+# Azure Search VectorStore 초기화
+vector_store = AzureSearch(
+    azure_search_endpoint=AZURE_SEARCH_ENDPOINT,
+    azure_search_key=AZURE_SEARCH_API_KEY,
+    index_name="langchain-vector-demo",
+    embedding_function=embeddings.embed_query
+)
+
+print("Azure AI Search VectorStore 초기화 완료")
+```
+
+### 문서 추가
+
+```{python}
+from langchain_core.documents import Document
+
+# 샘플 문서 생성
+documents = [
+    Document(
+        page_content="Azure AI Search는 Microsoft Azure의 관리형 검색 서비스다.",
+        metadata={"source": "azure-docs", "category": "search", "year": 2024}
+    ),
+    Document(
+        page_content="벡터 검색과 전문 검색을 결합한 하이브리드 검색을 지원한다.",
+        metadata={"source": "azure-docs", "category": "features", "year": 2024}
+    ),
+    Document(
+        page_content="Azure OpenAI Service와 통합하여 RAG 시스템을 구축할 수 있다.",
+        metadata={"source": "azure-docs", "category": "ai", "year": 2024}
+    ),
+    Document(
+        page_content="엔터프라이즈급 보안과 규정 준수 기능을 제공한다.",
+        metadata={"source": "azure-docs", "category": "security", "year": 2024}
+    ),
+    Document(
+        page_content="자동 스케일링과 고가용성을 지원하는 클라우드 네이티브 서비스다.",
+        metadata={"source": "azure-docs", "category": "infrastructure", "year": 2024}
+    )
+]
+
+# 문서 추가
+ids = vector_store.add_documents(documents)
+print(f"{len(documents)}개 문서가 인덱스에 추가되었다.")
+print(f"문서 IDs: {ids}")
+```
+
+### 유사도 검색
+
+```{python}
+# 기본 유사도 검색
+query = "Azure에서 RAG 시스템을 만드는 방법은?"
+results = vector_store.similarity_search(query, k=3)
+
+print(f"\n질문: {query}\n")
+for i, doc in enumerate(results, 1):
+    print(f"[결과 {i}]")
+    print(f"내용: {doc.page_content}")
+    print(f"메타데이터: {doc.metadata}\n")
+```
+
+### 유사도 점수와 함께 검색
+
+```{python}
+# 유사도 점수 포함 검색
+results_with_score = vector_store.similarity_search_with_score(query, k=3)
+
+print(f"질문: {query}\n")
+for doc, score in results_with_score:
+    print(f"점수: {score:.4f}")
+    print(f"내용: {doc.page_content}")
+    print(f"카테고리: {doc.metadata.get('category', 'N/A')}\n")
+```
+
+## 하이브리드 검색
+
+Azure AI Search의 가장 강력한 기능은 벡터 검색과 전문 검색을 결합한 하이브리드 검색이다.
+
+### 하이브리드 검색 실행
+
+```{python}
+from azure.search.documents.models import VectorizedQuery
+
+# 하이브리드 검색 (벡터 + 키워드)
+query = "Azure 보안 기능"
+results = vector_store.hybrid_search(
+    query=query,
+    k=5
+)
+
+print(f"하이브리드 검색 결과:\n")
+for i, doc in enumerate(results, 1):
+    print(f"[{i}] {doc.page_content}")
+    print(f"    카테고리: {doc.metadata.get('category')}\n")
+```
+
+### 검색 가중치 조정
+
+```{python}
+# 벡터 검색 가중치 조정
+# alpha = 1.0: 벡터 검색 100%
+# alpha = 0.0: 키워드 검색 100%
+# alpha = 0.5: 50:50 (기본값)
+
+query = "검색 서비스"
+
+# 벡터 검색 위주
+print("=== 벡터 검색 위주 (alpha=0.8) ===")
+results_vector = vector_store.hybrid_search(query, k=3, alpha=0.8)
+for doc in results_vector:
+    print(f"- {doc.page_content[:50]}...")
+
+# 키워드 검색 위주
+print("\n=== 키워드 검색 위주 (alpha=0.2) ===")
+results_keyword = vector_store.hybrid_search(query, k=3, alpha=0.2)
+for doc in results_keyword:
+    print(f"- {doc.page_content[:50]}...")
+```
+
+## 메타데이터 필터링
+
+```{python}
+# 특정 카테고리의 문서만 검색
+query = "Azure 기능"
+results = vector_store.similarity_search(
+    query=query,
+    k=5,
+    filters="category eq 'features' or category eq 'ai'"
+)
+
+print("필터링된 검색 결과:")
+for doc in results:
+    print(f"- {doc.page_content}")
+    print(f"  카테고리: {doc.metadata['category']}\n")
+```
+
+```{python}
+# 복잡한 필터 조건
+results = vector_store.similarity_search(
+    query="Azure",
+    k=10,
+    filters="category eq 'search' and year eq 2024"
+)
+
+print(f"검색 조건: category='search' AND year=2024")
+print(f"결과 수: {len(results)}")
+```
+
+## RAG 시스템 구축
+
+### Azure OpenAI와 통합
+
+```{python}
+from langchain_openai import AzureChatOpenAI
+from langchain.chains import RetrievalQA
+
+# Azure OpenAI Chat 모델 설정
+llm = AzureChatOpenAI(
+    azure_deployment="gpt-4",
+    openai_api_version="2024-02-01",
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    api_key=AZURE_OPENAI_API_KEY,
+    temperature=0
+)
+
+# Retriever 생성 (하이브리드 검색 사용)
+retriever = vector_store.as_retriever(
+    search_type="similarity",
+    search_kwargs={"k": 3}
+)
+
+# RAG 체인 생성
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    chain_type="stuff",
+    retriever=retriever,
+    return_source_documents=True
+)
+
+print("RAG 시스템 준비 완료")
+```
+
+### 질의응답 실행
+
+```{python}
+# 질문하기
+question = "Azure AI Search의 주요 특징은 무엇인가?"
+result = qa_chain.invoke({"query": question})
+
+print(f"질문: {question}\n")
+print(f"답변:\n{result['result']}\n")
+print("참조 문서:")
+for i, doc in enumerate(result["source_documents"], 1):
+    print(f"[{i}] {doc.page_content}")
+    print(f"    출처: {doc.metadata.get('source')}, 카테고리: {doc.metadata.get('category')}\n")
+```
+
+### 대화형 RAG
+
+```{python}
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+
+# 대화 메모리 설정
+memory = ConversationBufferMemory(
+    memory_key="chat_history",
+    return_messages=True,
+    output_key="answer"
+)
+
+# 대화형 RAG 체인
+conversational_chain = ConversationalRetrievalChain.from_llm(
+    llm=llm,
+    retriever=retriever,
+    memory=memory,
+    return_source_documents=True
+)
+
+# 대화 시작
+questions = [
+    "Azure AI Search가 무엇인가?",
+    "하이브리드 검색이란?",
+    "Azure와 어떻게 통합되나?"
+]
+
+for question in questions:
+    result = conversational_chain.invoke({"question": question})
+    print(f"Q: {question}")
+    print(f"A: {result['answer']}\n")
+```
+
+## 고급 인덱스 관리
+
+### 인덱스 스키마 정의
+
+```{python}
+from azure.search.documents.indexes.models import (
+    SearchIndex,
+    SearchField,
+    SearchFieldDataType,
+    VectorSearch,
+    HnswAlgorithmConfiguration,
+    VectorSearchProfile,
+    SemanticConfiguration,
+    SemanticField,
+    SemanticSearch
+)
+
+# 필드 정의
+fields = [
+    SearchField(
+        name="id",
+        type=SearchFieldDataType.String,
+        key=True,
+        filterable=True
+    ),
+    SearchField(
+        name="content",
+        type=SearchFieldDataType.String,
+        searchable=True,
+        analyzer_name="ko.microsoft"  # 한글 형태소 분석기
+    ),
+    SearchField(
+        name="content_vector",
+        type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+        vector_search_dimensions=1536,  # Ada-002 차원
+        vector_search_profile_name="myHnswProfile"
+    ),
+    SearchField(
+        name="category",
+        type=SearchFieldDataType.String,
+        filterable=True,
+        facetable=True
+    ),
+    SearchField(
+        name="year",
+        type=SearchFieldDataType.Int32,
+        filterable=True,
+        sortable=True
+    )
+]
+
+# 벡터 검색 설정 (HNSW 알고리즘)
+vector_search = VectorSearch(
+    algorithms=[
+        HnswAlgorithmConfiguration(
+            name="myHnsw",
+            parameters={
+                "m": 4,  # 연결 수
+                "efConstruction": 400,  # 구축 시 탐색 깊이
+                "efSearch": 500,  # 검색 시 탐색 깊이
+                "metric": "cosine"  # 유사도 메트릭
+            }
+        )
+    ],
+    profiles=[
+        VectorSearchProfile(
+            name="myHnswProfile",
+            algorithm_configuration_name="myHnsw"
+        )
+    ]
+)
+
+# 시맨틱 검색 설정
+semantic_config = SemanticConfiguration(
+    name="my-semantic-config",
+    prioritized_fields=SemanticField(
+        title_field=None,
+        content_fields=[SemanticField(field_name="content")],
+        keywords_fields=[SemanticField(field_name="category")]
+    )
+)
+
+semantic_search = SemanticSearch(configurations=[semantic_config])
+```
+
+### 인덱스 생성
+
+```{python}
+from azure.search.documents.indexes import SearchIndexClient
+from azure.core.credentials import AzureKeyCredential
+
+# 인덱스 클라이언트
+index_client = SearchIndexClient(
+    endpoint=AZURE_SEARCH_ENDPOINT,
+    credential=AzureKeyCredential(AZURE_SEARCH_API_KEY)
+)
+
+# 인덱스 생성
+index = SearchIndex(
+    name="advanced-index",
+    fields=fields,
+    vector_search=vector_search,
+    semantic_search=semantic_search
+)
+
+result = index_client.create_or_update_index(index)
+print(f"인덱스 '{result.name}' 생성 완료")
+```
+
+### 인덱스 조회 및 삭제
+
+```{python}
+# 모든 인덱스 조회
+indexes = index_client.list_indexes()
+print("현재 인덱스 목록:")
+for idx in indexes:
+    print(f"- {idx.name}")
+
+# 특정 인덱스 정보 조회
+index_info = index_client.get_index("advanced-index")
+print(f"\n인덱스 정보:")
+print(f"이름: {index_info.name}")
+print(f"필드 수: {len(index_info.fields)}")
+
+# 인덱스 삭제
+# index_client.delete_index("advanced-index")
+# print("인덱스 삭제 완료")
+```
+
+## 시맨틱 검색
+
+Azure AI Search의 시맨틱 랭킹 기능을 활용한다.
+
+```{python}
+from azure.search.documents.models import QueryType
+
+# 시맨틱 검색 실행
+results = vector_store.similarity_search(
+    query="클라우드 기반 검색 솔루션의 보안 기능",
+    k=5,
+    query_type=QueryType.SEMANTIC,
+    semantic_configuration_name="my-semantic-config"
+)
+
+print("시맨틱 검색 결과:")
+for i, doc in enumerate(results, 1):
+    print(f"\n[{i}] {doc.page_content}")
+    print(f"카테고리: {doc.metadata.get('category')}")
+```
+
+## 성능 최적화
+
+### 배치 업로드
+
+```{python}
+from azure.search.documents import SearchClient
+
+# Search 클라이언트 생성
+search_client = SearchClient(
+    endpoint=AZURE_SEARCH_ENDPOINT,
+    index_name="langchain-vector-demo",
+    credential=AzureKeyCredential(AZURE_SEARCH_API_KEY)
+)
+
+# 대량 문서 업로드 (배치 단위)
+batch_size = 100
+documents_batch = []
+
+for doc in large_document_list:
+    documents_batch.append(doc)
+    
+    if len(documents_batch) >= batch_size:
+        # 배치 업로드
+        result = search_client.upload_documents(documents=documents_batch)
+        print(f"{len(documents_batch)}개 문서 업로드 완료")
+        documents_batch = []
+
+# 남은 문서 업로드
+if documents_batch:
+    search_client.upload_documents(documents=documents_batch)
+```
+
+### 인덱싱 최적화
+
+```{python}
+# 인덱서 설정으로 자동 인덱싱
+from azure.search.documents.indexes.models import (
+    SearchIndexer,
+    IndexingSchedule,
+    FieldMapping
+)
+
+# 데이터 소스 연결 (예: Blob Storage)
+indexer = SearchIndexer(
+    name="my-indexer",
+    data_source_name="my-datasource",
+    target_index_name="my-index",
+    schedule=IndexingSchedule(interval="PT2H"),  # 2시간마다
+    field_mappings=[
+        FieldMapping(source_field_name="content", target_field_name="content")
+    ]
+)
+
+# 인덱서 생성 및 실행
+# indexer_client.create_or_update_indexer(indexer)
+# indexer_client.run_indexer("my-indexer")
+```
+
+## 보안 및 인증
+
+### Managed Identity 사용
+
+```{python}
+from azure.identity import DefaultAzureCredential
+
+# Managed Identity로 인증 (권장)
+credential = DefaultAzureCredential()
+
+vector_store = AzureSearch(
+    azure_search_endpoint=AZURE_SEARCH_ENDPOINT,
+    azure_search_credential=credential,  # 키 대신 credential
+    index_name="secure-index",
+    embedding_function=embeddings.embed_query
+)
+
+print("Managed Identity로 인증 완료")
+```
+
+### Private Endpoint 설정
+
+Azure Portal에서 설정:
+1. Azure AI Search 리소스 → "네트워킹"
+2. "프라이빗 엔드포인트 연결" 추가
+3. VNet 및 서브넷 선택
+4. DNS 설정 구성
+
+### 역할 기반 액세스 제어 (RBAC)
+
+Azure Portal에서 설정:
+1. AI Search 리소스 → "액세스 제어(IAM)"
+2. "역할 할당 추가"
+3. 역할 선택:
+   - Search Service Contributor: 관리 작업
+   - Search Index Data Contributor: 문서 추가/삭제
+   - Search Index Data Reader: 읽기 전용
+
+## 모니터링 및 진단
+
+### Azure Monitor 통합
+
+- Azure Portal에서 모니터링
+- AI Search → 모니터링 → 메트릭
+- 주요 메트릭:
+    - SearchQueriesPerSecond: 초당 검색 쿼리 수
+    - ThrottledSearchQueriesPercentage: 제한된 쿼리 비율
+    - SearchLatency: 검색 지연 시간
+    - IndexingDocumentsCount: 인덱싱된 문서 수
+
+### 검색 품질 분석
+
+```{python}
+def analyze_search_quality(test_queries, expected_results):
+    """검색 품질 메트릭 계산"""
+    metrics = {
+        "precision": [],
+        "recall": [],
+        "mrr": []  # Mean Reciprocal Rank
+    }
+    
+    for query, expected in zip(test_queries, expected_results):
+        results = vector_store.similarity_search(query, k=10)
+        result_ids = [doc.metadata.get("id") for doc in results]
+        
+        # Precision@K
+        relevant_in_top_k = len(set(result_ids[:5]) & set(expected))
+        precision = relevant_in_top_k / 5
+        metrics["precision"].append(precision)
+        
+        # Recall
+        total_relevant = len(set(result_ids) & set(expected))
+        recall = total_relevant / len(expected) if expected else 0
+        metrics["recall"].append(recall)
+        
+        # MRR
+        for i, doc_id in enumerate(result_ids, 1):
+            if doc_id in expected:
+                metrics["mrr"].append(1/i)
+                break
+        else:
+            metrics["mrr"].append(0)
+    
+    return {
+        "avg_precision": sum(metrics["precision"]) / len(metrics["precision"]),
+        "avg_recall": sum(metrics["recall"]) / len(metrics["recall"]),
+        "avg_mrr": sum(metrics["mrr"]) / len(metrics["mrr"])
+    }
+
+# 사용 예시
+# test_queries = ["Azure 검색", "RAG 시스템", "보안 기능"]
+# expected = [["doc1", "doc2"], ["doc3", "doc4"], ["doc5"]]
+# quality_metrics = analyze_search_quality(test_queries, expected)
+```
+
+## 비용 최적화
+
+### 가격 책정 계층
+
+| 계층 | 월 비용 (SU당) | 스토리지 | 최대 인덱스 | 최대 스케일 | 용도 |
+|------|---------------|---------|-----------|-----------|------|
+| **Free** | $0 | 50MB | 3 | N/A | 개발/테스트 |
+| **Basic** | $73.73 | 15GB | 15 | 최대 3 파티션, 3 복제본 | 소규모 프로젝트 |
+| **Standard S1** | $245.28 | 160GB | 50 | 최대 12 파티션, 12 복제본 | 프로덕션 환경 |
+| **Standard S2** | $981.12 | 512GB | 200 | 최대 12 파티션, 12 복제본 | 대규모 프로덕션 |
+| **Standard S3** | $1,962.24 | 1TB | 200 (고밀도 모드: 1,000/파티션) | 최대 12 파티션, 12 복제본 | 엔터프라이즈급 |
+| **Storage Optimized L1** | $2,802.47 | 2TB | 10 | 최대 12 파티션, 12 복제본 | 스토리지 집약적 워크로드 |
+| **Storage Optimized L2** | $5,604.21 | 4TB | 10 | 최대 12 파티션, 12 복제본 | 대용량 스토리지 |
+
+**참고:**
+- 스토리지는 서비스당 최대 용량 기준 (파티션 수에 따라 증가)
+- Standard S3의 고밀도 모드는 파티션당 최대 1,000개 인덱스 지원
+- Confidential Compute 옵션은 추가 비용 발생 (약 10% 할증)
+
+### 비용 절감 전략
+
+1. 인덱스 크기 최적화
+    - 필요한 필드만 저장
+    - 검색하지 않는 필드는 `retrievable=False`
+2. 복제본 및 파티션 조정
+    - 개발: 1 복제본, 1 파티션
+    - 프로덕션: 필요한 만큼만
+3. 사용하지 않는 인덱스 삭제
+
+```python
+unused_indexes = ["old-index-1", "test-index-2"]
+for index_name in unused_indexes:
+    index_client.delete_index(index_name)
+    print(f"삭제: {index_name}")
+```
+
+4. 스케줄링된 인덱싱 사용
+    - 실시간 업데이트 대신 배치 처리
+
+
+## 문제 해결
+
+### 일반적인 오류
+
+
+```python
+# 인증 오류
+# 오류: 401 Unauthorized
+# 해결: API 키 및 엔드포인트 확인
+print(f"Endpoint: {AZURE_SEARCH_ENDPOINT}")
+print(f"Key: {AZURE_SEARCH_API_KEY[:10]}...")
+
+# 인덱스 용량 초과
+# 오류: 413 Request Entity Too Large
+# 해결: 배치 크기 줄이기 또는 상위 계층으로 업그레이드
+batch_size = 50  # 기본 100에서 줄임
+
+# 벡터 차원 불일치
+# 오류: Vector dimension mismatch
+# 해결: 인덱스 스키마와 임베딩 차원 일치 확인
+test_embed = embeddings.embed_query("test")
+print(f"임베딩 차원: {len(test_embed)}")
+print("인덱스 스키마에서 vector_search_dimensions 확인")
+
+# 쿼리 제한
+# 오류: 429 Too Many Requests
+# 해결: 재시도 로직 구현 또는 계층 업그레이드
+import time
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def search_with_retry(query):
+    return vector_store.similarity_search(query)
+```
+
+## 참고 자료
+
+### 공식 문서
+- [Azure AI Search 공식 문서](https://learn.microsoft.com/en-us/azure/search/)
+- [Azure AI Search Python SDK](https://learn.microsoft.com/en-us/python/api/overview/azure/search-documents-readme)
+- [벡터 검색 개요](https://learn.microsoft.com/en-us/azure/search/vector-search-overview)
+- [하이브리드 검색 가이드](https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview)
+- [시맨틱 검색 문서](https://learn.microsoft.com/en-us/azure/search/semantic-search-overview)
+
+### LangChain 통합
+- [LangChain Azure Search 통합](https://python.langchain.com/docs/integrations/vectorstores/azuresearch)
+- [Azure OpenAI + RAG 샘플](https://github.com/Azure-Samples/azure-search-openai-demo)
+
+### 튜토리얼 및 샘플
+- [Azure AI Search Python Samples](https://github.com/Azure-Samples/azure-search-python-samples)
+- [Vector Search Samples](https://github.com/Azure/azure-search-vector-samples)
+- [ChatGPT + Enterprise Data](https://github.com/Azure-Samples/azure-search-openai-demo-csharp)
+
+### 커뮤니티
+- [Microsoft Q&A - Azure AI Search](https://learn.microsoft.com/en-us/answers/tags/156/azure-search)
+- [Azure Updates](https://azure.microsoft.com/en-us/updates/?product=search)
+- [Tech Community Blog](https://techcommunity.microsoft.com/t5/azure-ai-services-blog/bg-p/Azure-AI-Services-blog)
