@@ -1,0 +1,970 @@
+---
+title: "Azure Container Apps"
+subtitle: 컨테이너 기반 배포
+description: |
+  Azure Container Apps를 활용한 RAG 시스템 컨테이너 배포 및 스케일링 전략을 다룬다.
+categories:
+  - AI
+  - RAG
+  - Azure
+author: Kwangmin Kim
+date: 11/09/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+## Azure Container Apps란?
+
+Azure Container Apps는 서버리스 컨테이너 플랫폼으로, Kubernetes 복잡도 없이 컨테이너를 실행할 수 있다.
+
+**주요 특징:**
+- Kubernetes 기반이지만 관리 불필요
+- HTTPS Ingress 자동 구성
+- Dapr 통합
+- KEDA 기반 자동 스케일링
+- Revision 관리 (Blue-Green 배포)
+
+**Azure Functions와 비교:**
+
+| 항목 | Functions | Container Apps |
+|------|-----------|----------------|
+| **실행 시간** | 최대 10분 | 무제한 |
+| **Cold Start** | 3-5초 | 1-2초 |
+| **커스터마이징** | 제한적 | 완전 제어 |
+| **WebSocket** | 불가 | 가능 |
+| **최소 인스턴스** | 0 (Consumption) | 0~30 |
+| **비용** | 실행 시간 기반 | vCPU/메모리 시간 |
+
+**Container Apps 권장 시나리오:**
+- 실행 시간 > 10분
+- WebSocket 또는 gRPC 필요
+- 복잡한 종속성
+- 지속적인 백그라운드 작업
+- Multi-container (사이드카 패턴)
+
+## 환경 설정
+
+### Docker 설치
+
+**Windows:**
+```powershell
+# Docker Desktop 설치
+winget install Docker.DockerDesktop
+```
+
+**macOS:**
+```bash
+brew install --cask docker
+```
+
+**Linux:**
+```bash
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+```
+
+### Azure CLI 확장
+
+```bash
+# Container Apps 확장 설치
+az extension add --name containerapp --upgrade
+
+# 확인
+az containerapp --version
+```
+
+## Dockerfile 작성
+
+### 프로젝트 구조
+
+```
+rag-container/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   └── rag.py
+├── Dockerfile
+├── requirements.txt
+└── .dockerignore
+```
+
+### requirements.txt
+
+```txt
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+langchain==0.1.6
+langchain-openai==0.0.5
+langchain-community==0.0.20
+azure-search-documents==11.4.0
+azure-identity==1.15.0
+python-dotenv==1.0.0
+```
+
+### app/main.py
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import os
+from app.rag import RAGSystem
+
+app = FastAPI(title="RAG API", version="1.0.0")
+
+# RAG 시스템 초기화
+rag = RAGSystem()
+
+class QueryRequest(BaseModel):
+    question: str
+    top_k: int = 3
+
+class QueryResponse(BaseModel):
+    question: str
+    answer: str
+    sources: list[str]
+
+@app.get("/")
+async def root():
+    """Health check"""
+    return {"status": "healthy", "service": "RAG API"}
+
+@app.get("/health")
+async def health():
+    """Health probe endpoint"""
+    try:
+        # 컴포넌트 상태 확인
+        if rag.is_initialized():
+            return {"status": "healthy"}
+        else:
+            return {"status": "initializing"}
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}
+
+@app.post("/query", response_model=QueryResponse)
+async def query(request: QueryRequest):
+    """RAG 쿼리 엔드포인트"""
+    try:
+        result = rag.query(
+            question=request.question,
+            top_k=request.top_k
+        )
+        return QueryResponse(
+            question=request.question,
+            answer=result["answer"],
+            sources=result["sources"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/stream")
+async def stream_query(request: QueryRequest):
+    """스트리밍 응답"""
+    from fastapi.responses import StreamingResponse
+    
+    async def generate():
+        async for chunk in rag.stream_query(request.question):
+            yield f"data: {chunk}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
+```
+
+### app/rag.py
+
+```python
+import os
+from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
+from langchain_community.vectorstores.azuresearch import AzureSearch
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+
+class RAGSystem:
+    def __init__(self):
+        self._initialized = False
+        self._init_components()
+    
+    def _init_components(self):
+        """RAG 컴포넌트 초기화"""
+        # Embeddings
+        self.embeddings = AzureOpenAIEmbeddings(
+            azure_deployment="text-embedding-3-small",
+            openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            api_key=os.getenv("AZURE_OPENAI_API_KEY")
+        )
+        
+        # Vector Store
+        self.vector_store = AzureSearch(
+            azure_search_endpoint=os.getenv("AZURE_SEARCH_ENDPOINT"),
+            azure_search_key=os.getenv("AZURE_SEARCH_API_KEY"),
+            index_name=os.getenv("AZURE_SEARCH_INDEX_NAME"),
+            embedding_function=self.embeddings.embed_query
+        )
+        
+        # LLM
+        self.llm = AzureChatOpenAI(
+            azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+            openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            temperature=0
+        )
+        
+        # Retriever
+        self.retriever = self.vector_store.as_retriever(
+            search_kwargs={"k": 3}
+        )
+        
+        # Prompt
+        prompt = ChatPromptTemplate.from_template(
+            """다음 컨텍스트를 참고하여 질문에 답변하세요.
+
+컨텍스트:
+{context}
+
+질문: {question}
+
+답변:"""
+        )
+        
+        # RAG Chain
+        def format_docs(docs):
+            return "\n\n".join([doc.page_content for doc in docs])
+        
+        self.rag_chain = (
+            {"context": self.retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt
+            | self.llm
+            | StrOutputParser()
+        )
+        
+        self._initialized = True
+    
+    def is_initialized(self) -> bool:
+        return self._initialized
+    
+    def query(self, question: str, top_k: int = 3) -> dict:
+        """RAG 쿼리 실행"""
+        # 문서 검색
+        docs = self.retriever.invoke(question)
+        
+        # 답변 생성
+        answer = self.rag_chain.invoke(question)
+        
+        # 출처 추출
+        sources = [doc.metadata.get("source", "Unknown") for doc in docs]
+        
+        return {
+            "answer": answer,
+            "sources": sources
+        }
+    
+    async def stream_query(self, question: str):
+        """스트리밍 쿼리"""
+        async for chunk in self.rag_chain.astream(question):
+            yield chunk
+```
+
+### Dockerfile
+
+```dockerfile
+FROM python:3.11-slim
+
+# 작업 디렉토리
+WORKDIR /app
+
+# 시스템 패키지 업데이트
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 종속성 설치
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 애플리케이션 코드 복사
+COPY ./app ./app
+
+# 포트 노출
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+# 애플리케이션 실행
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### .dockerignore
+
+```
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.git
+.gitignore
+.dockerignore
+Dockerfile
+README.md
+.env
+```
+
+## 로컬 테스트
+
+### Docker 빌드 및 실행
+
+```bash
+# 이미지 빌드
+docker build -t rag-api:latest .
+
+# 로컬 실행
+docker run -p 8000:8000 \
+  -e AZURE_OPENAI_ENDPOINT="https://openai-rag.openai.azure.com/" \
+  -e AZURE_OPENAI_API_KEY="your-key" \
+  -e AZURE_OPENAI_DEPLOYMENT="gpt-4o" \
+  -e AZURE_OPENAI_API_VERSION="2024-02-01" \
+  -e AZURE_SEARCH_ENDPOINT="https://search-rag.search.windows.net" \
+  -e AZURE_SEARCH_API_KEY="your-key" \
+  -e AZURE_SEARCH_INDEX_NAME="rag-documents" \
+  rag-api:latest
+
+# Health check
+curl http://localhost:8000/health
+
+# 쿼리 테스트
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Azure AI Search란?"}'
+```
+
+### docker-compose.yml (개발용)
+
+```yaml
+version: '3.8'
+
+services:
+  rag-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT}
+      - AZURE_OPENAI_API_VERSION=2024-02-01
+      - AZURE_SEARCH_ENDPOINT=${AZURE_SEARCH_ENDPOINT}
+      - AZURE_SEARCH_API_KEY=${AZURE_SEARCH_API_KEY}
+      - AZURE_SEARCH_INDEX_NAME=${AZURE_SEARCH_INDEX_NAME}
+    volumes:
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+실행:
+```bash
+docker-compose up
+```
+
+## Azure Container Registry
+
+### ACR 생성
+
+```bash
+# 리소스 그룹 생성
+az group create --name rg-rag-prod --location koreacentral
+
+# Container Registry 생성
+az acr create \
+  --resource-group rg-rag-prod \
+  --name acrragprod \
+  --sku Basic \
+  --location koreacentral
+
+# ACR 로그인
+az acr login --name acrragprod
+```
+
+### 이미지 푸시
+
+```bash
+# 이미지 태깅
+docker tag rag-api:latest acrragprod.azurecr.io/rag-api:latest
+docker tag rag-api:latest acrragprod.azurecr.io/rag-api:v1.0.0
+
+# 이미지 푸시
+docker push acrragprod.azurecr.io/rag-api:latest
+docker push acrragprod.azurecr.io/rag-api:v1.0.0
+
+# 이미지 확인
+az acr repository list --name acrragprod --output table
+az acr repository show-tags --name acrragprod --repository rag-api --output table
+```
+
+## Container Apps Environment
+
+### Environment 생성
+
+```bash
+# Log Analytics Workspace 생성
+az monitor log-analytics workspace create \
+  --resource-group rg-rag-prod \
+  --workspace-name law-rag-prod \
+  --location koreacentral
+
+# Workspace ID 조회
+WORKSPACE_ID=$(az monitor log-analytics workspace show \
+  --resource-group rg-rag-prod \
+  --workspace-name law-rag-prod \
+  --query customerId -o tsv)
+
+WORKSPACE_KEY=$(az monitor log-analytics workspace get-shared-keys \
+  --resource-group rg-rag-prod \
+  --workspace-name law-rag-prod \
+  --query primarySharedKey -o tsv)
+
+# Container Apps Environment 생성
+az containerapp env create \
+  --name cae-rag-prod \
+  --resource-group rg-rag-prod \
+  --location koreacentral \
+  --logs-workspace-id $WORKSPACE_ID \
+  --logs-workspace-key $WORKSPACE_KEY
+```
+
+## Container App 배포
+
+### ACR 통합
+
+```bash
+# ACR Admin 활성화
+az acr update --name acrragprod --admin-enabled true
+
+# ACR 자격 증명 조회
+ACR_USERNAME=$(az acr credential show --name acrragprod --query username -o tsv)
+ACR_PASSWORD=$(az acr credential show --name acrragprod --query passwords[0].value -o tsv)
+```
+
+### Container App 생성
+
+```bash
+az containerapp create \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --environment cae-rag-prod \
+  --image acrragprod.azurecr.io/rag-api:latest \
+  --target-port 8000 \
+  --ingress external \
+  --registry-server acrragprod.azurecr.io \
+  --registry-username $ACR_USERNAME \
+  --registry-password $ACR_PASSWORD \
+  --cpu 1.0 \
+  --memory 2.0Gi \
+  --min-replicas 0 \
+  --max-replicas 10 \
+  --env-vars \
+    AZURE_OPENAI_ENDPOINT="https://openai-rag.openai.azure.com/" \
+    AZURE_OPENAI_DEPLOYMENT="gpt-4o" \
+    AZURE_OPENAI_API_VERSION="2024-02-01" \
+    AZURE_SEARCH_ENDPOINT="https://search-rag.search.windows.net" \
+    AZURE_SEARCH_INDEX_NAME="rag-documents" \
+  --secrets \
+    azure-openai-key="your-openai-key" \
+    azure-search-key="your-search-key" \
+  --secret-env-vars \
+    AZURE_OPENAI_API_KEY=azure-openai-key \
+    AZURE_SEARCH_API_KEY=azure-search-key
+```
+
+### FQDN 확인
+
+```bash
+# Container App FQDN 조회
+az containerapp show \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --query properties.configuration.ingress.fqdn -o tsv
+
+# 출력: ca-rag-api.politebeach-12345678.koreacentral.azurecontainerapps.io
+```
+
+### 배포 테스트
+
+```bash
+FQDN=$(az containerapp show \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --query properties.configuration.ingress.fqdn -o tsv)
+
+# Health check
+curl https://$FQDN/health
+
+# 쿼리 테스트
+curl -X POST https://$FQDN/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Azure Container Apps란?"}'
+```
+
+## 스케일링 전략
+
+### HTTP 기반 스케일링
+
+```bash
+az containerapp update \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --min-replicas 1 \
+  --max-replicas 10 \
+  --scale-rule-name http-rule \
+  --scale-rule-type http \
+  --scale-rule-http-concurrency 50
+```
+
+**설정 의미:**
+- `min-replicas 1`: 항상 1개 인스턴스 유지 (Cold Start 방지)
+- `max-replicas 10`: 최대 10개까지 확장
+- `http-concurrency 50`: 동시 요청 50개당 1개 인스턴스 추가
+
+### CPU/메모리 기반 스케일링
+
+```bash
+az containerapp update \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --scale-rule-name cpu-rule \
+  --scale-rule-type cpu \
+  --scale-rule-metadata type=Utilization value=70
+```
+
+### 커스텀 메트릭 스케일링 (KEDA)
+
+**YAML 정의:**
+```yaml
+scaleRules:
+  - name: queue-based-scaling
+    custom:
+      type: azure-queue
+      metadata:
+        queueName: rag-requests
+        queueLength: "5"
+        accountName: stragprod
+      auth:
+        - secretRef: queue-connection
+          triggerParameter: connection
+```
+
+## Revision 관리
+
+### Blue-Green 배포
+
+```bash
+# 새 Revision 배포 (트래픽 0%)
+az containerapp update \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --image acrragprod.azurecr.io/rag-api:v2.0.0 \
+  --revision-suffix v2
+
+# Revision 목록 확인
+az containerapp revision list \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --output table
+
+# 트래픽 분할 (50:50)
+az containerapp ingress traffic set \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --revision-weight ca-rag-api--v1=50 ca-rag-api--v2=50
+
+# 100% v2로 전환
+az containerapp ingress traffic set \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --revision-weight ca-rag-api--v2=100
+
+# 이전 Revision 비활성화
+az containerapp revision deactivate \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --revision ca-rag-api--v1
+```
+
+### 롤백
+
+```bash
+# 즉시 롤백
+az containerapp ingress traffic set \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --revision-weight ca-rag-api--v1=100
+```
+
+## 멀티 컨테이너 (사이드카)
+
+### Redis 캐시 사이드카
+
+**containerapp.yaml:**
+```yaml
+properties:
+  template:
+    containers:
+      - name: rag-api
+        image: acrragprod.azurecr.io/rag-api:latest
+        env:
+          - name: REDIS_HOST
+            value: localhost
+          - name: REDIS_PORT
+            value: "6379"
+        resources:
+          cpu: 1.0
+          memory: 2.0Gi
+      
+      - name: redis
+        image: redis:7-alpine
+        resources:
+          cpu: 0.5
+          memory: 1.0Gi
+```
+
+배포:
+```bash
+az containerapp create \
+  --name ca-rag-with-cache \
+  --resource-group rg-rag-prod \
+  --environment cae-rag-prod \
+  --yaml containerapp.yaml
+```
+
+### 캐시 통합 코드
+
+```python
+import redis
+from functools import lru_cache
+
+class RAGSystemWithCache(RAGSystem):
+    def __init__(self):
+        super().__init__()
+        self.redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            decode_responses=True
+        )
+    
+    def query(self, question: str, top_k: int = 3) -> dict:
+        # 캐시 확인
+        cache_key = f"rag:{question}"
+        cached = self.redis_client.get(cache_key)
+        
+        if cached:
+            return json.loads(cached)
+        
+        # RAG 실행
+        result = super().query(question, top_k)
+        
+        # 캐시 저장 (10분)
+        self.redis_client.setex(cache_key, 600, json.dumps(result))
+        
+        return result
+```
+
+## 모니터링
+
+### Application Insights 통합
+
+```bash
+# Application Insights 생성
+az monitor app-insights component create \
+  --app rag-api-insights \
+  --location koreacentral \
+  --resource-group rg-rag-prod \
+  --workspace law-rag-prod
+
+# Instrumentation Key 조회
+INSTRUMENTATION_KEY=$(az monitor app-insights component show \
+  --app rag-api-insights \
+  --resource-group rg-rag-prod \
+  --query instrumentationKey -o tsv)
+
+# Container App 업데이트
+az containerapp update \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --set-env-vars APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=$INSTRUMENTATION_KEY"
+```
+
+### OpenTelemetry 계측
+
+**requirements.txt 추가:**
+```txt
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-instrumentation-fastapi==0.42b0
+azure-monitor-opentelemetry-exporter==1.0.0b21
+```
+
+**main.py 수정:**
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+# Tracer 설정
+trace.set_tracer_provider(TracerProvider())
+tracer = trace.get_tracer(__name__)
+
+exporter = AzureMonitorTraceExporter.from_connection_string(
+    os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
+)
+trace.get_tracer_provider().add_span_processor(
+    BatchSpanProcessor(exporter)
+)
+
+# FastAPI 자동 계측
+app = FastAPI()
+FastAPIInstrumentor.instrument_app(app)
+
+@app.post("/query")
+async def query(request: QueryRequest):
+    with tracer.start_as_current_span("rag_query") as span:
+        span.set_attribute("question.length", len(request.question))
+        result = rag.query(request.question)
+        span.set_attribute("answer.length", len(result["answer"]))
+        return result
+```
+
+### 로그 쿼리
+
+```kusto
+// Container App 로그
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "ca-rag-api"
+| where TimeGenerated > ago(1h)
+| order by TimeGenerated desc
+| take 100
+
+// 시스템 로그
+ContainerAppSystemLogs_CL
+| where ContainerAppName_s == "ca-rag-api"
+| where TimeGenerated > ago(1h)
+| project TimeGenerated, Log_s
+
+// HTTP 요청 분석
+requests
+| where cloud_RoleName == "ca-rag-api"
+| summarize 
+    Count=count(),
+    AvgDuration=avg(duration),
+    P95Duration=percentile(duration, 95)
+  by bin(timestamp, 5m)
+| render timechart
+```
+
+## CI/CD 파이프라인
+
+### GitHub Actions
+
+**.github/workflows/deploy.yml:**
+```yaml
+name: Build and Deploy to Azure Container Apps
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AZURE_CONTAINER_REGISTRY: acrragprod
+  CONTAINER_APP_NAME: ca-rag-api
+  RESOURCE_GROUP: rg-rag-prod
+  IMAGE_NAME: rag-api
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Login to ACR
+        run: |
+          az acr login --name ${{ env.AZURE_CONTAINER_REGISTRY }}
+      
+      - name: Build and push image
+        run: |
+          IMAGE_TAG=${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker build -t $IMAGE_TAG .
+          docker push $IMAGE_TAG
+      
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+```
+
+## 보안
+
+### Managed Identity
+
+```bash
+# System-assigned identity 활성화
+az containerapp identity assign \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --system-assigned
+
+# Principal ID 조회
+PRINCIPAL_ID=$(az containerapp identity show \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --query principalId -o tsv)
+
+# Azure OpenAI 권한 부여
+az role assignment create \
+  --assignee $PRINCIPAL_ID \
+  --role "Cognitive Services OpenAI User" \
+  --scope /subscriptions/{subscription-id}/resourceGroups/rg-rag-prod/providers/Microsoft.CognitiveServices/accounts/openai-rag-prod
+
+# Azure Search 권한 부여
+az role assignment create \
+  --assignee $PRINCIPAL_ID \
+  --role "Search Index Data Reader" \
+  --scope /subscriptions/{subscription-id}/resourceGroups/rg-rag-prod/providers/Microsoft.Search/searchServices/search-rag-prod
+```
+
+### DefaultAzureCredential 사용
+
+```python
+from azure.identity import DefaultAzureCredential
+
+credential = DefaultAzureCredential()
+
+# OpenAI (Managed Identity)
+llm = AzureChatOpenAI(
+    azure_deployment="gpt-4o",
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    azure_ad_token_provider=lambda: credential.get_token(
+        "https://cognitiveservices.azure.com/.default"
+    ).token
+)
+
+# Azure Search (Managed Identity)
+from azure.search.documents import SearchClient
+
+search_client = SearchClient(
+    endpoint=os.getenv("AZURE_SEARCH_ENDPOINT"),
+    index_name=os.getenv("AZURE_SEARCH_INDEX_NAME"),
+    credential=credential
+)
+```
+
+### 네트워크 보안
+
+```bash
+# VNET 통합
+az containerapp env create \
+  --name cae-rag-secure \
+  --resource-group rg-rag-prod \
+  --location koreacentral \
+  --infrastructure-subnet-resource-id /subscriptions/{sub-id}/resourceGroups/rg-rag-prod/providers/Microsoft.Network/virtualNetworks/vnet-rag/subnets/subnet-containerapp
+
+# Internal Ingress (Private)
+az containerapp create \
+  --name ca-rag-internal \
+  --resource-group rg-rag-prod \
+  --environment cae-rag-secure \
+  --image acrragprod.azurecr.io/rag-api:latest \
+  --ingress internal \
+  --target-port 8000
+```
+
+## 비용 최적화
+
+### 가격 구조
+
+**Container Apps 비용:**
+- vCPU: $0.000024/초 ($0.0864/vCPU-시간)
+- 메모리: $0.0000027/GB-초 ($0.00972/GB-시간)
+- 요청: 첫 200만 건 무료, 이후 $0.40/100만 건
+
+**예시 계산** (1 vCPU, 2GB, min=1, max=10):
+
+**시나리오 1: 낮은 트래픽**
+- 평균 인스턴스: 1개
+- 월간 시간: 730시간
+- vCPU 비용: 1 × 730 × $0.0864 = $63.07
+- 메모리 비용: 2GB × 730 × $0.00972 = $14.19
+- **총 비용**: ~$77/월
+
+**시나리오 2: 중간 트래픽**
+- 평균 인스턴스: 3개
+- 월간 시간: 730시간
+- vCPU 비용: 3 × 730 × $0.0864 = $189.22
+- 메모리 비용: 3 × 2GB × 730 × $0.00972 = $42.57
+- **총 비용**: ~$232/월
+
+### 비용 절감 팁
+
+1. **min-replicas 조정**
+```bash
+# 오프피크에 0으로 설정 (Cold Start 허용)
+az containerapp update \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --min-replicas 0
+```
+
+2. **리소스 최적화**
+```bash
+# 필요한 최소 리소스만 할당
+az containerapp update \
+  --name ca-rag-api \
+  --resource-group rg-rag-prod \
+  --cpu 0.5 \
+  --memory 1.0Gi
+```
+
+3. **Consumption Plan 사용**
+```bash
+# Consumption 환경 (더 저렴)
+az containerapp env create \
+  --name cae-rag-consumption \
+  --resource-group rg-rag-prod \
+  --location koreacentral \
+  --enable-workload-profiles false
+```
+
+## 참고 자료
+
+### 공식 문서
+- [Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/)
+- [Container Apps 가격](https://azure.microsoft.com/en-us/pricing/details/container-apps/)
+- [KEDA Scalers](https://keda.sh/docs/scalers/)
+
+## 다음 단계
+
+컨테이너 배포가 완료되었다면, 이제 전체 시스템을 통합하자:
+
+👉 [09-End-to-End-Azure-RAG.qmd](./09-End-to-End-Azure-RAG.qmd) - End-to-End Azure RAG 시스템 구축

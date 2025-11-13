@@ -7,9 +7,9 @@ categories:
   - AI
   - RAG
   - Azure
-  - Storage
+  - Cloud
 author: Kwangmin Kim
-date: 01/02/2025
+date: 11/02/2025
 format: 
   html:
     page-layout: full
@@ -20,3 +20,611 @@ draft: False
 execute:
     eval: false
 ---
+
+## Azure Blob Storage란?
+
+Azure Blob Storage는 Microsoft Azure에서 제공하는 객체 스토리지 서비스로, RAG 시스템의 문서 저장소로 사용된다. 비정형 데이터(PDF, Word, 이미지 등)를 대용량으로 저장하고 관리할 수 있는 확장 가능한 클라우드 스토리지다.
+
+**RAG 파이프라인에서의 역할:**
+- 원본 문서 저장 (PDF, DOCX, PPTX, 이미지 등)
+- 전처리된 텍스트 저장
+- 메타데이터 및 인덱스 백업
+- 대용량 데이터셋 관리
+
+**주요 특징:**
+- **확장성**: EB(Exabyte) 규모까지 자동 확장
+- **내구성**: 99.999999999% (11 nine's) 데이터 내구성
+- **비용 효율성**: 계층형 스토리지로 비용 최적화
+- **보안**: 암호화, RBAC, Private Endpoint 지원
+
+## Blob Storage 계층
+
+Azure Blob Storage는 데이터 액세스 패턴에 따라 3가지 계층을 제공한다:
+
+| 계층 | 용도 | 가격 (GB/월) | 읽기 비용 | 적합한 시나리오 |
+|------|------|-------------|-----------|----------------|
+| **Hot** | 자주 액세스 | $0.0184 | 낮음 | RAG 운영 문서, 활성 데이터셋 |
+| **Cool** | 가끔 액세스 | $0.01 | 중간 | 아카이브 문서, 백업 |
+| **Archive** | 거의 없음 | $0.002 | 높음 | 장기 보관, 규정 준수 데이터 |
+
+**RAG 시스템 권장 사항:**
+- **Hot 계층**: 현재 RAG에서 사용 중인 문서
+- **Cool 계층**: 3개월 이상 미사용 문서
+- **Archive 계층**: 법적 보관 의무만 있는 문서
+
+## Storage Account 생성
+
+### Azure Portal에서 생성
+
+**1. Azure Portal 접속:**
+- [portal.azure.com](https://portal.azure.com) → "리소스 만들기"
+- "Storage Account" 검색 및 선택
+
+**2. 기본 설정:**
+- **구독**: 사용할 구독 선택
+- **리소스 그룹**: 새로 만들기 또는 기존 선택 (예: `rg-rag-prod`)
+- **Storage Account 이름**: 전역적으로 고유한 이름 (예: `stragdocs2025`)
+- **지역**: Korea Central 또는 Korea South
+- **성능**: Standard (대부분의 경우 충분)
+- **중복성**: 
+  - LRS (Locally Redundant Storage): 단일 데이터센터 내 3개 복제
+  - GRS (Geo-Redundant Storage): 다른 리전에 자동 복제 (권장)
+
+**3. 고급 설정:**
+- **보안**: 
+  - Require secure transfer (HTTPS 강제)
+  - Enable blob public access (나중에 제어 가능)
+- **Data Lake Storage Gen2**: RAG에서는 불필요
+- **Blob soft delete**: 7일 (실수로 삭제 방지)
+
+**4. 네트워킹:**
+- **연결 방법**: 
+  - Public endpoint (개발): 모든 네트워크에서 액세스
+  - Private endpoint (프로덕션): VNet 내에서만 액세스
+
+**5. 검토 + 만들기** → 생성 완료 (약 1분 소요)
+
+### Azure CLI로 생성
+
+```bash
+# Azure CLI 로그인
+az login
+
+# 리소스 그룹 생성
+az group create \
+    --name rg-rag-prod \
+    --location koreacentral
+
+# Storage Account 생성
+az storage account create \
+    --name stragdocs2025 \
+    --resource-group rg-rag-prod \
+    --location koreacentral \
+    --sku Standard_GRS \
+    --kind StorageV2 \
+    --https-only true \
+    --allow-blob-public-access false
+
+# 생성 확인
+az storage account show \
+    --name stragdocs2025 \
+    --resource-group rg-rag-prod \
+    --query "[name, location, sku.name]"
+```
+
+## 컨테이너 생성
+
+Blob Storage에서 **컨테이너**는 파일 시스템의 폴더와 유사한 개념이다.
+
+### Azure Portal에서 생성
+
+1. Storage Account → "컨테이너" 메뉴
+2. "+ 컨테이너" 클릭
+3. 설정:
+   - **이름**: `rag-documents` (소문자, 하이픈만 허용)
+   - **Public access level**: Private (권장)
+4. "만들기" 클릭
+
+### Python SDK로 생성
+
+```{python}
+from azure.storage.blob import BlobServiceClient
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# 환경 변수에서 연결 문자열 가져오기
+connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+
+# BlobServiceClient 생성
+blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+
+# 컨테이너 생성
+container_name = "rag-documents"
+container_client = blob_service_client.create_container(container_name)
+
+print(f"컨테이너 '{container_name}' 생성 완료")
+```
+
+**환경 변수 설정** (`.env` 파일):
+```
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=stragdocs2025;AccountKey=xxx;EndpointSuffix=core.windows.net
+```
+
+## 문서 업로드
+
+### 단일 파일 업로드
+
+```{python}
+from azure.storage.blob import BlobClient
+
+# Blob 클라이언트 생성
+blob_client = blob_service_client.get_blob_client(
+    container="rag-documents",
+    blob="sample.pdf"
+)
+
+# 파일 업로드
+with open("sample.pdf", "rb") as data:
+    blob_client.upload_blob(data, overwrite=True)
+    
+print("파일 업로드 완료")
+```
+
+### 여러 파일 일괄 업로드
+
+```{python}
+import os
+from pathlib import Path
+
+def upload_directory(container_name, local_directory):
+    """디렉토리 내 모든 파일을 Blob Storage에 업로드"""
+    container_client = blob_service_client.get_container_client(container_name)
+    
+    # 로컬 디렉토리의 모든 파일 탐색
+    for root, dirs, files in os.walk(local_directory):
+        for file in files:
+            file_path = os.path.join(root, file)
+            
+            # Blob 이름 생성 (디렉토리 구조 유지)
+            blob_name = os.path.relpath(file_path, local_directory).replace("\\", "/")
+            
+            # 파일 업로드
+            with open(file_path, "rb") as data:
+                blob_client = container_client.get_blob_client(blob_name)
+                blob_client.upload_blob(data, overwrite=True)
+                print(f"업로드: {blob_name}")
+
+# 사용 예시
+upload_directory("rag-documents", "./documents")
+```
+
+### 메타데이터와 함께 업로드
+
+```{python}
+from datetime import datetime
+
+# 메타데이터 정의
+metadata = {
+    "author": "Kwangmin Kim",
+    "category": "AI",
+    "upload_date": datetime.now().isoformat(),
+    "version": "1.0"
+}
+
+# 메타데이터와 함께 업로드
+with open("report.pdf", "rb") as data:
+    blob_client = blob_service_client.get_blob_client(
+        container="rag-documents",
+        blob="report.pdf"
+    )
+    blob_client.upload_blob(
+        data,
+        metadata=metadata,
+        overwrite=True
+    )
+
+print("메타데이터와 함께 업로드 완료")
+```
+
+## 문서 다운로드
+
+### 단일 파일 다운로드
+
+```{python}
+# Blob 다운로드
+blob_client = blob_service_client.get_blob_client(
+    container="rag-documents",
+    blob="sample.pdf"
+)
+
+# 로컬에 저장
+with open("downloaded_sample.pdf", "wb") as download_file:
+    download_file.write(blob_client.download_blob().readall())
+
+print("파일 다운로드 완료")
+```
+
+### 스트리밍 다운로드 (대용량 파일)
+
+```{python}
+# 스트리밍으로 다운로드 (메모리 효율적)
+with open("large_file.pdf", "wb") as download_file:
+    blob_data = blob_client.download_blob()
+    
+    # 청크 단위로 읽기 (기본 4MB)
+    for chunk in blob_data.chunks():
+        download_file.write(chunk)
+
+print("대용량 파일 다운로드 완료")
+```
+
+## 문서 목록 조회
+
+### 컨테이너 내 모든 Blob 나열
+
+```{python}
+# 컨테이너의 모든 Blob 가져오기
+container_client = blob_service_client.get_container_client("rag-documents")
+blob_list = container_client.list_blobs()
+
+print("Blob 목록:")
+for blob in blob_list:
+    print(f"- {blob.name}")
+    print(f"  크기: {blob.size / 1024:.2f} KB")
+    print(f"  수정일: {blob.last_modified}")
+```
+
+### 메타데이터 포함 조회
+
+```{python}
+# 메타데이터 포함 조회
+blob_list = container_client.list_blobs(include=['metadata'])
+
+for blob in blob_list:
+    print(f"\n파일: {blob.name}")
+    print(f"메타데이터: {blob.metadata}")
+```
+
+### 특정 접두사로 필터링
+
+```{python}
+# "reports/" 폴더의 파일만 조회
+blob_list = container_client.list_blobs(name_starts_with="reports/")
+
+for blob in blob_list:
+    print(f"- {blob.name}")
+```
+
+## 문서 삭제
+
+### 단일 파일 삭제
+
+```{python}
+# Blob 삭제
+blob_client = blob_service_client.get_blob_client(
+    container="rag-documents",
+    blob="old_file.pdf"
+)
+
+blob_client.delete_blob()
+print("파일 삭제 완료")
+```
+
+### 조건부 삭제 (오래된 파일만)
+
+```{python}
+from datetime import datetime, timedelta
+
+# 30일 이상 된 파일 삭제
+threshold_date = datetime.now() - timedelta(days=30)
+
+container_client = blob_service_client.get_container_client("rag-documents")
+blob_list = container_client.list_blobs()
+
+for blob in blob_list:
+    if blob.last_modified < threshold_date:
+        blob_client = container_client.get_blob_client(blob.name)
+        blob_client.delete_blob()
+        print(f"삭제: {blob.name} (수정일: {blob.last_modified})")
+```
+
+## SAS (Shared Access Signature) 토큰
+
+SAS 토큰은 Storage Account 키를 노출하지 않고 제한된 액세스를 제공한다.
+
+### SAS 토큰 생성
+
+```{python}
+from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+from datetime import datetime, timedelta
+
+# SAS 토큰 생성 (읽기 전용, 1시간 유효)
+sas_token = generate_blob_sas(
+    account_name="stragdocs2025",
+    container_name="rag-documents",
+    blob_name="sample.pdf",
+    account_key=os.getenv("AZURE_STORAGE_KEY"),
+    permission=BlobSasPermissions(read=True),
+    expiry=datetime.utcnow() + timedelta(hours=1)
+)
+
+# SAS URL 생성
+sas_url = f"https://stragdocs2025.blob.core.windows.net/rag-documents/sample.pdf?{sas_token}"
+print(f"SAS URL: {sas_url}")
+```
+
+### SAS 토큰으로 다운로드
+
+```{python}
+import requests
+
+# SAS URL로 파일 다운로드
+response = requests.get(sas_url)
+
+if response.status_code == 200:
+    with open("downloaded_with_sas.pdf", "wb") as f:
+        f.write(response.content)
+    print("SAS 토큰으로 다운로드 완료")
+else:
+    print(f"다운로드 실패: {response.status_code}")
+```
+
+## RAG 파이프라인 통합
+
+### 문서 로딩 함수
+
+```{python}
+from typing import List
+from langchain_core.documents import Document
+
+def load_documents_from_blob(
+    container_name: str,
+    prefix: str = ""
+) -> List[Document]:
+    """Azure Blob Storage에서 문서 로딩"""
+    
+    container_client = blob_service_client.get_container_client(container_name)
+    blob_list = container_client.list_blobs(
+        name_starts_with=prefix,
+        include=['metadata']
+    )
+    
+    documents = []
+    for blob in blob_list:
+        # 지원 파일 형식만 처리
+        if blob.name.endswith(('.pdf', '.txt', '.docx')):
+            # Blob 다운로드
+            blob_client = container_client.get_blob_client(blob.name)
+            content = blob_client.download_blob().readall()
+            
+            # Document 객체 생성
+            doc = Document(
+                page_content=content.decode('utf-8', errors='ignore'),
+                metadata={
+                    "source": blob.name,
+                    "size": blob.size,
+                    "last_modified": blob.last_modified.isoformat(),
+                    **blob.metadata  # Blob 메타데이터 추가
+                }
+            )
+            documents.append(doc)
+    
+    return documents
+
+# 사용 예시
+documents = load_documents_from_blob("rag-documents", prefix="reports/")
+print(f"로딩된 문서 수: {len(documents)}")
+```
+
+### LangChain AzureBlobStorageLoader 사용
+
+```{python}
+from langchain_community.document_loaders import AzureBlobStorageFileLoader
+
+# Azure Blob Storage에서 파일 로딩
+loader = AzureBlobStorageFileLoader(
+    conn_str=os.getenv("AZURE_STORAGE_CONNECTION_STRING"),
+    container="rag-documents",
+    blob_name="sample.pdf"
+)
+
+documents = loader.load()
+print(f"로딩된 문서: {len(documents)}")
+print(f"첫 번째 문서 내용 (앞 200자):\n{documents[0].page_content[:200]}")
+```
+
+## 비용 최적화
+
+### 수명 주기 관리 정책
+
+Azure Portal에서 설정:
+1. Storage Account → "수명 주기 관리"
+2. "+ 규칙 추가"
+3. 규칙 정의:
+
+**예시: 자동 계층 전환**
+```json
+{
+  "rules": [
+    {
+      "name": "move-to-cool",
+      "enabled": true,
+      "type": "Lifecycle",
+      "definition": {
+        "filters": {
+          "blobTypes": ["blockBlob"],
+          "prefixMatch": ["rag-documents/"]
+        },
+        "actions": {
+          "baseBlob": {
+            "tierToCool": {
+              "daysAfterModificationGreaterThan": 90
+            },
+            "tierToArchive": {
+              "daysAfterModificationGreaterThan": 365
+            },
+            "delete": {
+              "daysAfterModificationGreaterThan": 730
+            }
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+**의미:**
+- 90일 미사용 → Cool 계층 전환
+- 365일 미사용 → Archive 계층 전환
+- 730일(2년) 후 → 자동 삭제
+
+### 압축 저장
+
+```{python}
+import gzip
+
+# 텍스트 파일 압축 후 업로드
+with open("large_document.txt", "rb") as f:
+    content = f.read()
+    compressed = gzip.compress(content)
+
+blob_client = blob_service_client.get_blob_client(
+    container="rag-documents",
+    blob="large_document.txt.gz"
+)
+
+blob_client.upload_blob(
+    compressed,
+    metadata={"compressed": "gzip"},
+    overwrite=True
+)
+
+print(f"원본 크기: {len(content)} bytes")
+print(f"압축 크기: {len(compressed)} bytes ({len(compressed)/len(content)*100:.1f}%)")
+```
+
+## 보안 설정
+
+### Managed Identity로 인증
+
+```{python}
+from azure.identity import DefaultAzureCredential
+
+# Managed Identity 사용 (키 노출 없음)
+credential = DefaultAzureCredential()
+
+blob_service_client = BlobServiceClient(
+    account_url="https://stragdocs2025.blob.core.windows.net",
+    credential=credential
+)
+
+# 이후 동일하게 사용
+container_client = blob_service_client.get_container_client("rag-documents")
+```
+
+**Managed Identity 설정:**
+1. Azure Function/Container App → "ID" → "시스템 할당 관리 ID" 활성화
+2. Storage Account → "액세스 제어(IAM)" → "역할 할당 추가"
+3. 역할: "Storage Blob Data Contributor"
+4. 할당 대상: 생성된 Managed Identity
+
+### Private Endpoint 설정
+
+1. Storage Account → "네트워킹" → "프라이빗 엔드포인트 연결"
+2. "+ 프라이빗 엔드포인트" 클릭
+3. 설정:
+   - 리소스 그룹 선택
+   - 이름: `pe-storage-rag`
+   - 대상 하위 리소스: `blob`
+   - 가상 네트워크 및 서브넷 선택
+4. "만들기" → VNet 내에서만 액세스 가능
+
+## 모니터링
+
+### Storage Analytics 활성화
+
+```{python}
+from azure.storage.blob import BlobAnalyticsLogging, Metrics, RetentionPolicy
+
+# Analytics 설정
+logging = BlobAnalyticsLogging(
+    version="1.0",
+    delete=True,
+    read=True,
+    write=True,
+    retention_policy=RetentionPolicy(enabled=True, days=7)
+)
+
+metrics = Metrics(
+    version="1.0",
+    enabled=True,
+    include_apis=True,
+    retention_policy=RetentionPolicy(enabled=True, days=7)
+)
+
+# 설정 적용
+blob_service_client.set_service_properties(
+    analytics_logging=logging,
+    hour_metrics=metrics,
+    minute_metrics=metrics
+)
+
+print("Storage Analytics 활성화 완료")
+```
+
+### 주요 메트릭
+
+Azure Portal → Storage Account → "메트릭":
+- **Transactions**: 요청 수 (GET, PUT, DELETE)
+- **Ingress/Egress**: 업로드/다운로드 데이터량
+- **Availability**: 가동률
+- **Success E2E Latency**: 종단 간 응답 시간
+
+## 문제 해결
+
+### 일반적인 오류
+
+**1. AuthorizationPermissionMismatch**
+```
+오류: 권한 없음
+해결: Storage Account IAM에서 "Storage Blob Data Contributor" 역할 추가
+```
+
+**2. ContainerNotFound**
+```python
+# 컨테이너 존재 확인 후 생성
+try:
+    container_client = blob_service_client.get_container_client("rag-documents")
+    container_client.get_container_properties()
+except Exception:
+    container_client.create_container()
+```
+
+**3. BlobNotFound**
+```python
+# Blob 존재 확인
+if blob_client.exists():
+    blob_client.download_blob()
+else:
+    print("파일이 존재하지 않습니다")
+```
+
+## 참고 자료
+
+### 공식 문서
+- [Azure Blob Storage 개요](https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blobs-overview)
+- [Python SDK 참조](https://learn.microsoft.com/en-us/python/api/overview/azure/storage-blob-readme)
+- [보안 가이드](https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations)
+
+### 샘플 코드
+- [Azure Storage Python Samples](https://github.com/Azure-Samples/azure-storage-python-samples)
+- [LangChain Azure 통합](https://python.langchain.com/docs/integrations/document_loaders/azure_blob_storage_file)
+
+## 다음 단계
+
+문서 저장이 완료되었다면, 이제 OCR 및 레이아웃 분석 단계로 넘어가자:
+
+👉 [02-Document-Intelligence.qmd](./02-Document-Intelligence.qmd) - Azure Document Intelligence를 활용한 문서 분석

@@ -1,0 +1,634 @@
+---
+title: "Azure Functions Apps"
+subtitle: 서버리스 RAG 배포
+description: |
+  Azure Functions를 활용한 RAG 시스템 서버리스 배포 및 HTTP API 구현 방법을 다룬다.
+categories:
+  - AI
+  - RAG
+  - Azure
+author: Kwangmin Kim
+date: 11/08/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+## Azure Functions란?
+
+Azure Functions는 서버리스 컴퓨팅 플랫폼으로, 인프라 관리 없이 코드를 실행할 수 있다.
+
+**서버리스 장점:**
+- 인프라 관리 불필요
+- 자동 스케일링
+- 사용한 만큼만 과금
+- 이벤트 기반 실행
+
+**RAG 시스템 배포에 적합한 경우:**
+- 간헐적인 요청 (일 100~1000건)
+- 트래픽 변동이 큼
+- 빠른 배포 필요
+- 비용 최적화 중요
+
+## Azure Functions vs Container Apps
+
+| 항목 | Azure Functions | Container Apps |
+|------|----------------|----------------|
+| **아키텍처** | 서버리스 함수 | 컨테이너 기반 |
+| **확장** | 자동 (초 단위) | 자동 (분 단위) |
+| **Cold Start** | 있음 (3-5초) | 있음 (1-2초) |
+| **최대 실행 시간** | 10분 | 무제한 |
+| **비용** | 실행 시간 기반 | vCPU/메모리 기반 |
+| **권장 사용** | 간헐적 요청 | 지속적 서비스 |
+
+**Azure Functions 권장**: 트래픽이 적거나 불규칙한 경우
+**Container Apps 권장**: 지속적인 트래픽, WebSocket 필요
+
+## 환경 설정
+
+### Azure Functions Core Tools 설치
+
+**Windows (PowerShell):**
+```powershell
+# Chocolatey로 설치
+choco install azure-functions-core-tools-4
+
+# 또는 npm으로 설치
+npm install -g azure-functions-core-tools@4
+```
+
+**macOS:**
+```bash
+brew tap azure/functions
+brew install azure-functions-core-tools@4
+```
+
+**Linux:**
+```bash
+wget -q https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+sudo apt-get update
+sudo apt-get install azure-functions-core-tools-4
+```
+
+### Python 환경
+
+```bash
+# Python 3.9, 3.10, 3.11 지원
+python --version
+
+# 가상환경 생성
+python -m venv .venv
+source .venv/bin/activate  # Linux/macOS
+.venv\Scripts\activate     # Windows
+
+# 필수 패키지
+pip install azure-functions
+pip install langchain-openai
+pip install langchain-community
+pip install azure-search-documents
+pip install python-dotenv
+```
+
+## Functions 프로젝트 생성
+
+### 프로젝트 초기화
+
+```bash
+# 새 프로젝트 생성
+func init rag-function-app --python
+
+cd rag-function-app
+
+# HTTP 트리거 함수 생성
+func new --name rag-query --template "HTTP trigger" --authlevel "function"
+```
+
+**생성된 구조:**
+```
+rag-function-app/
+├── rag-query/
+│   ├── __init__.py
+│   └── function.json
+├── host.json
+├── local.settings.json
+└── requirements.txt
+```
+
+### requirements.txt
+
+```txt
+azure-functions
+langchain-openai
+langchain-community
+azure-search-documents
+python-dotenv
+tiktoken
+```
+
+### local.settings.json
+
+```json
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AZURE_OPENAI_ENDPOINT": "https://openai-rag-prod.openai.azure.com/",
+    "AZURE_OPENAI_API_KEY": "your-key",
+    "AZURE_OPENAI_DEPLOYMENT": "gpt-4o",
+    "AZURE_OPENAI_API_VERSION": "2024-02-01",
+    "AZURE_SEARCH_ENDPOINT": "https://search-rag-prod.search.windows.net",
+    "AZURE_SEARCH_API_KEY": "your-key",
+    "AZURE_SEARCH_INDEX_NAME": "rag-documents"
+  }
+}
+```
+
+## RAG 함수 구현
+
+### rag-query/__init__.py
+
+```python
+import azure.functions as func
+import logging
+import json
+import os
+from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
+from langchain_community.vectorstores.azuresearch import AzureSearch
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+
+# 환경 변수 로드
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
+AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
+AZURE_SEARCH_API_KEY = os.getenv("AZURE_SEARCH_API_KEY")
+AZURE_SEARCH_INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME")
+
+# 전역 초기화 (Cold Start 최적화)
+embeddings = None
+vector_store = None
+llm = None
+rag_chain = None
+
+def init_rag_components():
+    """RAG 컴포넌트 초기화 (한 번만 실행)"""
+    global embeddings, vector_store, llm, rag_chain
+    
+    if rag_chain is not None:
+        return  # 이미 초기화됨
+    
+    logging.info("RAG 컴포넌트 초기화 중...")
+    
+    # Embeddings
+    embeddings = AzureOpenAIEmbeddings(
+        azure_deployment="text-embedding-3-small",
+        openai_api_version=AZURE_OPENAI_API_VERSION,
+        azure_endpoint=AZURE_OPENAI_ENDPOINT,
+        api_key=AZURE_OPENAI_API_KEY
+    )
+    
+    # Vector Store
+    vector_store = AzureSearch(
+        azure_search_endpoint=AZURE_SEARCH_ENDPOINT,
+        azure_search_key=AZURE_SEARCH_API_KEY,
+        index_name=AZURE_SEARCH_INDEX_NAME,
+        embedding_function=embeddings.embed_query
+    )
+    
+    # LLM
+    llm = AzureChatOpenAI(
+        azure_deployment=AZURE_OPENAI_DEPLOYMENT,
+        openai_api_version=AZURE_OPENAI_API_VERSION,
+        azure_endpoint=AZURE_OPENAI_ENDPOINT,
+        api_key=AZURE_OPENAI_API_KEY,
+        temperature=0
+    )
+    
+    # Retriever
+    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    
+    # Prompt
+    prompt = ChatPromptTemplate.from_template(
+        """다음 컨텍스트를 참고하여 질문에 답변하세요.
+
+컨텍스트:
+{context}
+
+질문: {question}
+
+답변:"""
+    )
+    
+    # RAG Chain
+    def format_docs(docs):
+        return "\n\n".join([doc.page_content for doc in docs])
+    
+    rag_chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+    
+    logging.info("RAG 컴포넌트 초기화 완료")
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP 트리거 함수"""
+    logging.info('RAG 쿼리 요청 수신')
+    
+    try:
+        # RAG 컴포넌트 초기화
+        init_rag_components()
+        
+        # 요청 파싱
+        try:
+            req_body = req.get_json()
+            question = req_body.get('question')
+        except ValueError:
+            question = req.params.get('question')
+        
+        if not question:
+            return func.HttpResponse(
+                json.dumps({"error": "질문을 입력해주세요"}),
+                mimetype="application/json",
+                status_code=400
+            )
+        
+        # RAG 실행
+        logging.info(f"질문: {question}")
+        answer = rag_chain.invoke(question)
+        
+        # 응답 반환
+        response = {
+            "question": question,
+            "answer": answer,
+            "status": "success"
+        }
+        
+        return func.HttpResponse(
+            json.dumps(response, ensure_ascii=False),
+            mimetype="application/json",
+            status_code=200
+        )
+    
+    except Exception as e:
+        logging.error(f"오류 발생: {str(e)}")
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+```
+
+### function.json
+
+```json
+{
+  "scriptFile": "__init__.py",
+  "bindings": [
+    {
+      "authLevel": "function",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": [
+        "get",
+        "post"
+      ]
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "$return"
+    }
+  ]
+}
+```
+
+## 로컬 테스트
+
+### 로컬 실행
+
+```bash
+# Functions 앱 시작
+func start
+```
+
+출력:
+```
+Functions:
+        rag-query: [GET,POST] http://localhost:7071/api/rag-query
+```
+
+### cURL 테스트
+
+```bash
+# POST 요청
+curl -X POST http://localhost:7071/api/rag-query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Azure AI Search란 무엇인가?"}'
+
+# GET 요청
+curl "http://localhost:7071/api/rag-query?question=Azure+AI+Search란+무엇인가?"
+```
+
+### Python으로 테스트
+
+```python
+import requests
+import json
+
+url = "http://localhost:7071/api/rag-query"
+data = {"question": "Azure AI Search란 무엇인가?"}
+
+response = requests.post(url, json=data)
+result = response.json()
+
+print(f"질문: {result['question']}")
+print(f"답변: {result['answer']}")
+```
+
+## Azure 배포
+
+### Function App 리소스 생성
+
+```bash
+# 리소스 그룹 생성
+az group create --name rg-rag-prod --location koreacentral
+
+# Storage Account 생성 (Functions 필수)
+az storage account create \
+  --name stragprod \
+  --resource-group rg-rag-prod \
+  --location koreacentral \
+  --sku Standard_LRS
+
+# Function App 생성 (Python 3.11)
+az functionapp create \
+  --resource-group rg-rag-prod \
+  --consumption-plan-location koreacentral \
+  --runtime python \
+  --runtime-version 3.11 \
+  --functions-version 4 \
+  --name func-rag-prod \
+  --storage-account stragprod \
+  --os-type Linux
+```
+
+### 환경 변수 설정
+
+```bash
+# Application Settings 설정
+az functionapp config appsettings set \
+  --name func-rag-prod \
+  --resource-group rg-rag-prod \
+  --settings \
+    AZURE_OPENAI_ENDPOINT="https://openai-rag-prod.openai.azure.com/" \
+    AZURE_OPENAI_API_KEY="your-key" \
+    AZURE_OPENAI_DEPLOYMENT="gpt-4o" \
+    AZURE_OPENAI_API_VERSION="2024-02-01" \
+    AZURE_SEARCH_ENDPOINT="https://search-rag-prod.search.windows.net" \
+    AZURE_SEARCH_API_KEY="your-key" \
+    AZURE_SEARCH_INDEX_NAME="rag-documents"
+```
+
+### 배포
+
+```bash
+# Azure에 배포
+func azure functionapp publish func-rag-prod
+
+# 배포 완료 후 URL 확인
+# https://func-rag-prod.azurewebsites.net/api/rag-query
+```
+
+### 배포 테스트
+
+```bash
+# Function Key 조회
+FUNCTION_KEY=$(az functionapp keys list \
+  --name func-rag-prod \
+  --resource-group rg-rag-prod \
+  --query "functionKeys.default" -o tsv)
+
+# API 호출
+curl -X POST https://func-rag-prod.azurewebsites.net/api/rag-query?code=$FUNCTION_KEY \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Azure AI Search란?"}'
+```
+
+## Cold Start 최적화
+
+### Premium Plan
+
+Consumption Plan의 Cold Start를 개선하려면 Premium Plan으로 변경한다.
+
+```bash
+# Premium Plan 생성
+az functionapp plan create \
+  --resource-group rg-rag-prod \
+  --name plan-rag-premium \
+  --location koreacentral \
+  --sku EP1 \
+  --is-linux
+
+# Function App을 Premium Plan으로 변경
+az functionapp update \
+  --name func-rag-prod \
+  --resource-group rg-rag-prod \
+  --plan plan-rag-premium
+```
+
+**Premium Plan 장점:**
+- Always-on (Cold Start 없음)
+- VNET 통합
+- 더 많은 메모리/CPU
+
+**비용**: ~$146/월 (EP1)
+
+### 컴포넌트 재사용
+
+전역 변수로 컴포넌트를 캐싱하여 재초기화를 방지한다.
+
+```python
+# 전역 초기화 (함수 외부)
+embeddings = None
+vector_store = None
+
+def init_components():
+    global embeddings, vector_store
+    if embeddings is None:
+        embeddings = AzureOpenAIEmbeddings(...)
+        vector_store = AzureSearch(...)
+```
+
+## 스트리밍 응답
+
+Azure Functions는 기본적으로 스트리밍을 지원하지 않지만, Server-Sent Events (SSE)로 구현 가능하다.
+
+### SSE 함수
+
+```python
+import asyncio
+
+async def main(req: func.HttpRequest) -> func.HttpResponse:
+    """스트리밍 응답"""
+    question = req.get_json().get('question')
+    
+    async def generate():
+        yield "data: " + json.dumps({"type": "start"}) + "\n\n"
+        
+        # 스트리밍 실행
+        async for chunk in streaming_llm.astream(question):
+            yield "data: " + json.dumps({
+                "type": "chunk",
+                "content": chunk.content
+            }) + "\n\n"
+        
+        yield "data: " + json.dumps({"type": "end"}) + "\n\n"
+    
+    return func.HttpResponse(
+        generate(),
+        mimetype="text/event-stream"
+    )
+```
+
+## 모니터링
+
+### Application Insights
+
+Application Insights는 자동으로 활성화된다.
+
+**로그 확인:**
+```bash
+# Azure Portal에서 확인
+# Function App → Application Insights → Logs
+
+# 예시 쿼리
+traces
+| where message contains "RAG"
+| order by timestamp desc
+| take 100
+```
+
+### 커스텀 메트릭
+
+```python
+from applicationinsights import TelemetryClient
+
+tc = TelemetryClient(os.getenv("APPINSIGHTS_INSTRUMENTATIONKEY"))
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    start_time = time.time()
+    
+    # RAG 실행
+    answer = rag_chain.invoke(question)
+    
+    # 메트릭 전송
+    duration = time.time() - start_time
+    tc.track_metric("RAGQueryDuration", duration)
+    tc.track_event("RAGQuery", {"question_length": len(question)})
+    tc.flush()
+    
+    return func.HttpResponse(...)
+```
+
+## CORS 설정
+
+웹 앱에서 API를 호출하려면 CORS 설정이 필요하다.
+
+```bash
+# CORS 허용
+az functionapp cors add \
+  --name func-rag-prod \
+  --resource-group rg-rag-prod \
+  --allowed-origins "https://your-app.com"
+
+# 모든 오리진 허용 (개발 환경)
+az functionapp cors add \
+  --name func-rag-prod \
+  --resource-group rg-rag-prod \
+  --allowed-origins "*"
+```
+
+## 보안
+
+### Managed Identity
+
+API 키 대신 Managed Identity를 사용한다.
+
+```bash
+# Managed Identity 활성화
+az functionapp identity assign \
+  --name func-rag-prod \
+  --resource-group rg-rag-prod
+
+# Azure OpenAI에 권한 부여
+az role assignment create \
+  --assignee <managed-identity-principal-id> \
+  --role "Cognitive Services OpenAI User" \
+  --scope <azure-openai-resource-id>
+```
+
+### Key Vault 통합
+
+```bash
+# Key Vault 생성
+az keyvault create \
+  --name kv-rag-prod \
+  --resource-group rg-rag-prod \
+  --location koreacentral
+
+# 비밀 저장
+az keyvault secret set \
+  --vault-name kv-rag-prod \
+  --name "AzureOpenAIKey" \
+  --value "your-key"
+
+# Function App에서 참조
+az functionapp config appsettings set \
+  --name func-rag-prod \
+  --resource-group rg-rag-prod \
+  --settings \
+    AZURE_OPENAI_API_KEY="@Microsoft.KeyVault(SecretUri=https://kv-rag-prod.vault.azure.net/secrets/AzureOpenAIKey/)"
+```
+
+## 비용 최적화
+
+### Consumption Plan 비용
+
+**계산식:**
+- 실행 시간: $0.000016/GB-초
+- 요청: $0.20/100만 요청
+
+**예시** (월 10,000 요청, 각 5초, 1.5GB 메모리):
+- 실행 비용: 10,000 × 5초 × 1.5GB × $0.000016 = $1.20
+- 요청 비용: 10,000 / 1,000,000 × $0.20 = $0.002
+- **총 비용**: ~$1.20/월
+
+**무료 할당량:**
+- 매월 400,000 GB-초 무료
+- 매월 1,000,000 요청 무료
+
+## 참고 자료
+
+### 공식 문서
+- [Azure Functions Python](https://learn.microsoft.com/en-us/azure/azure-functions/functions-reference-python)
+- [Functions 가격](https://azure.microsoft.com/en-us/pricing/details/functions/)
+
+## 다음 단계
+
+서버리스 배포가 완료되었다면, 이제 컨테이너 기반 배포를 살펴보자:
+
+👉 [08-Azure-Container-Apps.qmd](./08-Azure-Container-Apps.qmd) - Azure Container Apps를 활용한 컨테이너 배포
