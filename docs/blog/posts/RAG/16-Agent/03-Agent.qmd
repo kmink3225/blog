@@ -19,18 +19,22 @@ draft: False
 jupyter: python3
 ---
 
+# 도구 호출 에이전트 (Tool Calling Agent)
 
-도구 호출을 사용하면 모델이 하나 이상의 **도구(tool)** 가 **호출되어야 하는 시기를 감지하고 해당 도구에 전달해야 하는 입력** 으로 전달할 수 있습니다. 
-
-API 호출에서 도구를 설명하고 모델이 이러한 도구를 호출하기 위한 인수가 포함된 JSON과 같은 구조화된 객체를 출력하도록 지능적으로 선택할 수 있습니다. 
-
-도구 API 의 목표는 일반 텍스트 완성이나 채팅 API를 사용하여 수행할 수 있는 것보다 더 안정적으로 유효하고 유용한 **도구 호출(tool call)** 을 반환하는 것입니다.
-
-이러한 구조화된 출력을 도구 호출 채팅 모델에 여러 도구를 바인딩하고 모델이 호출할 도구를 선택할 수 있다는 사실과 결합하여 쿼리가 해결될 때까지 반복적으로 도구를 호출하고 결과를 수신하는 에이전트를 만들 수 있습니다.
-
-이것은 OpenAI 의 특정 도구 호출 스타일에 맞게 설계된 OpenAI 도구 에이전트의 보다 **일반화된 버전** 입니다.
-
- 이 에이전트는 LangChain의 ToolCall 인터페이스를 사용하여 OpenAI 외에도 `Anthropic`, `Google Gemini`, `Mistral`과 같은 더 광범위한 공급자 구현을 지원합니다.
+* LLM에 Binding Tool을 호출 및 커스텀 tool을 개발하여 LLM에 붙이고 적절한 시점에 적절한 tool을 호출(invoke)하는 일련의 복잡한 작업을 간소화 및 편리하게 구현하는 방법을 다룬다.
+* Tool Calling Agent는 LLM에게 개발자가 Tool을 개발하여 쥐어주게하고 적절한 시점에 적절한 tool을 알아서 사용하도록 하는 역할을 한다.
+    * 도구 호출을 사용하면 모델이 하나 이상의 **도구(tool)** 가 **호출되어야 하는 시기를 감지하고 해당 도구에 전달해야 하는 입력** 으로 전달할 수 있다. 
+    * API 호출에서 도구를 설명하고 모델이 이러한 도구를 호출하기 위한 인수가 포함된 JSON과 같은 구조화된 객체를 출력하도록 지능적으로 선택할 수 있다. 
+    * 도구 API 의 목표는 일반 텍스트 완성이나 채팅 API를 사용하여 수행할 수 있는 것보다 더 안정적으로 유효하고 유용한 **도구 호출(tool call)** 을 반환하는 것이다.
+    * 이러한 구조화된 출력을 도구 호출 채팅 모델에 여러 도구를 바인딩하고 모델이 호출할 도구를 선택할 수 있다는 사실과 결합하여 쿼리가 해결될 때까지 반복적으로 도구를 호출하고 결과를 수신하는 에이전트를 만들 수 있다.
+    * 이것은 OpenAI 의 특정 도구 호출 스타일에 맞게 설계된 OpenAI 도구 에이전트의 보다 **일반화된 버전** 이다.
+* 이 에이전트는 LangChain의 ToolCall 인터페이스를 사용하여 OpenAI 외에도 `Anthropic`, `Google Gemini`, `Mistral`과 같은 더 광범위한 공급자 구현을 지원
+* 무료 모델인 Ollama도 Tool Calling Agent기능을 제공
+* Agent = LLM + Tool + **Decision Cylcle**
+    * Tool =  LLM + (Tool1(웹검색), Tool2(문서검색), Tool3(코드실행), ...)
+    * Cycle = Query (질문) > Tool (LLM + Tools) > Thought (어떤 도구를 선택해야하는지) + Memory (이전 대화내용 + 사용 Tool 활용) > Action (선택된 Tool 사용) > Observation (검색결과) > 정보확인
+        * 정보확인 단계에서 정보가 유익하면 출력 안유익하면  Thought 단계로 돌아간다 (다른 Tool 선택)
+        * 예시: 특정 맥락에 대한 파이썬 코드를 작성해달라고 LLM에 요청하면 LLM이 Tool을 선택하여 Action을 취하다가 파이썬 코드에 오류가 나면 다시 Thought 돌아가는 Cycle을 반복한다.
 
 **참고 링크**
 
@@ -47,6 +51,10 @@ from dotenv import load_dotenv
 load_dotenv()
 ```
 
+```
+True
+```
+
 ```{python}
 # LangSmith 추적을 설정합니다. https://smith.langchain.com
 # !pip install -qU langchain-teddynote
@@ -55,6 +63,13 @@ from langchain_teddynote import logging
 # 프로젝트 이름을 입력합니다.
 logging.langsmith("CH15-Agents")
 ```
+
+```
+LangSmith 추적을 시작합니다.
+[프로젝트명]
+CH15-Agents
+```
+
 
 ```{python}
 from langchain.tools import tool
@@ -71,7 +86,7 @@ def search_news(query: str) -> List[Dict[str, str]]:
     return news_tool.search_by_keyword(query, k=5)
 
 
-# 도구 생성
+# 커스텀 도구 생성
 @tool
 def python_repl_tool(
     code: Annotated[str, "The python code to execute to generate your chart."],
@@ -93,6 +108,14 @@ print(f"도구 이름: {python_repl_tool.name}")
 print(f"도구 설명: {python_repl_tool.description}")
 ```
 
+```
+도구 이름: search_news
+도구 설명: Search Google News by input keyword
+도구 이름: python_repl_tool
+도구 설명: Use this to execute python code. If you want to see the output of a value,
+    you should print it out with `print(...)`. This is visible to the user.
+```
+
 ```{python}
 # tools 정의
 tools = [search_news, python_repl_tool]
@@ -101,7 +124,9 @@ tools = [search_news, python_repl_tool]
 ## Agent 프롬프트 생성
 
 - `chat_history` : 이전 대화 내용을 저장하는 변수 (멀티턴을 지원하지 않는다면, 생략 가능합니다.)
-- `agent_scratchpad` : 에이전트가 임시로 저장하는 변수
+    - 싱글턴: 1문 1답 하는 방식으로 이전의 대화를 기억하지 않음
+    - 멀티턴: 과거의 여러 대화들을 기억 및 활용해 다음 답변을 출력하는 방법
+- `agent_scratchpad` : 에이전트가 임시로 저장하는 변수로 에이전트가 사고하는 과정을 임시로 기억함
 - `input` : 사용자의 입력
 
 ```{python}
@@ -138,18 +163,21 @@ agent = create_tool_calling_agent(llm, tools, prompt)
 
 ## AgentExecutor
 
-AgentExecutor는 도구를 사용하는 에이전트를 실행하는 클래스입니다.
+* AgentExecutor는 도구를 사용하는 에이전트를 실행하는 클래스
+* Agent와 중첩되는 기능들이 있지만 Agent의 움직임을 통제해주는 기능때문에 사용해야한다.
+* 후에 multi agent를 구현할 시 Executor의 활용이 중요해진다.
 
 **주요 속성**
 - `agent`: 실행 루프의 각 단계에서 계획을 생성하고 행동을 결정하는 에이전트
 - `tools`: 에이전트가 사용할 수 있는 유효한 도구 목록
 - `return_intermediate_steps`: 최종 출력과 함께 에이전트의 중간 단계 경로를 반환할지 여부
-- `max_iterations`: 실행 루프를 종료하기 전 최대 단계 수
-- `max_execution_time`: 실행 루프에 소요될 수 있는 최대 시간
-- `early_stopping_method`: 에이전트가 `AgentFinish`를 반환하지 않을 때 사용할 조기 종료 방법. ("force" or "generate")
-  - `"force"` 는 시간 또는 반복 제한에 도달하여 중지되었다는 문자열을 반환합니다.
-  - `"generate"` 는 에이전트의 LLM 체인을 마지막으로 한 번 호출하여 이전 단계에 따라 최종 답변을 생성합니다.
+- `max_iterations`: 실행 루프를 종료하기 전 최대 단계 수, agent가 무한 cycle에 빠지지 않도록 제어 가능
+- `max_execution_time`: 실행 루프에 소요될 수 있는 최대 시간, agent가 무한 cycle에 빠지지 않도록 제어 가능
+- `early_stopping_method`: 에이전트가 `AgentFinish`를 반환하지 않을 때 사용할 조기 종료 방법. ("force" or "generate"), agent가 무한 cycle에 빠지지 않도록 제어 가능
+    - `"force"` 는 시간 또는 반복 제한에 도달하여 중지되었다는 문자열을 반환합니다.
+    - `"generate"` 는 에이전트의 LLM 체인을 마지막으로 한 번 호출하여 이전 단계에 따라 최종 답변을 생성합니다.
 - `handle_parsing_errors`: 에이전트의 출력 파서에서 발생한 오류 처리 방법. (True, False, 또는 오류 처리 함수)
+    - True: error가 발생했을때 llm이 error을 개선하여 유연하게 출력을 생성
 - `trim_intermediate_steps`: 중간 단계를 트리밍하는 방법. (-1 trim 하지 않음, 또는 트리밍 함수)
 
 **주요 메서드**
@@ -188,6 +216,38 @@ print("Agent 실행 결과:")
 print(result["output"])
 ```
 
+```
+Invoking: `search_news` with `{'query': 'AI 투자'}`
+[{'url': 'https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5', 'content': 'AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문'}, {'url': 'https://news.google.com/rss/articles/CBMiU0FVX3lxTFB1VDRjTlIxeHRjV3NKaERHMFJLOFNpUlNUVnZzQ0JvOUpISVE2cW9rbTZPVU9lQXZuUURJNHF0aDZyaDdQM0F5NFhsc0NrN1dHNEZz?oc=5', 'content': '글로벌 CEO들 "향후 3년 무조건 AI 투자···직원도 더 뽑을 것" - 네이트 뉴스'}, {'url': 'https://news.google.com/rss/articles/CBMiakFVX3lxTE9BQUtjd3pDS1dXRkZQTlo4Y2w2d2laZFFQRXdsbGlCMFRTcWJYLTNLaksxbFlnYzk3clVnYlFxZF93U2xubXY1VVhBTDQ2SDhLbm9hcDdXQ3prTlJtV0VCYTFINmNRbjR5N3c?oc=5', 'content': 'MIT 경제학자 "10년간 AI에 영향받을 직업은 5% 불과...기업은 투자비만 날리게 될 것" - AI타임스'}, {'url': 'https://news.google.com/rss/articles/CBMiW0FVX3lxTE9oenZObVAzOV9hbUliNGhkLTBXZXZrTGpvT0ljcXlpWE5leld2b3RLbUJFTFRtZnU4c0VFaC1oYkVvTTdESEZCYmZUTDJSMFFYdGVXeXN3OVdRTEE?oc=5', 'content': 'MS, 이탈리아에 AI 인프라 6조4천억 투자 결정 - 연합뉴스'}, {'url': 'https://news.google.com/rss/articles/CBMiiAFBVV95cUxOSVBVSnBvY2tXMnZQZTQ2OEliRTQyT0NSVTRMLUNNRFZQSnYzWXN5T3dyWDBnc1NZS2ZzOV9CSjFqT3kxZXFVck1qczJJUlRKZDh6cm5STHZteWk1bVltekdQVG1ZdnlpLUo3Rl9WQ0lSYjM4bFNHOXRYeUU3LVc0WkpfVW5kZDY10gGcAUFVX3lxTE5KRmdOOGkwYi1NZktDVXpWYWhRX0dlTW91NU45T1RURmlWNi14TU1ERnIxSzVwbTJEZnlOQVBnTUFsNHk5b3NjUzUyM2ljWFBuRl9OSFNTeVNhZ3BKV0pPWUNrRFIyRzJOS09GOFRnX1pZVHBxVnVGekRUWlRSSlozcmFPSFNpcEo4cThZOGxyel8wbzZuU2xNcjJUcg?oc=5', 'content': '“전 세계 CEO 72%, 3년간 경제 성장 낙관적… 투자 1순위 AI” - 조선비즈 - 조선비즈'}]다음은 AI 투자와 관련된 최근 뉴스 기사들입니다:
+
+1. [AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문](https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5)
+
+2. [글로벌 CEO들 "향후 3년 무조건 AI 투자···직원도 더 뽑을 것" - 네이트 뉴스](https://news.google.com/rss/articles/CBMiU0FVX3lxTFB1VDRjTlIxeHRjV3NKaERHMFJLOFNpUlNUVnZzQ0JvOUpISVE2cW9rbTZPVU9lQXZuUURJNHF0aDZyaDdQM0F5NFhsc0NrN1dHNEZz?oc=5)
+
+3. [MIT 경제학자 "10년간 AI에 영향받을 직업은 5% 불과...기업은 투자비만 날리게 될 것" - AI타임스](https://news.google.com/rss/articles/CBMiakFVX3lxTE9BQUtjd3pDS1dXRkZQTlo4Y2w2d2laZFFQRXdsbGlCMFRTcWJYLTNLaksxbFlnYzk3clVnYlFxZF93U2xubXY1VVhBTDQ2SDhLbm9hcDdXQ3prTlJtV0VCYTFINmNRbjR5N3c?oc=5)
+
+4. [MS, 이탈리아에 AI 인프라 6조4천억 투자 결정 - 연합뉴스](https://news.google.com/rss/articles/CBMiW0FVX3lxTE9oenZObVAzOV9hbUliNGhkLTBXZXZrTGpvT0ljcXlpWE5leld2b3RLbUJFTFRtZnU4c0VFaC1oYkVvTTdESEZCYmZUTDJSMFFYdGVXeXN3OVdRTEE?oc=5)
+
+5. [“전 세계 CEO 72%, 3년간 경제 성장 낙관적… 투자 1순위 AI” - 조선비즈](https://news.google.com/rss/articles/CBMiiAFBVV95cUxOSVBVSnBvY2tXMnZQZTQ2OEliRTQyT0NSVTRMLUNNRFZQSnYzWXN5T3dyWDBnc1NZS2ZzOV9CSjFqT3kxZXFVck1qczJJUlRKZDh6cm5STHZteWk1bVltekdQVG1ZdnlpLUo3Rl9WQ0lSYjM4bFNHOXRYeUU3LVc0WkpfVW5kZDY10gGcAUFVX3lxTE5KRmdOOGkwYi1NZktDVXpWYWhRX0dlTW91NU45T1RURmlWNi14TU1ERnIxSzVwbTJEZnlOQVBnTUFsNHk5b3NjUzUyM2ljWFBuRl9OSFNTeVNhZ3BKV0pPWUNrRFIyRzJOS09GOFRnX1pZVHBxVnVGekRUWlRSSlozcmFPSFNpcEo4cThZOGxyel8wbzZuU2xNcjJUcg?oc=5)
+
+이 기사들은 AI 투자에 대한 다양한 관점과 최근 동향을 다루고 있습니다.
+
+Agent 실행 결과:
+다음은 AI 투자와 관련된 최근 뉴스 기사들입니다:
+
+1. [AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문](https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5)
+
+2. [글로벌 CEO들 "향후 3년 무조건 AI 투자···직원도 더 뽑을 것" - 네이트 뉴스](https://news.google.com/rss/articles/CBMiU0FVX3lxTFB1VDRjTlIxeHRjV3NKaERHMFJLOFNpUlNUVnZzQ0JvOUpISVE2cW9rbTZPVU9lQXZuUURJNHF0aDZyaDdQM0F5NFhsc0NrN1dHNEZz?oc=5)
+
+3. [MIT 경제학자 "10년간 AI에 영향받을 직업은 5% 불과...기업은 투자비만 날리게 될 것" - AI타임스](https://news.google.com/rss/articles/CBMiakFVX3lxTE9BQUtjd3pDS1dXRkZQTlo4Y2w2d2laZFFQRXdsbGlCMFRTcWJYLTNLaksxbFlnYzk3clVnYlFxZF93U2xubXY1VVhBTDQ2SDhLbm9hcDdXQ3prTlJtV0VCYTFINmNRbjR5N3c?oc=5)
+
+4. [MS, 이탈리아에 AI 인프라 6조4천억 투자 결정 - 연합뉴스](https://news.google.com/rss/articles/CBMiW0FVX3lxTE9oenZObVAzOV9hbUliNGhkLTBXZXZrTGpvT0ljcXlpWE5leld2b3RLbUJFTFRtZnU4c0VFaC1oYkVvTTdESEZCYmZUTDJSMFFYdGVXeXN3OVdRTEE?oc=5)
+
+5. [“전 세계 CEO 72%, 3년간 경제 성장 낙관적… 투자 1순위 AI” - 조선비즈](https://news.google.com/rss/articles/CBMiiAFBVV95cUxOSVBVSnBvY2tXMnZQZTQ2OEliRTQyT0NSVTRMLUNNRFZQSnYzWXN5T3dyWDBnc1NZS2ZzOV9CSjFqT3kxZXFVck1qczJJUlRKZDh6cm5STHZteWk1bVltekdQVG1ZdnlpLUo3Rl9WQ0lSYjM4bFNHOXRYeUU3LVc0WkpfVW5kZDY10gGcAUFVX3lxTE5KRmdOOGkwYi1NZktDVXpWYWhRX0dlTW91NU45T1RURmlWNi14TU1ERnIxSzVwbTJEZnlOQVBnTUFsNHk5b3NjUzUyM2ljWFBuRl9OSFNTeVNhZ3BKV0pPWUNrRFIyRzJOS09GOFRnX1pZVHBxVnVGekRUWlRSSlozcmFPSFNpcEo4cThZOGxyel8wbzZuU2xNcjJUcg?oc=5)
+
+이 기사들은 AI 투자에 대한 다양한 관점과 최근 동향을 다루고 있습니다.
+```
+
 ## Stream 출력으로 단계별 결과 확인
 
 AgentExecutor의 `stream()` 메소드를 사용하여 에이전트의 중간 단계를 스트리밍할 것입니다.
@@ -212,7 +272,7 @@ AgentExecutor의 `stream()` 메소드를 사용하여 에이전트의 중간 단
 | Action | `actions`: AgentAction 또는 그 하위 클래스<br>`messages`: 액션 호출에 해당하는 채팅 메시지 |
 | Observation | `steps`: 현재 액션과 그 관찰을 포함한 에이전트가 지금까지 수행한 작업의 기록<br>`messages`: 함수 호출 결과(즉, 관찰)를 포함한 채팅 메시지 |
 | Final Answer | `output`: AgentFinish<br>`messages`: 최종 출력을 포함한 채팅 메시지 |
-```
+
 
 ```{python}
 from langchain.agents import AgentExecutor
@@ -234,6 +294,12 @@ for step in result:
     # 중간 단계 출력
     print(step)
     print("===" * 20)
+```
+
+```
+{'actions': [ToolAgentAction(tool='search_news', tool_input={'query': 'AI 투자'}, log="\nInvoking: `search_news` with `{'query': 'AI 투자'}`\n\n\n", message_log=[AIMessageChunk(content='', additional_kwargs={'tool_calls': [{'index': 0, 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'function': {'arguments': '{"query":"AI 투자"}', 'name': 'search_news'}, 'type': 'function'}]}, response_metadata={'finish_reason': 'tool_calls', 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_f85bea6784'}, id='run-75795ef1-9b6b-4733-9dff-009486316af6', tool_calls=[{'name': 'search_news', 'args': {'query': 'AI 투자'}, 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'type': 'tool_call'}], tool_call_chunks=[{'name': 'search_news', 'args': '{"query":"AI 투자"}', 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'index': 0, 'type': 'tool_call_chunk'}])], tool_call_id='call_dWv4C6NpksKE1IyaVmXjuDtT')], 'messages': [AIMessageChunk(content='', additional_kwargs={'tool_calls': [{'index': 0, 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'function': {'arguments': '{"query":"AI 투자"}', 'name': 'search_news'}, 'type': 'function'}]}, response_metadata={'finish_reason': 'tool_calls', 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_f85bea6784'}, id='run-75795ef1-9b6b-4733-9dff-009486316af6', tool_calls=[{'name': 'search_news', 'args': {'query': 'AI 투자'}, 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'type': 'tool_call'}], tool_call_chunks=[{'name': 'search_news', 'args': '{"query":"AI 투자"}', 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'index': 0, 'type': 'tool_call_chunk'}])]}
+{'steps': [AgentStep(action=ToolAgentAction(tool='search_news', tool_input={'query': 'AI 투자'}, log="\nInvoking: `search_news` with `{'query': 'AI 투자'}`\n\n\n", message_log=[AIMessageChunk(content='', additional_kwargs={'tool_calls': [{'index': 0, 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'function': {'arguments': '{"query":"AI 투자"}', 'name': 'search_news'}, 'type': 'function'}]}, response_metadata={'finish_reason': 'tool_calls', 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_f85bea6784'}, id='run-75795ef1-9b6b-4733-9dff-009486316af6', tool_calls=[{'name': 'search_news', 'args': {'query': 'AI 투자'}, 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'type': 'tool_call'}], tool_call_chunks=[{'name': 'search_news', 'args': '{"query":"AI 투자"}', 'id': 'call_dWv4C6NpksKE1IyaVmXjuDtT', 'index': 0, 'type': 'tool_call_chunk'}])], tool_call_id='call_dWv4C6NpksKE1IyaVmXjuDtT'), observation=[{'url': 'https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5', 'content': 'AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문'}, {'url': 'https://news.google.com/rss/articles/CBMiU0FVX3lxTFB1VDRjTlIxeHRjV3NKaERHMFJLOFNpUlNUVnZzQ0JvOUpISVE2cW9rbTZPVU9lQXZuUURJNHF0aDZyaDdQM0F5NFhsc0NrN1dHNEZz?oc=5', 'content': '글로벌 CEO들 "향후 3년 무조건 AI 투자···직원도 더 뽑을 것" - 네이트 뉴스'}, {'url': 'https://news.google.com/rss/articles/CBMiakFVX3lxTE9BQUtjd3pDS1dXRkZQTlo4Y2w2d2laZFFQRXdsbGlCMFRTcWJYLTNLaksxbFlnYzk3clVnYlFxZF93U2xubXY1VVhBTDQ2SDhLbm9hcDdXQ3prTlJtV0VCYTFINmNRbjR5N3c?oc=5', 'content': 'MIT 경제학자 "10년간 AI에 영향받을 직업은 5% 불과...기업은 투자비만 날리게 될 것" - AI타임스'}, {'url': 'https://news.google.com/rss/articles/CBMiW0FVX3lxTE9oenZObVAzOV9hbUliNGhkLTBXZXZrTGpvT0ljcXlpWE5leld2b3RLbUJFTFRtZnU4c0VFaC1oYkVvTTdESEZCYmZUTDJSMFFYdGVXeXN3OVdRTEE?oc=5', 'content': 'MS, 이탈리아에 AI 인프라 6조4천억 투자 결정 - 연합뉴스'}, {'url': 'https://news.google.com/rss/articles/CBMiiAFBVV95cUxOSVBVSnBvY2tXMnZQZTQ2OEliRTQyT0NSVTRMLUNNRFZQSnYzWXN5T3dyWDBnc1NZS2ZzOV9CSjFqT3kxZXFVck1qczJJUlRKZDh6cm5STHZteWk1bVltekdQVG1ZdnlpLUo3Rl9WQ0lSYjM4bFNHOXRYeUU3LVc0WkpfVW5kZDY10gGcAUFVX3lxTE5KRmdOOGkwYi1NZktDVXpWYWhRX0dlTW91NU45T1RURmlWNi14TU1ERnIxSzVwbTJEZnlOQVBnTUFsNHk5b3NjUzUyM2ljWFBuRl9OSFNTeVNhZ3BKV0pPWUNrRFIyRzJOS09GOFRnX1pZVHBxVnVGekRUWlRSSlozcmFPSFNpcEo4cThZOGxyel8wbzZuU2xNcjJUcg?oc=5', 'content': '“전 세계 CEO 72%, 3년간 경제 성장 낙관적… 투자 1순위 AI” - 조선비즈 - 조선비즈'}])], 'messages': [FunctionMessage(content='[{"url": "https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5", "content": "AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문"}, {"url": "https://news.google.com/rss/articles/CBMiU0FVX3lxTFB1VDRjTlIxeHRjV3NKaERHMFJLOFNpUlNUVnZzQ0JvOUpISVE2cW9rbTZPVU9lQXZuUURJNHF0aDZyaDdQM0F5NFhsc0NrN1dHNEZz?oc=5", "content": "글로벌 CEO들 \\"향후 3년 무조건 AI 투자···직원도 더 뽑을 것\\" - 네이트 뉴스"}, {"url": "https://news.google.com/rss/articles/CBMiakFVX3lxTE9BQUtjd3pDS1dXRkZQTlo4Y2w2d2laZFFQRXdsbGlCMFRTcWJYLTNLaksxbFlnYzk3clVnYlFxZF93U2xubXY1VVhBTDQ2SDhLbm9hcDdXQ3prTlJtV0VCYTFINmNRbjR5N3c?oc=5", "content": "MIT 경제학자 \\"10년간 AI에 영향받을 직업은 5% 불과...기업은 투자비만 날리게 될 것\\" - AI타임스"}, {"url": "https://news.google.com/rss/articles/CBMiW0FVX3lxTE9oenZObVAzOV9hbUliNGhkLTBXZXZrTGpvT0ljcXlpWE5leld2b3RLbUJFTFRtZnU4c0VFaC1oYkVvTTdESEZCYmZUTDJSMFFYdGVXeXN3OVdRTEE?oc=5", "content": "MS, 이탈리아에 AI 인프라 6조4천억 투자 결정 - 연합뉴스"}, {"url": "https://news.google.com/rss/articles/CBMiiAFBVV95cUxOSVBVSnBvY2tXMnZQZTQ2OEliRTQyT0NSVTRMLUNNRFZQSnYzWXN5T3dyWDBnc1NZS2ZzOV9CSjFqT3kxZXFVck1qczJJUlRKZDh6cm5STHZteWk1bVltekdQVG1ZdnlpLUo3Rl9WQ0lSYjM4bFNHOXRYeUU3LVc0WkpfVW5kZDY10gGcAUFVX3lxTE5KRmdOOGkwYi1NZktDVXpWYWhRX0dlTW91NU45T1RURmlWNi14TU1ERnIxSzVwbTJEZnlOQVBnTUFsNHk5b3NjUzUyM2ljWFBuRl9OSFNTeVNhZ3BKV0pPWUNrRFIyRzJOS09GOFRnX1pZVHBxVnVGekRUWlRSSlozcmFPSFNpcEo4cThZOGxyel8wbzZuU2xNcjJUcg?oc=5", "content": "“전 세계 CEO 72%, 3년간 경제 성장 낙관적… 투자 1순위 AI” - 조선비즈 - 조선비즈"}]', name='search_news')]}
+{'output': '다음은 AI 투자와 관련된 최근 뉴스 기사들입니다:\n\n1. [AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문](https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5)\n\n2. [글로벌 CEO들 "향후 3년 무조건 AI 투자···직원도 더 뽑을 것" - 네이트 뉴스](https://news.google.com/rss/articles/CBMiU0FVX3lxTFB1VDRjTlIxeHRjV3NKaERHMFJLOFNpUlNUVnZzQ0JvOUpISVE2cW9rbTZPVU9lQXZuUURJNHF0aDZyaDdQM0F5NFhsc0NrN1dHNEZz?oc=5)\n\n3. [MIT 경제학자 "10년간 AI에 영향받을 직업은 5% 불과...기업은 투자비만 날리게 될 것" - AI타임스](https://news.google.com/rss/articles/CBMiakFVX3lxTE9BQUtjd3pDS1dXRkZQTlo4Y2w2d2laZFFQRXdsbGlCMFRTcWJYLTNLaksxbFlnYzk3clVnYlFxZF93U2xubXY1VVhBTDQ2SDhLbm9hcDdXQ3prTlJtV0VCYTFINmNRbjR5N3c?oc=5)\n\n4. [MS, 이탈리아에 AI 인프라 6조4천억 투자 결정 - 연합뉴스](https://news.google.com/rss/articles/CBMiW0FVX3lxTE9oenZObVAzOV9hbUliNGhkLTBXZXZrTGpvT0ljcXlpWE5leld2b3RLbUJFTFRtZnU4c0VFaC1oYkVvTTdESEZCYmZUTDJSMFFYdGVXeXN3OVdRTEE?oc=5)\n\n5. [“전 세계 CEO 72%, 3년간 경제 성장 낙관적… 투자 1순위 AI” - 조선비즈](https://news.google.com/rss/articles/CBMiiAFBVV95cUxOSVBVSnBvY2tXMnZQZTQ2OEliRTQyT0NSVTRMLUNNRFZQSnYzWXN5T3dyWDBnc1NZS2ZzOV9CSjFqT3kxZXFVck1qczJJUlRKZDh6cm5STHZteWk1bVltekdQVG1ZdnlpLUo3Rl9WQ0lSYjM4bFNHOXRYeUU3LVc0WkpfVW5kZDY10gGcAUFVX3lxTE5KRmdOOGkwYi1NZktDVXpWYWhRX0dlTW91NU45T1RURmlWNi14TU1ERnIxSzVwbTJEZnlOQVBnTUFsNHk5b3NjUzUyM2ljWFBuRl9OSFNTeVNhZ3BKV0pPWUNrRFIyRzJOS09GOFRnX1pZVHBxVnVGekRUWlRSSlozcmFPSFNpcEo4cThZOGxyel8wbzZuU2xNcjJUcg?oc=5)\n\n이 기사들은 AI 투자에 대한 다양한 관점과 최근 동향을 다루고 있습니다.', 'messages': [AIMessage(content='다음은 AI 투자와 관련된 최근 뉴스 기사들입니다:\n\n1. [AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문](https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5)\n\n2. [글로벌 CEO들 "향후 3년 무조건 AI 투자···직원도 더 뽑을 것" - 네이트 뉴스](https://news.google.com/rss/articles/CBMiU0FVX3lxTFB1VDRjTlIxeHRjV3NKaERHMFJLOFNpUlNUVnZzQ0JvOUpISVE2cW9rbTZPVU9lQXZuUURJNHF0aDZyaDdQM0F5NFhsc0NrN1dHNEZz?oc=5)\n\n3. [MIT 경제학자 "10년간 AI에 영향받을 직업은 5% 불과...기업은 투자비만 날리게 될 것" - AI타임스](https://news.google.com/rss/articles/CBMiakFVX3lxTE9BQUtjd3pDS1dXRkZQTlo4Y2w2d2laZFFQRXdsbGlCMFRTcWJYLTNLaksxbFlnYzk3clVnYlFxZF93U2xubXY1VVhBTDQ2SDhLbm9hcDdXQ3prTlJtV0VCYTFINmNRbjR5N3c?oc=5)\n\n4. [MS, 이탈리아에 AI 인프라 6조4천억 투자 결정 - 연합뉴스](https://news.google.com/rss/articles/CBMiW0FVX3lxTE9oenZObVAzOV9hbUliNGhkLTBXZXZrTGpvT0ljcXlpWE5leld2b3RLbUJFTFRtZnU4c0VFaC1oYkVvTTdESEZCYmZUTDJSMFFYdGVXeXN3OVdRTEE?oc=5)\n\n5. [“전 세계 CEO 72%, 3년간 경제 성장 낙관적… 투자 1순위 AI” - 조선비즈](https://news.google.com/rss/articles/CBMiiAFBVV95cUxOSVBVSnBvY2tXMnZQZTQ2OEliRTQyT0NSVTRMLUNNRFZQSnYzWXN5T3dyWDBnc1NZS2ZzOV9CSjFqT3kxZXFVck1qczJJUlRKZDh6cm5STHZteWk1bVltekdQVG1ZdnlpLUo3Rl9WQ0lSYjM4bFNHOXRYeUU3LVc0WkpfVW5kZDY10gGcAUFVX3lxTE5KRmdOOGkwYi1NZktDVXpWYWhRX0dlTW91NU45T1RURmlWNi14TU1ERnIxSzVwbTJEZnlOQVBnTUFsNHk5b3NjUzUyM2ljWFBuRl9OSFNTeVNhZ3BKV0pPWUNrRFIyRzJOS09GOFRnX1pZVHBxVnVGekRUWlRSSlozcmFPSFNpcEo4cThZOGxyel8wbzZuU2xNcjJUcg?oc=5)\n\n이 기사들은 AI 투자에 대한 다양한 관점과 최근 동향을 다루고 있습니다.')]}
 ```
 
 ### 중간 단계 출력을 사용자 정의 함수로 출력
@@ -271,6 +337,34 @@ for step in result:
     # 중간 단계를 parser 를 사용하여 단계별로 출력
     # print(step)
     agent_stream_parser.process_agent_steps(step)
+```
+
+
+```
+[도구 호출]
+Tool: python_repl_tool
+code: import matplotlib.pyplot as plt
+
+# 데이터
+sizes = [15, 30, 45, 10]
+labels = ['A', 'B', 'C', 'D']
+colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue']
+
+# 파이 차트 그리기
+plt.figure(figsize=(8, 6))
+plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=140)
+plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+plt.title('Pie Chart Example')
+plt.show()
+Log: 
+Invoking: `python_repl_tool` with `{'code': "import matplotlib.pyplot as plt\n\n# 데이터\nsizes = [15, 30, 45, 10]\nlabels = ['A', 'B', 'C', 'D']\ncolors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue']\n\n# 파이 차트 그리기\nplt.figure(figsize=(8, 6))\nplt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=140)\nplt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.\nplt.title('Pie Chart Example')\nplt.show()"}`
+
+
+
+[관찰 내용]
+Observation: 
+[최종 답변]
+파이 차트가 성공적으로 그려졌습니다. 차트에는 A, B, C, D의 네 가지 카테고리가 포함되어 있으며, 각 카테고리의 비율이 표시되어 있습니다. 추가적인 질문이나 요청이 있으시면 말씀해 주세요!
 ```
 
 다음은 callback 을 수정하여 사용하는 방법입니다.
@@ -325,6 +419,30 @@ for step in result:
     agent_stream_parser.process_agent_steps(step)
 ```
 
+```
+<<<<<<< 도구 호출 >>>>>>
+Tool: search_news
+<<<<<<< 도구 호출 >>>>>>
+<<<<<<< 관찰 내용 >>>>>>
+Observation: {'url': 'https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5', 'content': 'AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문'}
+<<<<<<< 관찰 내용 >>>>>>
+<<<<<<< 최종 답변 >>>>>>
+다음은 AI 투자와 관련된 최근 뉴스 기사들입니다:
+
+1. [AI 투자 늘리는 통신사, 주파수 재할당 대가 마련 부담 - 전자신문](https://news.google.com/rss/articles/CBMiS0FVX3lxTE51YlpldHRJY3JiQld5aTB2WDNYQXFUVmhaeGFkbE1ybERvZWE5QW5qOEt6MS10R3RFR0tBSHFDZWttazJPUjJzeVRzNA?oc=5)
+
+2. [글로벌 CEO들 "향후 3년 무조건 AI 투자···직원도 더 뽑을 것" - 네이트 뉴스](https://news.google.com/rss/articles/CBMiU0FVX3lxTFB1VDRjTlIxeHRjV3NKaERHMFJLOFNpUlNUVnZzQ0JvOUpISVE2cW9rbTZPVU9lQXZuUURJNHF0aDZyaDdQM0F5NFhsc0NrN1dHNEZz?oc=5)
+
+3. [MIT 경제학자 "10년간 AI에 영향받을 직업은 5% 불과...기업은 투자비만 날리게 될 것" - AI타임스](https://news.google.com/rss/articles/CBMiakFVX3lxTE9BQUtjd3pDS1dXRkZQTlo4Y2w2d2laZFFQRXdsbGlCMFRTcWJYLTNLaksxbFlnYzk3clVnYlFxZF93U2xubXY1VVhBTDQ2SDhLbm9hcDdXQ3prTlJtV0VCYTFINmNRbjR5N3c?oc=5)
+
+4. [MS, 이탈리아에 AI 인프라 6조4천억 투자 결정 - 연합뉴스](https://news.google.com/rss/articles/CBMiW0FVX3lxTE9oenZObVAzOV9hbUliNGhkLTBXZXZrTGpvT0ljcXlpWE5leld2b3RLbUJFTFRtZnU4c0VFaC1oYkVvTTdESEZCYmZUTDJSMFFYdGVXeXN3OVdRTEE?oc=5)
+
+5. [“전 세계 CEO 72%, 3년간 경제 성장 낙관적… 투자 1순위 AI” - 조선비즈](https://news.google.com/rss/articles/CBMiiAFBVV95cUxOSVBVSnBvY2tXMnZQZTQ2OEliRTQyT0NSVTRMLUNNRFZQSnYzWXN5T3dyWDBnc1NZS2ZzOV9CSjFqT3kxZXFVck1qczJJUlRKZDh6cm5STHZteWk1bVltekdQVG1ZdnlpLUo3Rl9WQ0lSYjM4bFNHOXRYeUU3LVc0WkpfVW5kZDY10gGcAUFVX3lxTE5KRmdOOGkwYi1NZktDVXpWYWhRX0dlTW91NU45T1RURmlWNi14TU1ERnIxSzVwbTJEZnlOQVBnTUFsNHk5b3NjUzUyM2ljWFBuRl9OSFNTeVNhZ3BKV0pPWUNrRFIyRzJOS09GOFRnX1pZVHBxVnVGekRUWlRSSlozcmFPSFNpcEo4cThZOGxyel8wbzZuU2xNcjJUcg?oc=5)
+
+이 기사들은 AI 투자에 대한 다양한 관점과 최근 동향을 다루고 있습니다.
+<<<<<<< 최종 답변 >>>>>>
+```
+
 ## 이전 대화내용 기억하는 Agent
 
 이전의 대화내용을 기억하기 위해서는 `RunnableWithMessageHistory` 를 사용하여 `AgentExecutor` 를 감싸줍니다.
@@ -375,6 +493,13 @@ for step in response:
     agent_stream_parser.process_agent_steps(step)
 ```
 
+```
+<<<<<<< 최종 답변 >>>>>>
+안녕하세요, 테디! 만나서 반가워요. 어떻게 도와드릴까요?
+<<<<<<< 최종 답변 >>>>>>
+```
+
+
 ```{python}
 # 질의에 대한 답변을 스트리밍으로 출력 요청
 response = agent_with_chat_history.stream(
@@ -386,6 +511,12 @@ response = agent_with_chat_history.stream(
 # 출력 확인
 for step in response:
     agent_stream_parser.process_agent_steps(step)
+```
+
+```
+<<<<<<< 최종 답변 >>>>>>
+당신의 이름은 테디입니다!
+<<<<<<< 최종 답변 >>>>>>
 ```
 
 ```{python}
@@ -402,6 +533,15 @@ response = agent_with_chat_history.stream(
 for step in response:
     agent_stream_parser.process_agent_steps(step)
 ```
+
+
+```
+<<<<<<< 최종 답변 >>>>>>
+감사합니다, 테디! 테디노트 주식회사에 대해 더 알고 싶으신가요? 아니면 다른 도움이 필요하신가요?
+<<<<<<< 최종 답변 >>>>>>
+```
+
+
 
 ```{python}
 # 질의에 대한 답변을 스트리밍으로 출력 요청
@@ -420,6 +560,50 @@ for step in response:
     agent_stream_parser.process_agent_steps(step)
 ```
 
+
+```
+<<<<<<< 도구 호출 >>>>>>
+Tool: search_news
+<<<<<<< 도구 호출 >>>>>>
+<<<<<<< 관찰 내용 >>>>>>
+Observation: {'url': 'https://news.google.com/rss/articles/CBMiakFVX3lxTFB6b3FPREFINURLSy1pVUZDbXB4X3JwaW1fVGNCRks1RklJMDFNTWxCbURTbGMwU05kWVRRLU9xNnVFUkNPVFNLaUlTOThQaDRoQzlKQWtsQnVETnFqbEhGc2hIQnU2RERoS3c?oc=5', 'content': '인사이드 구글 - The Keyword'}
+<<<<<<< 관찰 내용 >>>>>>
+<<<<<<< 최종 답변 >>>>>>
+아래는 셜리 상무님께 보낼 이메일 본문입니다.
+
+---
+
+제목: 최신 뉴스 업데이트
+
+안녕하세요, 셜리 상무님.
+
+테디노트 주식회사의 테디입니다. 최근의 주요 뉴스를 아래와 같이 정리하여 전달드립니다.
+
+1. [인사이드 구글 - The Keyword](https://news.google.com/rss/articles/CBMiakFVX3lxTFB6b3FPREFINURLSy1pVUZDbXB4X3JwaW1fVGNCRks1RklJMDFNTWxCbURTbGMwU05kWVRRLU9xNnVFUkNPVFNLaUlTOThQaDRoQzlKQWtsQnVETnFqbEhGc2hIQnU2RERoS3c?oc=5)
+
+2. [지역별 가격 조정 예고 - Riot Games](https://news.google.com/rss/articles/CBMickFVX3lxTE9USmRUM2lXX0NkdXgwdWlYMk1MQnprMmEwT3UySUd0MFg1VTJzQldNMGNXVEw4N0VvUlJDaklEX2Vybl9QcGIwTGwyNzhYeS1sVkJmSDRDbDliRm9FOWRpMlJiM0FrWDBsb0RCeExKTVhYZw?oc=5)
+
+3. ['제135회 중국수출입박람회' 광저우서 개막 - 최신 뉴스 온라인 선전시 정부](https://news.google.com/rss/articles/CBMieEFVX3lxTE1lUzhZOU9WTGE1Z2JwcTdJbldlZG5ac0QxSy1WWkI4b3lGQVFBU2ItUUwwbGZJZEVDaGZrVE5xMzl0OVVmZEtIaEoxaHVIX3RERkgzVEltOFRvS0dOX05ReDBSelJXaktNWVF0N2RxMU44MVNCdDNXcw?oc=5)
+
+4. [김정은 전용차 또 바꿨나…최신 마이바흐 SUV 포착 - 연합뉴스TV](https://news.google.com/rss/articles/CBMiZ0FVX3lxTFBsU0pmcm9Cb0RId2FVTFBzZVg0UTN5WFBjTVVRbDhBTG1DMmdTYlFNaGJVUl9hVjhBUlpSNGRBM3QzdGFxcWVZT0pCTkhIMGRLbmRITUR3ZXNHMVJURE90Y1U1SmQ0NFU?oc=5)
+
+5. [군, 대북 확성기 방송…최신 탈북자 뉴스부터 ‘탈출하라’ 내용까지 - KBS뉴스](https://news.google.com/rss/articles/CBMiW0FVX3lxTE0tU0xLX21DLUlJb2ZDemhUYlNpMDlHNmdwLVJ4Z1FYVmJFdk1GWndBd29LMmVVV1hJYTRta3lMLWFMMUtxS1BBc1hHdXBERjZFU2hodnpPQUtzbTA?oc=5)
+
+이 정보가 도움이 되길 바랍니다. 추가적인 질문이나 요청이 있으시면 언제든지 말씀해 주세요.
+
+감사합니다.
+
+테디  
+teddy@teddynote.com  
+테디노트 주식회사
+
+--- 
+
+이메일을 보내실 준비가 되셨나요? 추가로 수정할 부분이 있으면 말씀해 주세요!
+<<<<<<< 최종 답변 >>>>>>
+```
+
+
 ```{python}
 # 질의에 대한 답변을 스트리밍으로 출력 요청
 response = agent_with_chat_history.stream(
@@ -434,4 +618,3 @@ response = agent_with_chat_history.stream(
 for step in response:
     agent_stream_parser.process_agent_steps(step)
 ```
-
