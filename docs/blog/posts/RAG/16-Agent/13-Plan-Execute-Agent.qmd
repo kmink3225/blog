@@ -1,0 +1,682 @@
+---
+title: "Plan-and-Execute Agent"
+subtitle: 복잡한 작업 계획과 실행을 위한 에이전트 패턴
+description: |
+  Plan-and-Execute 패턴을 활용하여 복잡한 다단계 작업을 계획하고 순차적으로 실행하는 에이전트 구현을 다룬다.
+categories:
+  - AI
+  - RAG
+  - LangChain
+author: Kwangmin Kim
+date: 11/18/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+## Plan-and-Execute Agent란?
+
+Plan-and-Execute는 대규모 언어 모델(LLM)이 **계획(Planning)**과 **실행(Execution)** 단계를 분리하여 복잡한 문제를 체계적으로 해결하는 패턴이다.
+
+### ReAct와의 차이
+
+**ReAct 패턴의 한계:**
+- 각 단계마다 즉시 행동 결정
+- 복잡한 작업의 경우 비효율적인 단계 반복
+- 전체 계획이 없어 방향 혼란 가능
+
+**Plan-and-Execute의 장점:**
+- **2단계 분리**: 먼저 전체 계획 수립, 후에 실행
+- **효율성**: 불필요한 반복 작업 최소화
+- **재현성**: 같은 계획으로 다른 입력에 적용 가능
+- **추적성**: 계획 단계를 명시적으로 추적
+
+### Plan-and-Execute 작동 원리
+
+```
+Phase 1: Planning
+├─ 1. Task: "목표 분석"
+├─ 2. Task: "필요 리소스 식별"
+└─ 3. Task: "실행 순서 결정"
+
+Phase 2: Execution
+├─ Task 1 실행 (웹 검색)
+├─ Task 2 실행 (파일 읽기)
+├─ Task 3 실행 (데이터 분석)
+└─ 최종 결과 생성
+```
+
+### LangGraph의 Plan-and-Execute 구현
+
+LangGraph의 `create_planning_agent`를 사용하여 효과적으로 구현할 수 있다.
+
+**핵심 특징:**
+- **계획 최적화**: LLM이 한 번에 전체 계획 수립
+- **상태 관리**: 각 태스크의 진행 상황 추적
+- **에러 복구**: 특정 태스크 실패 시 재시도 또는 대체 방안
+- **결과 통합**: 각 태스크의 결과를 최종 답변으로 통합
+
+```{python}
+# API 키를 환경변수로 관리하기 위한 설정 파일
+from dotenv import load_dotenv
+
+# API 키 정보 로드
+load_dotenv()
+```
+
+```{python}
+# LangSmith 추적을 설정한다. https://smith.langchain.com
+# !pip install -qU langchain-teddynote
+from langchain_teddynote import logging
+
+# 프로젝트 이름을 입력한다.
+logging.langsmith("CH16-Plan-Execute-Agent")
+```
+
+## 환경 설정
+
+### 기본 구성 요소
+
+Plan-and-Execute Agent는 네 가지 핵심 요소로 구성된다:
+
+1. **Planner LLM**: 계획 수립 담당
+2. **Executor LLM**: 실제 작업 수행
+3. **도구(Tools)**: 외부 작업 수행
+4. **메모리(Memory)**: 계획 및 실행 이력 저장
+
+![Plan-and-Execute Agent 아키텍처](assets/plan_execute_agent.png)
+
+```{python}
+from langchain_openai import ChatOpenAI
+from langchain_teddynote.tools.tavily import TavilySearch
+from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+# 메모리 설정 (계획 및 실행 이력 저장)
+memory = MemorySaver()
+
+# 모델 설정
+# Planner: 복잡한 추론이 필요하므로 GPT-4o 사용
+planner_model = ChatOpenAI(model_name="gpt-4o", temperature=0)
+
+# Executor: 비용 절감을 위해 GPT-4o-mini 사용
+executor_model = ChatOpenAI(model_name="gpt-4o-mini")
+```
+
+**모델 선택 전략:**
+- **Planner**: 더 강력한 모델 (복잡한 계획 수립)
+- **Executor**: 더 빠르고 저렴한 모델 (계획된 작업 수행)
+
+## 계획 작성 시스템
+
+### 계획 구조 정의
+
+```{python}
+from typing import List
+from pydantic import BaseModel, Field
+
+class Task(BaseModel):
+    """수행할 작업의 단위"""
+    id: int = Field(description="작업 ID (1부터 시작)")
+    title: str = Field(description="작업 제목")
+    description: str = Field(description="작업 상세 설명")
+    required_tools: List[str] = Field(description="필요한 도구 목록")
+    dependencies: List[int] = Field(
+        default_factory=list, 
+        description="선행 작업 ID 목록"
+    )
+    
+    def __str__(self) -> str:
+        return f"Task {self.id}: {self.title}"
+
+class Plan(BaseModel):
+    """전체 작업 계획"""
+    objective: str = Field(description="최종 목표")
+    tasks: List[Task] = Field(description="수행할 작업 리스트")
+    
+    def __str__(self) -> str:
+        task_str = "\n".join(f"  {task}" for task in self.tasks)
+        return f"Goal: {self.objective}\n\nTasks:\n{task_str}"
+```
+
+**Plan 구조의 장점:**
+- 명확한 작업 구조
+- 의존성 추적으로 순서 관리
+- 필요한 도구 사전 식별
+
+### Planner Prompt 작성
+
+```{python}
+from langchain_core.prompts import ChatPromptTemplate
+
+planner_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """당신은 전문적인 작업 계획가(Project Manager)입니다.
+        
+사용자의 요청을 분석하여 다음 규칙에 따라 상세한 작업 계획을 수립하세요:
+
+1. **작업 분해**: 복잡한 요청을 논리적인 소 작업들로 분해
+2. **순차성**: 선행 작업이 필요한 경우 dependencies에 명시
+3. **도구 식별**: 각 작업에 필요한 도구 명시 (web_search, file_management, pdf_retriever 등)
+4. **명확성**: 각 작업의 목표가 명확하고 측정 가능하도록 작성
+
+사용 가능한 도구:
+- web_search: 웹 검색 (최신 정보 필요시)
+- file_write: 파일 작성
+- file_read: 파일 읽기
+- pdf_retriever: PDF 문서 검색
+- data_analysis: 데이터 분석
+
+응답 형식은 다음 JSON 스키마를 따르세요:
+```json
+{{
+    "objective": "최종 목표",
+    "tasks": [
+        {{
+            "id": 1,
+            "title": "작업 제목",
+            "description": "작업 상세 설명",
+            "required_tools": ["tool1", "tool2"],
+            "dependencies": []
+        }}
+    ]
+}}
+```""",
+    ),
+    ("human", "{input}"),
+])
+```
+
+**Prompt 설계 팁:**
+- 구조화된 출력 형식 명시
+- 사용 가능한 도구 목록 제공
+- 작업 분해의 기준 설명
+
+## 도구 설정
+
+### 웹 검색 도구
+
+```{python}
+from langchain_teddynote.tools.tavily import TavilySearch
+
+# 웹 검색 도구 생성
+web_search = TavilySearch(
+    topic="general",
+    max_results=5,
+    include_answer=False,
+    include_raw_content=False,
+)
+
+web_search.name = "web_search"
+web_search.description = (
+    "웹에서 정보를 검색합니다. 최신 정보, 뉴스, 통계 등이 필요할 때 사용합니다."
+)
+```
+
+### 파일 관리 도구
+
+```{python}
+from langchain_community.agent_toolkits import FileManagementToolkit
+
+working_directory = "tmp"
+
+file_management_tools = FileManagementToolkit(
+    root_dir=str(working_directory),
+).get_tools()
+
+# 도구 이름과 설명 업데이트
+for tool in file_management_tools:
+    if tool.name == "file_write":
+        tool.description = "파일을 작성하거나 수정합니다."
+    elif tool.name == "file_read":
+        tool.description = "파일의 내용을 읽습니다."
+    elif tool.name == "list_directory":
+        tool.description = "디렉토리의 파일 목록을 조회합니다."
+```
+
+### PDF 검색 도구
+
+```{python}
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
+from langchain.document_loaders import PDFPlumberLoader
+from langchain_core.tools.retriever import create_retriever_tool
+from langchain_core.prompts import PromptTemplate
+
+# PDF 로드 및 벡터화
+loader = PDFPlumberLoader("data/sample_document.pdf")
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+split_docs = loader.load_and_split(text_splitter)
+vector = FAISS.from_documents(split_docs, OpenAIEmbeddings())
+pdf_retriever = vector.as_retriever()
+
+# Retriever 도구 생성
+retriever_tool = create_retriever_tool(
+    pdf_retriever,
+    "pdf_retriever",
+    "내부 문서에서 정보를 검색합니다. 회사 정책, 보고서, 기술 문서 등을 조회할 수 있습니다.",
+    document_prompt=PromptTemplate.from_template(
+        "<document><context>{page_content}</context><metadata><source>{source}</source><page>{page}</page></metadata></document>"
+    ),
+)
+```
+
+### 전체 도구 목록
+
+```{python}
+# 도구 목록 구성
+tools = [web_search, *file_management_tools, retriever_tool]
+```
+
+## Plan-and-Execute 에이전트 구현
+
+### Executor 에이전트 생성
+
+계획된 작업을 실행할 ReAct 에이전트를 생성한다.
+
+```{python}
+from langgraph.prebuilt import create_react_agent
+
+# Executor 에이전트: 개별 작업 수행
+executor = create_react_agent(
+    executor_model,
+    tools,
+    checkpointer=memory,
+)
+```
+
+### Plan-and-Execute 그래프 구축
+
+```{python}
+from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import BaseMessage
+from typing import Annotated
+from langgraph.graph.message import add_messages
+
+class PlanExecuteState(BaseModel):
+    """계획 및 실행 상태"""
+    input: str = Field(description="사용자 입력")
+    plan: Plan = Field(default=None, description="수립된 계획")
+    past_steps: Annotated[List[tuple], add_messages] = Field(
+        default_factory=list,
+        description="완료된 작업과 결과"
+    )
+    response: str = Field(default="", description="최종 응답")
+
+def plan_step(state: PlanExecuteState) -> PlanExecuteState:
+    """계획 수립 단계"""
+    # Planner가 계획 수립
+    planner_chain = planner_prompt | planner_model.with_structured_output(Plan)
+    plan = planner_chain.invoke({"input": state.input})
+    
+    return {**state, "plan": plan}
+
+def execute_step(state: PlanExecuteState) -> PlanExecuteState:
+    """작업 실행 단계"""
+    plan = state.plan
+    past_steps = state.past_steps
+    
+    # 완료되지 않은 작업 찾기
+    completed_task_ids = {step[0] for step in past_steps}
+    next_task = None
+    
+    for task in plan.tasks:
+        # 의존성이 모두 완료되었고, 아직 수행되지 않은 작업
+        if (task.id not in completed_task_ids and 
+            all(dep_id in completed_task_ids for dep_id in task.dependencies)):
+            next_task = task
+            break
+    
+    if next_task is None:
+        # 모든 작업 완료
+        return state
+    
+    # 작업 실행
+    task_instruction = f"""
+    다음 작업을 수행하세요:
+    
+    제목: {next_task.title}
+    설명: {next_task.description}
+    필요 도구: {', '.join(next_task.required_tools)}
+    
+    이전 작업 결과:
+    {chr(10).join(f"Task {task_id}: {result}" for task_id, result in past_steps)}
+    """
+    
+    # Executor가 작업 수행
+    result = executor.invoke(
+        {"messages": [("human", task_instruction)]},
+        {"configurable": {"thread_id": f"task_{next_task.id}"}}
+    )
+    
+    # 결과 저장
+    past_steps.append((next_task.id, result["messages"][-1].content))
+    
+    return {**state, "past_steps": past_steps}
+
+def generate_response_step(state: PlanExecuteState) -> PlanExecuteState:
+    """최종 응답 생성 단계"""
+    plan = state.plan
+    past_steps = state.past_steps
+    
+    # 모든 작업이 완료되었는지 확인
+    if len(past_steps) < len(plan.tasks):
+        return state
+    
+    # 결과 통합
+    summary = f"""
+    ## 작업 완료 보고서
+    
+    **목표**: {plan.objective}
+    
+    ### 수행 작업
+    """
+    
+    for task_id, result in past_steps:
+        task = next(t for t in plan.tasks if t.id == task_id)
+        summary += f"\n\n**Task {task_id}: {task.title}**\n{result}\n"
+    
+    return {**state, "response": summary}
+
+# 그래프 구성
+workflow = StateGraph(PlanExecuteState)
+
+workflow.add_node("plan", plan_step)
+workflow.add_node("execute", execute_step)
+workflow.add_node("respond", generate_response_step)
+
+workflow.add_edge(START, "plan")
+workflow.add_edge("plan", "execute")
+workflow.add_edge("execute", "execute")  # 모든 작업 완료까지 반복
+workflow.add_edge("execute", "respond")
+workflow.add_edge("respond", END)
+
+# 컴파일
+plan_execute_agent = workflow.compile(checkpointer=memory)
+```
+
+**그래프 구조:**
+- **plan 노드**: LLM이 전체 작업 계획 수립
+- **execute 노드**: 각 작업을 순차적으로 실행 (반복)
+- **respond 노드**: 최종 응답 생성
+
+## 실행 함수 정의
+
+### 스트리밍 출력
+
+```{python}
+from langchain_teddynote.messages import stream_graph
+
+def run_plan_execute_agent(instruction: str, thread_id: str = "main"):
+    """계획 및 실행 에이전트 실행"""
+    config = {"configurable": {"thread_id": thread_id}}
+    inputs = {"messages": [("human", instruction)]}
+    
+    stream_graph(plan_execute_agent, inputs, config)
+```
+
+## 사용 예시
+
+### 예시 1: 시장 조사 보고서 작성
+
+```{python}
+instruction = """
+AI 에이전트 시장에 대한 종합 조사 보고서를 작성해주세요.
+
+다음 내용이 포함되어야 합니다:
+1. 현재 AI 에이전트 시장 규모 및 성장률
+2. 주요 플레이어 및 기술 트렌드
+3. 시장 기회 및 위험 요소 분석
+4. 향후 6개월 전망
+
+보고서는 마크다운 형식으로 작성하고 파일로 저장해주세요.
+"""
+
+run_plan_execute_agent(instruction)
+```
+
+**실행 흐름:**
+
+1. **Plan 단계**:
+   - Task 1: 시장 규모 및 성장률 조사 (web_search)
+   - Task 2: 주요 플레이어 분석 (web_search)
+   - Task 3: 기술 트렌드 조사 (web_search + pdf_retriever)
+   - Task 4: 보고서 작성 (Task 1-3 결과 필요)
+   - Task 5: 파일 저장 (Task 4 결과 필요)
+
+2. **Execute 단계**:
+   - Task 1 실행 → 결과 저장
+   - Task 2 실행 → 결과 저장
+   - Task 3 실행 → 결과 저장
+   - Task 4 실행 → 결과 저장
+   - Task 5 실행 → 결과 저장
+
+3. **Respond 단계**: 최종 보고서 생성
+
+### 예시 2: 데이터 분석 및 시각화
+
+```{python}
+instruction = """
+회사의 분기별 판매 데이터를 분석하고 시각화하는 프로젝트를 진행해주세요.
+
+다음을 순서대로 수행하세요:
+1. sales_data.csv 파일 읽기
+2. 분기별 판매액, 증감율, 주요 제품 분석
+3. 분석 결과를 정리한 요약 테이블 작성
+4. 주요 통찰력을 markdown 형식으로 정리
+5. 최종 분석 보고서를 analysis_report.md로 저장
+"""
+
+run_plan_execute_agent(instruction)
+```
+
+**실행 특징:**
+- Task 간 의존성 자동 관리
+- 각 Task의 결과가 다음 Task의 입력으로 사용
+- 순서 위반 불가능 (의존성으로 보호)
+
+### 예시 3: 경쟁사 분석
+
+```{python}
+instruction = """
+주요 경쟁사 3곳에 대한 경쟁 분석 리포트를 작성해주세요.
+
+1. 경쟁사1, 경쟁사2, 경쟁사3의 최신 뉴스와 제품 정보 수집
+2. 각 경쟁사의 강점, 약점, 기회, 위협(SWOT) 분석
+3. 우리 회사와의 차별화 전략 도출
+4. 비교 테이블 작성
+5. 최종 보고서를 competitor_analysis.md로 저장
+
+각 경쟁사별 분석은 병렬로 수행 가능합니다.
+"""
+
+run_plan_execute_agent(instruction)
+```
+
+## 고급 기법
+
+### 조건부 Task 실행
+
+```{python}
+def should_execute_task(task: Task, previous_results: dict) -> bool:
+    """특정 조건에서만 Task 실행"""
+    
+    # 예: 검색 결과가 충분하면 분석 Task 스킵
+    if task.id == 4 and len(previous_results.get("search_results", [])) < 3:
+        return False
+    
+    # 예: 파일이 존재하면 생성 Task 스킵
+    if task.id == 5 and "file_exists" in previous_results:
+        return False
+    
+    return True
+```
+
+### Task 결과 캐싱
+
+```{python}
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def execute_task_cached(task_id: int, instruction: str) -> str:
+    """동일한 Task는 캐시된 결과 사용"""
+    # 실행 로직
+    pass
+```
+
+### 에러 처리 및 재시도
+
+```{python}
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10)
+)
+def execute_task_with_retry(task: Task) -> str:
+    """실패 시 지수 백오프로 재시도"""
+    # 실행 로직
+    pass
+```
+
+## Plan-and-Execute vs ReAct
+
+| 특성 | Plan-and-Execute | ReAct |
+|------|------------------|-------|
+| **계획 수립** | ✅ 사전 계획 수립 | ❌ 즉흥적 행동 |
+| **복잡도** | 높음 (다단계 작업) | 중간 (단일 목표) |
+| **효율성** | ✅ 불필요한 반복 최소 | ❌ 반복 가능성 높음 |
+| **유연성** | 제한적 (계획 변경 어려움) | ✅ 높음 (동적 대응) |
+| **예측성** | ✅ 높음 (계획이 명시적) | 낮음 (동적 결정) |
+| **토큰 소비** | 중간 (계획 + 실행) | 높음 (반복으로 인한 증가) |
+
+**선택 기준:**
+- **Plan-and-Execute**: 복잡하고 구조화된 작업, 예측 가능한 프로세스
+- **ReAct**: 단순하고 반복적인 작업, 높은 유연성 필요
+
+## 베스트 프랙티스
+
+### 1. 명확한 Task 정의
+
+```python
+# ❌ 나쁜 예
+Task(
+    id=1,
+    title="조사",
+    description="뭔가 조사하기"
+)
+
+# ✅ 좋은 예
+Task(
+    id=1,
+    title="AI 에이전트 시장 규모 조사",
+    description="2024년 AI 에이전트 시장 규모, 성장률, 주요 플레이어를 웹 검색으로 조사",
+    required_tools=["web_search"],
+    dependencies=[]
+)
+```
+
+### 2. 적절한 Task 분해
+
+```python
+# ❌ 너무 많은 Task
+# 100개 이상의 세분화된 Task → 관리 복잡도 증가
+
+# ✅ 적절한 수준
+# 5-10개의 의미 있는 Task → 명확한 진행 추적
+```
+
+### 3. 의존성 명시
+
+```python
+# ❌ 순환 의존성 주의
+Task(id=1, dependencies=[2, 3])
+Task(id=2, dependencies=[1])  # 순환 참조 발생!
+
+# ✅ 단방향 의존성
+Task(id=1, dependencies=[])
+Task(id=2, dependencies=[1])
+Task(id=3, dependencies=[1, 2])
+```
+
+## 트러블슈팅
+
+### 문제 1: Task 순서 오류
+
+```python
+# 의존성 검증
+def validate_plan(plan: Plan) -> bool:
+    """계획의 의존성이 올바른지 검증"""
+    task_ids = {task.id for task in plan.tasks}
+    
+    for task in plan.tasks:
+        # 존재하지 않는 Task에 의존
+        if not all(dep_id in task_ids for dep_id in task.dependencies):
+            raise ValueError(f"Task {task.id}: 존재하지 않는 의존성")
+        
+        # 순환 의존성 감지
+        if task.id in task.dependencies:
+            raise ValueError(f"Task {task.id}: 자기 자신에 의존")
+    
+    return True
+```
+
+### 문제 2: Task 실패 처리
+
+```python
+def handle_task_failure(task: Task, error: str, previous_results: dict):
+    """Task 실패 시 대응"""
+    
+    # 1. 재시도
+    if task.id in [1, 2, 3]:  # 중요한 Task만 재시도
+        return "retry"
+    
+    # 2. 대체 Task 실행
+    if task.id == 4:  # 웹 검색 실패
+        return "use_pdf_retriever"
+    
+    # 3. 사용자 개입
+    return "manual_intervention_required"
+```
+
+### 문제 3: 토큰 오버플로우
+
+```python
+def truncate_results(results: List[str], max_tokens: int = 2000) -> List[str]:
+    """이전 결과 길이 제한"""
+    truncated = []
+    total_tokens = 0
+    
+    for result in results:
+        result_tokens = len(result.split())
+        if total_tokens + result_tokens > max_tokens:
+            truncated.append(result[:500] + "...")
+        else:
+            truncated.append(result)
+        total_tokens += result_tokens
+    
+    return truncated
+```
+
+## 참고 자료
+
+- [Plan-and-Execute Agent 논문](https://arxiv.org/abs/2305.04091)
+- [LangGraph State Management](https://langchain-ai.github.io/langgraph/concepts/low_level_concepts/)
+- [Agent Architecture Best Practices](https://langchain-ai.github.io/langgraph/tutorials/)
+
+## 다음 단계
+
+Plan-and-Execute Agent의 기본을 익혔다면, 다음 주제들을 살펴보자:
+
+- **Multi-Agent 시스템**: 여러 에이전트의 협업
+- **동적 Task 생성**: 런타임에 Task 추가/제거
+- **Agent Orchestration**: 복잡한 워크플로우 관리

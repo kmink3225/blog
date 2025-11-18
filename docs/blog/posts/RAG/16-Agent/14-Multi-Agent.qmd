@@ -1,0 +1,1060 @@
+---
+title: "Multi-Agent 시스템"
+subtitle: 여러 에이전트의 협업을 통한 복잡한 문제 해결
+description: |
+  Multi-Agent 패턴을 활용하여 각각의 전문성을 가진 여러 에이전트가 협력하여 복잡한 문제를 해결하는 시스템 구현을 다룬다.
+categories:
+  - AI
+  - Agent
+  - LangChain
+author: Kwangmin Kim
+date: 11/19/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+execute:
+    eval: false
+---
+
+## Multi-Agent 시스템이란?
+
+Multi-Agent 시스템은 **각각의 전문성과 역할을 가진 여러 에이전트들이 협력하여 복잡한 문제를 해결하는 아키텍처**이다.
+
+### 단일 에이전트의 한계
+
+**ReAct/Plan-and-Execute의 문제점:**
+- 하나의 모델이 모든 역할 수행
+- 도메인 전문성 부족
+- 확장성 제한
+- 오류 누적
+
+**Multi-Agent의 장점:**
+- **역할 분담**: 각 에이전트가 특화된 역할 수행
+- **전문성**: 도메인별 최적화된 모델 사용
+- **안정성**: 특정 에이전트 실패 시 다른 에이전트가 보완
+- **확장성**: 새로운 역할의 에이전트 추가 용이
+- **성능**: 병렬 처리로 전체 실행 시간 단축
+
+### Multi-Agent 작동 원리
+
+```
+User Request
+    ↓
+[Coordinator] (요청 분석 및 작업 분배)
+    ↓
+    ├─→ [Research Agent] (정보 수집)
+    ├─→ [Analysis Agent] (데이터 분석)
+    ├─→ [Writer Agent] (문서 작성)
+    └─→ [Review Agent] (품질 검토)
+    ↓
+[Aggregator] (결과 통합)
+    ↓
+Final Output
+```
+
+### 에이전트의 역할 유형
+
+**1. Coordinator Agent**
+- 사용자 요청 분석
+- 작업 분배
+- 에이전트 간 통신 관리
+
+**2. Specialist Agent**
+- 특정 도메인 전문 수행
+- Research, Analysis, Writing, Code Generation 등
+
+**3. Validator Agent**
+- 결과 검증
+- 품질 확인
+- 오류 감지 및 수정
+
+**4. Aggregator Agent**
+- 각 에이전트의 결과 통합
+- 최종 응답 생성
+
+```{python}
+# API 키를 환경변수로 관리하기 위한 설정 파일
+from dotenv import load_dotenv
+
+# API 키 정보 로드
+load_dotenv()
+```
+
+```{python}
+# LangSmith 추적을 설정한다. https://smith.langchain.com
+# !pip install -qU langchain-teddynote
+from langchain_teddynote import logging
+
+# 프로젝트 이름을 입력한다.
+logging.langsmith("CH17-Multi-Agent-System")
+```
+
+## 환경 설정
+
+### 기본 구성 요소
+
+Multi-Agent 시스템은 다음 요소들로 구성된다:
+
+1. **Coordinator**: 요청 라우팅 및 작업 분배
+2. **Specialist Agents**: 각 도메인별 전문 에이전트
+3. **Communication Layer**: 에이전트 간 메시지 전달
+4. **Result Aggregator**: 결과 통합
+5. **Memory System**: 에이전트 간 상태 공유
+
+![Multi-Agent 시스템 아키텍처](assets/multi_agent_architecture.png)
+
+```{python}
+from langchain_openai import ChatOpenAI
+from langchain_teddynote.tools.tavily import TavilySearch
+from langchain_community.agent_toolkits import FileManagementToolkit
+from langchain_core.tools.retriever import create_retriever_tool
+from langgraph.checkpoint.memory import MemorySaver
+from typing import List, Dict, Any
+from pydantic import BaseModel, Field
+
+# 메모리 설정
+memory = MemorySaver()
+
+# 모델들 정의 (각 역할에 따라 다른 모델 사용 가능)
+coordinator_model = ChatOpenAI(model_name="gpt-4o", temperature=0)
+research_model = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3)
+analysis_model = ChatOpenAI(model_name="gpt-4o", temperature=0)
+writer_model = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.7)
+reviewer_model = ChatOpenAI(model_name="gpt-4o", temperature=0)
+```
+
+**모델 선택 전략:**
+- **Coordinator**: 강력한 모델 (복잡한 분석 필요)
+- **Specialist**: 역할에 맞는 모델 (Research는 정확성, Writer는 창의성)
+- **Reviewer**: 강력한 모델 (품질 평가)
+
+## 도구 설정
+
+### 웹 검색 도구
+
+```{python}
+web_search = TavilySearch(
+    topic="general",
+    max_results=5,
+    include_answer=False,
+)
+
+web_search.name = "web_search"
+web_search.description = "웹에서 최신 정보를 검색합니다."
+```
+
+### 파일 관리 도구
+
+```{python}
+working_directory = "tmp"
+file_tools = FileManagementToolkit(
+    root_dir=str(working_directory),
+).get_tools()
+
+for tool in file_tools:
+    if tool.name == "file_write":
+        tool.description = "파일을 작성합니다."
+    elif tool.name == "file_read":
+        tool.description = "파일을 읽습니다."
+    elif tool.name == "list_directory":
+        tool.description = "디렉토리를 나열합니다."
+```
+
+### PDF 검색 도구
+
+```{python}
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
+from langchain.document_loaders import PDFPlumberLoader
+from langchain_core.prompts import PromptTemplate
+
+loader = PDFPlumberLoader("data/sample_document.pdf")
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+split_docs = loader.load_and_split(text_splitter)
+vector = FAISS.from_documents(split_docs, OpenAIEmbeddings())
+pdf_retriever = vector.as_retriever()
+
+retriever_tool = create_retriever_tool(
+    pdf_retriever,
+    "pdf_retriever",
+    "내부 문서에서 정보를 검색합니다.",
+    document_prompt=PromptTemplate.from_template(
+        "<document><context>{page_content}</context><metadata><source>{source}</source><page>{page}</page></metadata></document>"
+    ),
+)
+```
+
+## 에이전트 정의
+
+### 에이전트 기본 구조
+
+```{python}
+from enum import Enum
+from typing import Optional
+from datetime import datetime
+
+class AgentRole(str, Enum):
+    """에이전트 역할 정의"""
+    COORDINATOR = "coordinator"
+    RESEARCHER = "researcher"
+    ANALYST = "analyst"
+    WRITER = "writer"
+    REVIEWER = "reviewer"
+    AGGREGATOR = "aggregator"
+
+class Agent(BaseModel):
+    """에이전트 정의"""
+    name: str = Field(description="에이전트 이름")
+    role: AgentRole = Field(description="에이전트 역할")
+    model: Any = Field(description="LLM 모델")
+    tools: List[Any] = Field(default_factory=list, description="사용 가능한 도구")
+    system_prompt: str = Field(description="시스템 프롬프트")
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+class AgentMessage(BaseModel):
+    """에이전트 메시지"""
+    agent_name: str = Field(description="발신 에이전트")
+    timestamp: datetime = Field(default_factory=datetime.now)
+    content: str = Field(description="메시지 내용")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class MultiAgentState(BaseModel):
+    """멀티 에이전트 시스템 상태"""
+    user_input: str = Field(description="사용자 입력")
+    coordinator_plan: Optional[Dict[str, Any]] = Field(default=None, description="코디네이터 계획")
+    agent_results: Dict[str, str] = Field(default_factory=dict, description="각 에이전트 결과")
+    messages: List[AgentMessage] = Field(default_factory=list, description="에이전트 간 메시지")
+    final_output: str = Field(default="", description="최종 출력")
+    
+    def add_message(self, agent_name: str, content: str, metadata: Dict = None):
+        """메시지 추가"""
+        self.messages.append(
+            AgentMessage(
+                agent_name=agent_name,
+                content=content,
+                metadata=metadata or {}
+            )
+        )
+```
+
+### Coordinator Agent
+
+사용자 요청을 분석하고 작업을 분배한다.
+
+```{python}
+from langchain_core.prompts import ChatPromptTemplate
+
+coordinator_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """당신은 조직의 최고 코디네이터(Coordinator)입니다.
+        
+사용자의 요청을 분석하여 어떤 에이전트들이 필요한지, 각 에이전트의 역할이 무엇인지를 결정합니다.
+
+사용 가능한 에이전트:
+- researcher: 웹 검색을 통한 정보 수집
+- analyst: 수집된 정보의 분석 및 인사이트 도출
+- writer: 분석 결과를 바탕으로 문서 작성
+- reviewer: 최종 결과물의 품질 검증
+
+다음 JSON 형식으로 응답하세요:
+```json
+{{
+    "required_agents": ["researcher", "analyst", "writer"],
+    "task_flow": [
+        {{
+            "agent": "researcher",
+            "task": "구체적인 작업 설명",
+            "dependencies": []
+        }},
+        {{
+            "agent": "analyst",
+            "task": "구체적인 작업 설명",
+            "dependencies": ["researcher"]
+        }}
+    ],
+    "success_criteria": "성공 기준 설명"
+}}
+```""",
+    ),
+    ("human", "사용자 요청: {input}"),
+])
+
+def coordinator_step(state: MultiAgentState) -> Dict[str, Any]:
+    """코디네이터 실행"""
+    import json
+    
+    response = coordinator_model.invoke(
+        coordinator_prompt.format_prompt(input=state.user_input)
+    )
+    
+    # JSON 파싱
+    plan = json.loads(response.content)
+    state.add_message("coordinator", f"계획 수립 완료: {len(plan['required_agents'])}개 에이전트 필요")
+    
+    return {"coordinator_plan": plan}
+```
+
+### Researcher Agent
+
+웹 검색을 통해 정보를 수집한다.
+
+```{python}
+researcher_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """당신은 데이터 조사 전문가(Research Agent)입니다.
+
+주어진 주제에 대해 웹 검색을 통해 신뢰할 수 있는 최신 정보를 수집합니다.
+
+다음을 고려하세요:
+1. 다양한 소스에서 정보 수집
+2. 정보의 신뢰도 평가
+3. 중요한 데이터와 통계 포함
+4. 출처 명시
+
+최종 결과는 다음 형식으로 제공하세요:
+```
+## 조사 결과
+
+### 핵심 발견사항
+- 발견사항 1
+- 발견사항 2
+
+### 참고 자료
+- [출처1](URL)
+- [출처2](URL)
+```
+""",
+    ),
+    ("human", "조사 주제: {topic}"),
+])
+
+from langgraph.prebuilt import create_react_agent
+
+researcher_agent = create_react_agent(
+    research_model,
+    [web_search],
+)
+
+def researcher_step(state: MultiAgentState, topic: str) -> str:
+    """리서처 에이전트 실행"""
+    result = researcher_agent.invoke(
+        {"messages": [("human", researcher_prompt.format_prompt(topic=topic).to_string())]},
+        {"configurable": {"thread_id": "researcher"}}
+    )
+    
+    content = result["messages"][-1].content
+    state.add_message("researcher", content)
+    
+    return content
+```
+
+### Analyst Agent
+
+수집된 정보를 분석한다.
+
+```{python}
+analyst_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """당신은 데이터 분석 전문가(Analysis Agent)입니다.
+
+리서처가 수집한 정보를 깊이 있게 분석합니다.
+
+분석 항목:
+1. **주요 트렌드**: 현재의 주요 변화
+2. **기회 요소**: 활용 가능한 기회
+3. **위험 요소**: 주의해야 할 위험
+4. **미래 전망**: 향후 발전 방향
+5. **통계 분석**: 수집된 데이터의 정량적 분석
+
+최종 분석은 다음 형식으로 제공하세요:
+```
+## 분석 결과
+
+### SWOT 분석
+#### 강점(Strengths)
+- 강점1
+- 강점2
+
+#### 약점(Weaknesses)
+- 약점1
+
+#### 기회(Opportunities)
+- 기회1
+
+#### 위협(Threats)
+- 위협1
+
+### 인사이트
+- 인사이트1
+- 인사이트2
+```""",
+    ),
+    ("human", "분석 대상:\n{research_data}"),
+])
+
+analyst_agent = create_react_agent(
+    analysis_model,
+    [pdf_retriever],
+)
+
+def analyst_step(state: MultiAgentState, research_data: str) -> str:
+    """분석가 에이전트 실행"""
+    result = analyst_agent.invoke(
+        {"messages": [("human", analyst_prompt.format_prompt(research_data=research_data).to_string())]},
+        {"configurable": {"thread_id": "analyst"}}
+    )
+    
+    content = result["messages"][-1].content
+    state.add_message("analyst", content)
+    
+    return content
+```
+
+### Writer Agent
+
+분석 결과를 문서로 작성한다.
+
+```{python}
+writer_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """당신은 전문 작가(Writer Agent)입니다.
+
+분석된 정보를 바탕으로 높은 품질의 보고서를 작성합니다.
+
+작성 지침:
+1. **명확성**: 쉽고 명확한 표현
+2. **구조화**: 논리적인 흐름
+3. **시각화**: 테이블, 리스트 활용
+4. **설득력**: 데이터 기반의 주장
+5. **전문성**: 산업 용어 적절한 사용
+
+최종 보고서는 다음 구조를 따르세요:
+```
+# [제목]
+
+## 개요
+[간단한 요약]
+
+## 주요 내용
+[상세한 내용]
+
+## 결론
+[핵심 결론 및 권장사항]
+```""",
+    ),
+    ("human", "작성 자료:\n{analysis_data}"),
+])
+
+writer_agent = create_react_agent(
+    writer_model,
+    [*file_tools],
+)
+
+def writer_step(state: MultiAgentState, analysis_data: str) -> str:
+    """작가 에이전트 실행"""
+    result = writer_agent.invoke(
+        {"messages": [("human", writer_prompt.format_prompt(analysis_data=analysis_data).to_string())]},
+        {"configurable": {"thread_id": "writer"}}
+    )
+    
+    content = result["messages"][-1].content
+    state.add_message("writer", content)
+    
+    return content
+```
+
+### Reviewer Agent
+
+최종 결과를 검증한다.
+
+```{python}
+reviewer_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """당신은 품질 검토 전문가(Review Agent)입니다.
+
+최종 결과물의 품질을 검증합니다.
+
+검증 항목:
+1. **정확성**: 사실에 기반했는가
+2. **완성도**: 모든 필요한 요소를 포함했는가
+3. **일관성**: 논리적 오류는 없는가
+4. **가독성**: 읽기 쉬운가
+5. **전문성**: 전문적인 수준인가
+
+평가 결과를 다음 형식으로 제공하세요:
+```
+## 검토 결과
+
+### 종합 평가: [Pass/Revise/Reject]
+
+### 강점
+- 강점1
+- 강점2
+
+### 개선 필요 항목
+- 개선 사항1
+- 개선 사항2
+
+### 최종 의견
+[종합 의견]
+```""",
+    ),
+    ("human", "검토 대상:\n{document}"),
+])
+
+reviewer_agent = create_react_agent(
+    reviewer_model,
+    [pdf_retriever],
+)
+
+def reviewer_step(state: MultiAgentState, document: str) -> str:
+    """검토자 에이전트 실행"""
+    result = reviewer_agent.invoke(
+        {"messages": [("human", reviewer_prompt.format_prompt(document=document).to_string())]},
+        {"configurable": {"thread_id": "reviewer"}}
+    )
+    
+    content = result["messages"][-1].content
+    state.add_message("reviewer", content)
+    
+    return content
+```
+
+## Multi-Agent 시스템 그래프 구축
+
+### 상태 관리 및 실행 흐름
+
+```{python}
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from typing import Annotated
+
+class MultiAgentGraph:
+    """멀티 에이전트 시스템 그래프"""
+    
+    def __init__(self):
+        self.state = None
+        
+    def coordinator_node(self, state: MultiAgentState) -> Dict[str, Any]:
+        """코디네이터 노드"""
+        plan = coordinator_step(state)
+        return {"coordinator_plan": plan}
+    
+    def researcher_node(self, state: MultiAgentState) -> Dict[str, str]:
+        """리서처 노드"""
+        if not state.coordinator_plan or "researcher" not in state.coordinator_plan.get("required_agents", []):
+            return {"agent_results": state.agent_results}
+        
+        # 리서처 태스크 찾기
+        task = next(
+            (t for t in state.coordinator_plan["task_flow"] if t["agent"] == "researcher"),
+            None
+        )
+        
+        if task:
+            result = researcher_step(state, task["task"])
+            state.agent_results["researcher"] = result
+        
+        return {"agent_results": state.agent_results}
+    
+    def analyst_node(self, state: MultiAgentState) -> Dict[str, str]:
+        """분석가 노드"""
+        if "researcher" not in state.agent_results:
+            return {"agent_results": state.agent_results}
+        
+        result = analyst_step(state, state.agent_results["researcher"])
+        state.agent_results["analyst"] = result
+        
+        return {"agent_results": state.agent_results}
+    
+    def writer_node(self, state: MultiAgentState) -> Dict[str, str]:
+        """작가 노드"""
+        if "analyst" not in state.agent_results:
+            return {"agent_results": state.agent_results}
+        
+        result = writer_step(state, state.agent_results["analyst"])
+        state.agent_results["writer"] = result
+        
+        return {"agent_results": state.agent_results}
+    
+    def reviewer_node(self, state: MultiAgentState) -> Dict[str, str]:
+        """검토자 노드"""
+        if "writer" not in state.agent_results:
+            return {"agent_results": state.agent_results}
+        
+        result = reviewer_step(state, state.agent_results["writer"])
+        state.agent_results["reviewer"] = result
+        
+        return {"agent_results": state.agent_results}
+    
+    def aggregator_node(self, state: MultiAgentState) -> Dict[str, str]:
+        """집계 노드"""
+        # 최종 결과 통합
+        final_output = f"""
+# 최종 보고서
+
+## 프로세스 요약
+- **조직**: {len(state.messages)}개의 에이전트 협력
+- **단계**: Coordinator → Researcher → Analyst → Writer → Reviewer
+
+## 최종 결과
+
+{state.agent_results.get('writer', '결과 없음')}
+
+## 검토 의견
+
+{state.agent_results.get('reviewer', '검토 없음')}
+"""
+        return {"final_output": final_output}
+    
+    def build_graph(self):
+        """그래프 구성"""
+        workflow = StateGraph(MultiAgentState)
+        
+        # 노드 추가
+        workflow.add_node("coordinator", self.coordinator_node)
+        workflow.add_node("researcher", self.researcher_node)
+        workflow.add_node("analyst", self.analyst_node)
+        workflow.add_node("writer", self.writer_node)
+        workflow.add_node("reviewer", self.reviewer_node)
+        workflow.add_node("aggregator", self.aggregator_node)
+        
+        # 엣지 구성
+        workflow.add_edge(START, "coordinator")
+        workflow.add_edge("coordinator", "researcher")
+        workflow.add_edge("researcher", "analyst")
+        workflow.add_edge("analyst", "writer")
+        workflow.add_edge("writer", "reviewer")
+        workflow.add_edge("reviewer", "aggregator")
+        workflow.add_edge("aggregator", END)
+        
+        return workflow.compile(checkpointer=memory)
+
+# 그래프 생성
+multi_agent_graph = MultiAgentGraph()
+multi_agent_system = multi_agent_graph.build_graph()
+```
+
+**그래프 구조:**
+```
+START
+  ↓
+[Coordinator] - 작업 계획
+  ↓
+[Researcher] - 정보 수집
+  ↓
+[Analyst] - 데이터 분석
+  ↓
+[Writer] - 문서 작성
+  ↓
+[Reviewer] - 품질 검증
+  ↓
+[Aggregator] - 결과 통합
+  ↓
+END
+```
+
+## 실행 및 사용 예시
+
+### 실행 함수
+
+```{python}
+def run_multi_agent_system(user_input: str, thread_id: str = "main") -> str:
+    """멀티 에이전트 시스템 실행"""
+    from langchain_teddynote.messages import stream_graph
+    
+    config = {"configurable": {"thread_id": thread_id}}
+    inputs = {"user_input": user_input}
+    
+    result = multi_agent_system.invoke(inputs, config)
+    
+    return result["final_output"]
+```
+
+### 예시 1: 기술 트렌드 분석 보고서
+
+```{python}
+user_input = """
+2024년 AI 기술 트렌드에 대한 전문 보고서를 작성해주세요.
+
+보고서는 다음을 포함해야 합니다:
+1. 현재의 주요 AI 기술 트렌드
+2. 각 기술의 시장 영향도 분석
+3. 기업에 미치는 영향
+4. 향후 6개월 전망
+
+최종 보고서는 마크다운 형식으로, 
+표, 핵심 포인트 정리 등을 포함해주세요.
+"""
+
+output = run_multi_agent_system(user_input)
+print(output)
+```
+
+**실행 흐름:**
+1. **Coordinator**: "AI 트렌드 분석 보고서" 계획 수립
+2. **Researcher**: 최신 AI 기술 트렌드 웹 검색
+3. **Analyst**: 수집된 정보 분석 및 SWOT 분석
+4. **Writer**: 전문 보고서 작성
+5. **Reviewer**: 최종 품질 검증
+6. **Aggregator**: 최종 보고서 생성
+
+### 예시 2: 경쟁사 분석 및 전략 수립
+
+```{python}
+user_input = """
+우리 회사의 주요 경쟁사 3곳에 대한 심층 분석 보고서와 
+대응 전략을 수립해주세요.
+
+분석 범위:
+1. 경쟁사별 시장 점유율 및 최신 동향
+2. 제품/서비스 비교 분석
+3. 강점 및 약점 평가
+4. 우리 회사의 차별화 전략
+
+최종 결과물:
+- 경쟁사 분석 보고서 (competitor_analysis.md)
+- 대응 전략 가이드 (strategy_guide.md)
+"""
+
+output = run_multi_agent_system(user_input)
+print(output)
+```
+
+### 예시 3: 시장 진출 타당성 검토
+
+```{python}
+user_input = """
+신시장 진출의 타당성을 검토하는 종합 보고서를 작성해주세요.
+
+검토 대상: [구체적인 시장/지역/제품]
+
+포함 항목:
+1. 시장 규모 및 성장률 조사
+2. 경쟁 환경 분석
+3. 규제 및 정책 환경
+4. 진출 시 기회 및 위험
+5. 예상 수익성 분석
+6. 최종 권장사항
+
+최종 결과는 경영진 보고 형식으로 작성해주세요.
+"""
+
+output = run_multi_agent_system(user_input)
+print(output)
+```
+
+## 고급 패턴
+
+### 패턴 1: 병렬 처리
+
+여러 에이전트가 동시에 작업을 수행한다.
+
+```{python}
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def parallel_agent_execution(tasks: Dict[str, str]) -> Dict[str, str]:
+    """여러 에이전트 병렬 실행"""
+    
+    results = {}
+    
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {}
+        
+        # 리서처 병렬 실행 (여러 주제)
+        for topic, instruction in tasks.items():
+            future = executor.submit(researcher_step, instruction)
+            futures[topic] = future
+        
+        # 결과 수집
+        for topic, future in futures.items():
+            results[topic] = future.result()
+    
+    return results
+
+# 사용 예시
+parallel_tasks = {
+    "AI trends": "AI 기술 트렌드 조사",
+    "Market data": "시장 데이터 조사",
+    "Competitor info": "경쟁사 정보 조사"
+}
+
+results = parallel_agent_execution(parallel_tasks)
+```
+
+**장점:**
+- 실행 시간 단축
+- 자원 효율적 활용
+
+### 패턴 2: 조건부 에이전트 실행
+
+조건에 따라 특정 에이전트를 활성화한다.
+
+```{python}
+def conditional_agent_routing(state: MultiAgentState) -> str:
+    """조건부 에이전트 라우팅"""
+    
+    # 사용자 입력의 복잡도에 따라 결정
+    if len(state.user_input.split()) > 100:
+        # 복잡한 요청: 전체 파이프라인 실행
+        return "full_pipeline"
+    
+    elif "분석" in state.user_input:
+        # 분석만 필요
+        return "analyst_only"
+    
+    elif "최신 정보" in state.user_input:
+        # 리서치만 필요
+        return "researcher_only"
+    
+    else:
+        # 기본 파이프라인
+        return "default_pipeline"
+```
+
+### 패턴 3: 에이전트 간 피드백 루프
+
+에이전트의 결과에 대해 다른 에이전트가 피드백을 제공한다.
+
+```{python}
+def feedback_loop(
+    initial_result: str,
+    feedback_provider: str
+) -> str:
+    """피드백 루프"""
+    
+    feedback = reviewer_agent.invoke({
+        "messages": [
+            ("human", f"다음 결과를 검토하고 개선 사항을 제시하세요:\n{initial_result}")
+        ]
+    })
+    
+    # 개선된 버전 생성
+    improved_result = writer_agent.invoke({
+        "messages": [
+            ("human", f"다음 피드백을 바탕으로 문서를 개선하세요:\n{feedback['messages'][-1].content}")
+        ]
+    })
+    
+    return improved_result["messages"][-1].content
+```
+
+## 성능 최적화
+
+### 1. 캐싱 전략
+
+```{python}
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def cached_research(topic: str) -> str:
+    """연구 결과 캐싱"""
+    return researcher_step(None, topic)
+
+# 사용
+result1 = cached_research("AI trends")
+result2 = cached_research("AI trends")  # 캐시에서 반환
+```
+
+### 2. 토큰 최적화
+
+```{python}
+def optimize_token_usage(result: str, max_tokens: int = 1500) -> str:
+    """토큰 사용량 최적화"""
+    
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=max_tokens,
+        chunk_overlap=0
+    )
+    
+    chunks = splitter.split_text(result)
+    return chunks[0]  # 가장 관련성 높은 청크만 사용
+```
+
+### 3. 비용 절감 전략
+
+```{python}
+def cost_optimized_model_selection(task_complexity: str) -> ChatOpenAI:
+    """작업 복잡도에 따른 모델 선택"""
+    
+    if task_complexity == "simple":
+        return ChatOpenAI(model_name="gpt-4o-mini")
+    
+    elif task_complexity == "medium":
+        return ChatOpenAI(model_name="gpt-4o-mini")
+    
+    else:  # complex
+        return ChatOpenAI(model_name="gpt-4o")
+```
+
+## 에러 처리 및 복구
+
+### 에이전트 실패 처리
+
+```{python}
+def handle_agent_failure(failed_agent: str, state: MultiAgentState) -> str:
+    """에이전트 실패 시 대응"""
+    
+    if failed_agent == "researcher":
+        # 대체: PDF 문서에서 정보 검색
+        return pdf_retriever.invoke(state.user_input)
+    
+    elif failed_agent == "analyst":
+        # 대체: 원본 데이터 직접 사용
+        return state.agent_results.get("researcher", "")
+    
+    elif failed_agent == "writer":
+        # 대체: 간단한 텍스트 형식으로 작성
+        return f"## 분석 결과\n{state.agent_results['analyst']}"
+    
+    else:
+        raise Exception(f"Unknown agent: {failed_agent}")
+```
+
+### 재시도 메커니즘
+
+```{python}
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10)
+)
+def resilient_agent_call(agent_func, *args, **kwargs):
+    """재시도 가능한 에이전트 호출"""
+    return agent_func(*args, **kwargs)
+```
+
+## 다양한 아키텍처 패턴
+
+### 패턴 1: 순차적 파이프라인 (Sequential)
+
+```
+Agent1 → Agent2 → Agent3 → Output
+```
+
+**사용 사례:** 정보 수집 → 분석 → 작성
+
+### 패턴 2: 병렬 처리 (Parallel)
+
+```
+      ├→ Agent1 ─┐
+Input ┤           ├→ Aggregator → Output
+      └→ Agent2 ─┘
+```
+
+**사용 사례:** 여러 시각에서의 분석 수행
+
+### 패턴 3: 위임 구조 (Hierarchical)
+
+```
+Master Agent
+    ├→ Team A
+    │   ├→ Member 1
+    │   └→ Member 2
+    └→ Team B
+        ├→ Member 3
+        └→ Member 4
+```
+
+**사용 사례:** 대규모 조직 구조
+
+### 패턴 4: 피드백 루프 (Feedback Loop)
+
+```
+Agent1 → Agent2 → Reviewer ─┐
+         ↑                   ↓
+         └────── Feedback ───┘
+```
+
+**사용 사례:** 반복적 개선 및 품질 보증
+
+## Multi-Agent vs Single-Agent
+
+| 특성 | Multi-Agent | Single-Agent |
+|------|------------|-------------|
+| **전문성** | ✅ 높음 (도메인별 최적화) | ❌ 낮음 (일반화 필요) |
+| **복잡성** | 높음 (시스템 관리) | ✅ 낮음 (단순함) |
+| **확장성** | ✅ 높음 (에이전트 추가) | 제한적 |
+| **비용** | 중간 (병렬 처리로 단축) | ✅ 낮음 |
+| **안정성** | ✅ 높음 (중복성) | 낮음 (단일 실패점) |
+| **성능** | ✅ 빠름 (병렬 처리) | 느림 (순차 처리) |
+
+## 베스트 프랙티스
+
+### 1. 명확한 역할 정의
+
+```python
+# ❌ 나쁜 예
+Agent(name="Agent1", role="모든 작업 수행")
+
+# ✅ 좋은 예
+Agent(
+    name="Research Agent",
+    role=AgentRole.RESEARCHER,
+    system_prompt="웹 검색을 통한 정보 수집 전문가"
+)
+```
+
+### 2. 적절한 에이전트 수
+
+```python
+# ❌ 너무 많은 에이전트 (관리 복잡도 증가)
+agents = [Agent() for _ in range(20)]
+
+# ✅ 적절한 수 (5-7개)
+agents = [
+    coordinator, researcher, analyst, writer, reviewer
+]
+```
+
+### 3. 명확한 의사소통 프로토콜
+
+```python
+# 에이전트 간 메시지 규격화
+class AgentMessage(BaseModel):
+    sender: str
+    recipient: str
+    content: str
+    metadata: Dict[str, Any]
+```
+
+### 4. 상태 관리
+
+```python
+# 공유 상태 정의
+class SharedState(BaseModel):
+    user_input: str
+    intermediate_results: Dict[str, str]
+    metadata: Dict[str, Any]
+```
+
+## 참고 자료
+
+- [Multi-Agent Systems Paper](https://arxiv.org/abs/2308.00352)
+- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
+- [Agent Design Patterns](https://langchain-ai.github.io/langgraph/tutorials/)
+- [Distributed AI Systems](https://arxiv.org/abs/2402.18658)
+
+## 다음 단계
+
+Multi-Agent 시스템의 기본을 익혔다면, 다음 주제들을 살펴보자:
+
+- **Agent Orchestration**: 복잡한 워크플로우 관리
+- **Knowledge Sharing**: 에이전트 간 지식 공유 메커니즘
+- **Performance Monitoring**: 멀티 에이전트 시스템의 모니터링 및 최적화
+- **Scalability**: 대규모 멀티 에이전트 시스템 구축
