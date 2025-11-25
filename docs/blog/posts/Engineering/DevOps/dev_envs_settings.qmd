@@ -1,120 +1,448 @@
 ---
-title: "Poetry - Python 의존성 관리 및 패키징 도구"
-subtitle: "Poetry vs Conda: Python 패키지 관리 생태계 이해"
+title: "Azure VM에 개발 환경 구축하기"
+subtitle: "Ubuntu 24.04 VM에 Git, Conda, Poetry 설치 및 SSH 접속"
 description: |
-  Poetry는 Python 프로젝트의 의존성 관리(dependency management), 가상환경(virtual environment), 
-  패키징(packaging), 배포(distribution)를 통합적으로 관리하는 현대적 도구이다.
-  
-  이 문서에서는 Poetry와 Conda의 차이점, Poetry의 핵심 개념(pyproject.toml, poetry.lock, resolution algorithm),
-  그리고 실무에서의 활용 사례(프로젝트 생성, 의존성 추가, 가상환경 관리, 패키지 빌드)를 다룬다.
-  또한 pip, pipenv, requirements.txt와의 비교를 통해 Poetry 선택의 이유를 설명한다.
+  Azure Portal에서 Ubuntu 24.04 LTS VM을 생성한 후 개발 환경을 구축하는 과정에서 마주칠 수 있는 문제들과 해결 방법을 정리한다.
+  웹 브라우저 콘솔의 sudo 제약, SSH 접속 방법, Git/Conda/Poetry 설치 과정에서의 권한 문제,
+  그리고 여러 SSH Key를 효율적으로 관리하는 방법을 다룬다.
+  각 문제의 원인과 해결책을 단계별로 설명하며, 실무에서 사용 가능한 SSH Key 관리 전략을 포함한다.
 categories:
   - Engineering
-  - Python
+  - DevOps
+  - Infrastructure
+  - Azure
+  - Security
+  - Cloud
 author: Kwangmin Kim
-date: 10/01/2025
+date: 11/25/2025
 format: 
   html:
-    page-layout: full
     code-fold: true
     toc: true
     number-sections: true
 draft: False
 ---
 
-# Poetry란?
 
-**Poetry**는 Python 프로젝트의 라이브러리 의존성 관리, 가상환경 구성, 패키징, 배포를 **통합**으로 관리하는 도구다.
+# VM에 개발 환경 구축하기
 
-## 핵심 개념
+* 조건: Azure VM(Ubuntu 24.04)에서 개발환경
+* Azure Portal에서 Ubuntu 24.04 LTS VM을 생성한 후 git, conda, poetry를 설치하는 과정에서 마주칠 수 있는 문제들과 해결 방법을 정리
+
+## 초기 상황
+
+### 생성한 VM 스펙
+- **VM명**: test-agent
+- **OS**: Ubuntu 24.04 LTS (Canonical official image)
+- **크기**: Standard D8as v5 (8vCPUs, 32GB RAM)
+- **접속 방식**: 
+  - 웹 브라우저 콘솔 (Azure Portal 내 터미널) - sudo 제약 있음
+  - SSH (원격 접속) - 권장 방식
+
+### 설치 목표
+- git: source code 버전 관리
+- Miniconda (conda): DL/ML/Stat dependency 관리
+- Poetry: Python 개발관련 dependency 관리
+
+## 발생한 문제들과 해결 방법
+
+### 웹 브라우저 콘솔에서 sudo 권한 제약
+
+* 증상
+
+```bash
+kmkim [ ~ ]$ sudo apt update
+sudo: The "no new privileges" flag is set, which prevents sudo from running as root.
+sudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag.
+```
+
+* 원인
+  * **웹 브라우저 콘솔** = Azure Portal의 웹 화면 내에 내장된 터미널 창 (Cloud Shell이 아닌 경우)
+  * Azure Portal의 웹 브라우저 콘솔은 보안상 `no-new-privileges` 플래그가 설정되어 있어서 sudo 권한 상승이 불가능
+  * 이는 컨테이너 환경의 제약이 아니라 웹 콘솔 자체의 보안 제한
+  * 왜 이런 제한이 필요한가?
+    - 웹 브라우저는 악성 JavaScript나 공격으로 조작될 수 있음
+    - 브라우저 콘솔을 통해 root 권한을 얻을 수 있다면, 전체 VM을 장악당할 위험 증가
+    - `no-new-privileges` 플래그는 이미 실행 중인 프로세스가 권한을 **상승**시키는 것을 막음 (기존 권한 유지는 가능)
+    - 따라서 웹 콘솔로 일반 사용자(azureuser) 작업은 가능하지만, sudo로 root 권한이 필요한 작업은 차단
+* **해결책**
+  * 웹 브라우저 콘솔대신 **SSH로 직접 접속**
+
+### SSH 접속 방법
+
+* 증상
+  * 웹 콘솔의 sudo 제약으로 인해 패키지 설치가 불가능한 상황
+* SSH란?
+  * SSH (Secure Shell) = 인터넷을 통해 원격 컴퓨터에 안전하게 접속하는 프로토콜
+  * 웹 브라우저 콘솔 vs SSH의 차이:
+
+| 항목 | 웹 브라우저 콘솔 | SSH |
+|------|----------------|-----|
+| **접속 방식** | Azure Portal 웹 페이지 내 | 암호화된 네트워크 연결 |
+| **보안** | 웹 브라우저 보안 정책 적용 (제약 많음) | 공개키 암호화 (매우 강력) |
+| **권한** | `no-new-privileges` 플래그로 sudo 차단 | 일반 사용자이지만 sudo 가능 |
+| **통신** | 평문 또는 약한 암호화 | 모든 데이터 암호화 (AES-256 등) |
+| **인증** | Azure Portal 로그인 | Private Key 파일 기반 |
+| **안정성** | 브라우저 다운시 연결 끊김 | 네트워크만 안정하면 지속 연결 |
+
+* SSH가 안전한 이유?
+  1. **공개키 암호화** (Public Key Cryptography)
+     - 클라이언트(PC)가 공개키를 가짐
+     - 서버(Azure VM)가 비공개키를 가짐
+     - 공개키로 암호화한 메시지는 비공개키로만 복호화 가능
+     - 통신 과정이 모두 암호화됨
+  
+  2. **Private Key 인증**
+     ```
+     클라이언트 (PC)           서버 (Azure VM)
+     test-agent_key.pem    ←→ 비공개키 저장
+     (Private Key)            (Private Key)
+     
+     접속 요청 시:
+     1. 클라이언트가 Public Key로 challenge를 보냄
+     2. 서버가 비공개키로 검증
+     3. Private Key가 일치하면 접속 허용
+     ```
+  
+  3. **중간자 공격 방지**
+     - SSH 키 교환 과정에서 호스트 키를 검증
+     - 첫 접속 시 호스트 지문(fingerprint)을 확인
+     - 같은 호스트면 이후 자동 인증
+  
+  4. **비밀번호 방식의 문제점**
+     - 약한 비밀번호 → 브루트포스 공격에 취약
+     - 비밀번호 탈취 → 전체 VM 장악
+     - SSH Key는 수천 자리의 암호화된 파일 → 거의 불가능
+* 해결책
+  SSH로 직접 접속합
+
+#### SSH 접속 단계
+
+* 1단계: Private Key 파일 준비
+  - VM 생성 시 Azure가 생성한 `test-agent_key.pem` 파일을 다운로드
+  - 보통 Downloads 폴더에 저장됨
+
+* 2단계: 로컬 PowerShell(Windows) 또는 Terminal(macOS/Linux)에서 접속
+
+```bash
+ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16
+```
+
+* 3단계: 첫 접속 시 호스트 인증
+
+```
+The authenticity of host '20.196.144.16' can't be established.
+Are you sure you want to continue connecting (yes/no)?
+```
+→ `yes` 입력
+
+
+* 4단계: 접속 완료
+
+```
+azureuser@test-agent:~$
+```
+
+* 장점
+  - 웹 콘솔의 제약이 없음
+  - sudo 권한이 정상 작동
+  - 더 안정적이고 빠름
+  - 로컬에서 언제든 접속 가능
+
+### Conda 설치 시 권한 부족
+
+* 증상
+```bash
+azureuser@test-agent:~$ bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda
+mkdir: cannot create directory '/opt/conda': Permission denied
+ERROR: Could not create directory: '/opt/conda'.
+```
+
+* 원인
+  * `/opt` 디렉토리는 root 권한이 필요
+  * azureuser는 일반 사용자이므로 직접 접근 불가.
+* 해결책
+```bash
+sudo bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda
+```
+
+### Conda 초기화 실패
+
+* 증상
+```bash
+azureuser@test-agent:~$ sudo /opt/conda/bin/conda init bash
+no change     /root/.bashrc
+No action taken.
+```
+
+* 원인
+  * `sudo`로 실행하면 root의 `.bashrc`가 수정되지만, azureuser로 로그인하면 `/home/azureuser/.bashrc`를 사용
+* 해결책
+  * sudo 없이 실행하거나, 수동으로 초기화 코드를 추가
+
+```bash
+echo 'eval "$(/opt/conda/bin/conda shell.bash hook)"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+## 올바른 설치 절차 (최종 버전)
+
+### 사전 준비
+1. Azure VM 생성 (Ubuntu 24.04 LTS)
+2. Private Key 파일(`test-agent_key.pem`) 다운로드
+3. SSH로 접속
+
+### 설치 순서
+
+**1단계: 시스템 업데이트**
+```bash
+sudo apt update
+sudo apt upgrade -y
+```
+
+**2단계: Git 설치**
+```bash
+sudo apt install git -y
+git --version  # 확인
+```
+
+**3단계: Miniconda 설치** 
+```bash
+# 이미 설치되어 있는지 확인
+conda --version
+
+# 설치되지 않았다면:
+cd /tmp
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+sudo bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda
+```
+
+**4단계: Conda 초기화**
+```bash
+echo 'eval "$(/opt/conda/bin/conda shell.bash hook)"' >> ~/.bashrc
+source ~/.bashrc
+conda --version  # 확인
+```
+
+**5단계: Poetry 설치**
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+poetry --version  # 확인
+```
+
+## 5. 환경 이해하기
+
+### 작업 환경 구조
+
+```
+┌─────────────────────────────────────┐
+│  로컬 PC (Windows)                   │
+│  PowerShell Terminal                │
+└──────────────────┬──────────────────┘
+                   │ SSH
+                   ↓
+┌─────────────────────────────────────┐
+│  Azure VM (Ubuntu 24.04)             │
+│  azureuser@test-agent               │
+│  - git                              │
+│  - conda                            │
+│  - poetry                           │
+│  - 개발 작업 환경                     │
+└─────────────────────────────────────┘
+```
+
+### 중요 개념
 
 | 개념 | 설명 |
 |------|------|
-| **의존성 관리** | 프로젝트가 필요로 하는 라이브러리 버전을 선언하고 자동 설치 |
-| **가상환경** | 프로젝트별 독립적인 Python 환경 생성 (의존성 충돌 방지) |
-| **Lock file** | `poetry.lock`: 정확히 설치된 버전을 기록 (재현성 보장) |
-| **Packaging** | `poetry build`: 프로젝트를 배포 가능한 패키지로 변환 |
-| **Distribution** | `poetry publish`: 패키지를 PyPI에 배포 |
+| **VM (Virtual Machine)** | 클라우드에서 실행되는 가상 컴퓨터 |
+| **Image** | VM의 운영체제 템플릿 (Docker와 다름) |
+| **SSH** | 원격 서버에 안전하게 접속하는 프로토콜 |
+| **Private Key** | SSH 접속 인증용 파일 |
+| **웹 콘솔** | Azure Portal의 브라우저 기반 터미널 (제약이 있음) |
 
-## 개발 & 배포 생태계 전체 구조
 
-Python 프로젝트는 **개발 단계** → **배포 단계** → **운영 단계**의 3단계를 거칩니다.
+## VM 종료 및 관리
 
-### 전체 생태계 계층
+### VM 중지 (비용 절감)
+```bash
+# SSH 연결 종료
+exit
 
-```
-┌─────────────────────────────────────────────────────┐
-│  운영 단계: Kubernetes (대규모 자동화)                │
-│  - 수백 개 컨테이너 동시 관리                        │
-│  - 자동 스케일링 (트래픽 많으면 자동 복사본 증가)    │
-│  - 무중단 배포 (한두 개씩 교체하며 업데이트)        │
-│  - 로드밸런싱 (여러 복사본 사이에 트래픽 분산)      │
-│  - 자동 복구 (컨테이너 죽으면 자동 재시작)          │
-│  - 언제: 대규모 서비스 (마이크로서비스, 엔터프라이즈) │
-│  - 추천: ⚠️ PoC/개인 프로젝트는 오버킬              │
-└─────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────┐
-│  배포 단계: Docker (환경 캡슐화)                     │
-│  - 개발 환경 전체를 컨테이너로 패킹                  │
-│  - macOS/Linux/Windows 어디서나 동일 실행           │
-│  - OS 부터 Python, 라이브러리까지 모두 포함         │
-│  - 재현성 100% (언제 어디서나 같은 결과)           │
-│  - 언제: 팀 협업, 클라우드 배포, CI/CD            │
-│  - 추천: ✅ 권장                                   │
-└─────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────┐
-│  개발 단계: venv → pyenv → Poetry → Conda            │
-│  (로컬 머신에서 코드 작성 & 테스트)                 │
-├─────────────────────────────────────────────────────┤
-│  Conda (가장 포괄적)                                │
-│  - 언어 무관 + Python 버전 관리 + 이진 파일         │
-│  - 추천: ✅ Data Science / 과학 계산                │
-├─────────────────────────────────────────────────────┤
-│  pyenv + Poetry (권장)                              │
-│  - Python 의존성 + 패키징 + 가상환경                │
-│  - 추천: ✅ 순수 Python 개발 / 팀 협업             │
-├─────────────────────────────────────────────────────┤
-│  pyenv + pip (비권장)                               │
-│  - pyenv: Python 버전 관리                          │
-│  - pip: 패키지 설치 (수동 관리)                    │
-│  - 추천: ❌ 권장하지 않음                           │
-├─────────────────────────────────────────────────────┤
-│  venv + pip (기본 학습용)                           │
-│  - 가상환경 + 수동 패키지 설치                      │
-│  - 추천: ✅ Python 학습 초기 단계만                 │
-├─────────────────────────────────────────────────────┤
-│  venv (가장 기본)                                   │
-│  - 가상환경 생성만                                  │
-│  - 추천: ❌ 실무에서는 권장하지 않음               │
-└─────────────────────────────────────────────────────┘
+# Azure Portal에서:
+# Virtual Machines → test-agent → Stop 클릭
 ```
 
+- **Stop**: 비용 청구 안 됨, 나중에 재시작 가능
+- **Delete**: 완전 삭제 (복구 불가)
 
-## 개발 단계의 버전관리 도구 비교
+### VM 재시작
+```bash
+ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16
+```
 
-### 계층 구조 (기본 → 포괄적)
+## 편의성 개선 (선택사항)
 
-| 항목 | **venv** | **pyenv** | **Poetry** | **Conda** |
-|------|----------|-----------|-----------|----------|
-| **역할** | 가상환경만 | 여러 Python 버전 병렬 관리 | 의존성 + 패키징 + 환경 | 언어 무관 패키지 관리 |
-| **관리 대상** | 패키지 격리 | Python 인터프리터 버전 | 패키지 + Python 버전 | 모든 언어 패키지 + 이진 파일 |
-| **지원 언어** | Python만 | Python만 | Python만 | Python, R, C++, Java 등 |
-| **설정 파일** | 없음 (수동) | 버전 파일만 (`.python-version`) | `pyproject.toml`, `poetry.lock` | `environment.yml`, `conda.lock` |
-| **저장소** | PyPI (pip) | 없음 (Python.org) | PyPI | Conda-forge, Anaconda |
-| **설치 명령** | `python -m venv` | `brew install pyenv` (또는 git clone) | `pip install poetry` | `conda install` |
-| **가상환경** | ✓ 생성 | △ 조합 필요 (다른 도구와) | ✓ 자동 생성 | ✓ 생성 (이름 지정) |
-| **의존성 관리** | ✗ 수동 (pip) | ✗ 없음 | ✓ 자동 + 잠금 | ✓ 자동 + 잠금 |
-| **버전 해석** | PEP 440 (pip) | N/A | PEP 440 + Semantic Versioning | Conda 규칙 (유연함) |
-| **패키징/배포** | ✗ 불가능 | ✗ 불가능 | ✓ 자동화 | △ 가능 (복잡) |
-| **의존성 잠금** | ✗ 수동 | N/A | ✓ `poetry.lock` 자동 | ✓ 자동 (`conda-lock` 포함) |
-| **재현성** | 50% (수동 관리) | 100% (버전 파일) | 100% | 100% |
-| **학습곡선** | 극저 (1~2줄) | 낮음 (직관적) | 낮음 (직관적) | 중간~높음 |
-| **엔터프라이즈** | 최소 (레거시) | 중간 (증가 중) | 높음 (표준화 추세) | 높음 (데이터 과학) |
+### PowerShell에 SSH Alias 설정
 
-Docker
-├─ OS부터 시작
-├─ Python 설치
-├─ 라이브러리 설치
-└─ 어디서나 동일하게 실행 (맥, 리눅스, 윈도우)
+PowerShell 프로필 편집:
+```powershell
+notepad $PROFILE
+```
+
+다음 추가:
+```powershell
+Set-Alias -Name ssh-vm -Value 'ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16'
+```
+
+이후 접속:
+```bash
+ssh-vm
+```
+
+## SSH Key 관리 (여러 VM/서버 사용할 때)
+
+* Key가 여러 개일 때 관리 방법
+  * Azure VM, AWS EC2, GitHub, GitLab 등 여러 서비스를 사용하면 SSH Key가 점점 많아진다.
+* SSH Key 관리 전략
+  1. Key 저장소 통일 (`.ssh` 폴더)
+
+```powershell
+# Windows의 .ssh 폴더 (자동 생성됨)
+C:\Users\kmkim\.ssh\
+
+# Key 파일들을 모두 여기에 정리
+C:\Users\kmkim\.ssh\
+├── azure-vm-test-agent.pem      # Azure VM용
+├── aws-ec2-dev.pem               # AWS EC2용
+├── github-personal                # GitHub용 (확장자 없음)
+├── gitlab-work                    # GitLab용
+├── id_rsa                         # 기본 key (old format)
+└── id_ed25519                     # 최신 key format
+```
+
+  2. SSH Config 파일로 Host 별칭 관리
+
+SSH config 파일 생성:
+```powershell
+notepad C:\Users\kmkim\.ssh\config
+```
+
+다음 내용 추가:
+```
+# Azure VM - test-agent
+Host azure-test
+    HostName 20.196.144.16
+    User azureuser
+    IdentityFile C:\Users\kmkim\.ssh\azure-vm-test-agent.pem
+    Port 22
+
+# AWS EC2 - Development Server
+Host aws-dev
+    HostName ec2-1-2-3-4.compute-1.amazonaws.com
+    User ec2-user
+    IdentityFile C:\Users\kmkim\.ssh\aws-ec2-dev.pem
+    Port 22
+
+# GitHub
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile C:\Users\kmkim\.ssh\github-personal
+
+# GitLab
+Host gitlab.com
+    HostName gitlab.com
+    User git
+    IdentityFile C:\Users\kmkim\.ssh\gitlab-work
+```
+
+  3. 간단한 접속 명령
+    * SSH config를 설정하면 긴 명령을 단축
+
+**Before (설정 전):**
+```bash
+ssh -i C:\Users\kmkim\.ssh\azure-vm-test-agent.pem azureuser@20.196.144.16
+```
+
+**After (설정 후):**
+```bash
+ssh azure-test
+```
+
+  4. Key 권한 설정 (Windows)
+    * SSH Key는 신중하게 보관
+    * Windows에서는:
+
+```powershell
+# .ssh 폴더 우클릭 → 속성 → 보안 → 고급
+# 현재 사용자만 읽기/쓰기 권한 허용
+# 다른 사용자는 접근 차단
+
+# 또는 PowerShell로:
+icacls "C:\Users\kmkim\.ssh" /inheritance:r /grant:r "$env:USERNAME`:(F)"
+```
+
+   * SSH Key 명명 규칙 (권장)
+
+```
+<서비스>-<용도>-<환경>.pem
+
+예:
+- azure-vm-dev.pem
+- aws-ec2-prod.pem
+- github-personal
+- gitlab-work-deploy
+```
+
+### SSH Key 보안 체크리스트
+
+**해야 할 것:**
+- [ ] `.ssh` 폴더는 사용자만 접근 가능하도록 권한 설정
+- [ ] Private Key는 절대 공유/업로드하지 않기
+- [ ] `.ssh/config` 파일로 중앙 관리
+- [ ] 각 Key마다 명확한 목적 주석 추가
+- [ ] 정기적으로 사용하지 않는 Key 삭제
+
+**하지 말아야 할 것:**
+- [ ] Private Key를 GitHub에 커밋
+- [ ] `.gitignore`에 `*.pem` 추가하지 않기
+- [ ] 여러 서비스에 같은 Key 재사용 (한 곳 탈취 시 모두 위험)
+- [ ] Key 파일을 다운로드 폴더에 방치
+
+### 실무 Key 관리 (팀 환경)
+
+**개인 PC:**
+```
+Private Key (test-agent_key.pem)
+    ↓
+Passphrase로 추가 보호 (Optional)
+    ↓
+.ssh 폴더에만 저장
+    ↓
+접속 시만 사용
+```
+
+**서버:**
+```
+Public Key만 저장 (~/.ssh/authorized_keys)
+    ↓
+Private Key는 저장하지 않음
+    ↓
+누군가 서버를 해킹해도 다른 서버에 접속 불가
+```
+
+### SSH Key 재생성 (기존 Key 분실/탈취 시)
+
+```bash
+# 1. 새로운 Key 생성
+ssh-keygen -t ed25519 -C "azure-vm-replacement" -f C:\Users\kmkim\.ssh\azure-vm-new.pem
+
+# 2. Azure Portal에서 기존 public key 삭제
+# 3. 새로운 public key 등록
+# 4. .ssh/config 파일 업데이트
+# 5. 기존 Key 파일 삭제 (또는 백업 폴더로 이동)
+```
