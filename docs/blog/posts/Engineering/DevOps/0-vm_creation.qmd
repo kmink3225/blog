@@ -1,0 +1,541 @@
+---
+title: "Azure VM 생성부터 개발 환경 구축까지"
+subtitle: "Azure Portal에서 Ubuntu 24.04 VM 생성"
+description: |
+  Azure Portal에서 Ubuntu 24.04 LTS VM을 처음부터 생성하는 전체 과정을 다룬다.
+  VM 생성 시 주요 설정 항목(리전, 크기, 인증 방식, 네트워크, 디스크)을 설명한다.
+categories:
+  - Engineering
+  - DevOps
+  - Infrastructure
+  - Azure
+  - Cloud
+author: Kwangmin Kim
+date: 11/24/2025
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+---
+
+# Azure VM 생성 및 개발 환경 구축
+
+Azure Portal에서 Ubuntu 24.04 LTS VM을 처음부터 생성하고, Git, Conda, Poetry를 설치하여 완전한 개발 환경을 구축하는 과정을 단계별로 정리한다.
+
+## Azure VM이란?
+
+### VM (Virtual Machine) 개념
+
+**VM (가상 머신)**은 클라우드에서 실행되는 가상 컴퓨터다. 물리적 서버 하나에서 여러 개의 독립적인 컴퓨터를 동시에 실행할 수 있다.
+
+```
+물리 서버 (Azure 데이터센터)
+├── VM 1 (Ubuntu 24.04) ← 우리가 생성할 VM
+├── VM 2 (Windows Server)
+├── VM 3 (Ubuntu 22.04)
+└── VM 4 (CentOS)
+```
+
+### Azure VM의 장점
+
+| 항목 | 물리 서버 | Azure VM |
+|------|----------|----------|
+| **구매 시간** | 수일~수주 | 5분 |
+| **초기 비용** | 수백만~수천만원 | Pay As You Go (사용한 만큼만) |
+| **확장성** | 하드웨어 추가 구매 필요 | 클릭 몇 번으로 즉시 확장 |
+| **유지보수** | 직접 관리 | Azure가 관리 |
+| **위치** | 한 곳 고정 | 전 세계 60+ 리전 선택 가능 |
+
+### 주요 사용 사례
+
+- **개발/테스트 환경**: 로컬 PC 리소스 절약
+- **ML/DL 학습**: GPU VM으로 모델 훈련
+- **웹 서버 호스팅**: 24시간 서비스 운영
+- **데이터 분석**: 대용량 메모리 사용
+- **CI/CD 파이프라인**: 자동화된 빌드/배포
+
+## Azure VM 생성 과정
+
+### 사전 준비
+
+1. **Azure 계정**
+   - [Azure Portal](https://portal.azure.com) 접속
+   - Microsoft 계정으로 로그인
+   - 무료 계정: 12개월 무료 서비스 + $200 크레딧 제공
+
+2. **구독 (Subscription) 확인**
+   - Azure Portal → 구독 메뉴에서 활성 구독 확인
+   - 무료 평가판 또는 종량제 구독 필요
+
+### VM 생성 단계별 가이드
+
+#### 1단계: VM 생성 시작
+
+```
+Azure Portal 
+  → Virtual Machines 
+  → Create 
+  → Azure virtual machine
+```
+
+#### 2단계: 기본 설정 (Basics)
+
+**프로젝트 세부 정보**
+
+| 항목 | 설정 값 | 설명 |
+|------|---------|------|
+| **Subscription** | 본인의 구독 선택 | 비용이 청구될 구독 |
+| **Resource group** | 신규 생성 또는 기존 선택 | 리소스 그룹명: `rg-dev-vm` |
+
+**인스턴스 세부 정보**
+
+| 항목 | 설정 값 | 설명 |
+|------|---------|------|
+| **Virtual machine name** | `test-agent` | VM 식별용 이름 |
+| **Region** | `Korea Central` | 서울 리전 (지연 시간 최소화) |
+| **Availability options** | No infrastructure redundancy required | 개발용은 단일 VM |
+| **Security type** | Standard | 기본 보안 |
+| **Image** | **Ubuntu Server 24.04 LTS - x64 Gen2** | 운영체제 선택 |
+| **VM architecture** | x64 | 표준 아키텍처 |
+
+**크기 (Size)**
+
+| 항목 | 설정 값 | 스펙 | 월 예상 비용 |
+|------|---------|------|-------------|
+| **Size** | `Standard_D8as_v5` | 8 vCPUs, 32 GiB RAM | ~$280 |
+
+크기 선택 팁:
+- **B-series**: 저렴, CPU 버스트 가능 (개발/테스트)
+- **D-series**: 범용, 균형잡힌 CPU/메모리 (일반 워크로드)
+- **E-series**: 메모리 집약적 (데이터베이스, 캐싱)
+- **N-series**: GPU 포함 (ML/DL, 렌더링)
+
+**관리자 계정 (Administrator account)**
+
+| 항목 | 설정 값 | 설명 |
+|------|---------|------|
+| **Authentication type** | **SSH public key** | 비밀번호보다 안전 |
+| **Username** | `azureuser` | 기본 사용자명 (변경 가능) |
+| **SSH public key source** | Generate new key pair | Azure가 자동 생성 |
+| **Key pair name** | `test-agent_key` | Private key 파일명 |
+
+> **중요**: Private key (`.pem` 파일)는 VM 생성 완료 시 단 한 번만 다운로드 가능하다. 분실 시 VM 재생성 필요.
+
+**인바운드 포트 규칙 (Inbound port rules)**
+
+| 항목 | 설정 값 | 설명 |
+|------|---------|------|
+| **Public inbound ports** | Allow selected ports | SSH 접속 허용 |
+| **Select inbound ports** | **SSH (22)** | 원격 접속용 |
+
+보안 강화 방법 (선택):
+- SSH 포트를 22에서 다른 포트로 변경 (예: 2222)
+- 특정 IP만 허용하도록 제한
+
+#### 3단계: 디스크 설정 (Disks)
+
+| 항목 | 설정 값 | 설명 |
+|------|---------|------|
+| **OS disk type** | **Standard SSD (locally-redundant storage)** | 개발용은 Standard SSD 충분 |
+| **Delete with VM** | 체크 | VM 삭제 시 디스크도 삭제 |
+| **Encryption type** | (Default) Encryption at rest with platform-managed key | 기본 암호화 |
+
+디스크 타입 비교:
+
+| 타입 | IOPS | 처리량 | 용도 | 비용 |
+|------|------|--------|------|------|
+| **Premium SSD** | 최대 20,000 | 900 MB/s | 프로덕션, DB | 높음 |
+| **Standard SSD** | 최대 6,000 | 750 MB/s | 개발, 테스트 | 중간 |
+| **Standard HDD** | 최대 2,000 | 500 MB/s | 백업, 아카이브 | 낮음 |
+
+#### 4단계: 네트워킹 (Networking)
+
+**가상 네트워크 (Virtual network)**
+
+| 항목 | 설정 값 | 설명 |
+|------|---------|------|
+| **Virtual network** | (new) test-agent-vnet | 자동 생성 |
+| **Subnet** | (new) default (10.0.0.0/24) | 기본 서브넷 |
+| **Public IP** | (new) test-agent-ip | 외부 접속용 공인 IP |
+| **NIC network security group** | Basic | 기본 방화벽 |
+| **Public inbound ports** | Allow selected ports | |
+| **Select inbound ports** | SSH (22) | |
+
+**고급 네트워킹 (선택)**
+- Load balancing: 여러 VM에 트래픽 분산 (프로덕션)
+- Accelerated networking: 네트워크 성능 향상
+
+#### 5단계: 관리 (Management)
+
+**모니터링**
+
+| 항목 | 설정 값 | 설명 |
+|------|---------|------|
+| **Boot diagnostics** | Enable with managed storage account | 부팅 문제 진단용 |
+| **Enable OS guest diagnostics** | 선택 해제 | 추가 비용 발생 |
+
+**자동 종료 (Auto-shutdown)**
+
+| 항목 | 설정 값 | 설명 |
+|------|---------|------|
+| **Enable auto-shutdown** | 체크 권장 | 비용 절감 |
+| **Shutdown time** | 19:00 (KST) | 업무 종료 시간 |
+| **Time zone** | (UTC+09:00) Seoul | |
+| **Notification before shutdown** | 체크 | 종료 15분 전 알림 |
+
+#### 6단계: 고급 설정 (Advanced) - 기본값 유지
+
+- **Extensions**: VM 생성 후 설치 가능
+- **Cloud init**: 초기화 스크립트 (선택)
+- **User data**: 부팅 시 실행할 스크립트
+
+#### 7단계: 태그 (Tags) - 선택 사항
+
+리소스 분류 및 비용 추적용:
+
+| Name | Value |
+|------|-------|
+| Environment | Development |
+| Project | ML-Research |
+| Owner | your-email@example.com |
+
+#### 8단계: 검토 및 생성 (Review + create)
+
+1. **비용 확인**
+   ```
+   Virtual machine: $280.00/month
+   Disks: $19.20/month (128 GiB Standard SSD)
+   Total estimated cost: ~$300/month
+   ```
+
+2. **유효성 검증**
+   - "Validation passed" 확인
+
+3. **생성 클릭**
+   - **중요**: Private key 다운로드 팝업이 나타남
+   - `test-agent_key.pem` 파일 다운로드 (필수!)
+   - Downloads 폴더에 저장됨
+
+4. **배포 진행**
+   ```
+   Deployment is in progress...
+   ├── Creating network interface...
+   ├── Creating virtual machine...
+   ├── Creating disk...
+   └── Starting virtual machine...
+   
+   Deployment complete (약 2-3분 소요)
+   ```
+
+#### 9단계: VM 생성 완료 확인
+
+**리소스 그룹에서 확인**
+```
+Resource group: rg-dev-vm
+├── test-agent (Virtual machine)
+├── test-agent-ip (Public IP address)
+├── test-agent-nsg (Network security group)
+├── test-agent-vnet (Virtual network)
+└── test-agent_disk_... (Disk)
+```
+
+**Public IP 주소 확인**
+```
+Virtual Machines → test-agent → Overview
+Public IP address: 20.196.144.16 (예시)
+```
+
+## SSH를 통한 VM 접속
+
+### SSH란?
+
+**SSH (Secure Shell)**는 인터넷을 통해 원격 컴퓨터에 안전하게 접속하는 프로토콜이다.
+
+### 웹 브라우저 콘솔 vs SSH
+
+| 항목 | 웹 브라우저 콘솔 | SSH |
+|------|----------------|-----|
+| **접속 방식** | Azure Portal 웹 페이지 내 | 암호화된 네트워크 연결 |
+| **보안** | 웹 브라우저 보안 정책 적용 (제약 많음) | 공개키 암호화 (매우 강력) |
+| **권한** | `no-new-privileges` 플래그로 sudo 차단 | 일반 사용자이지만 sudo 가능 |
+| **통신** | 평문 또는 약한 암호화 | 모든 데이터 암호화 (AES-256 등) |
+| **인증** | Azure Portal 로그인 | Private Key 파일 기반 |
+| **안정성** | 브라우저 다운시 연결 끊김 | 네트워크만 안정하면 지속 연결 |
+
+### SSH가 안전한 이유
+
+1. **공개키 암호화** (Public Key Cryptography)
+   - 클라이언트(PC)가 공개키를 가짐
+   - 서버(Azure VM)가 비공개키를 가짐
+   - 공개키로 암호화한 메시지는 비공개키로만 복호화 가능
+   - 통신 과정이 모두 암호화됨
+
+2. **Private Key 인증**
+   ```
+   클라이언트 (PC)           서버 (Azure VM)
+   test-agent_key.pem    ←→ 비공개키 저장
+   (Private Key)            (Private Key)
+   
+   접속 요청 시:
+   1. 클라이언트가 Public Key로 challenge를 보냄
+   2. 서버가 비공개키로 검증
+   3. Private Key가 일치하면 접속 허용
+   ```
+
+3. **중간자 공격 방지**
+   - SSH 키 교환 과정에서 호스트 키를 검증
+   - 첫 접속 시 호스트 지문(fingerprint)을 확인
+   - 같은 호스트면 이후 자동 인증
+
+4. **비밀번호 방식의 문제점**
+   - 약한 비밀번호 → 브루트포스 공격에 취약
+   - 비밀번호 탈취 → 전체 VM 장악
+   - SSH Key는 수천 자리의 암호화된 파일 → 거의 불가능
+
+### SSH 접속 단계
+
+**1단계: Private Key 파일 준비**
+- VM 생성 시 다운로드한 `test-agent_key.pem` 파일 위치 확인
+- 보통 Downloads 폴더에 저장됨
+
+**2단계: 로컬 PowerShell(Windows) 또는 Terminal(macOS/Linux)에서 접속**
+
+```bash
+ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16
+```
+
+**3단계: 첫 접속 시 호스트 인증**
+
+```
+The authenticity of host '20.196.144.16' can't be established.
+Are you sure you want to continue connecting (yes/no)?
+```
+→ `yes` 입력
+
+**4단계: 접속 완료**
+
+```
+azureuser@test-agent:~$
+```
+
+**SSH 접속의 장점:**
+- 웹 콘솔의 제약이 없음
+- sudo 권한이 정상 작동
+- 더 안정적이고 빠름
+- 로컬에서 언제든 접속 가능
+
+
+## VM 종료 및 관리
+
+### VM 중지 (비용 절감)
+```bash
+# SSH 연결 종료
+exit
+
+# Azure Portal에서:
+# Virtual Machines → test-agent → Stop 클릭
+```
+
+- **Stop**: 비용 청구 안 됨, 나중에 재시작 가능
+- **Delete**: 완전 삭제 (복구 불가)
+
+### VM 재시작
+```bash
+ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16
+```
+
+## 편의성 개선 (선택사항)
+
+### PowerShell에 SSH Alias 설정
+
+PowerShell 프로필 편집:
+```powershell
+notepad $PROFILE
+```
+
+다음 추가:
+```powershell
+Set-Alias -Name ssh-vm -Value 'ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16'
+```
+
+이후 접속:
+```bash
+ssh-vm
+```
+
+## SSH Key 관리 전략
+
+Azure VM, AWS EC2, GitHub, GitLab 등 여러 서비스를 사용하면 SSH Key가 점점 많아진다. 효율적인 관리 전략이 필요하다.
+
+### 1. Key 저장소 통일 (.ssh 폴더)
+
+```powershell
+# Windows의 .ssh 폴더 (자동 생성됨)
+C:\Users\kmkim\.ssh\
+
+# Key 파일들을 모두 여기에 정리
+C:\Users\kmkim\.ssh\
+├── azure-vm-test-agent.pem      # Azure VM용
+├── aws-ec2-dev.pem               # AWS EC2용
+├── github-personal                # GitHub용 (확장자 없음)
+├── gitlab-work                    # GitLab용
+├── id_rsa                         # 기본 key (old format)
+└── id_ed25519                     # 최신 key format
+└── id_ed25519                     # 최신 key format
+```
+
+### 2. SSH Config 파일로 Host 별칭 관리
+SSH config 파일 생성:
+```powershell
+notepad C:\Users\kmkim\.ssh\config
+```
+
+다음 내용 추가:
+```
+# Azure VM - test-agent
+Host azure-test
+    HostName 20.196.144.16
+    User azureuser
+    IdentityFile C:\Users\kmkim\.ssh\azure-vm-test-agent.pem
+    Port 22
+
+# AWS EC2 - Development Server
+Host aws-dev
+    HostName ec2-1-2-3-4.compute-1.amazonaws.com
+    User ec2-user
+    IdentityFile C:\Users\kmkim\.ssh\aws-ec2-dev.pem
+    Port 22
+
+# GitHub
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile C:\Users\kmkim\.ssh\github-personal
+
+# GitLab
+Host gitlab.com
+    HostName gitlab.com
+    User git
+    IdentityFile C:\Users\kmkim\.ssh\gitlab-work
+```
+
+### 3. 간단한 접속 명령
+
+SSH config를 설정하면 긴 명령을 단축할 수 있다.
+
+**Before (설정 전):**
+```bash
+ssh -i C:\Users\kmkim\.ssh\azure-vm-test-agent.pem azureuser@20.196.144.16
+```
+
+**After (설정 후):**
+```bash
+ssh azure-test
+```
+
+### 4. Key 권한 설정 (Windows)
+
+SSH Key는 신중하게 보관해야 한다.
+
+```powershell
+# .ssh 폴더 우클릭 → 속성 → 보안 → 고급
+# 현재 사용자만 읽기/쓰기 권한 허용
+# 다른 사용자는 접근 차단
+
+# 또는 PowerShell로:
+icacls "C:\Users\kmkim\.ssh" /inheritance:r /grant:r "$env:USERNAME`:(F)"
+```
+
+### 5. SSH Key 명명 규칙 (권장)
+
+```
+<서비스>-<용도>-<환경>.pem
+
+예:
+- azure-vm-dev.pem
+- aws-ec2-prod.pem
+- github-personal
+- gitlab-work-deploy
+```
+
+## SSH Key 보안
+
+### 보안 체크리스트
+
+**해야 할 것:**
+- [ ] `.ssh` 폴더는 사용자만 접근 가능하도록 권한 설정
+- [ ] Private Key는 절대 공유/업로드하지 않기
+- [ ] `.ssh/config` 파일로 중앙 관리
+- [ ] 각 Key마다 명확한 목적 주석 추가
+- [ ] 정기적으로 사용하지 않는 Key 삭제
+
+**하지 말아야 할 것:**
+- [ ] Private Key를 GitHub에 커밋
+- [ ] `.gitignore`에 `*.pem` 추가하지 않기
+- [ ] 여러 서비스에 같은 Key 재사용 (한 곳 탈취 시 모두 위험)
+- [ ] Key 파일을 다운로드 폴더에 방치
+
+### 실무 Key 관리
+
+**개인 PC:**
+```
+Private Key (test-agent_key.pem)
+    ↓
+.ssh 폴더에만 저장
+    ↓
+접속 시만 사용
+```
+
+**서버:**
+```
+Public Key만 저장 (~/.ssh/authorized_keys)
+    ↓
+Private Key는 저장하지 않음
+    ↓
+누군가 서버를 해킹해도 다른 서버에 접속 불가
+```
+
+### SSH Key 재생성 (기존 Key 분실/탈취 시)
+
+```bash
+# 1. 새로운 Key 생성
+ssh-keygen -t ed25519 -C "azure-vm-replacement" -f C:\Users\kmkim\.ssh\azure-vm-new.pem
+
+# 2. Azure Portal에서 기존 public key 삭제
+# 3. 새로운 public key 등록
+# 4. .ssh/config 파일 업데이트
+# 5. 기존 Key 파일 삭제 (또는 백업 폴더로 이동)
+```
+
+## VM 관리
+
+### VM 중지 및 재시작
+
+**VM 중지 (비용 절감)**
+```bash
+# SSH 연결 종료
+exit
+
+# Azure Portal에서:
+# Virtual Machines → test-agent → Stop 클릭
+```
+
+- **Stop**: 비용 청구 안 됨, 나중에 재시작 가능
+- **Delete**: 완전 삭제 (복구 불가)
+
+**VM 재시작**
+```bash
+ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16
+```
+
+### 중요 개념 정리
+
+| 개념 | 설명 |
+|------|------|
+| **VM (Virtual Machine)** | 클라우드에서 실행되는 가상 컴퓨터 |
+| **Image** | VM의 운영체제 템플릿 |
+| **SSH** | 원격 서버에 안전하게 접속하는 프로토콜 |
+| **Private Key** | SSH 접속 인증용 파일 (.pem) |
+| **Public IP** | 외부에서 VM에 접속하기 위한 공인 IP 주소 |
