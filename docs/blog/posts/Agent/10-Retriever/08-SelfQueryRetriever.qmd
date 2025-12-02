@@ -1,17 +1,17 @@
 ---
-title: "셀프 쿼리(Self-querying)"
-subtitle: 검색기
+title: "셀프 쿼리 검색기(Self-Query Retriever)"
+subtitle: "메타데이터 기반 지능형 문서 검색"
 description: |
-  문서 검색을 위한 다양한 Retriever 패턴과 최적화 기법을 다룬다.
+  자연어 질의를 구조화된 쿼리로 변환하여 메타데이터 필터링과 의미적 검색을 동시에 수행하는 SelfQueryRetriever의 원리와 활용 방법을 다룬다.
 categories:
   - AI
   - RAG
   - LangChain
+  - Agent
 author: Kwangmin Kim
-date: 12/31/2024
+date: 05/09/2024
 format: 
   html:
-    page-layout: full
     code-fold: true
     toc: true
     number-sections: true
@@ -20,17 +20,51 @@ execute:
     eval: false
 ---
 
+## SelfQueryRetriever 개요
 
-`SelfQueryRetriever` 는 자체적으로 질문을 생성하고 해결할 수 있는 기능을 갖춘 검색 도구입니다. 
+### 핵심 개념
 
-이는 사용자가 제공한 자연어 질의를 바탕으로, `query-constructing` LLM chain을 사용해 구조화된 질의를 만듭니다. 그 후, 이 구조화된 질의를 기본 벡터 데이터 저장소(VectorStore)에 적용하여 검색을 수행합니다.
+`SelfQueryRetriever`는 자연어 질의를 구조화된 쿼리로 자동 변환하여 검색을 수행하는 지능형 검색 도구이다. 일반적인 벡터 검색과 달리, 메타데이터 필터링과 의미적 검색을 동시에 활용한다.
 
-이 과정을 통해, `SelfQueryRetriever` 는 단순히 사용자의 입력 질의를 저장된 문서의 내용과 의미적으로 비교하는 것을 넘어서, 사용자의 질의에서 문서의 메타데이터에 대한 **필터를 추출** 하고, 이 필터를 실행하여 관련된 문서를 찾을 수 있습니다. 
+### 작동 원리
 
-[참고]
+1. 질의 분석: 사용자의 자연어 질의를 LLM이 분석
+2. 쿼리 구조화: LLM이 Query-constructing LLM chain을 사용해 구조화된 질의 생성
+3. 필터 추출: 질의에서 메타데이터 필터 조건 추출
+4. 검색 수행: 구조화된 질의를 벡터 저장소(VectorStore)에 적용하여 검색
 
-- LangChain 이 지원하는 셀프 쿼리 검색기(Self-query Retriever) 목록은 [여기](https://python.langchain.com/docs/integrations/retrievers/self_query) 에서 확인해 주시기 바랍니다.
+### 장단점
 
+#### 장점
+
+- 정확도 향상: 메타데이터 필터링으로 검색 결과의 정밀도 증가
+- 복합 조건 처리: 여러 메타데이터 조건을 조합한 검색 가능
+- 자연어 인터페이스: 사용자가 복잡한 쿼리 문법을 몰라도 자연어로 질의 가능
+- 테이블 데이터 활용: 구조화된 테이블 형식 데이터 처리에 효과적
+
+#### 단점
+
+- 메타데이터 의존성: 모든 문서에 적절한 메타데이터가 필요
+- 초기 설정 비용: `AttributeInfo` 정의 등 초기 구성 작업 필요
+- LLM 호출 오버헤드: 질의마다 LLM을 통한 쿼리 변환 과정 필요
+
+### 적용 사례
+
+대기업이나 데이터가 성숙도가 높은 기업에서는 거의 모든 데이터가 정형이기 때문에 SQL쿼리 또는 DBMS 하에 관리가 될 가능성이 높다.
+이런 table형식으로 관리되는 데이터에 이 SelfQueryRetriever는 유용하게 활용될 수 있다.
+
+- 전자상거래 제품 검색 (가격, 카테고리, 평점 등 필터링)
+- 문서 관리 시스템 (작성일, 저자, 문서 유형 등 조건 검색)
+- 콘텐츠 추천 시스템 (장르, 연도, 평점 기반 추천)
+
+**참고 자료**
+
+- [LangChain 공식 Self-Query Retriever 문서](https://python.langchain.com/docs/integrations/retrievers/self_query)
+
+
+## 환경 설정
+
+### API 키 로드
 
 ```{python}
 # API 키를 환경변수로 관리하기 위한 설정 파일
@@ -40,18 +74,28 @@ from dotenv import load_dotenv
 load_dotenv()
 ```
 
+### LangSmith 추적 설정
+
+LangSmith를 활용하면 LLM 호출 과정과 쿼리 변환 과정을 시각적으로 추적할 수 있다.
+
 ```{python}
-# LangSmith 추적을 설정합니다. https://smith.langchain.com
+# LangSmith 추적을 설정 (https://smith.langchain.com)
 # !pip install langchain-teddynote
 from langchain_teddynote import logging
 
-# 프로젝트 이름을 입력합니다.
+# 프로젝트 이름을 입력
 logging.langsmith("CH10-Retriever")
 ```
 
 ## 샘플 데이터 생성
 
-화장품 상품의 설명과 메타데이터를 기반으로 유사도 검색이 가능한 벡터 저장소를 구축합니다.
+화장품 상품의 설명과 메타데이터를 기반으로 유사도 검색이 가능한 벡터 저장소를 구축한다. 각 문서는 제품 설명(`page_content`)과 구조화된 메타데이터(연도, 카테고리, 평점)를 포함한다.
+
+**메타데이터 스키마**
+
+- `year` (정수): 제품 출시 연도
+- `category` (문자열): 제품 카테고리 (스킨케어, 메이크업, 클렌징, 선케어)
+- `user_rating` (실수): 사용자 평점 (1.0 ~ 5.0)
 
 ```{python}
 from langchain_chroma import Chroma
@@ -88,23 +132,31 @@ docs = [
 
 # 벡터 저장소 생성
 vectorstore = Chroma.from_documents(
-    docs, OpenAIEmbeddings(model="text-embedding-3-small")
+    docs, 
+    OpenAIEmbeddings(model="text-embedding-3-small")
 )
 ```
 
-## SelfQueryRetriever
+### 메타데이터 필드 정의
 
-이제 retriever를 인스턴스화할 수 있습니다. 이를 위해서는 문서가 지원하는 **메타데이터 필드** 와 문서 내용에 대한 **간단한 설명을 미리 제공** 해야 합니다.
+`AttributeInfo` 클래스를 사용하여 화장품 메타데이터 필드에 대한 정보를 정의한다. 범주형 데이터는 모든 sample space를 적어줘야하고 필요시 업데이트를 주기적으로 해줘야한다. 
 
-`AttributeInfo` 클래스를 사용하여 화장품 메타데이터 필드에 대한 정보를 정의합니다.
+- 카테고리(`category`): 문자열 타입, 화장품의 카테고리를 나타내며 ['스킨케어', '메이크업', '클렌징', '선케어'] 중 하나의 값을 가진다.
+- 연도(`year`): 정수 타입, 화장품이 출시된 연도를 나타낸다.
+- 사용자 평점(`user_rating`): 실수 타입, 1-5 범위의 사용자 평점을 나타낸다.
 
-- 카테고리(`category`): 문자열 타입, 화장품의 카테고리를 나타내며 ['스킨케어', '메이크업', '클렌징', '선케어'] 중 하나의 값을 가집니다.
-- 연도(`year`): 정수 타입, 화장품이 출시된 연도를 나타냅니다.
-- 사용자 평점(`user_rating`): 실수 타입, 1-5 범위의 사용자 평점을 나타냅니다.
+사실, 이 부분이 SelfQueryRetriever를 좀 더 규모있게 쓰기위해선 굉장히 번거롭고 데이터 모델링 들어가야하는 부분이라 사실 난이도가 높다. 데이터 모델링이 되기 위해선 주기적으로 서비스가 제공이되는 기획이 구체적으로 만들어져야하고 이를 바탕으로 데이터 모델링이 수행되어야 하기 때문에 상당한 자원이 투입되어야한다.
+
+**`AttributeInfo` 구성 요소**
+
+`AttributeInfo` 클래스를 사용하여 각 메타데이터 필드의 타입, 설명, 가능한 값을 정의한다. 이 정보는 LLM이 자연어 질의를 구조화된 쿼리로 변환할 때 참조하므로 명확하고 구체적으로 작성해야 한다.
+
+- `name`: 메타데이터 필드 이름
+- `description`: 필드에 대한 상세 설명 (LLM이 참조하므로 명확하게 작성)
+- `type`: 데이터 타입 (`string`, `integer`, `float` 등)
 
 ```{python}
 from langchain.chains.query_constructor.base import AttributeInfo
-
 
 # 메타데이터 필드 정보 생성
 metadata_field_info = [
@@ -126,12 +178,16 @@ metadata_field_info = [
 ]
 ```
 
-`SelfQueryRetriever.from_llm()` 메서드를 사용하여 `retriever` 객체를 생성합니다.
+### SelfQueryRetriever 생성
 
-- `llm`: 언어 모델
-- `vectorstore`: 벡터 저장소
-- `document_contents`: 문서들의 내용 설명
-- `metadata_field_info`: 메타데이터 필드 정보
+`SelfQueryRetriever.from_llm()` 메서드를 사용하여 retriever 객체를 생성한다.
+
+**주요 매개변수**
+
+- `llm`: 질의를 분석하고 구조화된 쿼리로 변환할 언어 모델
+- `vectorstore`: 문서가 저장된 벡터 저장소
+- `document_contents`: 문서 내용에 대한 간략한 설명 (LLM이 쿼리 생성 시 참조)
+- `metadata_field_info`: 앞서 정의한 메타데이터 필드 정보
 
 ```{python}
 from langchain.retrievers.self_query.base import SelfQueryRetriever
@@ -149,37 +205,65 @@ retriever = SelfQueryRetriever.from_llm(
 )
 ```
 
-## Query 테스트
+## Query Test
 
-필터를 걸 수 있는 질의를 입력하여 검색을 수행합니다.
+### 단일 필터 검색
+
+자연어 질의에서 메타데이터 조건을 자동으로 추출하여 필터링한다.
+
+#### 평점 기반 검색
 
 ```{python}
-# Self-query 검색
+# 평점 4.8 이상 제품 검색
 retriever.invoke("평점이 4.8 이상인 제품을 추천해주세요")
 ```
 
+```
+[Document(metadata={'category': '선케어', 'user_rating': 4.9, 'year': 2024}, page_content='자외선 차단 기능이 있는 톤업 선크림, SPF50+/PA++++ 높은 자외선 차단 지수로 피부를 보호합니다.'), Document(metadata={'category': '클렌징', 'user_rating': 4.8, 'year': 2023}, page_content='식물성 성분으로 만든 저자극 클렌징 오일, 메이크업과 노폐물을 부드럽게 제거합니다.')]
+```
+
+#### 연도 기반 검색
+
 ```{python}
-# Self-query 검색
+# 2023년 출시 제품 검색
 retriever.invoke("2023년에 출시된 상품을 추천해주세요")
 ```
 
+```
+[Document(metadata={'category': '메이크업', 'user_rating': 4.5, 'year': 2023}, page_content='24시간 지속되는 매트한 피니시의 파운데이션, 모공을 커버하고 자연스러운 피부 표현이 가능합니다.'), Document(metadata={'category': '스킨케어', 'user_rating': 4.6, 'year': 2023}, page_content='비타민 C 함유 브라이트닝 크림, 칙칙한 피부톤을 환하게 밝혀줍니다.'), Document(metadata={'category': '클렌징', 'user_rating': 4.8, 'year': 2023}, page_content='식물성 성분으로 만든 저자극 클렌징 오일, 메이크업과 노폐물을 부드럽게 제거합니다.')]
+```
+
+#### 카테고리 기반 검색
+
 ```{python}
-# Self-query 검색
+# 선케어 카테고리 제품 검색
 retriever.invoke("카테고리가 선케어인 상품을 추천해주세요")
 ```
 
-복합 필터를 사용하여 검색을 수행할 수 있습니다.
+```
+[Document(metadata={'category': '선케어', 'user_rating': 4.9, 'year': 2024}, page_content='자외선 차단 기능이 있는 톤업 선크림, SPF50+/PA++++ 높은 자외선 차단 지수로 피부를 보호합니다.')]
+```
+
+### 복합 필터 검색
+
+여러 메타데이터 조건을 조합하여 정밀한 검색을 수행한다.
 
 ```{python}
-# Self-query 검색
+# 카테고리와 평점 조건을 동시에 적용
 retriever.invoke(
     "카테고리가 메이크업인 상품 중에서 평점이 4.5 이상인 상품을 추천해주세요"
 )
 ```
 
-`k`는 가져올 문서의 수를 의미합니다.
+```
+[Document(metadata={'category': '메이크업', 'user_rating': 4.5, 'year': 2023}, page_content='24시간 지속되는 매트한 피니시의 파운데이션, 모공을 커버하고 자연스러운 피부 표현이 가능합니다.')]
+```
 
-`SelfQueryRetriever`를 사용하여 `k`를 지정할 수도 있습니다. 이는 생성자에 `enable_limit=True`를 전달하여 수행할 수 있습니다.
+## 검색 결과 제한 (Limit)
+
+### 코드 기반 제한 설정
+
+`enable_limit=True`와 `search_kwargs`를 사용하여 반환할 문서 개수를 제한한다.
 
 ```{python}
 retriever = SelfQueryRetriever.from_llm(
@@ -187,19 +271,25 @@ retriever = SelfQueryRetriever.from_llm(
     vectorstore=vectorstore,
     document_contents="Brief summary of a cosmetic product",
     metadata_field_info=metadata_field_info,
-    enable_limit=True,  # 검색 결과 제한 기능을 활성화합니다.
-    search_kwargs={"k": 2},  # k 의 값을 2로 지정하여 검색 결과를 2개로 제한합니다.
+    enable_limit=True,  # 검색 결과 제한 기능 활성화
+    search_kwargs={"k": 2},  # 최대 2개의 문서만 반환
 )
 ```
 
-2023년도 출시된 상품은 3개가 있지만 "k" 값을 2로 지정하여 2개만 반환하도록 합니다.
+2023년도 출시된 상품은 3개가 있지만 `k=2` 설정으로 인해 2개만 반환된다.
 
 ```{python}
-# Self-query 검색
+# 검색 결과 2개로 제한
 retriever.invoke("2023년에 출시된 상품을 추천해주세요")
 ```
 
-하지만 코드로 명시적으로 `search_kwargs`를 지정하지 않고 query 에서 `1개, 2개` 등의 숫자를 사용하여 검색 결과를 제한할 수 있습니다.
+```
+[Document(metadata={'category': '메이크업', 'user_rating': 4.5, 'year': 2023}, page_content='24시간 지속되는 매트한 피니시의 파운데이션, 모공을 커버하고 자연스러운 피부 표현이 가능합니다.'), Document(metadata={'category': '스킨케어', 'user_rating': 4.6, 'year': 2023}, page_content='비타민 C 함유 브라이트닝 크림, 칙칙한 피부톤을 환하게 밝혀줍니다.')]
+```
+
+### 자연어 기반 제한 설정
+
+`search_kwargs`를 명시하지 않고 질의문에 개수를 포함하여 동적으로 제한할 수 있다.
 
 ```{python}
 retriever = SelfQueryRetriever.from_llm(
@@ -207,31 +297,39 @@ retriever = SelfQueryRetriever.from_llm(
     vectorstore=vectorstore,
     document_contents="Brief summary of a cosmetic product",
     metadata_field_info=metadata_field_info,
-    enable_limit=True,  # 검색 결과 제한 기능을 활성화합니다.
+    enable_limit=True,  # 검색 결과 제한 기능 활성화
 )
 
-# Self-query 검색
+# 질의문에 "1개" 명시
 retriever.invoke("2023년에 출시된 상품 1개를 추천해주세요")
 ```
 
+```
+[Document(metadata={'category': '메이크업', 'user_rating': 4.5, 'year': 2023}, page_content='24시간 지속되는 매트한 피니시의 파운데이션, 모공을 커버하고 자연스러운 피부 표현이 가능합니다.')]
+```
+
+
 ```{python}
-# Self-query 검색
+# 질의문에 "2개" 명시
 retriever.invoke("2023년에 출시된 상품 2개를 추천해주세요")
 ```
 
-## 더 깊게 들어가기
+```
+[Document(metadata={'category': '메이크업', 'user_rating': 4.5, 'year': 2023}, page_content='24시간 지속되는 매트한 피니시의 파운데이션, 모공을 커버하고 자연스러운 피부 표현이 가능합니다.'), Document(metadata={'category': '스킨케어', 'user_rating': 4.6, 'year': 2023}, page_content='비타민 C 함유 브라이트닝 크림, 칙칙한 피부톤을 환하게 밝혀줍니다.')]
+```
 
-내부에서 어떤 일이 일어나는지 확인하고 더 많은 사용자 정의 제어를 하기 위해, 우리는 retriever를 처음부터 재구성할 수 있습니다.
+## 고급: Query Constructor Chain 커스터마이징
 
-이 과정은 `query-construction chain` 을 생성하는 것부터 시작합니다.
+* 조건문 쿼리들을 만들어주는 chain을 생성하는 방법
+* 여기에 메타데이터 (스키마)를 기준으로 lancgChain안에 이 조건문 쿼리를 만들어주는 프롬프트가 들어가 있음
+* 핵심은 자연어를 구조화된 쿼리로 변환하는 **Query Constructor Chain**을 생성하는 것이다.
+* 내부에서 어떤 일이 일어나는지 확인하고 더 많은 사용자 정의 제어를 하기 위해, 우리는 retriever를 처음부터 재구성할 수 있다.
 
 - [참고 튜토리얼](https://github.com/langchain-ai/langchain/blob/master/cookbook/self_query_hotel_search.ipynb) 
 
-### `query_constructor` chain 생성
+### Query Constructor 생성
 
-구조화된 쿼리를 생성하는 `query_constructor` chain 을 생성합니다.
-
-`get_query_constructor_prompt` 함수를 사용하여 쿼리 생성기 프롬프트를 가져옵니다.
+`get_query_constructor_prompt` 함수를 사용하여 LLM이 구조화된 쿼리를 생성하도록 하는 프롬프트를 가져온다.
 
 ```{python}
 from langchain.chains.query_constructor.base import (
@@ -239,70 +337,318 @@ from langchain.chains.query_constructor.base import (
     get_query_constructor_prompt,
 )
 
-# 문서 내용 설명과 메타데이터 필드 정보를 사용하여 쿼리 생성기 프롬프트를 가져옵니다.
+# 문서 내용 설명과 메타데이터 필드 정보를 사용하여 쿼리 생성 프롬프트 가져오기
 prompt = get_query_constructor_prompt(
     "Brief summary of a cosmetic product",  # 문서 내용 설명
     metadata_field_info,  # 메타데이터 필드 정보
 )
 
-# StructuredQueryOutputParser 를 생성
+# 구조화된 쿼리 출력을 파싱하는 Parser 생성
 output_parser = StructuredQueryOutputParser.from_components()
 
-# query_constructor chain 을 생성
+# Query Constructor Chain 구성: 프롬프트 → LLM → 파싱
 query_constructor = prompt | llm | output_parser
 ```
 
 `prompt.format()` 메서드를 사용하여 `query` 매개변수에 "dummy question" 문자열을 전달하고, 그 결과를 출력하여 Prompt 내용을 확인해 보겠습니다.
+langChain에서 이 프롬프트를 스키마 형태로 작성해주는 것을 제공한다.
 
 ```{python}
-# prompt 출력
+# 프롬프트 템플릿 출력
 print(prompt.format(query="dummy question"))
 ```
 
-`query_constructor.invoke()` 메서드를 호출하여 주어진 쿼리에 대한 처리를 수행합니다.
+### 쿼리 변환 테스트
+
+자연어 질의가 어떻게 구조화된 쿼리로 변환되는지 확인한다.
 
 ```{python}
 query_output = query_constructor.invoke(
     {
-        # 쿼리 생성기를 호출하여 주어진 질문에 대한 쿼리를 생성합니다.
         "query": "2023년도에 출시한 상품 중 평점이 4.5 이상인 상품중에서 스킨케어 제품을 추천해주세요"
     }
 )
 ```
 
-생성된 쿼리를 확인해 보겠습니다.
+생성된 구조화된 쿼리의 필터 조건을 확인한다.
 
 ```{python}
-# 쿼리 출력
+# 추출된 필터 조건 출력
 query_output.filter.arguments
 ```
 
-Self-query retriever의 핵심 요소는 query constructor입니다. 훌륭한 검색 시스템을 만들기 위해서는 query constructor가 잘 작동하도록 해야 합니다.
+[Comparison(comparator=, attribute='year', value=2023), Comparison(comparator=, attribute='user_rating', value=4.5), Comparison(comparator=, attribute='category', value='스킨케어')]
 
-이를 위해서는 **프롬프트(Prompt), 프롬프트 내의 예시, 속성 설명 등을 조정** 해야 합니다.
 
-### 구조화된 쿼리 변환기(Structured Query Translator)를 사용하여 구조화된 쿼리로 변환
+**Query Constructor 최적화 팁**
 
-다음으로 중요한 요소는 structured query translator입니다. 
+Self-query retriever의 핵심은 query constructor의 품질이다. 효과적인 검색 시스템을 만들기 위해 다음을 조정해야 한다:
 
-이는 일반적인 `StructuredQuery` 객체를 사용 중인 vector store의 구문에 맞는 메타데이터 필터로 변환하는 역할을 담당합니다.
+1. **프롬프트 튜닝**: `get_query_constructor_prompt`의 문서 설명을 명확하게 작성
+2. **Few-shot 예시 추가**: 프롬프트에 질의-쿼리 변환 예시 추가
+3. **AttributeInfo 정교화**: 각 메타데이터 필드의 설명을 LLM이 이해하기 쉽게 작성
+4. **LLM 모델 선택**: 쿼리 변환 품질에 따라 더 강력한 모델 사용 고려
+
+### Structured Query Translator 사용
+
+구조화된 쿼리를 특정 벡터 저장소의 문법에 맞게 변환하는 translator를 사용한다. 각 벡터 저장소(Chroma, Pinecone, Weaviate 등)는 고유한 필터 문법을 가지므로 적절한 translator가 필요하다.
 
 ```{python}
 from langchain.retrievers.self_query.chroma import ChromaTranslator
 
+# 커스텀 Query Constructor와 Translator를 사용한 Retriever 생성
 retriever = SelfQueryRetriever(
-    query_constructor=query_constructor,  # 이전에 생성한 query_constructor chain 을 지정
-    vectorstore=vectorstore,  # 벡터 저장소를 지정
-    structured_query_translator=ChromaTranslator(),  # 쿼리 변환기
+    query_constructor=query_constructor,  # 앞서 생성한 커스텀 query constructor
+    vectorstore=vectorstore,  # 벡터 저장소
+    structured_query_translator=ChromaTranslator(),  # Chroma 전용 쿼리 변환기
 )
 ```
 
-`retriever.invoke()` 메서드를 사용하여 주어진 질문에 대한 답변을 생성합니다.
+**주요 Translator 종류**
+
+- `ChromaTranslator`: Chroma 벡터 저장소용
+- `PineconeTranslator`: Pinecone 벡터 저장소용
+- `WeaviateTranslator`: Weaviate 벡터 저장소용
+- `QdrantTranslator`: Qdrant 벡터 저장소용
+
+### 커스텀 Retriever 테스트
+
+복합 조건 검색을 수행하여 커스텀 retriever의 동작을 확인한다.
 
 ```{python}
 retriever.invoke(
-    # 질문
     "2023년도에 출시한 상품 중 평점이 4.5 이상인 상품중에서 스킨케어 제품을 추천해주세요"
 )
 ```
+
+```
+[Document(metadata={'category': '스킨케어', 'user_rating': 4.6, 'year': 2023}, page_content='비타민 C 함유 브라이트닝 크림, 칙칙한 피부톤을 환하게 밝혀줍니다.')]
+```
+
+## 실전 활용 가이드
+
+### 메타데이터 설계 원칙
+
+1. **필터링 가능성**: 사용자가 자주 질의하는 속성을 메타데이터로 설계
+2. **타입 일관성**: 같은 필드는 모든 문서에서 동일한 타입 유지
+3. **값의 정규화**: 카테고리 등은 미리 정의된 값 사용 (오타 방지)
+4. **적절한 세분화**: 너무 세밀하거나 너무 포괄적이지 않게 조정
+
+### 성능 최적화
+
+1. **LLM 모델 선택**: 쿼리 변환 품질에 따라 gpt-4o-mini vs gpt-4o 선택
+2. **캐싱 활용**: 동일한 질의 패턴에 대해 결과 캐싱
+3. **메타데이터 인덱싱**: 벡터 저장소에서 메타데이터 필드 인덱싱 설정
+4. **Batch 처리**: 여러 질의를 한 번에 처리하여 LLM 호출 최소화
+
+### 일반적인 문제와 해결책
+
+#### 문제 1: LLM이 메타데이터 필터를 잘못 추출
+
+- 해결: `AttributeInfo`의 `description`을 더 명확하게 작성
+- 해결: Few-shot 예시를 프롬프트에 추가
+
+#### 문제 2: 특정 벡터 저장소에서 필터가 작동하지 않음
+
+- 해결: 해당 벡터 저장소에 맞는 Translator 사용 확인
+- 해결: 벡터 저장소가 해당 필터 연산자를 지원하는지 확인
+
+#### 문제 3: 검색 결과가 너무 적거나 많음
+
+- 해결: `enable_limit=True`와 함께 적절한 `k` 값 설정
+- 해결: 필터 조건을 완화하거나 강화
+
+#### 문제 4: 메타데이터 입력에 너무 많은 자원 소모
+
+* 문서에서 가정하는 것처럼 "메타데이터가 이미 구조화되어 있다"는 시나리오는 실제로는 매우 제한적.
+* 다음의 경우가 실제로 마주칠 경우들인데 이 self query를 사용하기 위해 아래의 시스템을 구축해야함 (배보다 배꼽이 더큼)
+  1. **신규 문서 수집**: 웹 크롤링, 자동 데이터 수집, 사용자 업로드 등
+  2. **기존 비정형 데이터**: 과거에 구조화되지 않은 텍스트 문서들
+  3. **지속적인 유지보수**: 메타데이터 스키마가 변경되면 기존 데이터도 갱신해야 함
+
+* 전략 1: 메타데이터를 사람이 작성하지 말고 LLM이 자동으로 추출 (가장 실용적)
+  * 장점
+    - 자동화됨 (사람의 개입 최소화)
+    - 스케일에 관계없이 일관성 유지
+    - 배치 처리로 비용 최적화 가능
+  * 단점
+    - LLM의 추출 오류 가능성 (정확도 90~95% 정도)
+    - LLM 호출 비용 발생
+    - 중요도 높은 도메인에서는 품질 관리 필요
+
+```python
+# 문서 수집 파이프라인
+async def process_document_with_metadata(raw_doc: str, schema: AttributeInfo) -> Document:
+    """문서 입수 시점에 메타데이터를 자동 추출"""
+    
+    extraction_prompt = PromptTemplate.from_template("""
+    다음 문서에서 메타데이터를 추출하세요.
+    
+    메타데이터 스키마:
+    - category: {categories}
+    - year: 정수형 (문서가 언급하는 연도)
+    - user_rating: 1.0~5.0 범위의 숫자 (평가가 없으면 null)
+    
+    문서:
+    {doc_content}
+    
+    JSON 형식으로 반환:
+    {{"category": "...", "year": ..., "user_rating": ...}}
+    """)
+    
+    extractor = extraction_prompt | llm | JsonOutputParser()
+    metadata = await extractor.ainvoke({
+        "doc_content": raw_doc,
+        "categories": ["스킨케어", "메이크업", "클렌징", "선케어"]
+    })
+    
+    return Document(
+        page_content=raw_doc,
+        metadata=metadata
+    )
+```
+
+* 전략 2: Hybrid 접근으로 자동 추출 + 사람의 검증을 조합 (가장 현실적)
+  * 비율 예시 (실제 기업에서 적용):
+    - 자동 추출으로 신뢰도 >= 0.85: 100% 자동 반영 (80~85%)
+    - 신뢰도 0.7~0.85: 샘플링해서 사람이 검증 (10~15%)
+    - 신뢰도 < 0.7: 수동 처리 (5~10%)
+
+```python
+# 데이터 파이프라인 단계별 처리
+class MetadataProcessingPipeline:
+    
+    async def ingest_batch(self, documents: List[str]):
+        """배치 입수"""
+        # 단계 1: LLM 자동 추출
+        with_auto_metadata = [
+            await self.extract_metadata_llm(doc) 
+            for doc in documents
+        ]
+        
+        # 단계 2: 신뢰도 점수 계산 (LLM에게 추출 신뢰도 함께 요청)
+        with_confidence = [
+            self.add_confidence_score(doc_meta)
+            for doc_meta in with_auto_metadata
+        ]
+        
+        # 단계 3: 신뢰도 낮은 것만 큐에 추가 (사람 검증용)
+        requires_review = [
+            item for item in with_confidence 
+            if item['confidence'] < 0.8
+        ]
+        
+        # 단계 4: 사람 검증 (선택적)
+        reviewed_items = await self.human_review_queue(requires_review)
+        
+        # 단계 5: DB에 저장
+        await self.save_to_vectorstore(with_confidence + reviewed_items)
+```
+
+* 전략 3: **도메인 특화 Rule + LLM** (데이터 거버넌스 맞음)
+  * 이미 데이터 표준화 프레임워크(word dictionary, domain dictionary, code dictionary)가 있다면 
+  * 이 표준화된 용어들을 LLM에 제공하면 정확도 크게 향상
+  * 데이터 거버넌스 원칙이 메타데이터 추출에도 자동으로 반영됨
+  * 하지만, 그래도 데이터 모델링이라는 큰 허들이 있긴 함
+
+```python
+class StructuredMetadataExtractor:
+    """이미 데이터 거버넌스 시스템이 있다면 활용"""
+    
+    def __init__(self, data_catalog: DataCatalog):
+        self.catalog = data_catalog  # 기존 메타데이터 저장소
+    
+    async def extract_metadata(self, 
+                               doc: Document, 
+                               doc_source: str) -> dict:
+        """
+        1. 소스 시스템에서 구조화된 메타데이터 먼저 조회
+        2. 없으면 LLM이 추출
+        3. 데이터 카탈로그에 등록된 사전(dictionary) 활용
+        """
+        
+        # 단계 1: 카탈로그에서 기존 메타데이터 확인
+        known_metadata = self.catalog.lookup(doc_source)
+        if known_metadata:
+            return known_metadata
+        
+        # 단계 2: 표준화된 코드/용어 사전을 LLM에 제공
+        dictionaries = {
+            "category_dict": self.catalog.get_category_dictionary(),
+            "year_range": self.catalog.get_year_range(),
+            "valid_ratings": self.catalog.get_rating_scale()
+        }
+        
+        # 단계 3: LLM이 이 사전을 기준으로 추출
+        extracted = await self.llm_extract_with_standards(
+            doc.page_content,
+            dictionaries
+        )
+        
+        # 단계 4: 표준 메타데이터로 정규화
+        normalized = self.catalog.normalize_metadata(extracted)
+        
+        # 단계 5: 다시 카탈로그에 등록 (다음 번에 재사용)
+        await self.catalog.register(doc_source, normalized)
+        
+        return normalized
+```
+
+
+```python
+# 플랫폼에 적용하는 방식: 100-200명 사용자 배포 시나리오
+class EnterpriseMetadataRetriever:
+    
+    def __init__(self, 
+                 standardization_framework,  # 기존 4-tier dictionary
+                 vectorstore,
+                 llm_model="gpt-4o-mini"):
+        self.standards = standardization_framework
+        self.vectorstore = vectorstore
+        self.llm = llm_model
+    
+    async def ingest_dataset(self, dataset: DataFrame):
+        """데이터셋 입수 시 메타데이터 자동 생성"""
+        
+        documents = []
+        for row in dataset.iterrows():
+            # 기존 데이터 거버넌스 시스템의 메타데이터 활용
+            metadata = {
+                "domain": self.standards.infer_domain(row),  # Domain dict 활용
+                "data_type": self.standards.infer_type(row),  # Term dict 활용
+                "quality_score": self.standards.assess_quality(row),
+                "standardization_status": self._check_standard(row),
+            }
+            
+            documents.append(Document(
+                page_content=row['description'],
+                metadata=metadata
+            ))
+        
+        await self.vectorstore.add_documents(documents)
+    
+    def _check_standard(self, row):
+        """표준화 여부 판단 (기존 시스템 활용)"""
+        return self.standards.is_standardized(row)
+```
+
+
+* 각 전략의 비용-정확도 트레이드오프
+
+| 전략 | 자동화율 | 정확도 | 유지비 | 스케일 | 추천 상황 |
+|------|---------|--------|--------|--------|---------|
+| 전략 1 (LLM 자동) | 100% | 90~95% | 낮음 | 매우 높음 | 비정형 데이터 대량, 품질 요구 낮음 |
+| 전략 2 (Hybrid) | 85~90% | 95~98% | 중간 | 높음 | 균형잡힌 운영 |
+| 전략 3 (거버넌스 연계) | 90~95% | 98~99% | 중간 | 중간-높음 | 거버넌스 상황 |
+
+
+## 참고 자료
+
+- [LangChain 공식 Self-Query Retriever 통합 목록](https://python.langchain.com/docs/integrations/retrievers/self_query)
+- [LangChain Self-Query Hotel Search 튜토리얼](https://github.com/langchain-ai/langchain/blob/master/cookbook/self_query_hotel_search.ipynb)
+- [Query Constructor 커스터마이징 가이드](https://python.langchain.com/docs/how_to/query_constructing_filters/)
+
+## 요약
+
+`SelfQueryRetriever`는 메타데이터 기반 필터링과 의미적 검색을 결합한 강력한 도구이다. 초기 메타데이터 설계와 `AttributeInfo` 정의에 투자하면, 사용자가 자연어로 복잡한 조건 검색을 수행할 수 있는 시스템을 구축할 수 있다. 특히 전자상거래, 문서 관리, 콘텐츠 추천 등 구조화된 메타데이터를 가진 도메인에서 높은 검색 정확도를 제공한다.
 

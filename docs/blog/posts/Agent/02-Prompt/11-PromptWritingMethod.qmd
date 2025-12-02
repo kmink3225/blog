@@ -1,0 +1,414 @@
+---
+title: "Prompt Design - 도메인별 실전 적용"
+subtitle: 데이터 사이언스, 거버넌스, 도메인 특화 프롬프트 엔지니어링
+description: |
+  프롬프트 엔지니어링의 실무 활용 사례 중심.
+  (1) 탐색적 데이터 분석(EDA)을 위한 구조화된 프롬프트와 Python 구현 예시,
+  (2) 데이터 거버넌스 및 표준 용어화: DAMA-DMBOK, ISO/IEC 11179 기반 메타데이터 관리,
+  (3) RAG 기반 도메인 특화 추천 시스템(PCR 진단 도메인 예시),
+  (4) 향후 발전 방향(멀티모달, 자동 최적화, 에이전트 워크플로)을 다룬다.
+  각 섹션은 실행 가능한 코드, JSON 출력 사례, 국제 표준 참조를 포함한다.
+categories:
+  - Prompt Engineering
+  - Domain Applications
+  - Data Governance
+  - RAG
+author: Kwangmin Kim
+date: 01/17/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: false
+draft: False
+---
+
+# Prompt Design
+
+## 도메인별 실전 적용 (Domain-Specific Applications)
+
+### 데이터 사이언스 & 분석
+
+#### 탐색적 데이터 분석 (EDA)
+
+**프롬프트의 역할**: EDA는 순차적 단계(structure → statistics → anomaly → distribution)의 조합이므로, 명확한 분석 단계(analysis_steps) 지정이 필수다. 이를 통해 LLM이 \"할루시네이션\"(미검증 통계치 생성)을 피하고, 실제 계산 가능한 작업들만 수행하도록 제약한다.
+
+**프롬프트 템플릿:**
+```python
+<role>
+너는 10년 경력의 데이터 사이언티스트야.
+통계적 엄밀성과 실무적 통찰을 동시에 제공해.
+</role>
+
+<task>
+첨부된 데이터셋 {dataset_name}에 대해 포괄적인 EDA를 수행해줘.
+</task>
+
+<analysis_steps>
+1. 데이터 구조 파악
+   - 행/열 개수, 데이터 타입, 메모리 사용량
+   
+2. 기술 통계
+   - 수치형: mean, median, std, quartiles, skewness, kurtosis
+   - 범주형: value_counts, cardinality, mode
+   
+3. 결측치 분석
+   - Missing pattern 시각화
+   - 결측 메커니즘 추론 (MCAR vs MAR vs MNAR)
+   
+4. 이상치 탐지
+   - IQR method
+   - Z-score (|z| > 3)
+   - Isolation Forest
+   
+5. 변수 간 관계
+   - 수치형-수치형: Pearson/Spearman correlation
+   - 범주형-범주형: Chi-square test
+   - 범주형-수치형: ANOVA
+   
+6. 분포 분석
+   - Normality test (Shapiro-Wilk)
+   - 분포 fitting (scipy.stats)
+</analysis_steps>
+
+<output_format>
+## 1. 데이터 개요
+[표 형식]
+
+## 2. 주요 발견사항 (Top 5)
+[번호 매겨 설명]
+
+## 3. 잠재적 문제점
+[우선순위 정렬]
+
+## 4. 추천 전처리 단계
+[실행 가능한 코드 포함]
+
+## 5. 시각화
+[matplotlib/seaborn 코드]
+</output_format>
+
+<constraints>
+- 모든 주장은 통계적 근거 제시
+- p-value < 0.05 기준
+- 시각화는 color-blind friendly palette 사용
+- 코드는 PEP 8 준수
+</constraints>
+```
+
+**실제 출력 예시:**
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+
+# 1. 데이터 로드
+df = pd.read_csv('sales_data.csv')
+
+# 2. 기술 통계
+print(df.describe())
+print(f"Skewness:\n{df.skew()}")
+print(f"Kurtosis:\n{df.kurtosis()}")
+
+# 3. 결측치 히트맵
+plt.figure(figsize=(10, 6))
+sns.heatmap(df.isnull(), cbar=False, cmap='viridis')
+plt.title('Missing Value Pattern')
+
+# 4. 이상치 탐지 (IQR)
+Q1 = df.quantile(0.25)
+Q3 = df.quantile(0.75)
+IQR = Q3 - Q1
+outliers = ((df < (Q1 - 1.5 * IQR)) | (df > (Q3 + 1.5 * IQR))).sum()
+print(f"Outliers per column:\n{outliers}")
+
+# 5. 상관관계 매트릭스
+corr_matrix = df.corr()
+plt.figure(figsize=(12, 8))
+sns.heatmap(corr_matrix, annot=True, fmt='.2f', 
+            cmap='coolwarm', center=0)
+plt.title('Correlation Matrix')
+
+# 6. 정규성 검정
+for col in df.select_dtypes(include=[np.number]).columns:
+    stat, p = stats.shapiro(df[col].dropna())
+    print(f"{col}: Shapiro-Wilk p-value = {p:.4f}")
+    if p < 0.05:
+        print(f"  → Non-normal distribution (reject H0)")
+```
+
+### 데이터 거버넌스 & 표준화
+
+#### 데이터 표준 용어 생성
+
+**표준화의 필요성**: 같은 개념을 다양한 비즈니스 용어로 표현하면(\"총매출액\", \"판매액\", \"순이익 전 수익\" 등), 데이터 통합 시 혼란이 발생한다. DAMA-DMBOK 프레임워크와 ISO/IEC 11179 메타데이터 표준을 따르면, 한국어 이름(logical name), 영문명(English name), 물리적 이름(physical name)이 1:1:1로 대응되어, 데이터 거버넌스 추적 가능성(traceability)이 보장된다.
+
+**프롬프트 (DAMA-DMBOK 기반):**
+
+```xml
+<role>
+너는 데이터 거버넌스 전문가야.
+DAMA-DMBOK 2.0 프레임워크를 따르고,
+ISO/IEC 11179 메타데이터 표준을 준수해.
+</role>
+
+<task>
+비즈니스 용어를 표준 데이터 용어로 변환해줘.
+</task>
+
+<input>
+비즈니스 용어: "고객이 최근 3개월간 구매한 총 금액"
+도메인: E-commerce
+</input>
+
+<standardization_rules>
+1. 3-tier 구조 적용
+   - 표준 단어 (Standard Word)
+   - 표준 도메인 (Standard Domain)
+   - 표준 용어 (Standard Term)
+
+2. 명명 규칙
+   - CamelCase for logical names
+   - snake_case for physical names
+   - 한글명은 조사 제거
+
+3. 메타데이터 항목 (ISO/IEC 11179)
+   - 식별자 (Identifier)
+   - 이름 (Name)
+   - 정의 (Definition)
+   - 데이터 타입 (Data Type)
+   - 형식 (Format)
+   - 허용값 (Permissible Values)
+   - 비즈니스 규칙 (Business Rules)
+</standardization_rules>
+
+<output_format>
+{
+  "logical_name_kr": "",
+  "logical_name_en": "",
+  "physical_name": "",
+  "definition": "",
+  "data_type": "",
+  "format": "",
+  "business_rule": "",
+  "domain": "",
+  "standard_words": [],
+  "related_terms": []
+}
+</output_format>
+```
+
+**출력 예시:**
+```json
+{
+  "logical_name_kr": "고객최근3개월구매금액",
+  "logical_name_en": "CustomerRecent3MonthPurchaseAmount",
+  "physical_name": "cust_rcnt_3mon_prchs_amt",
+  "definition": "특정 고객이 현재 시점 기준 최근 3개월(90일) 동안 구매한 상품 및 서비스의 총 금액(부가세 포함)",
+  "data_type": "DECIMAL(15,2)",
+  "format": "999,999,999,999.99",
+  "business_rule": [
+    "취소/환불 건은 제외",
+    "부분 환불 시 환불 금액 차감",
+    "배송비 포함",
+    "쿠폰 할인 후 실결제 금액 기준"
+  ],
+  "domain": "Sales",
+  "standard_words": [
+    "고객(Customer)",
+    "최근(Recent)",
+    "개월(Month)",
+    "구매(Purchase)",
+    "금액(Amount)"
+  ],
+  "related_terms": [
+    "고객생애가치(CustomerLifetimeValue)",
+    "구매빈도(PurchaseFrequency)",
+    "평균구매금액(AveragePurchaseAmount)"
+  ],
+  "data_quality_rules": {
+    "completeness": "NOT NULL",
+    "validity": ">= 0",
+    "consistency": "= SUM(order_amount) WHERE order_date BETWEEN CURRENT_DATE - 90 AND CURRENT_DATE"
+  },
+  "steward": "영업팀 데이터 스튜어드",
+  "last_updated": "2025-01-15",
+  "version": "1.2"
+}
+```
+
+#### RAG 기반 표준 용어 추천 시스템
+
+**시스템 아키텍처 및 각 단계의 의의:**
+```
+사용자 질의 (자연어)
+    ↓
+1. 질의 임베딩 (sentence-transformers)
+   → 사용자의 비정형 입력을 벡터 공간으로 변환
+    ↓
+2. Vector DB 검색 (FAISS/Pinecone)
+   - 표준 용어 사전: 조직에서 승인된 공식 용어들
+   - 과거 승인된 용어: 이전 표준화 이력 (일관성 유지)
+   - 도메인 지식베이스: 산업 표준 (ISO, WHO, CLSI 등)
+   → 유사한 기존 용어들을 검색하여, LLM의 할루시네이션 방지
+    ↓
+3. Top-k 유사 용어 검색 (k=3~5)
+   → 동일 개념의 다양한 표현 형태 제시 (유사도 순 정렬)
+    ↓
+4. LLM 컨텍스트 구성 (Few-shot Prompting)
+   → 검색된 용어들과 정의, 관련 표준을 프롬프트에 포함
+   → LLM이 기존 맥락을 활용하여 최적 선택 가능
+    ↓
+5. 표준화된 추천 생성
+   → 3가지 후보 제시 + 각각의 유사도/근거 제공
+   → 최종 선택의 신뢰도(confidence) 명시
+```
+
+**RAG의 효과**: 순수 LLM만 사용하면 \"새로운 용어\"를 임의로 생성할 위험이 있으나(hallucination), 기존 데이터베이스를 먼저 검색하고 그것을 기반으로 추천하므로, 조직의 표준화 일관성이 보장된다.
+
+**프롬프트:**
+```xml
+<context>
+{retrieved_similar_terms}
+
+예시 1:
+입력: "매출액"
+표준 용어: "판매금액 (SalesAmount)"
+정의: "상품 또는 서비스의 판매로 인해 발생한 수익"
+
+예시 2:
+입력: "회원 번호"
+표준 용어: "고객식별자 (CustomerIdentifier)"
+정의: "고객을 고유하게 식별하는 코드"
+
+예시 3:
+입력: "주문일자"
+표준 용어: "주문일시 (OrderDateTime)"
+정의: "고객이 주문을 완료한 날짜와 시간"
+</context>
+
+<user_input>
+{domain_expert_description}
+
+"코로나 검사에서 양성으로 나온 사람 수"
+</user_input>
+
+<task>
+위 맥락과 예시를 참고하여, 사용자 입력을 표준 데이터 용어로 변환해줘.
+Seegene의 PCR 진단 도메인 지식을 적용해.
+</task>
+
+<output_requirements>
+1. 3가지 표준 용어 후보 제시
+2. 각 후보에 대해:
+   - 표준명 (한글/영문)
+   - 정의
+   - 유사도 점수 (0-100%)
+   - 선택 근거
+3. 최종 추천 1개 선정 및 이유
+</output_requirements>
+```
+
+**출력:**
+```json
+{
+  "candidates": [
+    {
+      "rank": 1,
+      "logical_name_kr": "양성검출건수",
+      "logical_name_en": "PositiveDetectionCount",
+      "physical_name": "pos_detc_cnt",
+      "definition": "PCR 검사 결과 SARS-CoV-2 바이러스가 검출된(Ct값이 기준치 이하인) 검체의 수",
+      "similarity_score": 0.94,
+      "rationale": "도메인 표준 용어 '검출(Detection)'과 '건수(Count)' 사용. 의료 도메인에서 '양성'보다 '검출'이 더 정확한 표현.",
+      "related_standards": ["ISO 15189", "CLSI GP19"]
+    },
+    {
+      "rank": 2,
+      "logical_name_kr": "확진자수",
+      "logical_name_en": "ConfirmedCaseCount",
+      "physical_name": "cnfm_case_cnt",
+      "definition": "PCR 검사에서 양성 판정을 받은 사람의 수",
+      "similarity_score": 0.87,
+      "rationale": "일반적인 역학 조사 용어. 단, Seegene는 진단기기 회사이므로 '확진자'보다 '검출'이 적합.",
+      "related_standards": ["WHO ICD-10"]
+    },
+    {
+      "rank": 3,
+      "logical_name_kr": "양성반응수",
+      "logical_name_en": "PositiveResponseCount",
+      "physical_name": "pos_rspn_cnt",
+      "definition": "검사 결과 양성으로 나타난 반응의 수",
+      "similarity_score": 0.81,
+      "rationale": "'반응(Response)'은 화학적 관점. PCR은 분자진단이므로 '검출'이 더 적합.",
+      "related_standards": []
+    }
+  ],
+  "recommendation": {
+    "selected": "양성검출건수 (PositiveDetectionCount)",
+    "reason": "Seegene의 PCR 진단 도메인 특성상, '검출(Detection)'이 가장 정확한 표현. 국제 표준(ISO 15189)과도 일치.",
+    "confidence": 0.94
+  },
+  "metadata": {
+    "embedding_model": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+    "retrieved_docs": 12,
+    "processing_time_ms": 340
+  }
+}
+```
+
+## 향후 발전 방향
+
+**1. Multimodal Prompting (멀티모달 프롬프트)**
+- 텍스트 + 이미지 + 오디오 + 비디오 통합 프롬프트
+- **예시**: "이 제품 이미지를 분석하고, 첨부된 고객 리뷰를 종합하여 개선점을 제시해줘"
+- **과제**: 모달 간 상호작용 최적화, 비용 관리
+
+**2. Prompt Optimization Algorithms (자동 프롬프트 최적화)**
+- **DSPy (Stanford)**: 프롬프트를 자동으로 최적화하는 프레임워크
+- **Gradient-based Prompt Tuning**: 연속 공간에서 프롬프트 최적화
+- **진화 알고리즘**: 유전 알고리즘으로 프롬프트 진화
+
+**3. Agentic Workflows (에이전트 워크플로)**
+- 여러 LLM이 협력하여 복잡한 태스크 수행
+- **예시**: 리서치 에이전트 + 분석 에이전트 + 작성 에이전트
+- **LangGraph, AutoGen** 등 프레임워크 활용
+
+**4. Domain-Specific Prompt Libraries (도메인 특화 프롬프트 라이브러리)**
+- 의료, 법률, 금융 등 전문 도메인별 프롬프트 표준화
+- **Kwangmin의 context**: Data Governance, PCR 진단 도메인 특화 프롬프트 체계
+
+## 참고문헌 (References)
+
+### 핵심 논문
+
+1. **Wei, J., Wang, X., Schuurmans, D., et al. (2022)**. "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models." *NeurIPS 2022*. [arXiv:2201.11903](https://arxiv.org/abs/2201.11903)
+   - CoT의 이론적 기초 및 실증 연구
+
+2. **Wang, X., Wei, J., Schuurmans, D., et al. (2022)**. "Self-Consistency Improves Chain of Thought Reasoning in Language Models." *ICLR 2023*. [arXiv:2203.11171](https://arxiv.org/abs/2203.11171)
+   - Self-Consistency 기법의 효과 검증
+
+3. **Yao, S., Yu, D., Zhao, J., et al. (2023)**. "Tree of Thoughts: Deliberate Problem Solving with Large Language Models." *NeurIPS 2023*. [arXiv:2305.10601](https://arxiv.org/abs/2305.10601)
+   - Tree-of-Thoughts 알고리즘
+
+4. **Lewis, P., Perez, E., Piktus, A., et al. (2020)**. "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks." *NeurIPS 2020*. [arXiv:2005.11401](https://arxiv.org/abs/2005.11401)
+   - RAG 아키텍처의 기초
+
+5. **Gao, L., Madaan, A., Zhou, S., et al. (2022)**. "PAL: Program-aided Language Models." *ICML 2023*. [arXiv:2211.10435](https://arxiv.org/abs/2211.10435)
+   - 코드 기반 프롬프트 접근법
+
+6. **Bai, Y., Kadavath, S., Kundu, S., et al. (2022)**. "Constitutional AI: Harmlessness from AI Feedback." *Anthropic Technical Report*. [arXiv:2212.08073](https://arxiv.org/abs/2212.08073)
+   - Anthropic의 안전성 연구
+
+### 추가 자료
+
+7. **OpenAI (2023)**. "GPT-4 Technical Report." [arXiv:2303.08774](https://arxiv.org/abs/2303.08774)
+
+8. **Google (2023)**. "Gemini: A Family of Highly Capable Multimodal Models." [arXiv:2312.11805](https://arxiv.org/abs/2312.11805)
+
+9. **Anthropic (2024)**. "Mapping the Mind of a Large Language Model." [Anthropic Blog](https://www.anthropic.com/research/mapping-mind-language-model)
+
+10. **Perez, F., & Ribeiro, I. (2022)**. "Ignore Previous Prompt: Attack Techniques For Language Models." *arXiv preprint*. [arXiv:2211.09527](https://arxiv.org/abs/2211.09527)
