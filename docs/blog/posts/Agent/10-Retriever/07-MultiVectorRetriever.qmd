@@ -21,1075 +21,1076 @@ execute:
     eval: false
 ---
 
-# MultiVectorRetriever 개요
 
-## 핵심 개념
+# MultiVectorRetriever 개요  
 
-**MultiVectorRetriever**는 단일 문서에 대해 여러 벡터를 생성하여 다양한 관점에서 검색할 수 있도록 도와주는 고급 검색 시스템이다.
+## 핵심 개념  
 
-### 기본 아키텍처: "DocStore + VectorStore" 이중 구조
+**MultiVectorRetriever**는 단일 문서에 대해 여러 벡터를 생성하여 다양한 관점에서 검색할 수 있도록 도와주는 고급 검색 시스템이다.  
 
-이름에서 오해를 사수 있는 부분을 명확히 하자. **"다중 벡터저장소"**는 여러 개의 벡터 데이터베이스를 운영한다는 의미가 아니다. 실제로는 다음 두 가지 데이터 저장소를 함께 운영한다:
+### 기본 아키텍처: "DocStore + VectorStore" 이중 구조  
 
-1. **DocStore**: 원본 문서(규모가 큰 데이터)를 저장하는 공간
-2. **VectorStore**: 처리된 벡터 임베딩을 저장하는 공간
+이름에서 오해를 사수 있는 부분을 명확히 하자. **"다중 벡터저장소"**는 여러 개의 벡터 데이터베이스를 운영한다는 의미가 아니다. 실제로는 다음 두 가지 데이터 저장소를 함께 운영한다:  
 
-### 왜 필요한가?
+1. **DocStore**: 원본 문서(규모가 큰 데이터)를 저장하는 공간  
+2. **VectorStore**: 처리된 벡터 임베딩을 저장하는 공간  
 
-**계층적 맥락 보존 문제**
+### 왜 필요한가?  
 
-전통적인 RAG 시스템에서 A 페이지가 1, 2, 3번 chunk로 분할되었을 때:
-- 가장 유사도가 높은 단일 chunk만 반환됨 (예: 2번 chunk)
-- 2, 3번 chunk에도 질문과 유사한 내용이 들어있을 수 있음
-- **문제**: 제한된 문맥 정보로 인해 LLM이 부정확한 답변을 생성
+**계층적 맥락 보존 문제**  
 
-**MultiVectorRetriever의 해결책**
+전통적인 RAG 시스템에서 A 페이지가 1, 2, 3번 chunk로 분할되었을 때:  
+- 가장 유사도가 높은 단일 chunk만 반환됨 (예: 2번 chunk)  
+- 2, 3번 chunk에도 질문과 유사한 내용이 들어있을 수 있음  
+- **문제**: 제한된 문맥 정보로 인해 LLM이 부정확한 답변을 생성  
 
-단일 chunk만 반환하는 대신, 질문 쿼리의 내용이 모두 담긴 **A 페이지 전체**를 검색 반환한다. 이를 통해:
-- LLM이 "Lost in the Middle" 리스크를 간접적으로 회피할 수 있음
-- 더 정확하고 포괄적인 답변 생성 가능
-- 맥락을 유지하면서도 세밀한 검색 가능
+**MultiVectorRetriever의 해결책**  
 
-## ParentDocumentRetriever와의 차이점
+단일 chunk만 반환하는 대신, 질문 쿼리의 내용이 모두 담긴 **A 페이지 전체**를 검색 반환한다. 이를 통해:  
+- LLM이 "Lost in the Middle" 리스크를 간접적으로 회피할 수 있음  
+- 더 정확하고 포괄적인 답변 생성 가능  
+- 맥락을 유지하면서도 세밀한 검색 가능  
 
-**기능적 유사성**
+## ParentDocumentRetriever와의 차이점  
 
-* 두 Retriever 모두 계층적 문서 구조를 사용하지만, MultiVectorRetriever는 **용도적으로 더 세분화된 기능**을 제공한다.
-* 둘 다 "작게 검색 → 크게 반환"
-  * 검색: 작은 청크로 검색 (정밀도 ↑)
-  * 반환: 큰 문서로 반환 (맥락 ↑)
-* 구조도 동일:
-  * VectorStore: 검색용 작은 청크
-  * DocStore: 반환용 큰 문서
-  * ID 매핑으로 연결
+**기능적 유사성**  
 
-**핵심 차이: "작은 청크를 어떻게 만드느냐"**
+* 두 Retriever 모두 계층적 문서 구조를 사용하지만, MultiVectorRetriever는 **용도적으로 더 세분화된 기능**을 제공한다.  
+* 둘 다 "작게 검색 → 크게 반환"  
+  * 검색: 작은 청크로 검색 (정밀도 ↑)  
+  * 반환: 큰 문서로 반환 (맥락 ↑)  
+* 구조도 동일:  
+  * VectorStore: 검색용 작은 청크  
+  * DocStore: 반환용 큰 문서  
+  * ID 매핑으로 연결  
 
-* MultiVectorRetriever는 ParentDocumentRetriever의 일반화 버전이다.
-* ParentDocumentRetriever
-  * 원본 문서를 물리적으로 쪼갬
-  * 큰 문서 (Parent) -(분할)→ 작은 청크1, 청크2, 청크3 (Child)
-  * Child는 Parent의 실제 일부분 (계층적 분할): 단순히 크기만 다르게 쪼갬
-    * `parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000)`
-    * `child_splitter = RecursiveCharacterTextSplitter(chunk_size=400)`
-* MultiVectorRetriever
-  * 원본 문서(Parent)는 그대로 두고, 검색용 "표현(Chunk)"을 별도 생성
-  * child 생성 방식: 요약본 / 가상질문 / 여러 청크 (내용보전)
-  * 큰 문서 (Parent) -(파생)→ 작은 청크1, 청크2, 청크3 (Child) 
-  * 검색용 표현은 원본과 다른 내용일 수 있음
-  * 여러 방법 가능: 요약, 질문 생성, 다중 청크 등
-  * **ID 기반 유연한 매핑 시스템**
-    * 문서 A 페이지에 1, 2, 3 chunk가 있을 때, 각 문서와 chunk에 동일한 ID(예: 'abc')를 부여:
-      - **DocStore**: Parent document → ID 'abc'로 저장
-      - **VectorStore**: Child chunks (1, 2, 3) → 모두 ID 'abc'로 저장
-    * ID로 parent와 child가 강제로 연결되기 때문에 child 문서를 가공 및 변형해도 parent와 연결시킬 수 있다.
-* **ID 기반 유연한 매핑 시스템**을 이용한 MultiVectorRetriever의 유연한 반환 전략
-  * chunk 1, 2, 3 중 하나가 검색되었을 때, ID 'abc'를 key로 사용하여 다음 옵션들을 선택적으로 제어 가능:
-    1. **Parent Document만 반환**: 전체 맥락 제공
-    2. **Child Chunk만 반환**: 정밀한 정보만 제공
-    3. **둘 다 반환**: 세밀한 정보 + 전체 맥락 동시 제공
+**핵심 차이: "작은 청크를 어떻게 만드느냐"**  
 
-| | ParentDocumentRetriever | MultiVectorRetriever |
-|---|---|---|
-| **검색용 청크** | 원본의 일부 (물리적 분할) | 원본의 파생 표현 (요약/질문 등) |
-| **청크와 원본 관계** | 포함 관계 | 독립적 (다른 내용 가능) |
-| **유연성** | 낮음 (분할만) | 높음 (요약/질문/다중 방식) |
-| **사용 시기** | 단순한 계층 구조 | 검색 품질 최적화 필요 |
+* MultiVectorRetriever는 ParentDocumentRetriever의 일반화 버전이다.  
+* ParentDocumentRetriever  
+  * 원본 문서를 물리적으로 쪼갬  
+  * 큰 문서 (Parent) -(분할)→ 작은 청크1, 청크2, 청크3 (Child)  
+  * Child는 Parent의 실제 일부분 (계층적 분할): 단순히 크기만 다르게 쪼갬  
+    * `parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000)`  
+    * `child_splitter = RecursiveCharacterTextSplitter(chunk_size=400)`  
+* MultiVectorRetriever  
+  * 원본 문서(Parent)는 그대로 두고, 검색용 "표현(Chunk)"을 별도 생성  
+  * child 생성 방식: 요약본 / 가상질문 / 여러 청크 (내용보전)  
+  * 큰 문서 (Parent) -(파생)→ 작은 청크1, 청크2, 청크3 (Child)   
+  * 검색용 표현은 원본과 다른 내용일 수 있음  
+  * 여러 방법 가능: 요약, 질문 생성, 다중 청크 등  
+  * **ID 기반 유연한 매핑 시스템**  
+    * 문서 A 페이지에 1, 2, 3 chunk가 있을 때, 각 문서와 chunk에 동일한 ID(예: 'abc')를 부여:  
+      - **DocStore**: Parent document → ID 'abc'로 저장  
+      - **VectorStore**: Child chunks (1, 2, 3) → 모두 ID 'abc'로 저장  
+    * ID로 parent와 child가 강제로 연결되기 때문에 child 문서를 가공 및 변형해도 parent와 연결시킬 수 있다.  
+* **ID 기반 유연한 매핑 시스템**을 이용한 MultiVectorRetriever의 유연한 반환 전략  
+  * chunk 1, 2, 3 중 하나가 검색되었을 때, ID 'abc'를 key로 사용하여 다음 옵션들을 선택적으로 제어 가능:  
+    1. **Parent Document만 반환**: 전체 맥락 제공  
+    2. **Child Chunk만 반환**: 정밀한 정보만 제공  
+    3. **둘 다 반환**: 세밀한 정보 + 전체 맥락 동시 제공  
 
-### 예시 비교
+| | ParentDocumentRetriever | MultiVectorRetriever |  
+|---|---|---|  
+| **검색용 청크** | 원본의 일부 (물리적 분할) | 원본의 파생 표현 (요약/질문 등) |  
+| **청크와 원본 관계** | 포함 관계 | 독립적 (다른 내용 가능) |  
+| **유연성** | 낮음 (분할만) | 높음 (요약/질문/다중 방식) |  
+| **사용 시기** | 단순한 계층 구조 | 검색 품질 최적화 필요 |  
 
-**ParentDocumentRetriever:**
+### 예시 비교  
 
-```
-원본: "AI는 인공지능이다. 머신러닝을 사용한다. 딥러닝도 포함된다."
+**ParentDocumentRetriever:**  
 
-Child1: "AI는 인공지능이다."
-Child2: "머신러닝을 사용한다."
-Child3: "딥러닝도 포함된다."
+```  
+원본: "AI는 인공지능이다. 머신러닝을 사용한다. 딥러닝도 포함된다."  
 
-→ Child2로 검색 → 원본 전체 반환
-```
+Child1: "AI는 인공지능이다."  
+Child2: "머신러닝을 사용한다."  
+Child3: "딥러닝도 포함된다."  
 
-**MultiVectorRetriever:**
-```
-원본: "AI는 인공지능이다. 머신러닝을 사용한다. 딥러닝도 포함된다."
+→ Child2로 검색 → 원본 전체 반환  
+```  
 
-요약: "AI와 머신러닝, 딥러닝의 관계 설명"
-가상질문: "AI란 무엇인가? 머신러닝이란?"
+**MultiVectorRetriever:**  
+```  
+원본: "AI는 인공지능이다. 머신러닝을 사용한다. 딥러닝도 포함된다."  
 
-→ 요약/질문으로 검색 → 원본 반환
-```
+요약: "AI와 머신러닝, 딥러닝의 관계 설명"  
+가상질문: "AI란 무엇인가? 머신러닝이란?"  
 
-## 고급 활용 전략
+→ 요약/질문으로 검색 → 원본 반환  
+```  
 
-### 요약 기반 서치 최적화
+## 고급 활용 전략  
 
-- 각 chunk의 **요약본**을 생성하여 VectorStore에 임베딩 데이터로 저장:
-  - Semantic Match 품질 향상: 쿼리와 검색 대상의 추상화 레벨을 맞춰서 semantic match를 개선
-  - 질문자 쿼리와 유사한 요약본을 검색
-  - 해당 요약본에 대응되는 **원본 chunk**를 DocStore에서 호출
-- 예시
-  - 원본 청크: "2023년 11월 8일 삼성전자가 삼성 AI 포럼에서 삼성 가우스를 공개했다. 정규분포 이론을 정립한 수학자 가우스의 이름을 따왔으며, ..."
-  - 사용자 질문 쿼리: "삼성의 AI 제품이 뭐야?"
-  - 문제
-    - 원본에는 날짜, 인명, 기술적 세부사항이 섞여있음
-    - 임베딩이 이런 잡음에 영향받음
-    - 핵심 의미(삼성이 AI 제품을 만들었다)가 희석됨
-  - 해결: 요약본으로 검색
-    - 요약 청크: "삼성전자가 온디바이스 생성 AI 모델 '삼성 가우스'를 공개했으며, 언어·코드·이미지 3개 모델로 구성되어 있다."
-    - 사용자 질문 쿼리: "삼성의 AI 제품이 뭐야?"
-- 요약본 청크 생성 이점
-  - 검색 품질 향상
-  - 의미 밀도 증가: 핵심 정보만 압축되어 있음
-  - 노이즈 제거: 불필요한 세부사항 제거됨 
+### 요약 기반 서치 최적화  
+
+- 각 chunk의 **요약본**을 생성하여 VectorStore에 임베딩 데이터로 저장:  
+  - Semantic Match 품질 향상: 쿼리와 검색 대상의 추상화 레벨을 맞춰서 semantic match를 개선  
+  - 질문자 쿼리와 유사한 요약본을 검색  
+  - 해당 요약본에 대응되는 **원본 chunk**를 DocStore에서 호출  
+- 예시  
+  - 원본 청크: "2023년 11월 8일 삼성전자가 삼성 AI 포럼에서 삼성 가우스를 공개했다. 정규분포 이론을 정립한 수학자 가우스의 이름을 따왔으며, ..."  
+  - 사용자 질문 쿼리: "삼성의 AI 제품이 뭐야?"  
+  - 문제  
+    - 원본에는 날짜, 인명, 기술적 세부사항이 섞여있음  
+    - 임베딩이 이런 잡음에 영향받음  
+    - 핵심 의미(삼성이 AI 제품을 만들었다)가 희석됨  
+  - 해결: 요약본으로 검색  
+    - 요약 청크: "삼성전자가 온디바이스 생성 AI 모델 '삼성 가우스'를 공개했으며, 언어·코드·이미지 3개 모델로 구성되어 있다."  
+    - 사용자 질문 쿼리: "삼성의 AI 제품이 뭐야?"  
+- 요약본 청크 생성 이점  
+  - 검색 품질 향상  
+  - 의미 밀도 증가: 핵심 정보만 압축되어 있음  
+  - 노이즈 제거: 불필요한 세부사항 제거됨   
   - 상화 레벨 맞춤: 쿼리와 semantic 유사도가 더 높음  
-- 요약본 청크 생성 단점
-  - 비용: LLM으로 요약 생성 필요
-  - 시간: 인덱싱 시간 증가
-  - 정보손실: 요약 과정에서 중요한 디테일 누락 가능
-- 언제 사용?
-  - 문서가 길고 세부사항이 많을 때
-  - 사용자 질문이 고수준/추상적일 때
-  - 검색 품질이 비용보다 중요할 때
-- 언제 비추천?
-  - 정확한 수치/날짜가 중요할 때
-  - 문서가 이미 간결할 때
-  - 실시간 검색 속도가 중요할 때
+- 요약본 청크 생성 단점  
+  - 비용: LLM으로 요약 생성 필요  
+  - 시간: 인덱싱 시간 증가  
+  - 정보손실: 요약 과정에서 중요한 디테일 누락 가능  
+- 언제 사용?  
+  - 문서가 길고 세부사항이 많을 때  
+  - 사용자 질문이 고수준/추상적일 때  
+  - 검색 품질이 비용보다 중요할 때  
+- 언제 비추천?  
+  - 정확한 수치/날짜가 중요할 때  
+  - 문서가 이미 간결할 때  
+  - 실시간 검색 속도가 중요할 때  
 
-### 다양한 벡터 생성 전략
+### 다양한 벡터 생성 전략  
 
-LangChain에서는 문서를 다양한 상황에서 효율적으로 쿼리할 수 있는 MultiVectorRetriever를 제공한다. 이 기능을 사용하면 문서를 여러 벡터로 저장하고 관리할 수 있어, 정보 검색의 정확도와 효율성을 대폭 향상시킬 수 있다.
+LangChain에서는 문서를 다양한 상황에서 효율적으로 쿼리할 수 있는 MultiVectorRetriever를 제공한다. 이 기능을 사용하면 문서를 여러 벡터로 저장하고 관리할 수 있어, 정보 검색의 정확도와 효율성을 대폭 향상시킬 수 있다.  
 
-**문서당 여러 벡터 생성 방법:**
+**문서당 여러 벡터 생성 방법:**  
 
-1. **작은 청크 생성**: 문서를 더 작은 단위로 나눈 후, 각 청크에 대해 별도의 임베딩을 생성한다. 이 방식을 사용하면 문서의 특정 부분에 좋 더 세심한 주의를 기울일 수 있다. 이 과정은 `ParentDocumentRetriever`를 통해 구현할 수 있어, 세부 정보에 대한 탐색이 용이해진다.
+1. **작은 청크 생성**: 문서를 더 작은 단위로 나눈 후, 각 청크에 대해 별도의 임베딩을 생성한다. 이 방식을 사용하면 문서의 특정 부분에 좋 더 세심한 주의를 기울일 수 있다. 이 과정은 `ParentDocumentRetriever`를 통해 구현할 수 있어, 세부 정보에 대한 탐색이 용이해진다.  
 
-2. **요약 임베딩**: 각 문서의 요약을 생성하고, 이 요약으로부터 임베딩을 만듭니다. 이 요약 임베딩은 문서의 핵심 내용을 신속하게 파악하는 데 큰 도움이 된다. 문서 전체를 분석하는 대신 핵심적인 요약 부분만을 활용하여 효율성을 극대화할 수 있다.
+2. **요약 임베딩**: 각 문서의 요약을 생성하고, 이 요약으로부터 임베딩을 만듭니다. 이 요약 임베딩은 문서의 핵심 내용을 신속하게 파악하는 데 큰 도움이 된다. 문서 전체를 분석하는 대신 핵심적인 요약 부분만을 활용하여 효율성을 극대화할 수 있다.  
 
-3. **가설 질문 활용**: 각 문서에 대해 적합한 가설 질문을 만들고, 이 질문에 기반한 임베딩을 생성한다. 특정 주제나 내용에 대해 깊이 있는 탐색을 원할 때 이 방법이 유용하다. 가설 질문은 문서의 내용을 다양한 관점에서 접근하게 해주며, 더 광범위한 이해를 가능하게 한다.
+3. **가설 질문 활용**: 각 문서에 대해 적합한 가설 질문을 만들고, 이 질문에 기반한 임베딩을 생성한다. 특정 주제나 내용에 대해 깊이 있는 탐색을 원할 때 이 방법이 유용하다. 가설 질문은 문서의 내용을 다양한 관점에서 접근하게 해주며, 더 광범위한 이해를 가능하게 한다.  
 
-4. **수동 추가 방식**: 사용자가 문서 검색 시 고려해야 할 특정 질문이나 쿼리를 직접 추가할 수 있다. 이 방법을 통해 사용자는 검색 과정에서 보다 세밀한 제어를 할 수 있으며, 자신의 요구 사항에 맞춘 맞춤형 검색이 가능해진다.
-
-
-## 실습에 활용한 문서
-
-소프트웨어정책연구소(SPRi) - 2023년 12월호
-
-- 저자: 유재흥(AI정책연구실 책임연구원), 이지수(AI정책연구실 위촉연구원)
-- 링크: https://spri.kr/posts/view/23669
-- 파일명: `SPRI_AI_Brief_2023년12월호_F.pdf`
-
-**참고**: 위의 파일은 `data` 폴더 내에 다운로드 받으세요
-
-```{python}
-# API 키를 환경변수로 관리하기 위한 설정 파일
-from dotenv import load_dotenv
-
-# API 키 정보 로드
-load_dotenv()
-```
-
-```{python}
-# LangSmith 추적을 설정한다. https://smith.langchain.com
-# !pip install langchain-teddynote
-from langchain_teddynote import logging
-
-# 프로젝트 이름을 입력한다.
-logging.langsmith("CH10-Retriever")
-```
-
-텍스트 파일에서 데이터를 로드하고, 로드된 문서들을 지정된 크기로 분할하는 전처리 과정을 수행한다.
-
-분할된 문서들은 추후 벡터화 및 검색 등의 작업에 사용될 수 있다.
-
-```{python}
-from langchain_community.document_loaders import PyMuPDFLoader
-
-loader = PyMuPDFLoader("data/SPRI_AI_Brief_2023년12월호_F.pdf")
-docs = loader.load()
-print(len(docs))
-```
-
-데이터로부터 로드한 원본 도큐먼트는 `docs` 변수에 담았다.
+4. **수동 추가 방식**: 사용자가 문서 검색 시 고려해야 할 특정 질문이나 쿼리를 직접 추가할 수 있다. 이 방법을 통해 사용자는 검색 과정에서 보다 세밀한 제어를 할 수 있으며, 자신의 요구 사항에 맞춘 맞춤형 검색이 가능해진다.  
 
 
-```
-23
-```
+## 실습에 활용한 문서  
 
-```{python}
-print(docs[5].page_content[:500])
-```
+소프트웨어정책연구소(SPRi) - 2023년 12월호  
 
-```
+- 저자: 유재흥(AI정책연구실 책임연구원), 이지수(AI정책연구실 위촉연구원)  
+- 링크: https://spri.kr/posts/view/23669  
+- 파일명: `SPRI_AI_Brief_2023년12월호_F.pdf`  
+
+**참고**: 위의 파일은 `data` 폴더 내에 다운로드 받으세요  
+
+```{python}  
+# API 키를 환경변수로 관리하기 위한 설정 파일  
+from dotenv import load_dotenv  
+
+# API 키 정보 로드  
+load_dotenv()  
+```  
+
+```{python}  
+# LangSmith 추적을 설정한다. https://smith.langchain.com  
+# !pip install langchain-teddynote  
+from langchain_teddynote import logging  
+
+# 프로젝트 이름을 입력한다.  
+logging.langsmith("CH10-Retriever")  
+```  
+
+텍스트 파일에서 데이터를 로드하고, 로드된 문서들을 지정된 크기로 분할하는 전처리 과정을 수행한다.  
+
+분할된 문서들은 추후 벡터화 및 검색 등의 작업에 사용될 수 있다.  
+
+```{python}  
+from langchain_community.document_loaders import PyMuPDFLoader  
+
+loader = PyMuPDFLoader("data/SPRI_AI_Brief_2023년12월호_F.pdf")  
+docs = loader.load()  
+print(len(docs))  
+```  
+
+데이터로부터 로드한 원본 도큐먼트는 `docs` 변수에 담았다.  
+
+
+```  
+23  
+```  
+
+```{python}  
+print(docs[5].page_content[:500])  
+```  
+
+```  
 1. 정책/법제  
-2. 기업/산업 
-3. 기술/연구 
- 4. 인력/교육
-영국 AI 안전성 정상회의에 참가한 28개국, AI 위험에 공동 대응 선언
-n 영국 블레츨리 파크에서 개최된 AI 안전성 정상회의에 참가한 28개국들이 AI 안전 보장을 
-위한 협력 방안을 담은 블레츨리 선언을 발표
-n 첨단 AI를 개발하는 국가와 기업들은 AI 시스템에 대한 안전 테스트 계획에 합의했으며, 
-영국의 AI 안전 연구소가 전 세계 국가와 협력해 테스트를 주도할 예정 
-KEY Contents
-£ AI 안전성 정상회의 참가국들, 블레츨리 선언 통해 AI 안전 보장을 위한 협력에 합의
-n 2023년 11월 1~2일 영국 블레츨리 파크에서 열린 AI 안전성 정상회의(AI Safety Summit)에 
-참가한 28개국 대표들이 AI 위험 관리를 위한 ‘블레츨리 선언’을 발표 
-∙선언은 AI 안전 보장을 위해 국가, 국제기구, 기업, 시민사회, 학계를 포함한 모든 이해관계자의 협력이 
-중요하다고 강조했으며,
-```
+2. 기업/산업   
+3. 기술/연구   
+ 4. 인력/교육  
+영국 AI 안전성 정상회의에 참가한 28개국, AI 위험에 공동 대응 선언  
+n 영국 블레츨리 파크에서 개최된 AI 안전성 정상회의에 참가한 28개국들이 AI 안전 보장을   
+위한 협력 방안을 담은 블레츨리 선언을 발표  
+n 첨단 AI를 개발하는 국가와 기업들은 AI 시스템에 대한 안전 테스트 계획에 합의했으며,   
+영국의 AI 안전 연구소가 전 세계 국가와 협력해 테스트를 주도할 예정   
+KEY Contents  
+£ AI 안전성 정상회의 참가국들, 블레츨리 선언 통해 AI 안전 보장을 위한 협력에 합의  
+n 2023년 11월 1~2일 영국 블레츨리 파크에서 열린 AI 안전성 정상회의(AI Safety Summit)에   
+참가한 28개국 대표들이 AI 위험 관리를 위한 ‘블레츨리 선언’을 발표   
+∙선언은 AI 안전 보장을 위해 국가, 국제기구, 기업, 시민사회, 학계를 포함한 모든 이해관계자의 협력이   
+중요하다고 강조했으며,  
+```  
 
-* pdf가 23페이지로 구성되어 있어 23이 반환됨 pdf loader는 패이지 단위로 로드가 된다.
+* pdf가 23페이지로 구성되어 있어 23이 반환됨 pdf loader는 패이지 단위로 로드가 된다.  
 
-## Chunk + 원본 문서 검색
+## Chunk + 원본 문서 검색  
 
-* 대용량 정보를 검색하는 경우, 더 작은 단위로 정보를 임베딩하는 것이 유용할 수 있다.
-* `MultiVectorRetriever`를 통해 문서를 여러 벡터로 저장하고 관리할 수 있다.
-* `docstore`에 원본 문서를 저장하고, `vectorstore`에 임베딩된 문서를 저장한다. 
+* 대용량 정보를 검색하는 경우, 더 작은 단위로 정보를 임베딩하는 것이 유용할 수 있다.  
+* `MultiVectorRetriever`를 통해 문서를 여러 벡터로 저장하고 관리할 수 있다.  
+* `docstore`에 원본 문서를 저장하고, `vectorstore`에 임베딩된 문서를 저장한다.   
 
-이로써 문서를 더 작은 단위로 나누어 더 정확한 검색이 가능해진다. 때에 따라서는 원본 문서의 내용을 조회할 수 있다.
+이로써 문서를 더 작은 단위로 나누어 더 정확한 검색이 가능해진다. 때에 따라서는 원본 문서의 내용을 조회할 수 있다.  
 
-```{python}
-# 자식 청크를 인덱싱하는 데 사용할 벡터 저장소
-import uuid
-from langchain.storage import InMemoryStore
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.retrievers.multi_vector import MultiVectorRetriever
+```{python}  
+# 자식 청크를 인덱싱하는 데 사용할 벡터 저장소  
+import uuid  
+from langchain.storage import InMemoryStore  
+from langchain_chroma import Chroma  
+from langchain_openai import OpenAIEmbeddings  
+from langchain_text_splitters import RecursiveCharacterTextSplitter  
+from langchain.retrievers.multi_vector import MultiVectorRetriever  
 
-vectorstore = Chroma(
-    collection_name="small_bigger_chunks",
-    embedding_function=OpenAIEmbeddings(model="text-embedding-3-small"),
-)
-# 부모 문서의 저장소 계층
-store = InMemoryStore()
+vectorstore = Chroma(  
+    collection_name="small_bigger_chunks",  
+    embedding_function=OpenAIEmbeddings(model="text-embedding-3-small"),  
+)  
+# 부모 문서의 저장소 계층  
+store = InMemoryStore()  
 
-id_key = "doc_id"
+id_key = "doc_id"  
 
-# 검색기 (시작 시 비어 있음)
-retriever = MultiVectorRetriever(
-    vectorstore=vectorstore,
-    byte_store=store,
-    id_key=id_key,
-)
+# 검색기 (시작 시 비어 있음)  
+retriever = MultiVectorRetriever(  
+    vectorstore=vectorstore,  
+    byte_store=store,  
+    id_key=id_key,  
+)  
 
-# 문서 ID를 생성합니다.
-doc_ids = [str(uuid.uuid4()) for _ in docs]
+# 문서 ID를 생성합니다.  
+doc_ids = [str(uuid.uuid4()) for _ in docs]  
 
-# 두개의 생성된 id를 확인한다.
-doc_ids
-```
+# 두개의 생성된 id를 확인한다.  
+doc_ids  
+```  
 
-```
-['ff65f8d8-376d-47d2-bbc0-eae1f7e3c381', 'e18fd86b-f01a-445f-bf31-eb8d16259241', 'f099589b-066f-4827-9679-3bf2d2ec28d2', '834e63d6-0dd9-4bfb-8383-ca6a06d731ef', '5a33bffb-ae85-402e-a4bf-81ab376d7744', '319396d0-cc7d-41f9-826c-71bccc8dade6', '9a38995c-94b7-4963-9605-5d27f868b5e7', 'bc32292c-0d19-452f-b970-1074c43fc864', '48de377c-4693-407b-93e6-3f0ea44b5009', '9e27fff9-15d3-4754-bb26-00779158d528', 'd73a5aef-251b-4a30-aadb-2dc973ef1607', '56535934-2a23-4e3e-b6d2-79121dd93005', 'a535c103-0cf8-4c46-b5ea-90c34aad90bc', '48aac7ed-f704-4d65-90bd-3b5b18adc127', '63b42edf-3546-4257-9046-ff3f4687a217', '749f6239-fec3-4893-8959-f641d6d551b3', '4a08aa0e-4e38-460d-90dc-34e3faca6784', '91cfa69e-7ca7-44f9-8795-bc710622af17', '817e7519-3853-450c-bb05-b3f6763d9cd4', '00e3e534-762a-477b-adf4-3d1dbe67b656', '03171c52-bf3d-4d27-bf93-bb2da4ba6d87', 'df37aeb5-0bfd-4fb1-960d-aad8a5ad11cd', '3cf6570c-25c8-4b28-82ec-6804026e844e']
-```
+```  
+['ff65f8d8-376d-47d2-bbc0-eae1f7e3c381', 'e18fd86b-f01a-445f-bf31-eb8d16259241', 'f099589b-066f-4827-9679-3bf2d2ec28d2', '834e63d6-0dd9-4bfb-8383-ca6a06d731ef', '5a33bffb-ae85-402e-a4bf-81ab376d7744', '319396d0-cc7d-41f9-826c-71bccc8dade6', '9a38995c-94b7-4963-9605-5d27f868b5e7', 'bc32292c-0d19-452f-b970-1074c43fc864', '48de377c-4693-407b-93e6-3f0ea44b5009', '9e27fff9-15d3-4754-bb26-00779158d528', 'd73a5aef-251b-4a30-aadb-2dc973ef1607', '56535934-2a23-4e3e-b6d2-79121dd93005', 'a535c103-0cf8-4c46-b5ea-90c34aad90bc', '48aac7ed-f704-4d65-90bd-3b5b18adc127', '63b42edf-3546-4257-9046-ff3f4687a217', '749f6239-fec3-4893-8959-f641d6d551b3', '4a08aa0e-4e38-460d-90dc-34e3faca6784', '91cfa69e-7ca7-44f9-8795-bc710622af17', '817e7519-3853-450c-bb05-b3f6763d9cd4', '00e3e534-762a-477b-adf4-3d1dbe67b656', '03171c52-bf3d-4d27-bf93-bb2da4ba6d87', 'df37aeb5-0bfd-4fb1-960d-aad8a5ad11cd', '3cf6570c-25c8-4b28-82ec-6804026e844e']  
+```  
 
-* 총 23개 (parent document 수)의 uid가 생성됨
-* 여기서 큰 청크로 분할하기 위한 `parent_text_splitter`
-* 더 작은 청크로 분할하기 위한 `child_text_splitter`를 정의한다.
+* 총 23개 (parent document 수)의 uid가 생성됨  
+* 여기서 큰 청크로 분할하기 위한 `parent_text_splitter`  
+* 더 작은 청크로 분할하기 위한 `child_text_splitter`를 정의한다.  
 
-```{python}
-# RecursiveCharacterTextSplitter 객체를 생성한다.
-parent_text_splitter = RecursiveCharacterTextSplitter(chunk_size=600)
+```{python}  
+# RecursiveCharacterTextSplitter 객체를 생성한다.  
+parent_text_splitter = RecursiveCharacterTextSplitter(chunk_size=600)  
 
-# 더 작은 청크를 생성하는 데 사용할 분할기
-child_text_splitter = RecursiveCharacterTextSplitter(chunk_size=200)
-```
+# 더 작은 청크를 생성하는 데 사용할 분할기  
+child_text_splitter = RecursiveCharacterTextSplitter(chunk_size=200)  
+```  
 
-더 큰 Chunk인 Parent 문서를 생성한다.
+더 큰 Chunk인 Parent 문서를 생성한다.  
 
-```{python}
-parent_docs = []
+```{python}  
+parent_docs = []  
 
-for i, doc in enumerate(docs):
-    # 현재 문서의 ID를 가져옵니다.
-    _id = doc_ids[i]
-    # 현재 문서를 하위 문서로 분할
-    parent_doc = parent_text_splitter.split_documents([doc])
+for i, doc in enumerate(docs):  
+    # 현재 문서의 ID를 가져옵니다.  
+    _id = doc_ids[i]  
+    # 현재 문서를 하위 문서로 분할  
+    parent_doc = parent_text_splitter.split_documents([doc])  
 
-    for _doc in parent_doc:
-        # metadata에 문서 ID 를 저장
-        _doc.metadata[id_key] = _id
-    parent_docs.extend(parent_doc)
-```
+    for _doc in parent_doc:  
+        # metadata에 문서 ID 를 저장  
+        _doc.metadata[id_key] = _id  
+    parent_docs.extend(parent_doc)  
+```  
 
-* `parent_docs`에 기입된 `doc_id`를 확인한다.
-* `doc`에는 parent doc(page단위 내용)이 담기고
-* `parent_docs`에는 split chunk들이 담긴다.
-* 위의 코드 청크가 parent doc과 split chunk들에게 동일한 id를 부여하는 기능을 한다.
-
-
-```{python}
-child_docs = []
-for i, doc in enumerate(docs):
-    # 현재 문서의 ID를 가져옵니다.
-    _id = doc_ids[i]
-    # 현재 문서를 하위 문서로 분할
-    child_doc = child_text_splitter.split_documents([doc])
-    for _doc in child_doc:
-        # metadata에 문서 ID 를 저장
-        _doc.metadata[id_key] = _id
-    child_docs.extend(child_doc)
-```
-
-* `child_docs`에 기입된 `doc_id`를 확인한다.
-* 상대적으로 더 작은 Chunk인 Child 문서를 생성한다.
-
-```{python}
-# 생성된 Child 문서의 메타데이터를 확인한다.
-child_docs[0].metadata
-```
-
-{'source': 'data/SPRI_AI_Brief_2023년12월호_F.pdf', 'file_path': 'data/SPRI_AI_Brief_2023년12월호_F.pdf', 'page': 0, 'total_pages': 23, 'format': 'PDF 1.4', 'title': '', 'author': 'dj', 'subject': '', 'keywords': '', 'creator': 'Hwp 2018 10.0.0.13462', 'producer': 'Hancom PDF 1.3.0.542', 'creationDate': "D:20231208132838+09'00'", 'modDate': "D:20231208132838+09'00'", 'trapped': '', 'doc_id': 'ff65f8d8-376d-47d2-bbc0-eae1f7e3c381'}
-
-각각 분할된 청크의 수를 확인한다.
-
-```{python}
-print(f"분할된 parent_docs의 개수: {len(parent_docs)}")
-print(f"분할된 child_docs의 개수: {len(child_docs)}")
-```
-
-```
-분할된 parent_docs의 개수: 74
-분할된 child_docs의 개수: 443
-```
-
-* 보통 표준적인 MultiVectorRetriever 사용법
-
-```
-# 정상적인 방법
-retriever.vectorstore.add_documents(child_docs)   # 검색용: 작은 청크만
-retriever.docstore.mset(zip(doc_ids, parent_docs)) # 반환용: 큰 청크
-
-# VectorStore: child_docs (443개) - 검색에 사용
-# DocStore: parent_docs (74개) - 반환에 사용
-```
-
-* 하지만, 더 유연하게 구성을 가져갈 수도 있다.
-  * 벡터저장소엔 parent_docs와 child_docs를 저장하고
-  * docstore엔 문서 원본을 저장한다.
-  * 벡터저장소에 새롭게 생성한 작게 쪼개진 하위문서 집합을 추가한다.
-  * 다음으로는 상위 문서는 생성한 UUID와 맵핑하여 `docstore`에 추가한다.
-  * `mset()` 메소드를 통해 문서 ID와 문서 내용을 key-value 쌍으로 문서 저장소에 저장한다.
-
-```{python}
-# 벡터 저장소에 parent + child 문서를 추가
-retriever.vectorstore.add_documents(parent_docs)
-retriever.vectorstore.add_documents(child_docs)
-
-# docstore 에 원본 문서를 저장
-retriever.docstore.mset(list(zip(doc_ids, docs)))
-```
-
-유사도 검색을 수행한다. 가장 유사도가 높은 첫 번째 문서 조각을 출력한다.
-
-여기서 `retriever.vectorstore.similarity_search` 메소드는 child + parent 문서 chunk 내에서 검색을 수행한다.
-
-```{python}
-# vectorstore의 유사도 검색을 수행한다. 
-relevant_chunks = retriever.vectorstore.similarity_search(
-    "삼성전자가 만든 생성형 AI 의 이름은?"
-)
-print(f"검색된 문서의 개수: {len(relevant_chunks)}")
-```
-
-```
-검색된 문서의 개수: 4
-```
-
-* 잘게 쪼개진 chunk들에서 검색을 하고 싶으면 `retriever.vectorstore` 에서 유사도 검색 수행
+* `parent_docs`에 기입된 `doc_id`를 확인한다.  
+* `doc`에는 parent doc(page단위 내용)이 담기고  
+* `parent_docs`에는 split chunk들이 담긴다.  
+* 위의 코드 청크가 parent doc과 split chunk들에게 동일한 id를 부여하는 기능을 한다.  
 
 
-```{python}
-for chunk in relevant_chunks:
-    print(chunk.page_content, end="\n\n")
-    print(">" * 100, end="\n\n")
-```
+```{python}  
+child_docs = []  
+for i, doc in enumerate(docs):  
+    # 현재 문서의 ID를 가져옵니다.  
+    _id = doc_ids[i]  
+    # 현재 문서를 하위 문서로 분할  
+    child_doc = child_text_splitter.split_documents([doc])  
+    for _doc in child_doc:  
+        # metadata에 문서 ID 를 저장  
+        _doc.metadata[id_key] = _id  
+    child_docs.extend(child_doc)  
+```  
 
-```
-☞ 출처 : 삼성전자, ‘삼성 AI 포럼’서 자체 개발 생성형 AI ‘삼성 가우스’ 공개, 2023.11.08.
-삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.
-TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.
+* `child_docs`에 기입된 `doc_id`를 확인한다.  
+* 상대적으로 더 작은 Chunk인 Child 문서를 생성한다.  
 
->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+```{python}  
+# 생성된 Child 문서의 메타데이터를 확인한다.  
+child_docs[0].metadata  
+```  
 
-SPRi AI Brief |  
-2023-12월호
-10
-삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개
-n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성 
-AI 모델 ‘삼성 가우스’를 공개
-n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한
+{'source': 'data/SPRI_AI_Brief_2023년12월호_F.pdf', 'file_path': 'data/SPRI_AI_Brief_2023년12월호_F.pdf', 'page': 0, 'total_pages': 23, 'format': 'PDF 1.4', 'title': '', 'author': 'dj', 'subject': '', 'keywords': '', 'creator': 'Hwp 2018 10.0.0.13462', 'producer': 'Hancom PDF 1.3.0.542', 'creationDate': "D:20231208132838+09'00'", 'modDate': "D:20231208132838+09'00'", 'trapped': '', 'doc_id': 'ff65f8d8-376d-47d2-bbc0-eae1f7e3c381'}  
 
->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+각각 분할된 청크의 수를 확인한다.  
 
-▹ 삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개 ··························································· 10
-   ▹ 구글, 앤스로픽에 20억 달러 투자로 생성 AI 협력 강화 ················································ 11
+```{python}  
+print(f"분할된 parent_docs의 개수: {len(parent_docs)}")  
+print(f"분할된 child_docs의 개수: {len(child_docs)}")  
+```  
 
->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+```  
+분할된 parent_docs의 개수: 74  
+분할된 child_docs의 개수: 443  
+```  
+
+* 보통 표준적인 MultiVectorRetriever 사용법  
+
+```  
+# 정상적인 방법  
+retriever.vectorstore.add_documents(child_docs)   # 검색용: 작은 청크만  
+retriever.docstore.mset(zip(doc_ids, parent_docs)) # 반환용: 큰 청크  
+
+# VectorStore: child_docs (443개) - 검색에 사용  
+# DocStore: parent_docs (74개) - 반환에 사용  
+```  
+
+* 하지만, 더 유연하게 구성을 가져갈 수도 있다.  
+  * 벡터저장소엔 parent_docs와 child_docs를 저장하고  
+  * docstore엔 문서 원본을 저장한다.  
+  * 벡터저장소에 새롭게 생성한 작게 쪼개진 하위문서 집합을 추가한다.  
+  * 다음으로는 상위 문서는 생성한 UUID와 맵핑하여 `docstore`에 추가한다.  
+  * `mset()` 메소드를 통해 문서 ID와 문서 내용을 key-value 쌍으로 문서 저장소에 저장한다.  
+
+```{python}  
+# 벡터 저장소에 parent + child 문서를 추가  
+retriever.vectorstore.add_documents(parent_docs)  
+retriever.vectorstore.add_documents(child_docs)  
+
+# docstore 에 원본 문서를 저장  
+retriever.docstore.mset(list(zip(doc_ids, docs)))  
+```  
+
+유사도 검색을 수행한다. 가장 유사도가 높은 첫 번째 문서 조각을 출력한다.  
+
+여기서 `retriever.vectorstore.similarity_search` 메소드는 child + parent 문서 chunk 내에서 검색을 수행한다.  
+
+```{python}  
+# vectorstore의 유사도 검색을 수행한다.   
+relevant_chunks = retriever.vectorstore.similarity_search(  
+    "삼성전자가 만든 생성형 AI 의 이름은?"  
+)  
+print(f"검색된 문서의 개수: {len(relevant_chunks)}")  
+```  
+
+```  
+검색된 문서의 개수: 4  
+```  
+
+* 잘게 쪼개진 chunk들에서 검색을 하고 싶으면 `retriever.vectorstore` 에서 유사도 검색 수행  
+
+
+```{python}  
+for chunk in relevant_chunks:  
+    print(chunk.page_content, end="\n\n")  
+    print(">" * 100, end="\n\n")  
+```  
+
+```  
+☞ 출처 : 삼성전자, ‘삼성 AI 포럼’서 자체 개발 생성형 AI ‘삼성 가우스’ 공개, 2023.11.08.  
+삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.  
+TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.  
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>  
 
 SPRi AI Brief |  
-2023-12월호
-10
-삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개
-n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성 
-AI 모델 ‘삼성 가우스’를 공개
-n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한 
-삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유
-KEY Contents
-£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원
-n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델 
-‘삼성 가우스’를 최초 공개
-∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에 
-최적화된 크기의 모델 선택이 가능
-∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며, 
-온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유
-∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에
+2023-12월호  
+10  
+삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개  
+n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성   
+AI 모델 ‘삼성 가우스’를 공개  
+n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한  
 
->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-```
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>  
 
-이번에는 `retriever.invoke()` 메소드를 사용하여 쿼리를 실행한다.
+▹ 삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개 ··························································· 10  
+   ▹ 구글, 앤스로픽에 20억 달러 투자로 생성 AI 협력 강화 ················································ 11  
 
-`retriever.invoke()` 메소드는 원본 문서의 전체 내용을 검색한다.
-
-* 잘게 쪼개진 chunk들의 parent_doc에서 검색을 하고 싶으면 `retriever` 에서 유사도 검색 수행
-* parent와 child는 상대적인 개념으로 parent가 반드시 가공전 원본 문서를 의미하지는 않는다.
-
-```{python}
-relevant_docs = retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")
-print(f"검색된 문서의 개수: {len(relevant_docs)}", end="\n\n")
-print("=" * 100, end="\n\n")
-print(relevant_docs[0].page_content)
-```
-
-```
-검색된 문서의 개수: 2
-
-====================================================================================================
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>  
 
 SPRi AI Brief |  
-2023-12월호
-10
-삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개
-n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성 
-AI 모델 ‘삼성 가우스’를 공개
-n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한 
-삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유
-KEY Contents
-£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원
-n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델 
-‘삼성 가우스’를 최초 공개
-∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에 
-최적화된 크기의 모델 선택이 가능
-∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며, 
-온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유
-∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에 
-단계적으로 탑재할 계획
-n 삼성 가우스는 △텍스트를 생성하는 언어모델 △코드를 생성하는 코드 모델 △이미지를 생성하는 
-이미지 모델의 3개 모델로 구성
-∙언어 모델은 클라우드와 온디바이스 대상 다양한 모델로 구성되며, 메일 작성, 문서 요약, 번역 업무의 
-처리를 지원
-∙코드 모델 기반의 AI 코딩 어시스턴트 ‘코드아이(code.i)’는 대화형 인터페이스로 서비스를 제공하며 
-사내 소프트웨어 개발에 최적화
-∙이미지 모델은 창의적인 이미지를 생성하고 기존 이미지를 원하는 대로 바꿀 수 있도록 지원하며 
-저해상도 이미지의 고해상도 전환도 지원
-n IT 전문지 테크리퍼블릭(TechRepublic)은 온디바이스 AI가 주요 기술 트렌드로 부상했다며, 
-2024년부터 가우스를 탑재한 삼성 스마트폰이 메타의 라마(Llama)2를 탑재한 퀄컴 기기 및 구글 
-어시스턴트를 적용한 구글 픽셀(Pixel)과 경쟁할 것으로 예상
-☞ 출처 : 삼성전자, ‘삼성 AI 포럼’서 자체 개발 생성형 AI ‘삼성 가우스’ 공개, 2023.11.08.
-삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.
-TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.
-```
+2023-12월호  
+10  
+삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개  
+n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성   
+AI 모델 ‘삼성 가우스’를 공개  
+n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한   
+삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유  
+KEY Contents  
+£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원  
+n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델   
+‘삼성 가우스’를 최초 공개  
+∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에   
+최적화된 크기의 모델 선택이 가능  
+∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며,   
+온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유  
+∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에  
 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>  
+```  
 
-* 리트리버(retriever)가 벡터 데이터베이스에서 기본적으로 수행하는 검색 유형은 유사도 검색이다.
-* LangChain Vector Stores는 [Max Marginal Relevance](https://api.python.langchain.com/en/latest/vectorstores/langchain_core.vectorstores.VectorStore.html#langchain_core.vectorstores.VectorStore.max_marginal_relevance_search)를 통한 검색도 지원하므로, 이를 대신 사용하고 싶다면 다음과 같이 `search_type` 속성을 설정하면 된다.
-* `retriever` 객체의 `search_type` 속성을 `SearchType.mmr`로 설정한다.
-  - 이는 검색 시 MMR(Maximal Marginal Relevance) 알고리즘을 사용하도록 지정하는 것
+이번에는 `retriever.invoke()` 메소드를 사용하여 쿼리를 실행한다.  
 
-```{python}
-from langchain.retrievers.multi_vector import SearchType
+`retriever.invoke()` 메소드는 원본 문서의 전체 내용을 검색한다.  
 
-# 검색 유형을 MMR(Maximal Marginal Relevance)로 설정
-retriever.search_type = SearchType.mmr
+* 잘게 쪼개진 chunk들의 parent_doc에서 검색을 하고 싶으면 `retriever` 에서 유사도 검색 수행  
+* parent와 child는 상대적인 개념으로 parent가 반드시 가공전 원본 문서를 의미하지는 않는다.  
 
-# 관련 문서 전체를 검색
-print(retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")[0].page_content)
-```
+```{python}  
+relevant_docs = retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")  
+print(f"검색된 문서의 개수: {len(relevant_docs)}", end="\n\n")  
+print("=" * 100, end="\n\n")  
+print(relevant_docs[0].page_content)  
+```  
 
+```  
+검색된 문서의 개수: 2  
 
-```
+====================================================================================================  
+
 SPRi AI Brief |  
-2023-12월호
-10
-삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개
-n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성 
-AI 모델 ‘삼성 가우스’를 공개
-n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한 
-삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유
-KEY Contents
-£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원
-n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델 
-‘삼성 가우스’를 최초 공개
-∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에 
-최적화된 크기의 모델 선택이 가능
-∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며, 
-온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유
-∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에 
-단계적으로 탑재할 계획
-n 삼성 가우스는 △텍스트를 생성하는 언어모델 △코드를 생성하는 코드 모델 △이미지를 생성하는 
-이미지 모델의 3개 모델로 구성
-∙언어 모델은 클라우드와 온디바이스 대상 다양한 모델로 구성되며, 메일 작성, 문서 요약, 번역 업무의 
-처리를 지원
-∙코드 모델 기반의 AI 코딩 어시스턴트 ‘코드아이(code.i)’는 대화형 인터페이스로 서비스를 제공하며 
-사내 소프트웨어 개발에 최적화
-∙이미지 모델은 창의적인 이미지를 생성하고 기존 이미지를 원하는 대로 바꿀 수 있도록 지원하며 
-저해상도 이미지의 고해상도 전환도 지원
-n IT 전문지 테크리퍼블릭(TechRepublic)은 온디바이스 AI가 주요 기술 트렌드로 부상했다며, 
-2024년부터 가우스를 탑재한 삼성 스마트폰이 메타의 라마(Llama)2를 탑재한 퀄컴 기기 및 구글 
-어시스턴트를 적용한 구글 픽셀(Pixel)과 경쟁할 것으로 예상
-☞ 출처 : 삼성전자, ‘삼성 AI 포럼’서 자체 개발 생성형 AI ‘삼성 가우스’ 공개, 2023.11.08.
-삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.
-TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.
-```
+2023-12월호  
+10  
+삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개  
+n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성   
+AI 모델 ‘삼성 가우스’를 공개  
+n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한   
+삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유  
+KEY Contents  
+£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원  
+n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델   
+‘삼성 가우스’를 최초 공개  
+∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에   
+최적화된 크기의 모델 선택이 가능  
+∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며,   
+온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유  
+∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에   
+단계적으로 탑재할 계획  
+n 삼성 가우스는 △텍스트를 생성하는 언어모델 △코드를 생성하는 코드 모델 △이미지를 생성하는   
+이미지 모델의 3개 모델로 구성  
+∙언어 모델은 클라우드와 온디바이스 대상 다양한 모델로 구성되며, 메일 작성, 문서 요약, 번역 업무의   
+처리를 지원  
+∙코드 모델 기반의 AI 코딩 어시스턴트 ‘코드아이(code.i)’는 대화형 인터페이스로 서비스를 제공하며   
+사내 소프트웨어 개발에 최적화  
+∙이미지 모델은 창의적인 이미지를 생성하고 기존 이미지를 원하는 대로 바꿀 수 있도록 지원하며   
+저해상도 이미지의 고해상도 전환도 지원  
+n IT 전문지 테크리퍼블릭(TechRepublic)은 온디바이스 AI가 주요 기술 트렌드로 부상했다며,   
+2024년부터 가우스를 탑재한 삼성 스마트폰이 메타의 라마(Llama)2를 탑재한 퀄컴 기기 및 구글   
+어시스턴트를 적용한 구글 픽셀(Pixel)과 경쟁할 것으로 예상  
+☞ 출처 : 삼성전자, ‘삼성 AI 포럼’서 자체 개발 생성형 AI ‘삼성 가우스’ 공개, 2023.11.08.  
+삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.  
+TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.  
+```  
 
 
-```{python}
-from langchain.retrievers.multi_vector import SearchType
+* 리트리버(retriever)가 벡터 데이터베이스에서 기본적으로 수행하는 검색 유형은 유사도 검색이다.  
+* LangChain Vector Stores는 [Max Marginal Relevance](https://api.python.langchain.com/en/latest/vectorstores/langchain_core.vectorstores.VectorStore.html#langchain_core.vectorstores.VectorStore.max_marginal_relevance_search)를 통한 검색도 지원하므로, 이를 대신 사용하고 싶다면 다음과 같이 `search_type` 속성을 설정하면 된다.  
+* `retriever` 객체의 `search_type` 속성을 `SearchType.mmr`로 설정한다.  
+  - 이는 검색 시 MMR(Maximal Marginal Relevance) 알고리즘을 사용하도록 지정하는 것  
 
-# 검색 유형을 similarity_score_threshold로 설정
-retriever.search_type = SearchType.similarity_score_threshold
-retriever.search_kwargs = {"score_threshold": 0.3}
+```{python}  
+from langchain.retrievers.multi_vector import SearchType  
 
-# 관련 문서 전체를 검색
-print(retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")[0].page_content)
-```
+# 검색 유형을 MMR(Maximal Marginal Relevance)로 설정  
+retriever.search_type = SearchType.mmr  
 
-```
+# 관련 문서 전체를 검색  
+print(retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")[0].page_content)  
+```  
+
+
+```  
 SPRi AI Brief |  
-2023-12월호
-10
-삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개
-n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성 
-AI 모델 ‘삼성 가우스’를 공개
-n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한 
-삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유
-KEY Contents
-£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원
-n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델 
-‘삼성 가우스’를 최초 공개
-∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에 
-최적화된 크기의 모델 선택이 가능
-∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며, 
-온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유
-∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에 
-단계적으로 탑재할 계획
-n 삼성 가우스는 △텍스트를 생성하는 언어모델 △코드를 생성하는 코드 모델 △이미지를 생성하는 
-이미지 모델의 3개 모델로 구성
-∙언어 모델은 클라우드와 온디바이스 대상 다양한 모델로 구성되며, 메일 작성, 문서 요약, 번역 업무의 
-처리를 지원
-∙코드 모델 기반의 AI 코딩 어시스턴트 ‘코드아이(code.i)’는 대화형 인터페이스로 서비스를 제공하며 
-사내 소프트웨어 개발에 최적화
-∙이미지 모델은 창의적인 이미지를 생성하고 기존 이미지를 원하는 대로 바꿀 수 있도록 지원하며 
-저해상도 이미지의 고해상도 전환도 지원
-n IT 전문지 테크리퍼블릭(TechRepublic)은 온디바이스 AI가 주요 기술 트렌드로 부상했다며, 
-2024년부터 가우스를 탑재한 삼성 스마트폰이 메타의 라마(Llama)2를 탑재한 퀄컴 기기 및 구글 
-어시스턴트를 적용한 구글 픽셀(Pixel)과 경쟁할 것으로 예상
-☞ 출처 : 삼성전자, ‘삼성 AI 포럼’서 자체 개발 생성형 AI ‘삼성 가우스’ 공개, 2023.11.08.
-삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.
-TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.
-```
-
-```{python}
-from langchain.retrievers.multi_vector import SearchType
-
-# 검색 유형을 similarity로 설정, k값을 1로 설정
-retriever.search_type = SearchType.similarity
-retriever.search_kwargs = {"k": 1}
-
-# 관련 문서 전체를 검색
-print(len(retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")))
-```
-
-```
-1
-```
-
-## 요약본(summary)을 벡터저장소에 저장
-
-* 요약은 종종 청크(chunk)의 내용을 보다 정확하게 추출할 수 있어 더 나은 검색 결과를 얻을 수 있다.
-* 요약은 핵심 내용만을 담고 있어 LLM의 할루시네이션을 방지할 수 있다.
-* 여기서는 요약을 생성하는 방법과 이를 임베딩하는 방법에 대해 설명한다.
-
-```{python}
-# PDF 파일을 로드하고 텍스트를 분할하기 위한 라이브러리 임포트
-from langchain_community.document_loaders import PyMuPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-# PDF 파일 로더 초기화
-loader = PyMuPDFLoader("data/SPRI_AI_Brief_2023년12월호_F.pdf")
-
-# 텍스트 분할
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=50)
-
-# PDF 파일 로드 및 텍스트 분할 실행
-split_docs = loader.load_and_split(text_splitter)
-
-# 분할된 문서의 개수 출력
-print(f"분할된 문서의 개수: {len(split_docs)}")
-```
-
-```
-분할된 문서의 개수: 61
-```
+2023-12월호  
+10  
+삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개  
+n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성   
+AI 모델 ‘삼성 가우스’를 공개  
+n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한   
+삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유  
+KEY Contents  
+£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원  
+n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델   
+‘삼성 가우스’를 최초 공개  
+∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에   
+최적화된 크기의 모델 선택이 가능  
+∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며,   
+온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유  
+∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에   
+단계적으로 탑재할 계획  
+n 삼성 가우스는 △텍스트를 생성하는 언어모델 △코드를 생성하는 코드 모델 △이미지를 생성하는   
+이미지 모델의 3개 모델로 구성  
+∙언어 모델은 클라우드와 온디바이스 대상 다양한 모델로 구성되며, 메일 작성, 문서 요약, 번역 업무의   
+처리를 지원  
+∙코드 모델 기반의 AI 코딩 어시스턴트 ‘코드아이(code.i)’는 대화형 인터페이스로 서비스를 제공하며   
+사내 소프트웨어 개발에 최적화  
+∙이미지 모델은 창의적인 이미지를 생성하고 기존 이미지를 원하는 대로 바꿀 수 있도록 지원하며   
+저해상도 이미지의 고해상도 전환도 지원  
+n IT 전문지 테크리퍼블릭(TechRepublic)은 온디바이스 AI가 주요 기술 트렌드로 부상했다며,   
+2024년부터 가우스를 탑재한 삼성 스마트폰이 메타의 라마(Llama)2를 탑재한 퀄컴 기기 및 구글   
+어시스턴트를 적용한 구글 픽셀(Pixel)과 경쟁할 것으로 예상  
+☞ 출처 : 삼성전자, ‘삼성 AI 포럼’서 자체 개발 생성형 AI ‘삼성 가우스’ 공개, 2023.11.08.  
+삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.  
+TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.  
+```  
 
 
-```{python}
-from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
+```{python}  
+from langchain.retrievers.multi_vector import SearchType  
 
+# 검색 유형을 similarity_score_threshold로 설정  
+retriever.search_type = SearchType.similarity_score_threshold  
+retriever.search_kwargs = {"score_threshold": 0.3}  
 
-summary_chain = (
-    {"doc": lambda x: x.page_content}
-    # 문서 요약을 위한 프롬프트 템플릿 생성
-    | ChatPromptTemplate.from_messages(
-        [
-            ("system", "You are an expert in summarizing documents in Korean."),
-            (
-                "user",
-                "Summarize the following documents in 3 sentences in bullet points format.\n\n{doc}",
-            ),
-        ]
-    )
-    # OpenAI의 ChatGPT 모델을 사용하여 요약 생성
-    | ChatOpenAI(temperature=0, model="gpt-4o-mini")
-    | StrOutputParser()
-)
-```
+# 관련 문서 전체를 검색  
+print(retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")[0].page_content)  
+```  
 
-* `chain.batch` 메소드를 사용하여 `docs` 리스트의 문서들을 일괄 요약한다.
-* 여기서 `max_concurrency` 매개변수를 10으로 설정하여 최대 10개의 문서를 동시에 처리할 수 있도록 한다.
-
-```{python}
-# 문서 배치 처리
-summaries = summary_chain.batch(split_docs, {"max_concurrency": 10})
-```
-
-```{python}
-len(summaries)
-```
-
-```
-61
-```
-
-* 61개의 요약본이 생김
-* 요약된 내용을 출력하여 결과를 확인한다.
-
-```{python}
-# 원본 문서의 내용을 출력한다.
-print(split_docs[33].page_content, end="\n\n")
-# 요약을 출력한다.
-print("[요약]")
-print(summaries[33])
-```
-
-```
+```  
 SPRi AI Brief |  
-2023-12월호
-10
-삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개
-n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성 
-AI 모델 ‘삼성 가우스’를 공개
-n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한 
-삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유
-KEY Contents
-£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원
-n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델 
-‘삼성 가우스’를 최초 공개
-∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에 
-최적화된 크기의 모델 선택이 가능
-∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며, 
-온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유
-∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에
+2023-12월호  
+10  
+삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개  
+n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성   
+AI 모델 ‘삼성 가우스’를 공개  
+n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한   
+삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유  
+KEY Contents  
+£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원  
+n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델   
+‘삼성 가우스’를 최초 공개  
+∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에   
+최적화된 크기의 모델 선택이 가능  
+∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며,   
+온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유  
+∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에   
+단계적으로 탑재할 계획  
+n 삼성 가우스는 △텍스트를 생성하는 언어모델 △코드를 생성하는 코드 모델 △이미지를 생성하는   
+이미지 모델의 3개 모델로 구성  
+∙언어 모델은 클라우드와 온디바이스 대상 다양한 모델로 구성되며, 메일 작성, 문서 요약, 번역 업무의   
+처리를 지원  
+∙코드 모델 기반의 AI 코딩 어시스턴트 ‘코드아이(code.i)’는 대화형 인터페이스로 서비스를 제공하며   
+사내 소프트웨어 개발에 최적화  
+∙이미지 모델은 창의적인 이미지를 생성하고 기존 이미지를 원하는 대로 바꿀 수 있도록 지원하며   
+저해상도 이미지의 고해상도 전환도 지원  
+n IT 전문지 테크리퍼블릭(TechRepublic)은 온디바이스 AI가 주요 기술 트렌드로 부상했다며,   
+2024년부터 가우스를 탑재한 삼성 스마트폰이 메타의 라마(Llama)2를 탑재한 퀄컴 기기 및 구글   
+어시스턴트를 적용한 구글 픽셀(Pixel)과 경쟁할 것으로 예상  
+☞ 출처 : 삼성전자, ‘삼성 AI 포럼’서 자체 개발 생성형 AI ‘삼성 가우스’ 공개, 2023.11.08.  
+삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.  
+TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.  
+```  
 
-[요약]
-- 삼성전자가 온디바이스에서 작동 가능한 생성 AI 모델 '삼성 가우스'를 공개하였으며, 이 모델은 언어, 코드, 이미지의 3개 모델로 구성되어 있다.
-- '삼성 가우스'는 정규분포 이론을 정립한 수학자 가우스의 이름을 따왔으며, 다양한 상황에 최적화된 모델 선택이 가능하다.
-- 삼성전자는 이 AI 모델이 사용자 정보를 외부로 유출하지 않도록 설계되었으며, 향후 다양한 제품에 단계적으로 탑재할 계획이다.
-```
+```{python}  
+from langchain.retrievers.multi_vector import SearchType  
 
-* `Chroma` 벡터 저장소를 초기화하여 자식 청크(child chunks)를 인덱싱한다. 이때 `OpenAIEmbeddings`를 임베딩 함수로 사용한다.
-* 문서 ID를 나타내는 키로 `"doc_id"`를 사용한다.
+# 검색 유형을 similarity로 설정, k값을 1로 설정  
+retriever.search_type = SearchType.similarity  
+retriever.search_kwargs = {"k": 1}  
 
-```{python}
-import uuid
+# 관련 문서 전체를 검색  
+print(len(retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")))  
+```  
 
-# 요약 정보를 저장할 벡터 저장소를 생성한다.
-summary_vectorstore = Chroma(
-    collection_name="summaries",
-    embedding_function=OpenAIEmbeddings(model="text-embedding-3-small"),
-)
+```  
+1  
+```  
 
-# 부모 문서를 저장할 저장소를 생성한다.
-store = InMemoryStore()
+## 요약본(summary)을 벡터저장소에 저장  
 
-# 문서 ID를 저장할 키 이름을 지정한다.
-id_key = "doc_id"
+* 요약은 종종 청크(chunk)의 내용을 보다 정확하게 추출할 수 있어 더 나은 검색 결과를 얻을 수 있다.  
+* 요약은 핵심 내용만을 담고 있어 LLM의 할루시네이션을 방지할 수 있다.  
+* 여기서는 요약을 생성하는 방법과 이를 임베딩하는 방법에 대해 설명한다.  
 
-# 검색기를 초기화한다. (시작 시 비어 있음)
-retriever = MultiVectorRetriever(
-    vectorstore=summary_vectorstore,  # 벡터 저장소
-    byte_store=store,  # 바이트 저장소
-    id_key=id_key,  # 문서 ID 키
-)
-# 문서 ID를 생성합니다.
-doc_ids = [str(uuid.uuid4()) for _ in split_docs]
-```
+```{python}  
+# PDF 파일을 로드하고 텍스트를 분할하기 위한 라이브러리 임포트  
+from langchain_community.document_loaders import PyMuPDFLoader  
+from langchain_text_splitters import RecursiveCharacterTextSplitter  
 
-요약된 문서와 메타데이터(여기서는 생성한 요약본에 대한 `Document ID`이다)를 저장한다.
+# PDF 파일 로더 초기화  
+loader = PyMuPDFLoader("data/SPRI_AI_Brief_2023년12월호_F.pdf")  
 
-```{python}
-summary_docs = [
-    # 요약된 내용을 페이지 콘텐츠로 하고, 문서 ID를 메타데이터로 포함하는 Document 객체를 생성한다.
-    Document(page_content=s, metadata={id_key: doc_ids[i]})
-    for i, s in enumerate(summaries)
-]
-```
+# 텍스트 분할  
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=50)  
 
-요약본의 문서의 개수는 원본 문서의 개수와 일치한다.
+# PDF 파일 로드 및 텍스트 분할 실행  
+split_docs = loader.load_and_split(text_splitter)  
 
-```{python}
-# 요약본의 문서의 개수
-len(summary_docs)
-```
+# 분할된 문서의 개수 출력  
+print(f"분할된 문서의 개수: {len(split_docs)}")  
+```  
 
-```
-61
-```
+```  
+분할된 문서의 개수: 61  
+```  
 
-- `retriever.vectorstore.add_documents(summary_docs)`를 통해 `summary_docs`를 벡터 저장소에 추가한다.
-- `retriever.docstore.mset(list(zip(doc_ids, docs)))`를 사용하여 `doc_ids`와 `docs`를 매핑하여 문서 저장소에 저장한다.
 
-```{python}
-retriever.vectorstore.add_documents(
-    summary_docs
-)  # 요약된 문서를 벡터 저장소에 추가한다.
+```{python}  
+from langchain_core.documents import Document  
+from langchain_core.output_parsers import StrOutputParser  
+from langchain_core.prompts import ChatPromptTemplate  
+from langchain_openai import ChatOpenAI  
 
-# 문서 ID와 문서를 매핑하여 문서 저장소에 저장합니다.
-retriever.docstore.mset(list(zip(doc_ids, split_docs)))
-```
 
-`vectorstore` 객체의 `similarity_search` 메소드를 사용하여 유사도 검색을 수행한다.
+summary_chain = (  
+    {"doc": lambda x: x.page_content}  
+    # 문서 요약을 위한 프롬프트 템플릿 생성  
+    | ChatPromptTemplate.from_messages(  
+        [  
+            ("system", "You are an expert in summarizing documents in Korean."),  
+            (  
+                "user",  
+                "Summarize the following documents in 3 sentences in bullet points format.\n\n{doc}",  
+            ),  
+        ]  
+    )  
+    # OpenAI의 ChatGPT 모델을 사용하여 요약 생성  
+    | ChatOpenAI(temperature=0, model="gpt-4o-mini")  
+    | StrOutputParser()  
+)  
+```  
 
-```{python}
-# 유사도 검색을 수행한다.
-result_docs = summary_vectorstore.similarity_search(
-    "삼성전자가 만든 생성형 AI 의 이름은?"
-)
-```
+* `chain.batch` 메소드를 사용하여 `docs` 리스트의 문서들을 일괄 요약한다.  
+* 여기서 `max_concurrency` 매개변수를 10으로 설정하여 최대 10개의 문서를 동시에 처리할 수 있도록 한다.  
 
-```{python}
-# 1개의 결과 문서를 출력한다. (요약본)
-print(result_docs[0].page_content)
-```
+```{python}  
+# 문서 배치 처리  
+summaries = summary_chain.batch(split_docs, {"max_concurrency": 10})  
+```  
 
-```
-- 삼성전자가 온디바이스에서 작동 가능한 생성 AI 모델 '삼성 가우스'를 공개하였으며, 이 모델은 언어, 코드, 이미지의 3개 모델로 구성되어 있다.
-- '삼성 가우스'는 정규분포 이론을 정립한 수학자 가우스의 이름을 따왔으며, 다양한 상황에 최적화된 모델 선택이 가능하다.
-- 삼성전자는 이 AI 모델이 사용자 정보를 외부로 유출하지 않도록 설계되었으며, 향후 다양한 제품에 단계적으로 탑재할 계획이다.
-```
+```{python}  
+len(summaries)  
+```  
 
-`retriever` 객체의 `invoke()` 사용하여 질문과 관련된 문서를 검색한다.
+```  
+61  
+```  
 
-```{python}
-# 관련된 원본 문서를 검색하여 가져옵니다.
-retrieved_docs = retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")
-print(retrieved_docs[0].page_content)
-```
+* 61개의 요약본이 생김  
+* 요약된 내용을 출력하여 결과를 확인한다.  
 
-```
+```{python}  
+# 원본 문서의 내용을 출력한다.  
+print(split_docs[33].page_content, end="\n\n")  
+# 요약을 출력한다.  
+print("[요약]")  
+print(summaries[33])  
+```  
+
+```  
 SPRi AI Brief |  
-2023-12월호
-10
-삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개
-n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성 
-AI 모델 ‘삼성 가우스’를 공개
-n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한 
-삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유
-KEY Contents
-£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원
-n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델 
-‘삼성 가우스’를 최초 공개
-∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에 
-최적화된 크기의 모델 선택이 가능
-∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며, 
-온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유
-∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에
-```
+2023-12월호  
+10  
+삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개  
+n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성   
+AI 모델 ‘삼성 가우스’를 공개  
+n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한   
+삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유  
+KEY Contents  
+£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원  
+n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델   
+‘삼성 가우스’를 최초 공개  
+∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에   
+최적화된 크기의 모델 선택이 가능  
+∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며,   
+온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유  
+∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에  
 
-## 가설 쿼리(Hypothetical Queries)를 활용한 문서 탐색
+[요약]  
+- 삼성전자가 온디바이스에서 작동 가능한 생성 AI 모델 '삼성 가우스'를 공개하였으며, 이 모델은 언어, 코드, 이미지의 3개 모델로 구성되어 있다.  
+- '삼성 가우스'는 정규분포 이론을 정립한 수학자 가우스의 이름을 따왔으며, 다양한 상황에 최적화된 모델 선택이 가능하다.  
+- 삼성전자는 이 AI 모델이 사용자 정보를 외부로 유출하지 않도록 설계되었으며, 향후 다양한 제품에 단계적으로 탑재할 계획이다.  
+```  
 
-### 핵심 아이디어
+* `Chroma` 벡터 저장소를 초기화하여 자식 청크(child chunks)를 인덱싱한다. 이때 `OpenAIEmbeddings`를 임베딩 함수로 사용한다.  
+* 문서 ID를 나타내는 키로 `"doc_id"`를 사용한다.  
 
-**사용자가 물어볼 만한 질문을 미리 생성해서 검색 인덱스로 활용**하자는 전략이다.
+```{python}  
+import uuid  
 
-### 왜 효과적인가?
+# 요약 정보를 저장할 벡터 저장소를 생성한다.  
+summary_vectorstore = Chroma(  
+    collection_name="summaries",  
+    embedding_function=OpenAIEmbeddings(model="text-embedding-3-small"),  
+)  
 
-**1. 짧은 텍스트 간 매칭의 우수성**
+# 부모 문서를 저장할 저장소를 생성한다.  
+store = InMemoryStore()  
 
-일반적으로 다음과 같은 검색 성능 순서가 관찰된다:
-- **질문 ↔ 질문** (최고) > 질문 ↔ 문단 > 질문 ↔ 긴 문서 (최저)
+# 문서 ID를 저장할 키 이름을 지정한다.  
+id_key = "doc_id"  
 
-**2. 임베딩 정보 손실 문제**
+# 검색기를 초기화한다. (시작 시 비어 있음)  
+retriever = MultiVectorRetriever(  
+    vectorstore=summary_vectorstore,  # 벡터 저장소  
+    byte_store=store,  # 바이트 저장소  
+    id_key=id_key,  # 문서 ID 키  
+)  
+# 문서 ID를 생성합니다.  
+doc_ids = [str(uuid.uuid4()) for _ in split_docs]  
+```  
 
-긴 문서를 임베딩할 때:
-1. 문서 → 임베딩 과정에서 **1차 정보 손실**
-2. 검색 매칭 과정에서 **2차 정보 손실**
+요약된 문서와 메타데이터(여기서는 생성한 요약본에 대한 `Document ID`이다)를 저장한다.  
 
-따라서 임베딩 대상을 짧게 유지하는 것이 정보 손실을 최소화한다.
+```{python}  
+summary_docs = [  
+    # 요약된 내용을 페이지 콘텐츠로 하고, 문서 ID를 메타데이터로 포함하는 Document 객체를 생성한다.  
+    Document(page_content=s, metadata={id_key: doc_ids[i]})  
+    for i, s in enumerate(summaries)  
+]  
+```  
 
-**3. 가설 질문 방식의 장점**
+요약본의 문서의 개수는 원본 문서의 개수와 일치한다.  
 
-```
-전통적 방식:
-사용자 질문: "삼성의 AI 제품은?"
-    ↓ (의미 공간에서 멀리 떨어짐)
-원본 문서: "2023년 11월 8일 삼성전자가 삼성 AI 포럼에서..."
+```{python}  
+# 요약본의 문서의 개수  
+len(summary_docs)  
+```  
 
-가설 질문 방식:
-사용자 질문: "삼성의 AI 제품은?"
-    ↓ (의미 공간에서 매우 가까움)
-미리 생성한 질문: "삼성전자가 개발한 AI 기술은?"
-    ↓ (ID로 연결)
-원본 문서: "2023년 11월 8일 삼성전자가..."
-```
+```  
+61  
+```  
 
-**질문 ↔ 질문** 매칭이므로 의미적 유사도가 훨씬 높다.
+- `retriever.vectorstore.add_documents(summary_docs)`를 통해 `summary_docs`를 벡터 저장소에 추가한다.  
+- `retriever.docstore.mset(list(zip(doc_ids, docs)))`를 사용하여 `doc_ids`와 `docs`를 매핑하여 문서 저장소에 저장한다.  
 
-### 작동 원리
+```{python}  
+retriever.vectorstore.add_documents(  
+    summary_docs  
+)  # 요약된 문서를 벡터 저장소에 추가한다.  
 
-1. **문서마다 가상 질문 생성** (LLM 활용)
-   - 문서 내용을 읽고 "이 문서로 답할 수 있는 질문"을 3~5개 생성
+# 문서 ID와 문서를 매핑하여 문서 저장소에 저장합니다.  
+retriever.docstore.mset(list(zip(doc_ids, split_docs)))  
+```  
+
+`vectorstore` 객체의 `similarity_search` 메소드를 사용하여 유사도 검색을 수행한다.  
+
+```{python}  
+# 유사도 검색을 수행한다.  
+result_docs = summary_vectorstore.similarity_search(  
+    "삼성전자가 만든 생성형 AI 의 이름은?"  
+)  
+```  
+
+```{python}  
+# 1개의 결과 문서를 출력한다. (요약본)  
+print(result_docs[0].page_content)  
+```  
+
+```  
+- 삼성전자가 온디바이스에서 작동 가능한 생성 AI 모델 '삼성 가우스'를 공개하였으며, 이 모델은 언어, 코드, 이미지의 3개 모델로 구성되어 있다.  
+- '삼성 가우스'는 정규분포 이론을 정립한 수학자 가우스의 이름을 따왔으며, 다양한 상황에 최적화된 모델 선택이 가능하다.  
+- 삼성전자는 이 AI 모델이 사용자 정보를 외부로 유출하지 않도록 설계되었으며, 향후 다양한 제품에 단계적으로 탑재할 계획이다.  
+```  
+
+`retriever` 객체의 `invoke()` 사용하여 질문과 관련된 문서를 검색한다.  
+
+```{python}  
+# 관련된 원본 문서를 검색하여 가져옵니다.  
+retrieved_docs = retriever.invoke("삼성전자가 만든 생성형 AI 의 이름은?")  
+print(retrieved_docs[0].page_content)  
+```  
+
+```  
+SPRi AI Brief |  
+2023-12월호  
+10  
+삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개  
+n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성   
+AI 모델 ‘삼성 가우스’를 공개  
+n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한   
+삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유  
+KEY Contents  
+£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원  
+n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델   
+‘삼성 가우스’를 최초 공개  
+∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에   
+최적화된 크기의 모델 선택이 가능  
+∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며,   
+온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유  
+∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에  
+```  
+
+## 가설 쿼리(Hypothetical Queries)를 활용한 문서 탐색  
+
+### 핵심 아이디어  
+
+**사용자가 물어볼 만한 질문을 미리 생성해서 검색 인덱스로 활용**하자는 전략이다.  
+
+### 왜 효과적인가?  
+
+**1. 짧은 텍스트 간 매칭의 우수성**  
+
+일반적으로 다음과 같은 검색 성능 순서가 관찰된다:  
+- **질문 ↔ 질문** (최고) > 질문 ↔ 문단 > 질문 ↔ 긴 문서 (최저)  
+
+**2. 임베딩 정보 손실 문제**  
+
+긴 문서를 임베딩할 때:  
+1. 문서 → 임베딩 과정에서 **1차 정보 손실**  
+2. 검색 매칭 과정에서 **2차 정보 손실**  
+
+따라서 임베딩 대상을 짧게 유지하는 것이 정보 손실을 최소화한다.  
+
+**3. 가설 질문 방식의 장점**  
+
+```  
+전통적 방식:  
+사용자 질문: "삼성의 AI 제품은?"  
+    ↓ (의미 공간에서 멀리 떨어짐)  
+원본 문서: "2023년 11월 8일 삼성전자가 삼성 AI 포럼에서..."  
+
+가설 질문 방식:  
+사용자 질문: "삼성의 AI 제품은?"  
+    ↓ (의미 공간에서 매우 가까움)  
+미리 생성한 질문: "삼성전자가 개발한 AI 기술은?"  
+    ↓ (ID로 연결)  
+원본 문서: "2023년 11월 8일 삼성전자가..."  
+```  
+
+**질문 ↔ 질문** 매칭이므로 의미적 유사도가 훨씬 높다.  
+
+### 작동 원리  
+
+1. **문서마다 가상 질문 생성** (LLM 활용)  
+   - 문서 내용을 읽고 "이 문서로 답할 수 있는 질문"을 3~5개 생성  
    
-2. **질문을 VectorStore에 저장**
-   - 원본 문서는 DocStore에 보관
-   - 가상 질문들만 임베딩하여 검색 대상으로 활용
+2. **질문을 VectorStore에 저장**  
+   - 원본 문서는 DocStore에 보관  
+   - 가상 질문들만 임베딩하여 검색 대상으로 활용  
    
-3. **검색 시**
-   - 사용자 질문 → 가상 질문들과 유사도 검색
-   - 매칭된 가상 질문의 ID로 원본 문서 반환
+3. **검색 시**  
+   - 사용자 질문 → 가상 질문들과 유사도 검색  
+   - 매칭된 가상 질문의 ID로 원본 문서 반환  
 
-### 장단점 분석
+### 장단점 분석  
 
-**장점:**
-- 검색 정확도 향상: 질문-질문 매칭의 높은 의미 유사도
-- 다양한 관점 포착: 한 문서에 대해 여러 각도의 질문 생성 가능
-- 사용자 의도 파악 개선: 실제 사용자 질문 패턴과 유사
+**장점:**  
+- 검색 정확도 향상: 질문-질문 매칭의 높은 의미 유사도  
+- 다양한 관점 포착: 한 문서에 대해 여러 각도의 질문 생성 가능  
+- 사용자 의도 파악 개선: 실제 사용자 질문 패턴과 유사  
 
-**단점:**
-- 비용 증가: LLM으로 질문 생성 필요 (문서당 3~5개 질문)
-- 시간 소요: 인덱싱 시간 증가
-- 질문 품질 의존: LLM이 생성한 질문의 품질에 성능 좌우
+**단점:**  
+- 비용 증가: LLM으로 질문 생성 필요 (문서당 3~5개 질문)  
+- 시간 소요: 인덱싱 시간 증가  
+- 질문 품질 의존: LLM이 생성한 질문의 품질에 성능 좌우  
 
-**언제 사용할까?**
-- 사용자 질문 패턴이 명확할 때 (FAQ, 고객 지원 등)
-- 검색 품질이 매우 중요할 때
-- 인덱싱 비용보다 검색 성능이 우선일 때
+**언제 사용할까?**  
+- 사용자 질문 패턴이 명확할 때 (FAQ, 고객 지원 등)  
+- 검색 품질이 매우 중요할 때  
+- 인덱싱 비용보다 검색 성능이 우선일 때  
 
-**언제 비추천?**
-- 문서가 자주 변경될 때 (재생성 비용)
-- 실시간 인덱싱이 필요할 때
-- 비용이 제약 조건일 때
+**언제 비추천?**  
+- 문서가 자주 변경될 때 (재생성 비용)  
+- 실시간 인덱싱이 필요할 때  
+- 비용이 제약 조건일 때  
 
-### 구현 예제
+### 구현 예제  
 
-아래는 `Function Calling`을 활용하여 가설 질문을 생성하는 예제다.
+아래는 `Function Calling`을 활용하여 가설 질문을 생성하는 예제다.  
 
-```{python}
-functions = [
-    {
-        "name": "hypothetical_questions",  # 함수의 이름을 지정한다.
-        "description": "Generate hypothetical questions",  # 함수에 대한 설명을 작성한다.
-        "parameters": {  # 함수의 매개변수를 정의한다.
-            "type": "object",  # 매개변수의 타입을 객체로 지정한다.
-            "properties": {  # 객체의 속성을 정의한다.
-                "questions": {  # 'questions' 속성을 정의한다.
-                    "type": "array",  # 'questions'의 타입을 배열로 지정합니다.
-                    "items": {
-                        "type": "string"
-                    },  # 배열의 요소 타입을 문자열로 지정합니다.
-                },
-            },
-            "required": ["questions"],  # 필수 매개변수로 'questions'를 지정합니다.
-        },
-    }
-]
-```
+```{python}  
+functions = [  
+    {  
+        "name": "hypothetical_questions",  # 함수의 이름을 지정한다.  
+        "description": "Generate hypothetical questions",  # 함수에 대한 설명을 작성한다.  
+        "parameters": {  # 함수의 매개변수를 정의한다.  
+            "type": "object",  # 매개변수의 타입을 객체로 지정한다.  
+            "properties": {  # 객체의 속성을 정의한다.  
+                "questions": {  # 'questions' 속성을 정의한다.  
+                    "type": "array",  # 'questions'의 타입을 배열로 지정합니다.  
+                    "items": {  
+                        "type": "string"  
+                    },  # 배열의 요소 타입을 문자열로 지정합니다.  
+                },  
+            },  
+            "required": ["questions"],  # 필수 매개변수로 'questions'를 지정합니다.  
+        },  
+    }  
+]  
+```  
 
-`ChatPromptTemplate`을 사용하여 주어진 문서를 기반으로 3개의 가상 질문을 생성하는 프롬프트 템플릿을 정의한다.
+`ChatPromptTemplate`을 사용하여 주어진 문서를 기반으로 3개의 가상 질문을 생성하는 프롬프트 템플릿을 정의한다.  
 
-- `functions`와 `function_call`을 설정하여 가상 질문 생성 함수를 호출한다.
-- `JsonKeyOutputFunctionsParser`를 사용하여 생성된 가상 질문을 파싱하고, `questions` 키에 해당하는 값을 추출한다.
+- `functions`와 `function_call`을 설정하여 가상 질문 생성 함수를 호출한다.  
+- `JsonKeyOutputFunctionsParser`를 사용하여 생성된 가상 질문을 파싱하고, `questions` 키에 해당하는 값을 추출한다.  
 
-```{python}
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.output_parsers.openai_functions import JsonKeyOutputFunctionsParser
-from langchain_openai import ChatOpenAI
+```{python}  
+from langchain_core.prompts import ChatPromptTemplate  
+from langchain.output_parsers.openai_functions import JsonKeyOutputFunctionsParser  
+from langchain_openai import ChatOpenAI  
 
-hypothetical_query_chain = (
-    {"doc": lambda x: x.page_content}
-    # 아래 문서를 사용하여 답변할 수 있는 가상의 질문을 정확히 3개 생성하도록 요청합니다. 이 숫자는 조정될 수 있습니다.
-    | ChatPromptTemplate.from_template(
-        "Generate a list of exactly 3 hypothetical questions that the below document could be used to answer. "
-        "Potential users are those interested in the AI industry. Create questions that they would be interested in. "
-        "Output should be written in Korean:\n\n{doc}"
-    )
-    | ChatOpenAI(max_retries=0, model="gpt-4o-mini").bind(
-        functions=functions, function_call={"name": "hypothetical_questions"}
-    )
-    # 출력에서 "questions" 키에 해당하는 값을 추출합니다.
-    | JsonKeyOutputFunctionsParser(key_name="questions")
-)
-```
+hypothetical_query_chain = (  
+    {"doc": lambda x: x.page_content}  
+    # 아래 문서를 사용하여 답변할 수 있는 가상의 질문을 정확히 3개 생성하도록 요청합니다. 이 숫자는 조정될 수 있습니다.  
+    | ChatPromptTemplate.from_template(  
+        "Generate a list of exactly 3 hypothetical questions that the below document could be used to answer. "  
+        "Potential users are those interested in the AI industry. Create questions that they would be interested in. "  
+        "Output should be written in Korean:\n\n{doc}"  
+    )  
+    | ChatOpenAI(max_retries=0, model="gpt-4o-mini").bind(  
+        functions=functions, function_call={"name": "hypothetical_questions"}  
+    )  
+    # 출력에서 "questions" 키에 해당하는 값을 추출합니다.  
+    | JsonKeyOutputFunctionsParser(key_name="questions")  
+)  
+```  
 
-문서에 대한 답변을 출력
-- 출력은 생성한 3개의 가설 쿼리(Hypothetical Queries) 가 담겨 있다.
+문서에 대한 답변을 출력  
+- 출력은 생성한 3개의 가설 쿼리(Hypothetical Queries) 가 담겨 있다.  
 
-```{python}
-# 주어진 문서에 대해 체인을 실행합니다.
-hypothetical_query_chain.invoke(split_docs[33])
-```
-
-
-```
-['삼성 가우스가 다른 생성 AI 모델에 비해 어떤 경쟁력을 가질 수 있을까?', '온디바이스 작동이 가능한 삼성 가우스가 개인 정보 보호에 미치는 영향은 무엇일까?', '삼성전자가 삼성 가우스를 다양한 제품에 단계적으로 탑재하려는 이유는 무엇일까?']
-```
-
-`chain.batch` 메소드를 사용하여 `split_docs` 데이터에 대해 동시에 여러 개의 요청을 처리한다.
-
-```{python}
-# 문서 목록에 대해 가설 질문을 배치 생성
-hypothetical_questions = hypothetical_query_chain.batch(
-    split_docs, {"max_concurrency": 10}
-)
-```
-
-```{python}
-hypothetical_questions[33]
-```
-
-```
-['삼성 가우스가 다른 생성 AI 모델과 비교했을 때, 사용자 개인 정보 보호에 있어 어떤 장점을 제공할까요?', '삼성전자가 삼성 가우스를 다양한 제품에 탑재하기로 결정한 이유는 무엇일까요?', '온디바이스에서 작동하는 삼성 가우스의 기능이 AI 산업의 미래에 어떤 영향을 미칠까요?']
-```
+```{python}  
+# 주어진 문서에 대해 체인을 실행합니다.  
+hypothetical_query_chain.invoke(split_docs[33])  
+```  
 
 
-생성한 가설 쿼리(Hypothetical Queries)를 벡터저장소에 저장하는 과정이다.
+```  
+['삼성 가우스가 다른 생성 AI 모델에 비해 어떤 경쟁력을 가질 수 있을까?', '온디바이스 작동이 가능한 삼성 가우스가 개인 정보 보호에 미치는 영향은 무엇일까?', '삼성전자가 삼성 가우스를 다양한 제품에 단계적으로 탑재하려는 이유는 무엇일까?']  
+```  
 
-```{python}
-# 자식 청크를 인덱싱하는 데 사용할 벡터 저장소
-hypothetical_vectorstore = Chroma(
-    collection_name="hypo-questions", embedding_function=OpenAIEmbeddings()
-)
-# 부모 문서의 저장소 계층
-store = InMemoryStore()
+`chain.batch` 메소드를 사용하여 `split_docs` 데이터에 대해 동시에 여러 개의 요청을 처리한다.  
 
-id_key = "doc_id"
-# 검색기 (시작 시 비어 있음)
-retriever = MultiVectorRetriever(
-    vectorstore=hypothetical_vectorstore,
-    byte_store=store,
-    id_key=id_key,
-)
-doc_ids = [str(uuid.uuid4()) for _ in split_docs]  # 문서 ID 생성
-```
+```{python}  
+# 문서 목록에 대해 가설 질문을 배치 생성  
+hypothetical_questions = hypothetical_query_chain.batch(  
+    split_docs, {"max_concurrency": 10}  
+)  
+```  
 
-`question_docs` 리스트에 메타데이터(문서 ID)를 추가한다.
+```{python}  
+hypothetical_questions[33]  
+```  
 
-```{python}
-question_docs = []
-# hypothetical_questions 저장
-for i, question_list in enumerate(hypothetical_questions):
-    question_docs.extend(
-        # 질문 리스트의 각 질문에 대해 Document 객체를 생성하고, 메타데이터에 해당 질문의 문서 ID를 포함시킵니다.
-        [Document(page_content=s, metadata={id_key: doc_ids[i]}) for s in question_list]
-    )
-```
+```  
+['삼성 가우스가 다른 생성 AI 모델과 비교했을 때, 사용자 개인 정보 보호에 있어 어떤 장점을 제공할까요?', '삼성전자가 삼성 가우스를 다양한 제품에 탑재하기로 결정한 이유는 무엇일까요?', '온디바이스에서 작동하는 삼성 가우스의 기능이 AI 산업의 미래에 어떤 영향을 미칠까요?']  
+```  
 
-가설 쿼리를 문서에 추가하고, 원본 문서를 `docstore`에 추가한다.
 
-```{python}
-# hypothetical_questions 문서를 벡터 저장소에 추가합니다.
-retriever.vectorstore.add_documents(question_docs)
+생성한 가설 쿼리(Hypothetical Queries)를 벡터저장소에 저장하는 과정이다.  
 
-# 문서 ID와 문서를 매핑하여 문서 저장소에 저장합니다.
-retriever.docstore.mset(list(zip(doc_ids, split_docs)))
-```
+```{python}  
+# 자식 청크를 인덱싱하는 데 사용할 벡터 저장소  
+hypothetical_vectorstore = Chroma(  
+    collection_name="hypo-questions", embedding_function=OpenAIEmbeddings()  
+)  
+# 부모 문서의 저장소 계층  
+store = InMemoryStore()  
 
-`vectorstore` 객체의 `similarity_search` 메소드를 사용하여 유사도 검색을 수행한다.
+id_key = "doc_id"  
+# 검색기 (시작 시 비어 있음)  
+retriever = MultiVectorRetriever(  
+    vectorstore=hypothetical_vectorstore,  
+    byte_store=store,  
+    id_key=id_key,  
+)  
+doc_ids = [str(uuid.uuid4()) for _ in split_docs]  # 문서 ID 생성  
+```  
 
-```{python}
-# 유사한 문서를 벡터 저장소에서 검색합니다.
-result_docs = hypothetical_vectorstore.similarity_search(
-    "삼성전자가 만든 생성형 AI 의 이름은?"
-)
-```
+`question_docs` 리스트에 메타데이터(문서 ID)를 추가한다.  
 
-아래는 유사도 검색 결과를 확인한다.
+```{python}  
+question_docs = []  
+# hypothetical_questions 저장  
+for i, question_list in enumerate(hypothetical_questions):  
+    question_docs.extend(  
+        # 질문 리스트의 각 질문에 대해 Document 객체를 생성하고, 메타데이터에 해당 질문의 문서 ID를 포함시킵니다.  
+        [Document(page_content=s, metadata={id_key: doc_ids[i]}) for s in question_list]  
+    )  
+```  
 
-여기서는 생성한 가설 쿼리만 추가해 놓은 상태이므로, 생성한 가설 쿼리 중 유사도가 가장 높은 문서를 반환한다.
+가설 쿼리를 문서에 추가하고, 원본 문서를 `docstore`에 추가한다.  
 
-```{python}
-# 유사도 검색 결과를 출력한다.
-for doc in result_docs:
-    print(doc.page_content)
-    print(doc.metadata)
-```
+```{python}  
+# hypothetical_questions 문서를 벡터 저장소에 추가합니다.  
+retriever.vectorstore.add_documents(question_docs)  
 
-```
-삼성전자가 AI 기술을 활용하여 개발한 새로운 제품이나 서비스는 무엇일까요?
-{'doc_id': '61bcf671-1f5c-4d75-850e-42d4c88c2c87'}
-삼성의 Generative AI 기술이 향후 AI 시장에서 어떤 경쟁력을 가질 것으로 예상되나요?
-{'doc_id': '61bcf671-1f5c-4d75-850e-42d4c88c2c87'}
-삼성 개발자 콘퍼런스 코리아 2023에서 발표된 내용이 AI 산업에 어떤 영향을 미칠까요?
-{'doc_id': '61bcf671-1f5c-4d75-850e-42d4c88c2c87'}
-온디바이스에서 작동하는 삼성 가우스의 기능이 AI 산업의 미래에 어떤 영향을 미칠까요?
-{'doc_id': 'b7e88e61-8c28-400e-a4fb-f6bd25e5e40b'}
-```
+# 문서 ID와 문서를 매핑하여 문서 저장소에 저장합니다.  
+retriever.docstore.mset(list(zip(doc_ids, split_docs)))  
+```  
 
-`retriever` 객체의 `invoke` 메소드를 사용하여 쿼리와 관련된 문서를 검색한다.
+`vectorstore` 객체의 `similarity_search` 메소드를 사용하여 유사도 검색을 수행한다.  
 
-```{python}
-# 관련된 문서를 검색하여 가져옵니다.
-retrieved_docs = retriever.invoke(result_docs[1].page_content)
+```{python}  
+# 유사한 문서를 벡터 저장소에서 검색합니다.  
+result_docs = hypothetical_vectorstore.similarity_search(  
+    "삼성전자가 만든 생성형 AI 의 이름은?"  
+)  
+```  
 
-# 검색된 문서를 출력합니다.
-for doc in retrieved_docs:
-    print(doc.page_content)
-```
+아래는 유사도 검색 결과를 확인한다.  
 
-```
-삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.
-TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.
+여기서는 생성한 가설 쿼리만 추가해 놓은 상태이므로, 생성한 가설 쿼리 중 유사도가 가장 높은 문서를 반환한다.  
+
+```{python}  
+# 유사도 검색 결과를 출력한다.  
+for doc in result_docs:  
+    print(doc.page_content)  
+    print(doc.metadata)  
+```  
+
+```  
+삼성전자가 AI 기술을 활용하여 개발한 새로운 제품이나 서비스는 무엇일까요?  
+{'doc_id': '61bcf671-1f5c-4d75-850e-42d4c88c2c87'}  
+삼성의 Generative AI 기술이 향후 AI 시장에서 어떤 경쟁력을 가질 것으로 예상되나요?  
+{'doc_id': '61bcf671-1f5c-4d75-850e-42d4c88c2c87'}  
+삼성 개발자 콘퍼런스 코리아 2023에서 발표된 내용이 AI 산업에 어떤 영향을 미칠까요?  
+{'doc_id': '61bcf671-1f5c-4d75-850e-42d4c88c2c87'}  
+온디바이스에서 작동하는 삼성 가우스의 기능이 AI 산업의 미래에 어떤 영향을 미칠까요?  
+{'doc_id': 'b7e88e61-8c28-400e-a4fb-f6bd25e5e40b'}  
+```  
+
+`retriever` 객체의 `invoke` 메소드를 사용하여 쿼리와 관련된 문서를 검색한다.  
+
+```{python}  
+# 관련된 문서를 검색하여 가져옵니다.  
+retrieved_docs = retriever.invoke(result_docs[1].page_content)  
+
+# 검색된 문서를 출력합니다.  
+for doc in retrieved_docs:  
+    print(doc.page_content)  
+```  
+
+```  
+삼성전자, ‘삼성 개발자 콘퍼런스 코리아 2023’ 개최, 2023.11.14.  
+TechRepublic, Samsung Gauss: Samsung Research Reveals Generative AI, 2023.11.08.  
 SPRi AI Brief |  
-2023-12월호
-10
-삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개
-n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성 
-AI 모델 ‘삼성 가우스’를 공개
-n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한 
-삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유
-KEY Contents
-£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원
-n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델 
-‘삼성 가우스’를 최초 공개
-∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에 
-최적화된 크기의 모델 선택이 가능
-∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며, 
-온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유
-∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에
-```
+2023-12월호  
+10  
+삼성전자, 자체 개발 생성 AI ‘삼성 가우스’ 공개  
+n 삼성전자가 온디바이스에서 작동 가능하며 언어, 코드, 이미지의 3개 모델로 구성된 자체 개발 생성   
+AI 모델 ‘삼성 가우스’를 공개  
+n 삼성전자는 삼성 가우스를 다양한 제품에 단계적으로 탑재할 계획으로, 온디바이스 작동이 가능한   
+삼성 가우스는 외부로 사용자 정보가 유출될 위험이 없다는 장점을 보유  
+KEY Contents  
+£ 언어, 코드, 이미지의 3개 모델로 구성된 삼성 가우스, 온디바이스 작동 지원  
+n 삼성전자가 2023년 11월 8일 열린 ‘삼성 AI 포럼 2023’ 행사에서 자체 개발한 생성 AI 모델   
+‘삼성 가우스’를 최초 공개  
+∙정규분포 이론을 정립한 천재 수학자 가우스(Gauss)의 이름을 본뜬 삼성 가우스는 다양한 상황에   
+최적화된 크기의 모델 선택이 가능  
+∙삼성 가우스는 라이선스나 개인정보를 침해하지 않는 안전한 데이터를 통해 학습되었으며,   
+온디바이스에서 작동하도록 설계되어 외부로 사용자의 정보가 유출되지 않는 장점을 보유  
+∙삼성전자는 삼성 가우스를 활용한 온디바이스 AI 기술도 소개했으며, 생성 AI 모델을 다양한 제품에  
+```  
