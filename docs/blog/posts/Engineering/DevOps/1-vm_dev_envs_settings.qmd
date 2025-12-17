@@ -24,522 +24,523 @@ draft: False
 ---
 
 
-# VM에 개발 환경 구축하기
 
-* Project: Agent Platform PoC 환경 구축
-* 조건: Azure VM(Ubuntu 24.04)에서의 개발환경
-* Azure Portal에서 Ubuntu 24.04 LTS VM을 생성한 후 git, conda, pyenv, poetry를 설치하는 과정에서 마주칠 수 있는 문제들과 해결 방법을 정리
+# VM에 개발 환경 구축하기  
+
+* Project: Agent Platform PoC 환경 구축  
+* 조건: Azure VM(Ubuntu 24.04)에서의 개발환경  
+* Azure Portal에서 Ubuntu 24.04 LTS VM을 생성한 후 git, conda, pyenv, poetry를 설치하는 과정에서 마주칠 수 있는 문제들과 해결 방법을 정리  
 
 
-## 구축할 개발환경 모식도
+## 구축할 개발환경 모식도  
 
-### 작업 환경 구조
+### 작업 환경 구조  
 
-```
-┌─────────────────────────────────────┐
-│  로컬 PC (Windows)                   │
-│  PowerShell Terminal                │
-└──────────────────┬──────────────────┘
-                   │ SSH
-                   ↓
-┌─────────────────────────────────────┐
-│  Azure VM (Ubuntu 24.04)            │
-│  azureuser@test-agent               │
-│  - git                              │
-│  - conda                            |
-│  - pyenv                            │
-│  - poetry                           │
-│  - 개발 작업 환경                     │
-└─────────────────────────────────────┘
-```
+```  
+┌─────────────────────────────────────┐  
+│  로컬 PC (Windows)                   │  
+│  PowerShell Terminal                │  
+└──────────────────┬──────────────────┘  
+                   │ SSH  
+                   ↓  
+┌─────────────────────────────────────┐  
+│  Azure VM (Ubuntu 24.04)            │  
+│  azureuser@test-agent               │  
+│  - git                              │  
+│  - conda                            |  
+│  - pyenv                            │  
+│  - poetry                           │  
+│  - 개발 작업 환경                     │  
+└─────────────────────────────────────┘  
+```  
 
-### 중요 개념
+### 중요 개념  
 
-| 개념 | 설명 |
-|------|------|
-| **VM (Virtual Machine)** | 클라우드에서 실행되는 가상 컴퓨터 |
-| **Image** | VM의 운영체제 템플릿 (Docker와 다름) |
-| **SSH** | 원격 서버에 안전하게 접속하는 프로토콜 |
-| **Private Key** | SSH 접속 인증용 파일 |
-| **웹 콘솔** | Azure Portal의 브라우저 기반 터미널 (제약이 있음) |
+| 개념 | 설명 |  
+|------|------|  
+| **VM (Virtual Machine)** | 클라우드에서 실행되는 가상 컴퓨터 |  
+| **Image** | VM의 운영체제 템플릿 (Docker와 다름) |  
+| **SSH** | 원격 서버에 안전하게 접속하는 프로토콜 |  
+| **Private Key** | SSH 접속 인증용 파일 |  
+| **웹 콘솔** | Azure Portal의 브라우저 기반 터미널 (제약이 있음) |  
 
-## 초기 상황
+## 초기 상황  
 
-### 생성한 VM 스펙
+### 생성한 VM 스펙  
 
-- **VM명**: test-agent
-- **OS**: Ubuntu 24.04 LTS (Canonical official image)
-- **크기**: Standard D8as v5 (8vCPUs, 32GB RAM)
-- **접속 방식**: 
-  - 웹 브라우저 콘솔 (Azure Portal 내 터미널) - sudo 제약 있음
-  - SSH (원격 접속) - 권장 방식
+- **VM명**: test-agent  
+- **OS**: Ubuntu 24.04 LTS (Canonical official image)  
+- **크기**: Standard D8as v5 (8vCPUs, 32GB RAM)  
+- **접속 방식**:   
+  - 웹 브라우저 콘솔 (Azure Portal 내 터미널) - sudo 제약 있음  
+  - SSH (원격 접속) - 권장 방식  
 
-### 설치 목표
+### 설치 목표  
 
-- git: source code 버전 관리
-- Miniconda (conda): DL/ML/Stat dependency 관리
-- pyenv: python interpreter 버전 관리
-- Poetry: Python 개발관련 dependency 관리
+- git: source code 버전 관리  
+- Miniconda (conda): DL/ML/Stat dependency 관리  
+- pyenv: python interpreter 버전 관리  
+- Poetry: Python 개발관련 dependency 관리  
 
-## 발생한 문제들과 해결 방법
+## 발생한 문제들과 해결 방법  
 
-### 웹 브라우저 콘솔에서 sudo 권한 제약
+### 웹 브라우저 콘솔에서 sudo 권한 제약  
 
-* 증상
+* 증상  
 
-```bash
-kmkim [ ~ ]$ sudo apt update
-sudo: The "no new privileges" flag is set, which prevents sudo from running as root.
-sudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag.
-```
+```bash  
+kmkim [ ~ ]$ sudo apt update  
+sudo: The "no new privileges" flag is set, which prevents sudo from running as root.  
+sudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag.  
+```  
 
-* 원인
-  * **웹 브라우저 콘솔** = Azure Portal의 웹 화면 내에 내장된 터미널 창 (Cloud Shell이 아닌 경우)
-  * Azure Portal의 웹 브라우저 콘솔은 보안상 `no-new-privileges` 플래그가 설정되어 있어서 sudo 권한 상승이 불가능
-  * 이는 컨테이너 환경의 제약이 아니라 웹 콘솔 자체의 보안 제한
-  * 왜 이런 제한이 필요한가?
-    - 웹 브라우저는 악성 JavaScript나 공격으로 조작될 수 있음
-    - 브라우저 콘솔을 통해 root 권한을 얻을 수 있다면, 전체 VM을 장악당할 위험 증가
-    - `no-new-privileges` 플래그는 이미 실행 중인 프로세스가 권한을 **상승**시키는 것을 막음 (기존 권한 유지는 가능)
-    - 따라서 웹 콘솔로 일반 사용자(azureuser) 작업은 가능하지만, sudo로 root 권한이 필요한 작업은 차단
-* **해결책**
-  * 웹 브라우저 콘솔대신 local cmd prompt (power shell)에서 **SSH로 직접 접속**
+* 원인  
+  * **웹 브라우저 콘솔** = Azure Portal의 웹 화면 내에 내장된 터미널 창 (Cloud Shell이 아닌 경우)  
+  * Azure Portal의 웹 브라우저 콘솔은 보안상 `no-new-privileges` 플래그가 설정되어 있어서 sudo 권한 상승이 불가능  
+  * 이는 컨테이너 환경의 제약이 아니라 웹 콘솔 자체의 보안 제한  
+  * 왜 이런 제한이 필요한가?  
+    - 웹 브라우저는 악성 JavaScript나 공격으로 조작될 수 있음  
+    - 브라우저 콘솔을 통해 root 권한을 얻을 수 있다면, 전체 VM을 장악당할 위험 증가  
+    - `no-new-privileges` 플래그는 이미 실행 중인 프로세스가 권한을 **상승**시키는 것을 막음 (기존 권한 유지는 가능)  
+    - 따라서 웹 콘솔로 일반 사용자(azureuser) 작업은 가능하지만, sudo로 root 권한이 필요한 작업은 차단  
+* **해결책**  
+  * 웹 브라우저 콘솔대신 local cmd prompt (power shell)에서 **SSH로 직접 접속**  
 
-### Local에서 SSH 접속 방법
+### Local에서 SSH 접속 방법  
 
-* 증상
-  * 웹 콘솔의 sudo 제약으로 인해 패키지 설치가 불가능한 상황
-* SSH란?
-  * SSH (Secure Shell) = 인터넷을 통해 원격 컴퓨터에 안전하게 접속하는 프로토콜
+* 증상  
+  * 웹 콘솔의 sudo 제약으로 인해 패키지 설치가 불가능한 상황  
+* SSH란?  
+  * SSH (Secure Shell) = 인터넷을 통해 원격 컴퓨터에 안전하게 접속하는 프로토콜  
   * 자세한 내용은 [SSH 개요 블로그 참조](../Infra/Security/ssh.qmd)  
-* 장점
-  - 웹 콘솔의 제약이 없음
-  - sudo 권한이 정상 작동
-  - 웹 콘솔보다 더 안정적이고 빠름
+* 장점  
+  - 웹 콘솔의 제약이 없음  
+  - sudo 권한이 정상 작동  
+  - 웹 콘솔보다 더 안정적이고 빠름  
   - 로컬에서 언제든 접속 가능  
-* 웹 브라우저 콘솔 vs SSH의 차이:
+* 웹 브라우저 콘솔 vs SSH의 차이:  
 
-| 항목 | 웹 브라우저 콘솔 | SSH |
-|------|----------------|-----|
-| **접속 방식** | Azure Portal 웹 페이지 내 | 암호화된 네트워크 연결 |
-| **보안** | 웹 브라우저 보안 정책 적용 (제약 많음) | 공개키 암호화 (매우 강력) |
-| **권한** | `no-new-privileges` 플래그로 sudo 차단 | 일반 사용자이지만 sudo 가능 |
-| **통신** | 평문 또는 약한 암호화 | 모든 데이터 암호화 (AES-256 등) |
-| **인증** | Azure Portal 로그인 | Private Key 파일 기반 |
-| **안정성** | 브라우저 다운시 연결 끊김 | 네트워크만 안정하면 지속 연결 |
+| 항목 | 웹 브라우저 콘솔 | SSH |  
+|------|----------------|-----|  
+| **접속 방식** | Azure Portal 웹 페이지 내 | 암호화된 네트워크 연결 |  
+| **보안** | 웹 브라우저 보안 정책 적용 (제약 많음) | 공개키 암호화 (매우 강력) |  
+| **권한** | `no-new-privileges` 플래그로 sudo 차단 | 일반 사용자이지만 sudo 가능 |  
+| **통신** | 평문 또는 약한 암호화 | 모든 데이터 암호화 (AES-256 등) |  
+| **인증** | Azure Portal 로그인 | Private Key 파일 기반 |  
+| **안정성** | 브라우저 다운시 연결 끊김 | 네트워크만 안정하면 지속 연결 |  
 
-* SSH 접속 단계
-  * 1단계: Private Key 파일 준비
-    - VM 생성 시 Azure가 생성한 `test-agent_key.pem` 파일을 다운로드
-    - 보통 Downloads 폴더에 저장됨
-  * 2단계: 로컬 PowerShell(Windows) 또는 Terminal(macOS/Linux)에서 접속
-    - `ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16`
-    - `-i` 옵션은 Identity file(신원 확인 파일)을 지정하는 옵션
-  * 3단계: 첫 접속 시 호스트 인증
+* SSH 접속 단계  
+  * 1단계: Private Key 파일 준비  
+    - VM 생성 시 Azure가 생성한 `test-agent_key.pem` 파일을 다운로드  
+    - 보통 Downloads 폴더에 저장됨  
+  * 2단계: 로컬 PowerShell(Windows) 또는 Terminal(macOS/Linux)에서 접속  
+    - `ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16`  
+    - `-i` 옵션은 Identity file(신원 확인 파일)을 지정하는 옵션  
+  * 3단계: 첫 접속 시 호스트 인증  
 
-    ```
-    The authenticity of host '20.196.144.16' can't be established.
-    Are you sure you want to continue connecting (yes/no)?
-    ```
-    → `yes` 입력
+    ```  
+    The authenticity of host '20.196.144.16' can't be established.  
+    Are you sure you want to continue connecting (yes/no)?  
+    ```  
+    → `yes` 입력  
 
-  * 4단계: 접속 완료
+  * 4단계: 접속 완료  
 
-    ```
-    azureuser@test-agent:~$
-    ```
+    ```  
+    azureuser@test-agent:~$  
+    ```  
 
-### Conda 설치 시 권한 부족
+### Conda 설치 시 권한 부족  
 
-* 증상
+* 증상  
 
-```bash
-azureuser@test-agent:~$ bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda
-mkdir: cannot create directory '/opt/conda': Permission denied
-ERROR: Could not create directory: '/opt/conda'.
-```
+```bash  
+azureuser@test-agent:~$ bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda  
+mkdir: cannot create directory '/opt/conda': Permission denied  
+ERROR: Could not create directory: '/opt/conda'.  
+```  
 
-* 원인
-  * `/opt` 디렉토리는 root 권한이 필요
-  * azureuser는 일반 사용자이므로 직접 접근 불가.
-* 해결책
+* 원인  
+  * `/opt` 디렉토리는 root 권한이 필요  
+  * azureuser는 일반 사용자이므로 직접 접근 불가.  
+* 해결책  
 
-```bash
-sudo bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda
-```
+```bash  
+sudo bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda  
+```  
 
-### Conda 초기화 실패
+### Conda 초기화 실패  
 
-* 증상
-```bash
-azureuser@test-agent:~$ sudo /opt/conda/bin/conda init bash
-no change     /root/.bashrc
-No action taken.
-```
+* 증상  
+```bash  
+azureuser@test-agent:~$ sudo /opt/conda/bin/conda init bash  
+no change     /root/.bashrc  
+No action taken.  
+```  
 
-* 원인
-  * `sudo`로 실행하면 root의 `.bashrc`가 수정되지만, azureuser로 로그인하면 `/home/azureuser/.bashrc`를 사용
-* 해결책
-  * sudo 없이 실행하거나, 수동으로 초기화 코드를 추가
+* 원인  
+  * `sudo`로 실행하면 root의 `.bashrc`가 수정되지만, azureuser로 로그인하면 `/home/azureuser/.bashrc`를 사용  
+* 해결책  
+  * sudo 없이 실행하거나, 수동으로 초기화 코드를 추가  
 
-```bash
-# sudo 없이 실행. conda가 자동으로 .bashrc를 수정
-/opt/conda/bin/conda init bash
+```bash  
+# sudo 없이 실행. conda가 자동으로 .bashrc를 수정  
+/opt/conda/bin/conda init bash  
 
-# 실행 결과: .bashrc에 다음과 같은 긴 초기화 블록이 자동 추가됨
+# 실행 결과: .bashrc에 다음과 같은 긴 초기화 블록이 자동 추가됨  
 
-# >>> conda initialize >>>
-# !! Contents within this block are managed by 'conda init' !!
-__conda_setup="$('/opt/conda/bin/conda' 'shell.bash' 'hook' 2> /dev/null)"
-if [ $? -eq 0 ]; then
-    eval "$__conda_setup"
-else
-    if [ -f "/opt/conda/etc/profile.d/conda.sh" ]; then
-        . "/opt/conda/etc/profile.d/conda.sh"
-    else
-        export PATH="/opt/conda/bin:$PATH"
-    fi
-fi
-unset __conda_setup
-# <<< conda initialize <<<
-```
+# >>> conda initialize >>>  
+# !! Contents within this block are managed by 'conda init' !!  
+__conda_setup="$('/opt/conda/bin/conda' 'shell.bash' 'hook' 2> /dev/null)"  
+if [ $? -eq 0 ]; then  
+    eval "$__conda_setup"  
+else  
+    if [ -f "/opt/conda/etc/profile.d/conda.sh" ]; then  
+        . "/opt/conda/etc/profile.d/conda.sh"  
+    else  
+        export PATH="/opt/conda/bin:$PATH"  
+    fi  
+fi  
+unset __conda_setup  
+# <<< conda initialize <<<  
+```  
 
 
-```bash
-# 수동으로 초기화: conda shell.bash hook를 실행하여 초기화에 필요한 최소한의 코드만 생성
-# eval로 그 코드를 실행하도록 .bashrc에 추가
-# 자동 초기화와 동일한 효과
-echo 'eval "$(/opt/conda/bin/conda shell.bash hook)"' >> ~/.bashrc
-source ~/.bashrc
-```
+```bash  
+# 수동으로 초기화: conda shell.bash hook를 실행하여 초기화에 필요한 최소한의 코드만 생성  
+# eval로 그 코드를 실행하도록 .bashrc에 추가  
+# 자동 초기화와 동일한 효과  
+echo 'eval "$(/opt/conda/bin/conda shell.bash hook)"' >> ~/.bashrc  
+source ~/.bashrc  
+```  
 
-* Conda 설치 확인
+* Conda 설치 확인  
 
-```bash
-conda --version
-```
+```bash  
+conda --version  
+```  
 
-### Pyenv 설치
+### Pyenv 설치  
 
-#### Python 개발 환경 구축
+#### Python 개발 환경 구축  
 
-- conda와 pyenv는 python interpreter의 버전을 독립적으로 관리한다.
-  - conda는 deep learning, machine learning, statistics 관련 패키지들과 더불어 java, c++과 같은 python외 개발 관련 가상환경을 관리한다.
-  - pyenv는 오로지 python으로만 개발이 될 프로젝트용으로 사용되며 python version만 관리하고 후에 설치할 poetry와 맞물려 사용된다.
-- 사실, conda는 순서에 상관없이 나중에 설치해도 되지만 python개발환경 구축시엔 git이 편의성에 있어서 필요할 수 있다.
-- pyenv는 Python을 설치하고 버전을 관리하는 도구이다
-- Poetry는 Python 위에서 실행되므로, Python이 먼저 설치되어야 한다.
-- python 개발 환경 구축 순서는 다음의 단계를 따라야한다.
-  1. pyenv 설치 (Python 버전 관리자)
-  2. Python 3.11 설치 (프로그래밍 언어로 pyenv로 설치해야함)
-  3. Poetry 설치 (Python 패키지 관리자, Python 3.11 기반으로 설치)
+- conda와 pyenv는 python interpreter의 버전을 독립적으로 관리한다.  
+  - conda는 deep learning, machine learning, statistics 관련 패키지들과 더불어 java, c++과 같은 python외 개발 관련 가상환경을 관리한다.  
+  - pyenv는 오로지 python으로만 개발이 될 프로젝트용으로 사용되며 python version만 관리하고 후에 설치할 poetry와 맞물려 사용된다.  
+- 사실, conda는 순서에 상관없이 나중에 설치해도 되지만 python개발환경 구축시엔 git이 편의성에 있어서 필요할 수 있다.  
+- pyenv는 Python을 설치하고 버전을 관리하는 도구이다  
+- Poetry는 Python 위에서 실행되므로, Python이 먼저 설치되어야 한다.  
+- python 개발 환경 구축 순서는 다음의 단계를 따라야한다.  
+  1. pyenv 설치 (Python 버전 관리자)  
+  2. Python 3.11 설치 (프로그래밍 언어로 pyenv로 설치해야함)  
+  3. Poetry 설치 (Python 패키지 관리자, Python 3.11 기반으로 설치)  
 
-* Pyenv 설치
+* Pyenv 설치  
 
-```bash
-# 방법1
-curl https://pyenv.io/install.sh | bash # 회사 네트워크 방화벽때문에 pyenv.io 네트워크 접근 불가 → GitHub clone으로 해결
+```bash  
+# 방법1  
+curl https://pyenv.io/install.sh | bash # 회사 네트워크 방화벽때문에 pyenv.io 네트워크 접근 불가 → GitHub clone으로 해결  
 
-# 방법2: GitHub에서 직접 clone (권장)
-git clone https://github.com/pyenv/pyenv.git ~/.pyenv
-```
+# 방법2: GitHub에서 직접 clone (권장)  
+git clone https://github.com/pyenv/pyenv.git ~/.pyenv  
+```  
 
 **설치 후 PATH 설정**    
-- pyenv를 Shell 환경에 영구 등록
-- heredoc(히어닥) 문법: 여러 줄의 텍스트를 파일에 추가하는 방식
+- pyenv를 Shell 환경에 영구 등록  
+- heredoc(히어닥) 문법: 여러 줄의 텍스트를 파일에 추가하는 방식  
 
-```
-cat >> ~/.bashrc << 'EOF'
-[여기에 작성된 내용들]
-EOF
-```
+```  
+cat >> ~/.bashrc << 'EOF'  
+[여기에 작성된 내용들]  
+EOF  
+```  
 
-```bash
-cat >> ~/.bashrc << 'EOF' 
-export PYENV_ROOT="$HOME/.pyenv" 
-export PATH="$PYENV_ROOT/bin:$PATH"
-eval "$(pyenv init -)"
-eval "$(pyenv virtualenv-init -)"
-EOF
-source ~/.bashrc
-```
+```bash  
+cat >> ~/.bashrc << 'EOF'   
+export PYENV_ROOT="$HOME/.pyenv"   
+export PATH="$PYENV_ROOT/bin:$PATH"  
+eval "$(pyenv init -)"  
+eval "$(pyenv virtualenv-init -)"  
+EOF  
+source ~/.bashrc  
+```  
 
 코드 설명  
 1. cat >> ~/.bashrc  
-  * cat: 텍스트를 출력하는 명령어
-  * >>: 파일 끝에 추가(append)하라는 의미 (> 하나만 쓰면 덮어쓰기)
-  * ~/.bashrc: 현재 사용자의 홈 디렉토리(~)에 있는 .bashrc 파일
+  * cat: 텍스트를 출력하는 명령어  
+  * >>: 파일 끝에 추가(append)하라는 의미 (> 하나만 쓰면 덮어쓰기)  
+  * ~/.bashrc: 현재 사용자의 홈 디렉토리(~)에 있는 .bashrc 파일  
 2. << 'EOF'  
-  * <<: heredoc 시작을 의미 (여러 줄 입력 시작)
-  * 'EOF': 입력 종료 마커 (End Of File)
-  * 작은따옴표(')로 감싸면 → 변수 치환 안 함 (문자 그대로 저장)
-  * 큰따옴표(") 또는 따옴표 없으면 → 변수 치환 함
+  * <<: heredoc 시작을 의미 (여러 줄 입력 시작)  
+  * 'EOF': 입력 종료 마커 (End Of File)  
+  * 작은따옴표(')로 감싸면 → 변수 치환 안 함 (문자 그대로 저장)  
+  * 큰따옴표(") 또는 따옴표 없으면 → 변수 치환 함  
 3. export PYENV_ROOT="$HOME/.pyenv"  
-  * export: 환경 변수를 설정하고 자식 프로세스도 사용 가능하게 만듦
-  * PYENV_ROOT: pyenv가 설치된 위치를 저장하는 변수
-  * "$HOME/.pyenv": /home/azureuser/.pyenv (사용자 홈 폴더의 .pyenv 디렉토리)
+  * export: 환경 변수를 설정하고 자식 프로세스도 사용 가능하게 만듦  
+  * PYENV_ROOT: pyenv가 설치된 위치를 저장하는 변수  
+  * "$HOME/.pyenv": /home/azureuser/.pyenv (사용자 홈 폴더의 .pyenv 디렉토리)  
 4. export PATH="$PYENV_ROOT/bin:$PATH"  
-  * PATH: Shell이 명령어를 찾는 경로 목록
-  * $PYENV_ROOT/bin: pyenv 실행 파일이 있는 폴더를 PATH 맨 앞에 추가
-  * :$PATH: 기존 PATH 내용은 뒤에 유지
-  * 왜 맨 앞에? → 같은 이름의 명령어가 있으면 pyenv 버전을 우선 실행
+  * PATH: Shell이 명령어를 찾는 경로 목록  
+  * $PYENV_ROOT/bin: pyenv 실행 파일이 있는 폴더를 PATH 맨 앞에 추가  
+  * :$PATH: 기존 PATH 내용은 뒤에 유지  
+  * 왜 맨 앞에? → 같은 이름의 명령어가 있으면 pyenv 버전을 우선 실행  
 5. eval "$(pyenv init -)"  
-  * pyenv init -: pyenv 초기화 스크립트 생성 (실제로는 긴 Shell 코드 출력)
-  * $(): 명령어 치환 - 괄호 안 명령어를 실행하고 결과를 반환
-  * eval: 문자열을 Shell 명령어로 실행
-  * 실제 동작: pyenv가 출력한 초기화 코드를 즉시 실행
+  * pyenv init -: pyenv 초기화 스크립트 생성 (실제로는 긴 Shell 코드 출력)  
+  * $(): 명령어 치환 - 괄호 안 명령어를 실행하고 결과를 반환  
+  * eval: 문자열을 Shell 명령어로 실행  
+  * 실제 동작: pyenv가 출력한 초기화 코드를 즉시 실행  
 6. eval "$(pyenv virtualenv-init -)"  
-  * pyenv-virtualenv 플러그인 초기화 (가상 환경 관리 기능)
-  * 위와 동일한 방식으로 초기화 코드 실행
-7. EOF
-  * heredoc 종료 마커 (여기까지가 추가할 내용)
-8. source ~/.bashrc
-  * .bashrc 파일을 즉시 재실행 → 현재 Shell에 바로 적용
-  * 안 하면? → 다음 로그인이나 새 터미널을 열어야 적용됨
+  * pyenv-virtualenv 플러그인 초기화 (가상 환경 관리 기능)  
+  * 위와 동일한 방식으로 초기화 코드 실행  
+7. EOF  
+  * heredoc 종료 마커 (여기까지가 추가할 내용)  
+8. source ~/.bashrc  
+  * .bashrc 파일을 즉시 재실행 → 현재 Shell에 바로 적용  
+  * 안 하면? → 다음 로그인이나 새 터미널을 열어야 적용됨  
 
-* Pyenv 설치 확인: `pyenv --version`
-
-
-#### python 설치
-
-```bash
-# python 설치
-azureuser@test-agent:~$ pyenv install 3.11.10
-
-azureuser@test-agent:~$ python --version
-```
-
-ubuntu에 python이 설치되어 있지 않아 다음 메세지가 뜰 것.
-
-```bash
-pyenv: python: command not found
-The `python' command exists in these Python versions:
-  3.11.10
-Note: See 'pyenv help global' for tips on allowing both
-      python2 and python3 to be found.
-```
-
-* 시스템이 인식할 python버전을 설정
-
-```bash
-# 시스템 전체의 기본 Python 버전을 3.11.10으로 설정 (OS의 python 설치 유무와 버전을 신경쓸필요없어짐)
-azureuser@test-agent:~$ pyenv global 3.11.10
-
-# global 설정하면 pyenv가 관리하는 경로로 고정 되게됨
-azureuser@test-agent:~$ which python
-
-# 또는 python의 특정 버전의 최신 버전을 찾으려면 다음의 명령어를 입력하여 확인하여 설치
-pyenv install --list | grep "3.11" | tail -1
-
-# python 설치 확인
-azureuser@test-agent:~$ python --version
-```
+* Pyenv 설치 확인: `pyenv --version`  
 
 
-#### Poetry 설치
+#### python 설치  
 
-* pip install poetry = 간편 설치
-  * pip(Python 패키지 관리자)를 사용
-  * 가장 간단하고 빠름
-  * pyenv로 설치한 Python 환경에 직접 설치
-  * 하지만 Poetry 공식 문서는 이 방법을 권장하지 않음
+```bash  
+# python 설치  
+azureuser@test-agent:~$ pyenv install 3.11.10  
 
-```bash
-# 방법 1: pip를 이용한 간편 설치 (비권장)
-pip install poetry
-poetry --version  # 확인
-```
+azureuser@test-agent:~$ python --version  
+```  
 
-* curl 방식 = 공식 권장 설치 (독립 설치) 
-  * Poetry 설치 스크립트를 다운받아 실행
-  * Poetry를 시스템 Python과 분리하여 독립 환경에 설치
-  * `~/.local/bin`에 독립 설치
-  * 독립 환경이라 충돌 없음
-  * 더 깨끗하고 안전함
-  * Poetry 공식 문서의 표준 방법
+ubuntu에 python이 설치되어 있지 않아 다음 메세지가 뜰 것.  
 
-```bash
-# 방법 2: 공식 설치 스크립트 (권장)
-curl -ssl https://install.python-poetry.org | python3 -
-export PATH="$HOME/.local/bin:$PATH"
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-poetry --version  # 확인
-```
+```bash  
+pyenv: python: command not found  
+The `python' command exists in these Python versions:  
+  3.11.10  
+Note: See 'pyenv help global' for tips on allowing both  
+      python2 and python3 to be found.  
+```  
 
-* 발생 가능한 귀찮은 문제
-  * pip 방식의 문제
+* 시스템이 인식할 python버전을 설정  
 
-```bash
-# Python 3.11에서 poetry 설치
-pyenv global 3.11.10
-pip install poetry
+```bash  
+# 시스템 전체의 기본 Python 버전을 3.11.10으로 설정 (OS의 python 설치 유무와 버전을 신경쓸필요없어짐)  
+azureuser@test-agent:~$ pyenv global 3.11.10  
 
-# 나중에 Python 3.12로 변경
-pyenv global 3.12.5
+# global 설정하면 pyenv가 관리하는 경로로 고정 되게됨  
+azureuser@test-agent:~$ which python  
 
-# poetry가 사라짐!
-poetry --version
-# bash: poetry: command not found
-```
+# 또는 python의 특정 버전의 최신 버전을 찾으려면 다음의 명령어를 입력하여 확인하여 설치  
+pyenv install --list | grep "3.11" | tail -1  
 
-  * curl 방식은 안전
-
-```bash
-# 독립 설치
-curl -sSL https://install.python-poetry.org | python3 -
-
-# Python 버전 바꿔도 poetry는 유지됨
-pyenv global 3.12.5
-poetry --version
-# Poetry (version 1.8.3) ✅
-```
+# python 설치 확인  
+azureuser@test-agent:~$ python --version  
+```  
 
 
-## VM 종료 및 관리
+#### Poetry 설치  
 
-### VM 중지 (비용 절감)
+* pip install poetry = 간편 설치  
+  * pip(Python 패키지 관리자)를 사용  
+  * 가장 간단하고 빠름  
+  * pyenv로 설치한 Python 환경에 직접 설치  
+  * 하지만 Poetry 공식 문서는 이 방법을 권장하지 않음  
 
-```bash
-# SSH 연결 종료
-exit
+```bash  
+# 방법 1: pip를 이용한 간편 설치 (비권장)  
+pip install poetry  
+poetry --version  # 확인  
+```  
 
-```
+* curl 방식 = 공식 권장 설치 (독립 설치)   
+  * Poetry 설치 스크립트를 다운받아 실행  
+  * Poetry를 시스템 Python과 분리하여 독립 환경에 설치  
+  * `~/.local/bin`에 독립 설치  
+  * 독립 환경이라 충돌 없음  
+  * 더 깨끗하고 안전함  
+  * Poetry 공식 문서의 표준 방법  
 
-또는 Azure Portal에서 `Virtual Machines → test-agent → Stop` 클릭
+```bash  
+# 방법 2: 공식 설치 스크립트 (권장)  
+curl -ssl https://install.python-poetry.org | python3 -  
+export PATH="$HOME/.local/bin:$PATH"  
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc  
+source ~/.bashrc  
+poetry --version  # 확인  
+```  
 
-- **Stop**: 비용 청구 안 됨, 나중에 재시작 가능
-- **Delete**: **주의!** VM 완전 삭제 (복구 불가)
+* 발생 가능한 귀찮은 문제  
+  * pip 방식의 문제  
 
-### VM 재시작
-```bash
-ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16
-```
+```bash  
+# Python 3.11에서 poetry 설치  
+pyenv global 3.11.10  
+pip install poetry  
 
-## 편의성 개선 (선택사항)
+# 나중에 Python 3.12로 변경  
+pyenv global 3.12.5  
 
-### PowerShell에 SSH Alias 설정
+# poetry가 사라짐!  
+poetry --version  
+# bash: poetry: command not found  
+```  
 
-PowerShell 프로필 편집:
-```powershell
-notepad $PROFILE
-```
+  * curl 방식은 안전  
 
-다음 추가:
-```powershell
-Set-Alias -Name ssh-vm -Value 'ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16'
-```
+```bash  
+# 독립 설치  
+curl -sSL https://install.python-poetry.org | python3 -  
 
-이후 접속:
-```bash
-ssh-vm
-```
+# Python 버전 바꿔도 poetry는 유지됨  
+pyenv global 3.12.5  
+poetry --version  
+# Poetry (version 1.8.3) ✅  
+```  
 
-## SSH Key 관리 (여러 VM/서버 사용할 때)
 
-* Key가 여러 개일 때 관리 방법
-  * Azure VM, AWS EC2, GitHub, GitLab 등 여러 서비스를 사용하면 SSH Key가 점점 많아진다.
-* SSH Key 관리 전략
-  1. Key 저장소 통일 (`.ssh` 폴더)
+## VM 종료 및 관리  
 
-```powershell
-# Windows의 .ssh 폴더 (자동 생성됨)
-C:\Users\kmkim\.ssh\
+### VM 중지 (비용 절감)  
 
-# Key 파일들을 모두 여기에 정리
-C:\Users\kmkim\.ssh\
-├── azure-vm-test-agent.pem      # Azure VM용
-├── aws-ec2-dev.pem               # AWS EC2용
-├── github-personal                # GitHub용 (확장자 없음)
-├── gitlab-work                    # GitLab용
-├── id_rsa                         # 기본 key (old format)
-└── id_ed25519                     # 최신 key format
-```
+```bash  
+# SSH 연결 종료  
+exit  
 
-  2. SSH Config 파일로 Host 별칭 관리
+```  
 
-SSH config 파일 생성:
+또는 Azure Portal에서 `Virtual Machines → test-agent → Stop` 클릭  
 
-```powershell
-notepad C:\Users\kmkim\.ssh\config
-```
+- **Stop**: 비용 청구 안 됨, 나중에 재시작 가능  
+- **Delete**: **주의!** VM 완전 삭제 (복구 불가)  
 
-다음 내용 추가:
+### VM 재시작  
+```bash  
+ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16  
+```  
 
-```
-# Azure VM - test-agent
-Host azure-test
-    HostName 20.196.144.16
-    User azureuser
-    IdentityFile C:\Users\kmkim\.ssh\azure-vm-test-agent.pem
-    Port 22
+## 편의성 개선 (선택사항)  
 
-# AWS EC2 - Development Server
-Host aws-dev
-    HostName ec2-1-2-3-4.compute-1.amazonaws.com
-    User ec2-user
-    IdentityFile C:\Users\kmkim\.ssh\aws-ec2-dev.pem
-    Port 22
+### PowerShell에 SSH Alias 설정  
 
-# GitHub
-Host github.com
-    HostName github.com
-    User git
-    IdentityFile C:\Users\kmkim\.ssh\github-personal
+PowerShell 프로필 편집:  
+```powershell  
+notepad $PROFILE  
+```  
 
-# GitLab
-Host gitlab.com
-    HostName gitlab.com
-    User git
-    IdentityFile C:\Users\kmkim\.ssh\gitlab-work
-```
+다음 추가:  
+```powershell  
+Set-Alias -Name ssh-vm -Value 'ssh -i C:\Users\kmkim\Downloads\test-agent_key.pem azureuser@20.196.144.16'  
+```  
 
-  3. 간단한 접속 명령
-    * SSH config를 설정하면 긴 명령을 단축
+이후 접속:  
+```bash  
+ssh-vm  
+```  
 
-**Before (설정 전):**
-```bash
-ssh -i C:\Users\kmkim\.ssh\azure-vm-test-agent.pem azureuser@20.196.144.16
-```
+## SSH Key 관리 (여러 VM/서버 사용할 때)  
 
-**After (설정 후):**
-```bash
-ssh azure-test
-```
+* Key가 여러 개일 때 관리 방법  
+  * Azure VM, AWS EC2, GitHub, GitLab 등 여러 서비스를 사용하면 SSH Key가 점점 많아진다.  
+* SSH Key 관리 전략  
+  1. Key 저장소 통일 (`.ssh` 폴더)  
 
-  4. Key 권한 설정 (Windows)
-    * SSH Key는 신중하게 보관
-    * Windows에서는:
+```powershell  
+# Windows의 .ssh 폴더 (자동 생성됨)  
+C:\Users\kmkim\.ssh\  
 
-```powershell
-# .ssh 폴더 우클릭 → 속성 → 보안 → 고급
-# 현재 사용자만 읽기/쓰기 권한 허용
-# 다른 사용자는 접근 차단
+# Key 파일들을 모두 여기에 정리  
+C:\Users\kmkim\.ssh\  
+├── azure-vm-test-agent.pem      # Azure VM용  
+├── aws-ec2-dev.pem               # AWS EC2용  
+├── github-personal                # GitHub용 (확장자 없음)  
+├── gitlab-work                    # GitLab용  
+├── id_rsa                         # 기본 key (old format)  
+└── id_ed25519                     # 최신 key format  
+```  
 
-# 또는 PowerShell로:
-icacls "C:\Users\kmkim\.ssh" /inheritance:r /grant:r "$env:USERNAME`:(F)"
-```
+  2. SSH Config 파일로 Host 별칭 관리  
 
-   * SSH Key 명명 규칙 (권장)
+SSH config 파일 생성:  
 
-```
-<서비스>-<용도>-<환경>.pem
+```powershell  
+notepad C:\Users\kmkim\.ssh\config  
+```  
 
-예:
-- azure-vm-dev.pem
-- aws-ec2-prod.pem
-- github-personal
-- gitlab-work-deploy
-```
+다음 내용 추가:  
 
-### SSH Key 재생성 (기존 Key 분실/탈취 시)
+```  
+# Azure VM - test-agent  
+Host azure-test  
+    HostName 20.196.144.16  
+    User azureuser  
+    IdentityFile C:\Users\kmkim\.ssh\azure-vm-test-agent.pem  
+    Port 22  
 
-```bash
-# 1. 새로운 Key 생성
-ssh-keygen -t ed25519 -C "azure-vm-replacement" -f C:\Users\kmkim\.ssh\azure-vm-new.pem
+# AWS EC2 - Development Server  
+Host aws-dev  
+    HostName ec2-1-2-3-4.compute-1.amazonaws.com  
+    User ec2-user  
+    IdentityFile C:\Users\kmkim\.ssh\aws-ec2-dev.pem  
+    Port 22  
 
-# 2. Azure Portal에서 기존 public key 삭제
-# 3. 새로운 public key 등록
-# 4. .ssh/config 파일 업데이트
-# 5. 기존 Key 파일 삭제 (또는 백업 폴더로 이동)
-```
+# GitHub  
+Host github.com  
+    HostName github.com  
+    User git  
+    IdentityFile C:\Users\kmkim\.ssh\github-personal  
+
+# GitLab  
+Host gitlab.com  
+    HostName gitlab.com  
+    User git  
+    IdentityFile C:\Users\kmkim\.ssh\gitlab-work  
+```  
+
+  3. 간단한 접속 명령  
+    * SSH config를 설정하면 긴 명령을 단축  
+
+**Before (설정 전):**  
+```bash  
+ssh -i C:\Users\kmkim\.ssh\azure-vm-test-agent.pem azureuser@20.196.144.16  
+```  
+
+**After (설정 후):**  
+```bash  
+ssh azure-test  
+```  
+
+  4. Key 권한 설정 (Windows)  
+    * SSH Key는 신중하게 보관  
+    * Windows에서는:  
+
+```powershell  
+# .ssh 폴더 우클릭 → 속성 → 보안 → 고급  
+# 현재 사용자만 읽기/쓰기 권한 허용  
+# 다른 사용자는 접근 차단  
+
+# 또는 PowerShell로:  
+icacls "C:\Users\kmkim\.ssh" /inheritance:r /grant:r "$env:USERNAME`:(F)"  
+```  
+
+   * SSH Key 명명 규칙 (권장)  
+
+```  
+<서비스>-<용도>-<환경>.pem  
+
+예:  
+- azure-vm-dev.pem  
+- aws-ec2-prod.pem  
+- github-personal  
+- gitlab-work-deploy  
+```  
+
+### SSH Key 재생성 (기존 Key 분실/탈취 시)  
+
+```bash  
+# 1. 새로운 Key 생성  
+ssh-keygen -t ed25519 -C "azure-vm-replacement" -f C:\Users\kmkim\.ssh\azure-vm-new.pem  
+
+# 2. Azure Portal에서 기존 public key 삭제  
+# 3. 새로운 public key 등록  
+# 4. .ssh/config 파일 업데이트  
+# 5. 기존 Key 파일 삭제 (또는 백업 폴더로 이동)  
+```  

@@ -1,5 +1,9 @@
 import os
+import sys
 from pathlib import Path
+
+# 고정된 기본 경로
+BASE_PATH = r'c:\Users\kmkim\Desktop\projects\blog\docs\blog\posts'
 
 def add_trailing_spaces_to_qmd(file_path):
     """qmd 파일의 각 줄 끝에 공백 2칸을 추가하는 함수"""
@@ -64,10 +68,21 @@ def process_folder(folder_path):
 
 # 사용 예시
 if __name__ == '__main__':
-    # 처리할 폴더 경로 지정
-    target_folder = r'c:\Users\kmkim\Desktop\projects\blog\docs\blog\posts\Agent\13-Cloud-RAG'
+    # 명령행 인자로 폴더 이름 받기
+    if len(sys.argv) < 2:
+        print('Usage: python add-two-whitespces.py <folder_name>')
+        print(f'Example: python add-two-whitespces.py Agent\\13-Cloud-RAG')
+        print(f'Example: python add-two-whitespces.py Statistics')
+        print(f'Base path: {BASE_PATH}')
+        sys.exit(1)
     
-    print(f'Processing folder: {target_folder}')
+    # 기본 경로와 인자로 받은 폴더 결합
+    folder_name = sys.argv[1]
+    target_folder = os.path.join(BASE_PATH, folder_name)
+    
+    print(f'Base path: {BASE_PATH}')
+    print(f'Target folder: {folder_name}')
+    print(f'Full path: {target_folder}')
     print('=' * 80)
     process_folder(target_folder)
 
