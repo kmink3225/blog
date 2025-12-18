@@ -68,22 +68,50 @@ def process_folder(folder_path):
 
 # 사용 예시
 if __name__ == '__main__':
-    # 명령행 인자로 폴더 이름 받기
+    # 명령행 인자로 폴더 또는 파일 이름 받기
     if len(sys.argv) < 2:
-        print('Usage: python add-two-whitespces.py <folder_name>')
-        print(f'Example: python add-two-whitespces.py Agent\\13-Cloud-RAG')
-        print(f'Example: python add-two-whitespces.py Statistics')
-        print(f'Base path: {BASE_PATH}')
+        print('Usage: python add-two-whitespces.py <folder_or_file_path>')
+        print(f'Example (folder, relative): python add-two-whitespces.py Agent\\13-Cloud-RAG')
+        print(f'Example (folder, absolute): python add-two-whitespces.py "C:\\Users\\kmkim\\Desktop\\projects\\blog\\docs\\blog\\posts\\Engineering"')
+        print(f'Example (file, absolute): python add-two-whitespces.py "C:\\Users\\kmkim\\Desktop\\projects\\blog\\docs\\blog\\posts\\Engineering\\file.qmd"')
+        print(f'Base path (for relative paths): {BASE_PATH}')
         sys.exit(1)
     
-    # 기본 경로와 인자로 받은 폴더 결합
-    folder_name = sys.argv[1]
-    target_folder = os.path.join(BASE_PATH, folder_name)
+    # 입력받은 경로 처리
+    input_path = sys.argv[1]
     
-    print(f'Base path: {BASE_PATH}')
-    print(f'Target folder: {folder_name}')
-    print(f'Full path: {target_folder}')
+    # 절대경로인지 확인
+    if os.path.isabs(input_path):
+        # 절대경로면 그대로 사용
+        target_path = input_path
+        print(f'Using absolute path: {target_path}')
+    else:
+        # 상대경로면 BASE_PATH와 결합
+        target_path = os.path.join(BASE_PATH, input_path)
+        print(f'Base path: {BASE_PATH}')
+        print(f'Relative path: {input_path}')
+        print(f'Full path: {target_path}')
+    
     print('=' * 80)
-    process_folder(target_folder)
+    
+    # 파일인지 폴더인지 확인
+    if os.path.isfile(target_path):
+        # 단일 파일 처리
+        if target_path.endswith('.qmd'):
+            print(f'Processing single file...')
+            print('-' * 80)
+            if add_trailing_spaces_to_qmd(target_path):
+                print('-' * 80)
+                print('Completed: 1/1 file processed successfully')
+            else:
+                print('-' * 80)
+                print('Failed to process file')
+        else:
+            print(f'Error: File is not a .qmd file')
+    elif os.path.isdir(target_path):
+        # 폴더 재귀 처리
+        process_folder(target_path)
+    else:
+        print(f'Error: Path not found - {target_path}')
 
 
