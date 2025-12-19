@@ -1,0 +1,562 @@
+---
+title: "Azure AI Search 지역 지원 및 계층 선택"
+subtitle: "지역별 기능 가용성과 서비스 계층 비교"
+description: |
+  Azure AI Search의 지역별 기능 지원, 가용성 영역, 서비스 계층별 특징과 선택 가이드를 정리한다.
+categories:
+  - AI
+  - Cloud
+  - Azure
+  - Search
+author: Kwangmin Kim
+date: 12/18/2025
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+---
+
+# Indexs  
+
+요약: Azure AI Search의 인덱스 및 벡터 검색 핵심 개념과 실무 패턴을 간결히 정리한다.  
+
+## Index 구조  
+
+인덱스는 문서 스키마, 필드 속성, analyzer, scoring 설정을 포함한다.  
+
+- `key` 필드는 문서 식별에 필수이며, 각 필드는 `searchable`, `filterable`, `sortable`, `facetable` 속성을 가질 수 있다.  
+- 복합 필드와 컬렉션 타입을 활용해 구조화된 문서 표현을 설계한다.  
+
+설계 원칙: 최소한의 스키마로 시작해 사용 패턴에 따라 확장하고, 불필요한 벡터 필드는 배제한다.  
+
+## Vector Store 핵심  
+
+Azure는 HNSW 기반 ANN으로 고속 근사 검색을 제공하며, 벡터 필드는 `Collection(Edm.Single)`으로 저장한다.  
+
+- 주요 파라미터: `m`, `efConstruction`, `efSearch`.  
+- 트레이드오프: 정확도 vs 메모리 vs 지연.  
+
+간단한 규칙: 프로토타입은 낮은 설정, 프로덕션은 균형 또는 고정확도 설정 사용.  
+
+## Query와 유사도  
+
+- 벡터 쿼리는 임베딩 입력과 `k`를 받아 k-NN을 반환한다.  
+- Cosine이 텍스트 유사도에 일반적이며, L2는 거리 기반, dot product는 특수 모델에서 사용한다.  
+
+멀티벡터 쿼리에서 필드별 가중치로 결합해 멀티모달 결과를 생성할 수 있다.  
+
+## Hybrid Search 요약  
+
+BM25 텍스트 검색과 벡터 검색을 결합하면 검색 품질이 개선된다.  
+
+- RRF 또는 가중치 혼합을 사용해 순위를 통합한다.  
+- 실무에서는 하이브리드가 다양한 질의 유형에서 안정적 성능을 제공한다.  
+
+## Filtering 전략 (간단 가이드)  
+
+- `preFilter`: 필터 먼저 적용 → 후보군 축소 → 벡터 검색 (정확도 우수)  
+- `postFilter`: 벡터 먼저 → 후보 필터링 (지연 적음, k 보장 불가)  
+- 자동 모드: Azure 휴리스틱으로 선택 (일반 권장)  
+
+실무 권장: 엄격한 필터는 `preFilter`, 최소 지연이면 `postFilter`, 일반적은 자동.  
+
+## Vectorizer 통합  
+
+- 인덱싱 시 또는 쿼리 시 임베딩을 생성할 수 있다.  
+- 인덱싱 시 벡터 일관성 보장, 쿼리 시는 클라이언트 단순화 대신 지연 증가.  
+
+지원: Azure OpenAI 배포, Vision 서비스, 커스텀 Web API.  
+
+## Skillset 및 AI Enrichment  
+
+- Skillset은 OCR, NER, 임베딩 생성 등 AI 변환을 파이프라인에 통합한다.  
+- 대규모 처리 시 비용과 지연을 고려해 배치 및 병렬화를 설계한다.  
+
+권장: 비용-성능 트레이드오프를 검증한 후 프로덕션에 적용.  
+
+## Multi-Vector 설계 원칙  
+
+- 서로 다른 표현(제목/본문/요약/이미지)을 분리된 벡터 필드로 보관하고, 필요 시 가중치로 결합한다.  
+- 메모리 계산은 문서 수 × 차원 × 4바이트 × 오버헤드로 산정한다.  
+
+권장: 차원 축소 및 저장 대상 최소화로 비용 절감.  
+
+## 인덱싱 및 처리량  
+
+- 배치 크기: 보통 100~500 권장, 티어와 메모리에 따라 조정.  
+- 증분 인덱싱: High Water Mark 또는 타임스탬프 기반 변경 감지로 비용 절감.  
+
+티어 예시: Standard S1은 중간 규모 워크로드에 적합하나 대규모는 상위 티어 고려.  
+
+## 데이터 수집 방식 비교  
+
+- Indexer: 대규모 배치, AI enrichment에 적합.  
+- Push API: 실시간·고처리량 요구에 적합.  
+- Logic Apps: 이벤트 기반 통합, Low-code 시나리오 적합.  
+
+## RAG(요약)  
+
+- 흐름: 쿼리 임베딩 → 검색 → 융합 → LLM 응답.  
+- 최적화: 임베딩 캐시, 검색·재랭킹, context window 관리.  
+
+엔드투엔드 지연: 검색(수십 ms) + LLM(수백~수천 ms).  
+
+## 멀티테넌시 권장  
+
+- 소수 테넌트: 인덱스 분리 권장.  
+- 다수 테넌트: 통합 인덱스 + 필터 또는 하이브리드 전략 권장.  
+
+## 실시간 업데이트  
+
+- `mergeOrUpload`로 부분 업데이트를 적용하고 임베딩을 재생성해 업로드한다.  
+- 일관성은 eventual이며 반영 지연이 발생할 수 있다.  
+
+## 성능 튜닝 요약  
+
+- 고처리량: `m` 낮추기, `ef*` 낮춤, 캐시 활용.  
+- 고정확도: `m`, `ef*` 증가, 차원 증가, semantic reranking 추가.  
+
+## 비용 최적화 요약  
+
+- 임베딩 모델 선택과 차원 설정이 비용에 큰 영향.  
+- 불필요한 벡터 저장 방지, 압축·차원 축소 권장.  
+
+## 한계와 불확실성  
+
+- 100M+ 스케일의 실무 데이터는 파티셔닝·샤딩 전략 검증 필요.  
+- Azure 내부 휴리스틱은 상세 비공개이므로 실무 테스트 권장.  
+
+## 결론적 의사결정 포인트  
+
+- 키워드 중심이면 BM25 우선, 의미 중심이면 Vector 도입.  
+- 인덱스 크기와 SLA에 따라 pre/post 필터 선택 및 HNSW 튜닝 결정.  
+
+## References  
+
+- Microsoft Learn - Vector Search overview: https://learn.microsoft.com/en-us/azure/search/vector-search-overview  
+- Microsoft Learn - How to query with vector search: https://learn.microsoft.com/en-us/azure/search/vector-search-how-to-query  
+- Microsoft Learn - Vector search filters: https://learn.microsoft.com/en-us/azure/search/vector-search-filters  
+- Microsoft Learn - Configure vectorizers: https://learn.microsoft.com/en-us/azure/search/vector-search-how-to-configure-vectorizer  
+- Microsoft Learn - Multi-vector fields: https://learn.microsoft.com/en-us/azure/search/vector-search-multi-vector-fields  
+- Malkov, Y. & Yashunin, D. (2018). Efficient and robust ANN search using HNSW.  
+- MTEB benchmark: https://huggingface.co/spaces/mteb/leaderboard  
+- 컬럼에 인덱스 생성 (DB 레벨)  
+- 파티셔닝 고려 (시간 기반 파티션)  
+
+**실증 데이터 (Azure SQL Database 기준)**  
+- 1M 행 전체 스캔: 약 5-10분  
+- High Water Mark 사용 시 (1% 변경): 약 30초  
+- 약 10-20배 성능 향상  
+
+### 오류 처리 및 재시도
+
+**Indexer 오류 처리**  
+```json
+{
+  "parameters": {
+    "maxFailedItems": 10,
+    "maxFailedItemsPerBatch": 5,
+    "configuration": {
+      "failOnUnsupportedContentType": false,
+      "failOnUnprocessableDocument": false
+    }
+  }
+}
+```
+
+**재시도 전략 (Microsoft 권장사항)**  
+- 일시적 오류: 지수 백오프 (exponential backoff)  
+- 영구적 오류: 오류 로그 기록 후 건너뛰기  
+- 모니터링: Azure Monitor 통합 (실패율 알림)  
+
+## 실무 고려사항
+
+### 비용 최적화
+
+**Indexer 비용 구조**  
+- 실행 시간 기반 과금 (compute units)  
+- Skillset 사용 시 AI enrichment 추가 비용  
+- 데이터 전송 비용 (다른 리전 간)  
+
+**최적화 기법**  
+- 스케줄 최적화: 변경 빈도에 맞춘 실행 간격  
+- 필드 선택: 필요한 필드만 인덱싱  
+- 배치 크기 조정: 네트워크 대역폭과 메모리 균형  
+
+**예시 계산 (Standard S1, 1M 문서)**  
+- 전체 인덱싱: 월 1회 → 약 $50-$100  
+- 증분 인덱싱: 일 1회 (1% 변경) → 약 $150-$200  
+- AI Enrichment 포함: 추가 $500-$1,000  
+
+### 보안 및 접근 제어
+
+**Managed Identity 사용 (권장)**  
+```json
+{
+  "dataSourceName": "my-blob-datasource",
+  "credentials": {
+    "connectionString": null
+  },
+  "identity": {
+    "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+    "userAssignedIdentity": "/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/..."
+  }
+}
+```
+
+**장점**  
+- 연결 문자열 노출 방지  
+- Azure RBAC 통합  
+- 자동 토큰 갱신  
+
+## 증거의 강도 및 한계
+
+### 증거 출처
+
+- Microsoft Learn 공식 문서: Indexer API 명세, 아키텍처 설계  
+- Azure 가격 계산기: 비용 추정 데이터  
+- 성능 수치는 Microsoft 공개 벤치마크 및 커뮤니티 사례 기반  
+
+### 한계점
+
+- 실제 성능 변동성: 데이터 복잡도, 네트워크 지연, 동시 사용자에 따라 ±30% 변동  
+- AI Enrichment 정확도: OCR 정확도는 이미지 품질에 따라 70-98% 범위  
+- 최신 기능: SharePoint, MySQL 커넥터는 Preview 단계 (SLA 미보장)  
+
+### 대안 기술
+
+**Apache NiFi / Apache Airflow**  
+- 더 복잡한 ETL 파이프라인  
+- 멀티 클라우드 지원  
+- 학습 곡선 높음  
+
+**Azure Data Factory**  
+- 대규모 데이터 이동 (TB-PB)  
+- Azure Search 커넥터 제한적  
+- 배치 처리에 최적화  
+
+## 불확실성 영역
+
+- Logic Apps 성능 한계: 공식 문서에 구체적 처리량 상한선 명시 부족  
+- Skillset 비용 예측: 실제 사용량은 데이터 특성에 따라 크게 변동  
+- 최신 커넥터 안정성: Preview 단계 커넥터의 프로덕션 준비 상태 불명확  
+
+## 권장 의사결정 프레임워크
+
+**데이터 수집 방식 선택 플로우차트**  
+
+```
+데이터 소스 유형?
+├─ Azure 네이티브 (Blob, SQL, Cosmos) 
+│  └─ AI Enrichment 필요?
+│     ├─ Yes → Indexer + Skillset
+│     └─ No → 데이터 변경 빈도?
+│        ├─ 실시간 (<1분) → Push API
+│        └─ 배치 (>5분) → Indexer
+│
+└─ 외부 시스템 / 커스텀 로직
+   └─ 처리량?
+      ├─ 낮음 (<100 docs/sec) → Logic Apps
+      └─ 높음 (>100 docs/sec) → 커스텀 Push API
+```
+
+# Skillsets (AI Enrichment)
+
+## AI Enrichment 핵심 아키텍처
+
+### Enrichment Pipeline 구조
+
+**처리 플로우**  
+```
+Raw Documents → Document Cracking → Skillset Execution → Index Projection
+      ↓                ↓                    ↓                    ↓
+   (Blob/PDF)    (Text Extraction)   (AI Processing)      (Search Index)
+                                            ↓
+                                    Knowledge Store (optional)
+```
+
+**Document Cracking (문서 해체)**  
+- 지원 형식: PDF, Word, Excel, PowerPoint, HTML, JSON, XML, CSV, 이미지 (15+ 형식)  
+- 자동 메타데이터 추출: `metadata_storage_name`, `metadata_content_type`, `metadata_creation_date`  
+- 텍스트 추출 엔진: Tika 기반 (Apache Tika)  
+
+**처리량 (Microsoft 벤치마크)**  
+- PDF (텍스트 기반): 페이지당 평균 50-100ms  
+- PDF (이미지 기반, OCR 필요): 페이지당 평균 2-3초  
+- Office 문서: 페이지당 평균 100-200ms  
+
+### Skillset 정의 및 구성
+
+**Context 및 입출력 매핑**  
+- `context`: 스킬 실행 범위 (document 전체 vs. 각 페이지/이미지)  
+- `source`: 입력 데이터 경로 (JSON Path 스타일)  
+- `targetName`: 출력 데이터 필드명  
+
+## Cognitive Skills (요약)  
+
+- NLP Skills: 핵심 구문 추출, 개체명 인식, 언어 감지, 감정 분석, PIIDetection 등으로 다양한 언어와 처리 지연 특성을 가짐.  
+- Vision Skills: OCR(문서 중심)과 이미지 분석(장면 태깅)을 제공하며, OCR은 페이지당 수초 수준의 처리 시간이 소요될 수 있음.  
+- Custom Skills: Azure Functions 또는 외부 Web API로 커스텀 전처리·분류·임베딩을 통합할 수 있으며 배치 크기와 병렬도 조정으로 처리량을 튜닝한다.  
+
+실무 팁: AI enrichment는 비용·지연을 유발하므로 우선순위가 높은 변환만 파이프라인에 포함하고 배치 처리로 비용을 제어한다.  
+
+## Integrated Vectorization (요약)  
+
+Integrated Vectorization은 인덱싱 파이프라인 내에서 임베딩을 자동 생성해 일관성과 운영 편의성을 제공한다.  
+
+- 장점: 별도 임베딩 파이프라인 불필요, 인덱싱·쿼리 간 모델 불일치 위험 감소.  
+- 단점: 쿼리 지연 소폭 증가(쿼리-time vectorization), 모델 비용 및 rate-limit 영향 고려 필요.  
+
+지원 vectorizer 유형: Azure OpenAI 임베딩, Vision 멀티모달, 또는 커스텀 Web API 연결.  
+
+권장: 프로덕션에서는 사전생성(pre-vectorized)와 통합 vectorization 중 운영·비용·성능 요구에 따라 선택한다.  
+
+**처리 특성**  
+- 텍스트 청킹 자동 처리 (OpenAI 토큰 제한: 8191 tokens)  
+- 배치 처리: 최대 16 documents per request  
+- Rate limiting: Azure OpenAI 할당량에 의존  
+
+### 성능 및 비용 분석
+
+**임베딩 생성 비용 (Azure OpenAI 기준)**  
+- `text-embedding-ada-002`: $0.0001 per 1K tokens  
+- `text-embedding-3-small`: $0.00002 per 1K tokens  
+- `text-embedding-3-large`: $0.00013 per 1K tokens  
+
+**처리량 제약**  
+- Token per minute (TPM) 제한: 모델 및 할당량에 따라 120K-350K TPM  
+- 1M 문서 (평균 500 tokens/doc) 인덱싱:  
+  - 처리 시간: 120K TPM 기준 약 35-40분  
+  - 비용: ada-002 기준 약 $50  
+
+**병목 지점 분석**  
+- Rate Limiting: Azure OpenAI TPM 제한이 주요 병목  
+- Network Latency: 평균 50-100ms 추가 지연  
+- Indexer Throttling: 동시 실행 제한 (S1: 3 indexers, S2: 6 indexers)  
+
+## Knowledge Store 통합
+
+### 개념 및 사용 사례
+
+Knowledge Store는 AI enrichment 결과를 Azure Storage에 영구 저장하는 기능입니다.  
+
+**저장 형식**  
+- Object Projections: JSON Blobs (원본 문서 + enrichments)  
+- File Projections: 이미지, 정규화된 이미지  
+- Table Projections: Azure Table Storage (구조화된 데이터)  
+
+**사용 사례**  
+- 데이터 분석 (Power BI, Synapse Analytics 연동)  
+- ML 학습 데이터셋 구축  
+- 감사 및 규정 준수 (enrichment 추적)  
+- 다운스트림 애플리케이션 통합  
+
+**비용 구조**  
+- Azure Storage: Blob $0.018/GB/month, Table $0.045/GB/month  
+- 트랜잭션 비용: $0.004 per 10,000 operations  
+- 1M 문서 (평균 10KB/doc) Knowledge Store: 약 $180-$450/month  
+
+## Skillset 고급 패턴 및 최적화
+
+### Incremental Enrichment (증분 처리)
+
+**캐싱 메커니즘 (2020년 GA)**  
+```json
+{
+  "cache": {
+    "storageConnectionString": "DefaultEndpointsProtocol=https;...",
+    "enableReprocessing": true
+  }
+}
+```
+
+**작동 원리**  
+- 각 스킬 출력을 Blob Storage에 캐싱  
+- 문서 변경 시 영향받는 스킬만 재실행  
+- 해시 기반 변경 감지 (content hash)  
+
+**비용 절감 효과 (Microsoft 사례 연구)**  
+- 초기 인덱싱: 100% 비용  
+- 10% 문서 변경 시 재인덱싱: 캐싱 미사용 100% vs 캐싱 사용 15-20%  
+- 스킬 정의 변경 시: 영향받는 스킬 다운스트림만 재실행  
+
+**제약사항**  
+- 캐시 스토리지 비용 추가 ($0.018/GB/month)  
+- Custom Web API Skill은 캐싱 미지원 (상태 없는 함수 가정)  
+
+### 병렬 처리 및 성능 튜닝
+
+**최적화 가이드라인**  
+
+| 파라미터 | 기본값 | 권장 범위 | 영향 |
+|---------|--------|----------|------|
+| `batchSize` | 50-100 | 10-1000 | 메모리 vs 처리량 트레이드오프 |
+| `degreeOfParallelism` (Custom Skill) | 1 | 2-5 | API 처리량 vs 부하 |
+| OCR `imageAction` | none | generateNormalizedImages | 이미지 품질 vs 처리 시간 |
+
+**실제 벤치마크 (Standard S2, 100K 문서)**  
+- 기본 설정: 6-8시간  
+- 최적화 후 (`batchSize=500`, parallel skills): 2-3시간  
+- 증분 처리 + 캐싱: 20-30분 (10% 변경 시)  
+
+## 실무 패턴 및 Best Practices
+
+### 멀티모달 검색 파이프라인
+
+**처리 플로우**  
+1. OCR로 이미지에서 텍스트 추출  
+2. 원본 텍스트 + OCR 텍스트 병합  
+3. 2000자 단위로 청킹 (토큰 제한 고려)  
+4. 각 청크를 벡터로 변환  
+5. 인덱스에 페이지 단위로 저장  
+
+### 오류 처리 전략
+
+**일반적 오류 및 해결책**  
+
+| 오류 유형 | 원인 | 해결 방법 |
+|----------|------|----------|
+| `ImageExtractionError` | 손상된 이미지 파일 | `failOnUnsupportedContentType: false` |
+| `OcrTimeoutError` | 대용량 이미지 (>50MB) | 이미지 크기 사전 조정 |
+| `TokenLimitExceeded` | 텍스트 청킹 부족 | `SplitSkill` 추가 |
+| `RateLimitExceeded` | Azure OpenAI TPM 초과 | Retry policy 설정, 배치 크기 감소 |
+
+### 비용 최적화 체크리스트
+
+**스킬 선택성**  
+- 필요한 스킬만 활성화 (모든 문서에 OCR 불필요)  
+- 언어별 조건부 실행  
+
+**임베딩 모델 선택**  
+- `text-embedding-3-small` vs `ada-002`: 5배 저렴, 성능 유사  
+- 차원 축소: 512-dim vs 1536-dim (스토리지 비용 3배 차이)  
+
+**증분 처리 활용**  
+- 캐싱 활성화 (재처리 비용 80% 절감)  
+- High Water Mark 기반 변경 감지  
+
+**배치 크기 최적화**  
+- 네트워크 오버헤드 vs 메모리 사용량 균형  
+- 권장: 100-500 documents/batch  
+
+**예시 비용 분석 (1M 문서, 평균 5페이지/문서)**  
+- OCR (이미지 중심): $5,000-$7,500  
+- Entity Recognition: $500-$1,000  
+- Embeddings (ada-002): $250-$500  
+- Knowledge Store: $200-$400/month  
+- 총 비용: 초기 $6,000-$9,000, 월 $200-$400  
+
+## 증거의 강도 및 한계
+
+### 증거 출처
+
+- Microsoft Learn 공식 문서: Skillset API 명세, 아키텍처 가이드  
+- Azure Pricing Calculator: 비용 추정 데이터  
+- Microsoft Tech Community: 실제 고객 사례 및 벤치마크  
+- OCR 정확도: Computer Vision API 공식 벤치마크 (2023)  
+
+### 한계점
+
+- 성능 수치 변동성: 문서 복잡도, 이미지 품질에 따라 ±50% 변동  
+- 정확도 평가: 공개된 F1-Score는 특정 데이터셋 기준 (실제 도메인에서 다를 수 있음)  
+- 비용 예측: 실제 토큰 사용량은 텍스트 특성에 따라 변동  
+- 최신 기능: Integrated Vectorization은 2023년 GA (장기 안정성 미검증)  
+
+### 대안 기술
+
+**Haystack / LangChain**  
+- 더 유연한 커스터마이징  
+- 멀티 벤더 지원 (OpenAI, Cohere, HuggingFace)  
+- 인프라 관리 필요  
+
+**Elasticsearch with ML**  
+- 온프레미스 배포 가능  
+- ELSER (Elastic Learned Sparse EncodeR) 지원  
+- Azure OpenAI 통합 제한적  
+
+**Azure 통합 장점**  
+- 완전 관리형 (인프라 관리 불필요)  
+- Azure OpenAI, Cognitive Services 네이티브 통합  
+- 엔터프라이즈 보안 (Managed Identity, VNet)  
+
+## 불확실성 영역
+
+- Custom Skill 성능 한계: 대규모 환경에서 Azure Functions 동시성 제한 영향 불명확  
+- Knowledge Store 쿼리 성능: Table Storage 기반 분석 쿼리 성능 (>10M rows) 공식 벤치마크 부족  
+- Multimodal Embeddings 정확도: Azure AI Vision 임베딩의 실제 검색 성능 비교 데이터 제한적  
+- Incremental Enrichment 한계: 복잡한 스킬 의존성 그래프에서의 캐시 효율성 불명확  
+
+## 권장 아키텍처 패턴
+
+### RAG (Retrieval-Augmented Generation) 파이프라인
+
+```
+Document Upload
+    ↓
+Indexer (with Skillset)
+    ├─ OCR (이미지 → 텍스트)
+    ├─ Chunking (2000 chars)
+    ├─ Embeddings (Azure OpenAI)
+    └─ Metadata Extraction (Entity, KeyPhrase)
+    ↓
+Azure Search Index
+    ├─ Text Fields (BM25)
+    ├─ Vector Fields (HNSW)
+    └─ Metadata (필터링용)
+    ↓
+Query Processing
+    ├─ Hybrid Search (Text + Vector)
+    └─ Semantic Reranking
+    ↓
+LLM (Azure OpenAI GPT-4)
+    ├─ Context Injection
+    └─ Response Generation
+```
+
+**핵심 설계 결정**  
+- Chunking 전략: Fixed-size (2000 chars) vs Semantic (문장/문단 단위)  
+- Embedding 모델: ada-002 (범용) vs text-embedding-3-large (높은 정확도)  
+- Reranking: Semantic Ranker (Azure 네이티브) vs Cross-encoder (커스텀)  
+
+## 실무 의사결정 가이드
+
+### AI Enrichment 도입 판단 기준
+
+```
+문서 유형?
+├─ 구조화된 텍스트만 (JSON, CSV)
+│  └─ AI Enrichment 불필요 → 기본 인덱싱
+│
+└─ 비구조화 문서 (PDF, 이미지)
+   └─ 필요 기능?
+      ├─ 텍스트 추출만 → Document Cracking
+      ├─ 메타데이터 추출 (엔티티, 키워드) → Built-in Skills
+      ├─ 벡터 검색 → Integrated Vectorization
+      └─ 도메인 특화 처리 → Custom Skills
+```
+
+**비용 임계점**  
+- 문서 수 < 10K: AI Enrichment 비용 무시 가능 (< $100)  
+- 문서 수 10K-1M: 선택적 스킬 사용 권장  
+- 문서 수 > 1M: 증분 처리 + 캐싱 필수  
+
+## 참고 링크
+
+### Indexs
+- https://learn.microsoft.com/en-us/azure/search/search-what-is-an-index  
+- https://learn.microsoft.com/en-us/azure/search/vector-store  
+- https://learn.microsoft.com/en-us/azure/search/search-how-to-create-search-index?tabs=portal  
+- https://learn.microsoft.com/en-us/azure/search/vector-search-how-to-create-index?tabs=push%2Cportal-check-index  
+
+### Azure Search Indexer 및 데이터 수집 Workflows
+- https://learn.microsoft.com/en-us/azure/search/search-import-data-portal  
+- https://learn.microsoft.com/en-us/azure/search/search-indexer-overview  
+- https://learn.microsoft.com/en-us/azure/search/search-how-to-index-logic-apps  
+
+### Skillsets (AI Enrichment)
+- https://learn.microsoft.com/en-us/azure/search/cognitive-search-concept-intro  
+- https://learn.microsoft.com/en-us/azure/search/vector-search-integrated-vectorization  
+- https://learn.microsoft.com/en-us/azure/search/cognitive-search-working-with-skillsets
+
