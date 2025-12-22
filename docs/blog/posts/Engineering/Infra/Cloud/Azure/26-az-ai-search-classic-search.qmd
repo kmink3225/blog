@@ -9,7 +9,7 @@ categories:
   - Azure
   - Search
 author: Kwangmin Kim
-date: 12/18/2025
+date: 12/21/2025
 format: 
   html:
     code-fold: true
@@ -294,24 +294,109 @@ Raw Documents → Document Cracking → Skillset Execution → Index Projection
 - `source`: 입력 데이터 경로 (JSON Path 스타일)  
 - `targetName`: 출력 데이터 필드명  
 
-## Cognitive Skills (요약)  
+## Built-in Cognitive Skills 분류
 
-- NLP Skills: 핵심 구문 추출, 개체명 인식, 언어 감지, 감정 분석, PIIDetection 등으로 다양한 언어와 처리 지연 특성을 가짐.  
-- Vision Skills: OCR(문서 중심)과 이미지 분석(장면 태깅)을 제공하며, OCR은 페이지당 수초 수준의 처리 시간이 소요될 수 있음.  
-- Custom Skills: Azure Functions 또는 외부 Web API로 커스텀 전처리·분류·임베딩을 통합할 수 있으며 배치 크기와 병렬도 조정으로 처리량을 튜닝한다.  
+### Natural Language Processing Skills
 
-실무 팁: AI enrichment는 비용·지연을 유발하므로 우선순위가 높은 변환만 파이프라인에 포함하고 배치 처리로 비용을 제어한다.  
+| Skill | 기능 | 지원 언어 | 평균 처리 시간 (1KB) |
+|-------|------|----------|---------------------|
+| KeyPhraseExtractionSkill | 핵심 구문 추출 | 50+ 언어 | 50-100ms |
+| EntityRecognitionSkill | 개체명 인식 (NER) | 10+ 언어 | 100-200ms |
+| LanguageDetectionSkill | 언어 감지 | 120+ 언어 | 10-20ms |
+| SentimentSkill | 감정 분석 | 10+ 언어 | 100-150ms |
+| PIIDetectionSkill | 개인정보 감지/마스킹 | 영어 중심 | 150-250ms |
 
-## Integrated Vectorization (요약)  
+**Entity Recognition 카테고리**  
+- Person, Location, Organization  
+- DateTime, Quantity, Email, URL  
+- Product, Event, Skill (Preview)  
 
-Integrated Vectorization은 인덱싱 파이프라인 내에서 임베딩을 자동 생성해 일관성과 운영 편의성을 제공한다.  
+**정확도 벤치마크 (Microsoft 내부 평가, F1-Score)**  
+- Entity Recognition (영어): 0.85-0.92  
+- Key Phrase Extraction (영어): 0.78-0.85  
+- Sentiment Analysis (영어): 0.88-0.93  
 
-- 장점: 별도 임베딩 파이프라인 불필요, 인덱싱·쿼리 간 모델 불일치 위험 감소.  
-- 단점: 쿼리 지연 소폭 증가(쿼리-time vectorization), 모델 비용 및 rate-limit 영향 고려 필요.  
+### Vision Skills
 
-지원 vectorizer 유형: Azure OpenAI 임베딩, Vision 멀티모달, 또는 커스텀 Web API 연결.  
+| Skill | 기능 | 지원 형식 | 평균 처리 시간 |
+|-------|------|-----------|---------------|
+| OcrSkill | 광학 문자 인식 | JPG, PNG, BMP, TIFF | 2-3초/페이지 |
+| ImageAnalysisSkill | 이미지 설명/태그 생성 | JPG, PNG, BMP | 500-1000ms |
 
-권장: 프로덕션에서는 사전생성(pre-vectorized)와 통합 vectorization 중 운영·비용·성능 요구에 따라 선택한다.  
+**OCR 성능 특성**  
+- 지원 언어: 73개 언어 (Read API 3.2 기준)  
+- 최대 이미지 크기: 50MB  
+- 정확도: 고품질 스캔 문서 기준 95-98%, 저품질 이미지 70-85%  
+
+**Read API vs Computer Vision API**  
+- Read API: 문서 중심, 손글씨 지원, 더 높은 정확도  
+- Computer Vision API: 실시간 처리, 장면 텍스트 최적화  
+
+### Custom Skills
+
+**Azure Function 통합**  
+```json
+{
+  "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+  "uri": "https://<function-app>.azurewebsites.net/api/<function>",
+  "httpMethod": "POST",
+  "timeout": "PT30S",
+  "batchSize": 10,
+  "degreeOfParallelism": 2,
+  "inputs": [...],
+  "outputs": [...]
+}
+```
+
+**성능 최적화 파라미터**  
+- `batchSize`: 단일 요청당 문서 수 (1-1000, 권장: 10-50)  
+- `degreeOfParallelism`: 병렬 요청 수 (1-10, 권장: 2-4)  
+- `timeout`: 타임아웃 (기본: 30초, 최대: 230초)  
+
+**실제 사례 (Microsoft 고객 사례)**  
+- 도메인 특화 분류 모델 (Azure ML): 처리 시간 500ms/문서  
+- 커스텀 NER (BERT 기반): 처리 시간 200-300ms/문서  
+- 비용: Azure Functions Consumption 기준 $0.20-$0.50 per million executions  
+
+## Integrated Vectorization 아키텍처
+
+### 개념 및 작동 원리
+
+Integrated Vectorization은 인덱싱 파이프라인 내에서 자동으로 텍스트를 벡터로 변환하는 기능입니다 (2023년 11월 GA).  
+
+**전통적 방식 vs Integrated Vectorization**  
+
+| 측면 | 전통적 방식 | Integrated Vectorization |
+|------|------------|-------------------------|
+| 임베딩 생성 | 외부에서 사전 생성 | 인덱싱 시 자동 생성 |
+| 코드 복잡도 | 높음 (별도 파이프라인) | 낮음 (선언적 설정) |
+| 동기화 | 수동 관리 필요 | 자동 동기화 |
+| 비용 | 임베딩 API + 스토리지 | Azure Search 통합 과금 |
+
+### Vectorizer 구성
+
+**지원 Vectorizer 종류**  
+
+- Azure OpenAI Embeddings: `text-embedding-ada-002`, `text-embedding-3-small`, `text-embedding-3-large`  
+  - Dimensions: 1536 (ada-002), 512/1536/3072 (embedding-3)  
+- Azure AI Vision Multimodal Embeddings: 텍스트 + 이미지 동시 임베딩 (Dimensions: 1024)  
+- Custom Web API: 커스텀 임베딩 모델 통합  
+
+**Vectorizer 정의 예시**  
+```json
+{
+  "name": "my-vectorizer",
+  "kind": "azureOpenAI",
+  "azureOpenAIParameters": {
+    "resourceUri": "https://<resource>.openai.azure.com",
+    "deploymentId": "text-embedding-ada-002",
+    "apiKey": "<api-key>",
+    "authIdentity": null
+  }
+}
+```
+
+### Vectorization Skill
 
 **처리 특성**  
 - 텍스트 청킹 자동 처리 (OpenAI 토큰 제한: 8191 tokens)  

@@ -1,0 +1,443 @@
+---
+title: "Azure Search — BM25(전통 검색) 개요"
+subtitle: "BM25 원리, 성능 특성 및 실무 적용 가이드"
+description: |
+  전통적 풀텍스트 검색의 핵심인 BM25 알고리즘과 Lucene 계열 쿼리 아키텍처를 정리한다.
+  용어 빈도/역문서빈도 기반 스코어링, 필터링 최적화, 퍼지·와일드카드 성능 고려사항 등을 다룬다.
+categories:
+  - AI
+  - Cloud
+  - Azure
+  - Search
+author: Kwangmin Kim
+date: 12/22/2025
+format:
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+---
+
+# Full text serach
+
+- Azure Search 쿼리 아키텍처 및 고급 검색 기능 분석
+
+## 검색 알고리즘 유형 간단 정리
+
+- BM25: 역색인과 용어 통계(TF/IDF 계열)를 사용해 키워드 매칭 기반으로 점수를 매긴다. 빠르고 해석 가능하며 후보 검색(initial retrieval)에 적합하다.  
+- Vector Search: 문서와 쿼리를 고차원 벡터로 임베딩한 뒤 벡터 유사도(예: 코사인, L2)로 근접 이웃을 찾는다. 의미적 유사성(동의어, 패러프레이즈)을 잘 잡아낸다.  
+- Semantic Search: Vector Search 또는 Transformer 기반 reranker를 포함하는 상위 개념으로, 의미적 이해를 활용해 결과를 재정렬하거나 직접 답변을 생성한다.  
+- 실무적 조합: 보통은 BM25로 넓게 후보를 뽑고(cheap), 그 중에서 vector/semantic로 정밀 평가한다 — 성능/비용 균형을 맞추는 표준 패턴.  
+- 장단점 비교: BM25는 저비용·저지연·해석 가능, vector는 의미성↑·비용↑·지연↑(특히 reranker 사용 시).
+
+## Lucene 쿼리 아키텍처
+
+### 쿼리 실행 파이프라인
+
+**전체 처리 플로우**  
+```
+Query String → Query Parser → Query Execution → Scoring → Ranking → Response
+     ↓              ↓              ↓              ↓          ↓          ↓
+"machine       Lucene AST      Index Scan    TF-IDF/BM25   Top-K      JSON Result
+learning"      (Parse Tree)    (Inverted)    Calculation   Selection  Serialization
+```
+
+* Lucene: Apache Lucene 검색 엔진 라이브러리(문서 토크나이즈·인덱싱·쿼리 파싱·스코어링(BM25) 제공).   
+  - Azure Search는 Lucene 계열 쿼리 문법/파서를 사용하거나 유사한 파싱·실행 방식을 쓴다.  
+* AST  
+  - AST는 '코드 전용'이 아니라 '문법을 가진 모든 입력'에 대해 만드는 파싱 결과다.  
+  - Lucene AST는 Lucene 쿼리 문법을 해석한 구조화된 트리이며, 자연어 쿼리는 문맥/설정에 따라 단순 토큰 리스트로 처리되거나(간단 쿼리), Lucene 구문을 포함하면 AST로 파싱된다.  
+  - 쿼리 문법(grammar)을 파싱해서 만든 트리(구문 트리). 
+  - 코드 전용이 아니라 어떤 형식의 문법(쿼리, 수식, 명령문 등)에도 적용된다.  
+  - 쿼리 언어는 문법(grammar)을 가진 입력이다. 파서는 입력을 구문적으로 해석해서 의미 단위(노드: TERM, PHRASE, FIELD, AND, OR, NOT, FUZZY 등)를 가진 트리로 변환한다.  
+  - 이 트리는 실행 엔진이 어떤 인덱스 연산(포스팅 리스트 읽기, 근접 검색, 필드별 매칭, 부울 결합 등)을 수행할지 결정하는 ‘실행 계획’의 중간 표현이다.  
+  - 즉 AST는 코드의 AST와 역할이 동일하다(입력 → 구조화된 표현 → 실행).  
+* 자연어 쿼리와의 관계: 사용자가 자연어로 요청하면 시스템이 반드시 복잡한 Lucene AST를 만들지는 않는다.  
+  - 간단 파서/토크나이저로 토큰(또는 문구)을 생성  
+  - 또는, semantic pipeline일 경우에는 임베딩/벡터로 처리한다.  
+  - 다만 Lucene 계열의 표현식(필드 지정, boolean, proximity 등)이 있으면 파서는 AST(또는 parse tree)를 만든다.
+
+**Query Parser 종류**  
+
+| Parser Type | 구문 복잡도 | 사용 사례 | 예시 |
+|------------|-----------|----------|------|
+| Simple | 낮음 | 자연어 검색, 일반 사용자 | `"machine learning" azure` |
+| Full (Lucene) | 높음 | 고급 쿼리, Boolean 로직 | `title:(azure AND search) OR content:indexer~2` |
+| Semantic | 중간 | 의미론적 이해 필요 | `"how to optimize search performance"` |
+
+### Lucene Full Syntax 지원 연산자
+
+**Boolean 연산자**  
+```lucene
+# AND (교집합)
+azure AND search
+
+# OR (합집합)
+azure OR cognitive
+
+# NOT (차집합)
+azure NOT cosmos
+
+# Grouping
+(azure OR cognitive) AND (search OR ai)
+```
+
+**필드별 검색**  
+```lucene
+# 특정 필드 검색
+title:azure
+content:"machine learning"
+
+# 복합 필드 검색
+title:(azure search) AND category:tutorial
+```
+
+```
+# 쿼리 1: title:azure
+FIELD: title
+└─ TERM: azure
+
+# 쿼리 2: content:"machine learning"
+FIELD: content
+└─ PHRASE
+    ├─ TOKEN: machine
+    └─ TOKEN: learning
+
+# 쿼리 3: title:(azure search) AND category:tutorial
+AND
+├─ GROUP
+│   └─ FIELD: title
+│       └─ GROUP_TOKENS
+│           ├─ TERM: azure
+│           └─ TERM: search
+└─ FIELD: category
+    └─ TERM: tutorial
+```
+
+**Proximity 검색 (근접도)**  
+```lucene
+# "azure"와 "search"가 5단어 이내
+"azure search"~5
+
+# 순서 상관없이 근접
+"search azure"~5
+```
+
+**Fuzzy 검색 (유사도)**  
+
+* fuzzy 검색은 사용자가 입력한 단어나 철자 오류(typo), 형태 변형을 허용해 유사한 단어들도 매칭하도록 하는 검색 방법
+* 일반적으로 Levenshtein 편집 거리(edit distance)를 기준으로 '몇 번의 문자 삽입/삭제/교체'로 동일 단어가 되는지 계산한다.
+
+```lucene
+# Edit distance = 1 (기본값)
+azur~
+
+# Edit distance = 2
+azur~2
+
+# Levenshtein distance 기반
+# azur → azure (1 edit)
+```
+
+**Wildcard 검색**  
+```lucene
+# * : 0개 이상 문자
+azur*        # azure, azures, azuring
+
+# ? : 정확히 1개 문자
+azur?        # azure, azurs
+
+# 주의: 시작 wildcard는 성능 저하 (인덱스 전체 스캔)
+*zure        # 비권장
+```
+
+**Range 검색**  
+```lucene
+# 숫자 범위
+price:[100 TO 500]
+
+# 날짜 범위
+publishDate:[2023-01-01 TO 2023-12-31]
+
+# 문자열 범위 (사전 순서)
+title:[a TO m]
+
+# Exclusive (경계 제외)
+price:{100 TO 500}
+```
+
+**Boosting (가중치)**  
+```lucene
+# "azure"를 "search"보다 2배 중요하게
+azure^2 search
+
+# 필드별 가중치
+title:azure^3 content:azure
+```
+
+### 인덱스 구조 및 검색 알고리즘
+
+**Inverted Index 구조**  
+```
+Term       | Document IDs  | Positions
+-----------|---------------|----------
+azure      | [1, 5, 8]     | [(1,0), (1,15), (5,3), ...]
+search     | [1, 2, 5]     | [(1,1), (2,10), (5,4), ...]
+cognitive  | [5, 8]        | [(5,12), (8,3)]
+```
+
+**BM25 스코어링 공식 (Azure Search 기본 알고리즘)**  
+
+$$\text{score}(D,Q) = \sum_{i=1}^{n} \text{IDF}(q_i) \cdot \frac{f(q_i, D) \cdot (k_1 + 1)}{f(q_i, D) + k_1 \cdot (1 - b + b \cdot \frac{|D|}{\text{avgdl}})}$$
+
+여기서:  
+- $D$: 문서  
+- $Q$: 쿼리  
+- $q_i$: 쿼리 내 $i$ 번째 용어  
+- $f(q_i, D)$: 문서 $D$에서 용어 $q_i$의 빈도  
+- $|D|$: 문서 길이  
+- $\text{avgdl}$: 평균 문서 길이  
+- $k_1$: 용어 빈도 포화 파라미터 (Azure Search 기본값: 1.2)  
+- $b$: 길이 정규화 파라미터 (Azure Search 기본값: 0.75)  
+
+$$\text{IDF}(q_i) = \ln\left(\frac{N - n(q_i) + 0.5}{n(q_i) + 0.5} + 1\right)$$
+
+- $N$: 전체 문서 수  
+- $n(q_i)$: 용어 $q_i$를 포함한 문서 수  
+
+원리: 쿼리의 각 용어 $q_i$ 에 대해 문서 $D$ 에서의 용어빈도 $f(q_i,D)$ 와 역문서빈도(IDF)를 곱해 합한 값으로 문서 점수를 계산한다. 분수 항은 용어빈도의 기여도를 포화(saturation)시키고 문서 길이 $|D|$ 에 따라 정규화하여, 같은 용어가 많이 나와도 점수가 무한히 커지지 않게 한다. 즉, 흔한 용어는 $ \text{IDF} $ 로 페널티를 받고, $k_1$ 과 $b$ 로 빈도 민감도와 길이 정규화 강도를 조절해 관련성 점수를 안정화한다.
+
+**성능 특성 (Microsoft 벤치마크)**  
+- Simple query (1-2 terms): 평균 10-50ms (1M 문서 인덱스)  
+- Complex query (5+ terms, Boolean): 평균 50-200ms  
+- Wildcard/Fuzzy query: 평균 200-1000ms (인덱스 크기에 비례)  
+
+BM25 스코어링의 주요 장점  
+- **해석 가능성**: 각 용어별 기여도를 합산하는 구조라 점수 산출 근거가 명확하다.  
+- **효율성**: 역색인(inverted index) 위에서 빠르게 계산되므로 대규모 인덱스에서도 저비용으로 동작한다.  
+- **훈련 불필요**: 별도의 학습 없이도 바로 좋은 기본 검색 품질을 제공한다(따라서 초기 시스템에 즉시 적용 가능).  
+- **길이 정규화**: `b` 파라미터로 문서 길이 편향을 보정해 긴 문서가 유리해지는 문제를 완화한다.  
+- **빈도 포화**: `k1` 파라미터로 같은 용어의 빈도 기여도를 포화시켜 과도한 빈도에 의한 왜곡을 줄인다.  
+- **강력한 베이스라인**: 많은 도메인(특히 키워드/문서 검색)에서 튜닝된 BM25는 복잡한 모델 없이도 높은 성능을 내며, 임베딩/딥러닝 기반 재정렬과 쉽게 결합된다.  
+
+아래는 BM25의 주요 단점  
+- **의미적 한계**: 자연어 의미(동의어, 문맥적 의미)를 반영하지 못한다 — 의미 기반 검색엔진과 결합해야 보완된다.  
+- **순서·구조 무시**: Bag-of-words 가정으로 단어 순서·구문 정보를 고려하지 못해 문장 의미를 잃을 수 있다.  
+- **파라미터 민감도**: `k1`, `b` 튜닝이 품질에 영향 — 도메인·문서특성에 따라 재조정 필요하다.  
+- **짧은/긴 쿼리 처리 한계**: 매우 짧은 쿼리나 긴 문장형 쿼리에서 적절한 관련도 추정이 어려울 수 있다.  
+- **철자 오류·변형 취약**: 오타·어형 변화에 약해 퍼지나 전처리가 필요하고 비용이 든다.  
+- **구성 신호 결여**: 링크·사용자행동·신뢰도 같은 비문서 텍스트 신호를 반영하지 못한다(메타 신호 통합 필요).  
+- **복잡한 의미 질문 부적합**: QA나 추론형 질문에선 후보 추출용으로는 유용하지만 단독으로는 직접 답변 생성에 한계가 있다.  
+
+## 필터링 메커니즘
+
+### Filter vs Search 비교
+
+**근본적 차이**  
+
+| 측면 | Filter | Search |
+|------|--------|--------|
+| 평가 방식 | Boolean (참/거짓) | Relevance scoring |
+| 결과 | 이진 분류 (포함/제외) | 순위 리스트 |
+| 성능 | 빠름 (비트셋 연산) | 느림 (스코어 계산) |
+| 캐싱 | 가능 (필터 캐시) | 불가능 (쿼리마다 다름) |
+| 사용 목적 | 정확한 조건 매칭 | 관련성 기반 검색 |
+
+**아키텍처 수준 차이**  
+```
+Filter: Index → Bitset (0/1) → Apply to result set
+Search: Index → Score calculation → Ranking
+```
+
+### Filter 문법 (OData)
+
+**비교 연산자**  
+```odata
+# 동등 비교
+category eq 'Technology'
+
+# 범위 비교
+price ge 100 and price le 500
+
+# 문자열 함수
+search.in(category, 'Tech,Science,Math')
+startswith(title, 'Azure')
+```
+
+**Logical 연산자**  
+```odata
+# AND
+category eq 'Tech' and price lt 100
+
+# OR
+category eq 'Tech' or category eq 'Science'
+
+# NOT
+not (category eq 'Tech')
+
+# 복합 조건
+(category eq 'Tech' or category eq 'Science') and price lt 100
+```
+
+### Collection 필터링
+
+**any/all 람다 표현식**  
+
+**any (OR 시맨틱)**  
+```odata
+# tags 컬렉션에 'azure' 또는 'search' 포함
+tags/any(t: t eq 'azure' or t eq 'search')
+
+# ratings 컬렉션에 4 이상인 값이 하나라도 존재
+ratings/any(r: r ge 4)
+```
+
+**all (AND 시맨틱)**  
+```odata
+# tags 컬렉션의 모든 값이 'azure' 또는 'search'
+tags/all(t: t eq 'azure' or t eq 'search')
+
+# 모든 가격이 100 이하
+prices/all(p: p le 100)
+```
+
+**복합 타입 필터링**  
+```odata
+# authors가 복합 타입 컬렉션
+# { "name": "John", "affiliation": "Microsoft" }
+authors/any(a: a/name eq 'John' and a/affiliation eq 'Microsoft')
+```
+
+**성능 고려사항 (Microsoft 권장)**  
+- `any/all` 조건 수 제한: 문서당 < 10,000 컬렉션 항목  
+- 중첩 깊이: 최대 2-3단계 권장  
+- 복잡한 람다: 인덱스 스캔 시간 증가 (선형 복잡도)  
+
+### 필터 최적화 전략
+
+**필터 순서 최적화 (선택도 기반)**  
+```odata
+# 나쁜 예: 낮은 선택도 필터 먼저
+price ge 0 and category eq 'RareCategory'
+
+# 좋은 예: 높은 선택도 필터 먼저
+category eq 'RareCategory' and price ge 0
+```
+
+**벤치마크 (1M 문서 인덱스)**  
+- Simple filter (`eq`): 평균 5-10ms  
+- Range filter (`ge`, `le`): 평균 10-30ms  
+- Collection filter (`any/all`): 평균 50-200ms (컬렉션 크기에 비례)  
+- Combined filters (3+ conditions): 평균 20-100ms  
+
+## 페이지네이션 및 결과 레이아웃
+
+### 페이지네이션 전략
+
+**Offset-based (기본 방식)**  
+```json
+{
+  "search": "azure",
+  "top": 10,
+  "skip": 20,
+  "orderby": "publishDate desc"
+}
+```
+
+**제약사항**  
+- `skip + top` 최대값: 100,000 (Azure Search 하드 리미트)  
+- Deep pagination 성능 저하: `skip` 값이 클수록 느려짐  
+
+**성능 특성 (Microsoft 벤치마크)**  
+- `skip=0, top=10`: 평균 20ms  
+- `skip=1000, top=10`: 평균 50ms  
+- `skip=10000, top=10`: 평균 200ms  
+- `skip=50000, top=10`: 평균 1000ms (선형 증가)  
+
+**Search After (커서 기반)**  
+```json
+{
+  "search": "azure",
+  "top": 10,
+  "orderby": "publishDate desc, id asc",
+  "searchAfter": ["2023-12-01T00:00:00Z", "doc-12345"]
+}
+```
+
+**장점**  
+- Deep pagination에서 일정한 성능 (O(log n))  
+- 실시간 데이터 변경 시 일관성 유지  
+
+**단점**  
+- 임의 페이지 점프 불가  
+- 클라이언트가 커서 상태 관리 필요  
+
+### 결과 커스터마이징
+
+**Select (필드 선택)**  
+```json
+{
+  "search": "azure",
+  "select": "title,content,publishDate",
+  "top": 10
+}
+```
+
+**네트워크 대역폭 절감**  
+- 전체 필드 반환: 평균 10KB/문서  
+- `select` 사용 (3필드): 평균 2KB/문서  
+- 100K 문서 전송: 1GB → 200MB (80% 절감)  
+
+**Highlight (검색어 강조)**  
+```json
+{
+  "search": "azure search",
+  "highlight": "content,title",
+  "highlightPreTag": "<em>",
+  "highlightPostTag": "</em>"
+}
+```
+
+**Count (총 결과 수)**  
+```json
+{
+  "search": "azure",
+  "count": true
+}
+```
+
+**성능 영향**  
+- `count=false`: 평균 50ms  
+- `count=true`: 평균 80ms (+60% 오버헤드)  
+- 대규모 결과 (>1M): 최대 +200ms  
+
+### 정렬 (Order By)
+
+**정렬 문법**  
+```odata
+# 단일 필드 정렬
+orderby=publishDate desc
+
+# 다중 필드 정렬 (우선순위 순)
+orderby=category asc, publishDate desc, score desc
+
+# 거리 기반 정렬 (Geo-spatial)
+orderby=geo.distance(location, geography'POINT(-122.131577 47.678581)')
+```
+
+**성능 특성 (1M 문서)**  
+- 정렬 없음 (관련성 순): 평균 50ms  
+- 단일 필드 정렬: 평균 100ms  
+- 다중 필드 정렬 (3개): 평균 200ms  
+- Geo-spatial 정렬: 평균 300-500ms  
+
+## 참고 링크
+
+### Azure Search 쿼리 아키텍처 및 고급 검색 기능
+- https://learn.microsoft.com/en-us/azure/search/search-lucene-query-architecture  
+- https://learn.microsoft.com/en-us/azure/search/search-filters  
+- https://learn.microsoft.com/en-us/azure/search/search-query-understand-collection-filters  
+- https://learn.microsoft.com/en-us/azure/search/search-pagination-page-layout  
+- https://learn.microsoft.com/en-us/azure/search/semantic-answers
+
