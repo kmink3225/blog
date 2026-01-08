@@ -1,0 +1,1956 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.543">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="Self-Consistency의 정의부터 실전 구현까지 체계적으로 설명한다. Wang et al.&nbsp;(2022) “Self-Consistency Improves Chain of Thought Reasoning” 연구를 바탕으로 다수결 투표(Majority Voting)의 원리, 여러 추론 경로 생성 메커니즘, 샘플링 수와 Temperature 설정의 최적화 전략을 분석한다. GSM8K, MultiArith, CommonsenseQA 등 벤치마크에서 CoT 대비 최대 17%p 성능 향상 결과를 제시하고, 재닛의 오리 문제, 보안 이메일 분류, 복잡한 산술 문제 등 실무 예시와 Python 구현 코드(OpenAI API 활용)를 통해 실전 활용 방법을 상세히 다룬다. 비용-성능 트레이드오프 분석, 적용 시나리오별 권장사항, Hybrid Approach와 Confidence-Based Re-sampling 등 최적화 패턴을 제시한다.">
+
+<title>Kwangmin Kim - Self-Consistency</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete-preset-algolia.umd.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "algolia": {
+    "application-id": "DUOR1DRC9D",
+    "search-only-api-key": "f264da5dea684ffb9e9b4a574af3ed61",
+    "index-name": "prod_QUARTO",
+    "analytics-events": true,
+    "show-logo": true,
+    "libDir": "site_libs"
+  },
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script src="https://cdn.jsdelivr.net/npm/algoliasearch@4.5.1/dist/algoliasearch-lite.umd.js"></script>
+
+
+<script type="text/javascript">
+var ALGOLIA_INSIGHTS_SRC = "https://cdn.jsdelivr.net/npm/search-insights/dist/search-insights.iife.min.js";
+!function(e,a,t,n,s,i,c){e.AlgoliaAnalyticsObject=s,e[s]=e[s]||function(){
+(e[s].queue=e[s].queue||[]).push(arguments)},i=a.createElement(t),c=a.getElementsByTagName(t)[0],
+i.async=1,i.src=n,c.parentNode.insertBefore(i,c)
+}(window,document,"script",ALGOLIA_INSIGHTS_SRC,"aa");
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@algolia/autocomplete-plugin-algolia-insights">
+
+</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Kwangmin Kim - Self-Consistency">
+<meta property="og:description" content="Self-Consistency의 정의부터 실전 구현까지 체계적으로 설명한다. Wang et al.&nbsp;(2022) “Self-Consistency Improves Chain of Thought Reasoning” 연구를 바탕으로 다수결 투표(Majority Voting)의 원리, 여러 추론 경로 생성 메커니즘, 샘플링 수와 Temperature 설정의 최적화 전략을 분석한다. GSM8K, MultiArith, CommonsenseQA 등 벤치마크에서 CoT 대비 최대 17%p 성능 향상 결과를 제시하고, 재닛의 오리 문제, 보안 이메일 분류, 복잡한 산술 문제 등 실무 예시와 Python 구현 코드(OpenAI API 활용)를 통해 실전 활용 방법을 상세히 다룬다. 비용-성능 트레이드오프 분석, 적용 시나리오별 권장사항, Hybrid Approach와 Confidence-Based Re-sampling 등 최적화 패턴을 제시한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+<meta name="twitter:title" content="Kwangmin Kim - Self-Consistency">
+<meta name="twitter:description" content="Self-Consistency의 정의부터 실전 구현까지 체계적으로 설명한다. Wang et al.&nbsp;(2022) “Self-Consistency Improves Chain of Thought Reasoning” 연구를 바탕으로 다수결 투표(Majority Voting)의 원리, 여러 추론 경로 생성 메커니즘, 샘플링 수와 Temperature 설정의 최적화 전략을 분석한다. GSM8K, MultiArith, CommonsenseQA 등 벤치마크에서 CoT 대비 최대 17%p 성능 향상 결과를 제시하고, 재닛의 오리 문제, 보안 이메일 분류, 복잡한 산술 문제 등 실무 예시와 Python 구현 코드(OpenAI API 활용)를 통해 실전 활용 방법을 상세히 다룬다. 비용-성능 트레이드오프 분석, 적용 시나리오별 권장사항, Hybrid Approach와 Confidence-Based Re-sampling 등 최적화 패턴을 제시한다.">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+          <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-page-left">
+      <h1 class="title">Self-Consistency</h1>
+            <p class="subtitle lead">다수결 투표로 LLM 추론 정확도를 극대화하는 고급 프롬프팅 기법</p>
+                  <div>
+        <div class="description">
+          <p>Self-Consistency의 정의부터 실전 구현까지 체계적으로 설명한다. Wang et al.&nbsp;(2022) “Self-Consistency Improves Chain of Thought Reasoning” 연구를 바탕으로 다수결 투표(Majority Voting)의 원리, 여러 추론 경로 생성 메커니즘, 샘플링 수와 Temperature 설정의 최적화 전략을 분석한다. GSM8K, MultiArith, CommonsenseQA 등 벤치마크에서 CoT 대비 최대 17%p 성능 향상 결과를 제시하고, 재닛의 오리 문제, 보안 이메일 분류, 복잡한 산술 문제 등 실무 예시와 Python 구현 코드(OpenAI API 활용)를 통해 실전 활용 방법을 상세히 다룬다. 비용-성능 트레이드오프 분석, 적용 시나리오별 권장사항, Hybrid Approach와 Confidence-Based Re-sampling 등 최적화 패턴을 제시한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Prompt Engineering</div>
+                <div class="quarto-category">LLM</div>
+                <div class="quarto-category">AI</div>
+                <div class="quarto-category">Agent</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta column-page-left">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2025년 01월 30일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-full page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#part-6-self-consistency---다수결로-정확도를-높이는-법" id="toc-part-6-self-consistency---다수결로-정확도를-높이는-법" class="nav-link active" data-scroll-target="#part-6-self-consistency---다수결로-정확도를-높이는-법"><span class="header-section-number">1</span> Part 6: Self-Consistency - 다수결로 정확도를 높이는 법</a>
+  <ul class="collapse">
+  <li><a href="#들어가며" id="toc-들어가며" class="nav-link" data-scroll-target="#들어가며"><span class="header-section-number">1.1</span> 들어가며</a></li>
+  <li><a href="#self-consistency란" id="toc-self-consistency란" class="nav-link" data-scroll-target="#self-consistency란"><span class="header-section-number">1.2</span> Self-Consistency란?</a>
+  <ul class="collapse">
+  <li><a href="#정의" id="toc-정의" class="nav-link" data-scroll-target="#정의"><span class="header-section-number">1.2.1</span> 정의</a></li>
+  <li><a href="#핵심-아이디어" id="toc-핵심-아이디어" class="nav-link" data-scroll-target="#핵심-아이디어"><span class="header-section-number">1.2.2</span> 핵심 아이디어</a></li>
+  </ul></li>
+  <li><a href="#연구-배경-wang-et-al.-2022" id="toc-연구-배경-wang-et-al.-2022" class="nav-link" data-scroll-target="#연구-배경-wang-et-al.-2022"><span class="header-section-number">1.3</span> 연구 배경: Wang et al.&nbsp;(2022)</a>
+  <ul class="collapse">
+  <li><a href="#self-consistency-improves-chain-of-thought-reasoning" id="toc-self-consistency-improves-chain-of-thought-reasoning" class="nav-link" data-scroll-target="#self-consistency-improves-chain-of-thought-reasoning"><span class="header-section-number">1.3.1</span> “Self-Consistency Improves Chain of Thought Reasoning”</a></li>
+  <li><a href="#self-consistency의-3단계-프로세스" id="toc-self-consistency의-3단계-프로세스" class="nav-link" data-scroll-target="#self-consistency의-3단계-프로세스"><span class="header-section-number">1.3.2</span> Self-Consistency의 3단계 프로세스</a></li>
+  </ul></li>
+  <li><a href="#실제-예시-재닛의-오리-문제" id="toc-실제-예시-재닛의-오리-문제" class="nav-link" data-scroll-target="#실제-예시-재닛의-오리-문제"><span class="header-section-number">1.4</span> 실제 예시: 재닛의 오리 문제</a>
+  <ul class="collapse">
+  <li><a href="#문제-설정" id="toc-문제-설정" class="nav-link" data-scroll-target="#문제-설정"><span class="header-section-number">1.4.1</span> 문제 설정</a></li>
+  <li><a href="#다양한-추론-경로-생성" id="toc-다양한-추론-경로-생성" class="nav-link" data-scroll-target="#다양한-추론-경로-생성"><span class="header-section-number">1.4.2</span> 다양한 추론 경로 생성</a></li>
+  <li><a href="#다수결-투표" id="toc-다수결-투표" class="nav-link" data-scroll-target="#다수결-투표"><span class="header-section-number">1.4.3</span> 다수결 투표</a></li>
+  </ul></li>
+  <li><a href="#연구-결과-self-consistency의-효과" id="toc-연구-결과-self-consistency의-효과" class="nav-link" data-scroll-target="#연구-결과-self-consistency의-효과"><span class="header-section-number">1.5</span> 연구 결과: Self-Consistency의 효과</a>
+  <ul class="collapse">
+  <li><a href="#산술-추론-arithmetic-reasoning-성능" id="toc-산술-추론-arithmetic-reasoning-성능" class="nav-link" data-scroll-target="#산술-추론-arithmetic-reasoning-성능"><span class="header-section-number">1.5.1</span> 산술 추론 (Arithmetic Reasoning) 성능</a></li>
+  <li><a href="#상식-추론-commonsense-reasoning-성능" id="toc-상식-추론-commonsense-reasoning-성능" class="nav-link" data-scroll-target="#상식-추론-commonsense-reasoning-성능"><span class="header-section-number">1.5.2</span> 상식 추론 (Commonsense Reasoning) 성능</a></li>
+  <li><a href="#샘플링-수에-따른-성능-변화" id="toc-샘플링-수에-따른-성능-변화" class="nav-link" data-scroll-target="#샘플링-수에-따른-성능-변화"><span class="header-section-number">1.5.3</span> 샘플링 수에 따른 성능 변화</a></li>
+  </ul></li>
+  <li><a href="#aggregation-전략-어떻게-투표할까" id="toc-aggregation-전략-어떻게-투표할까" class="nav-link" data-scroll-target="#aggregation-전략-어떻게-투표할까"><span class="header-section-number">1.6</span> Aggregation 전략: 어떻게 투표할까?</a>
+  <ul class="collapse">
+  <li><a href="#majority-voting-다수결-투표---가장-효과적" id="toc-majority-voting-다수결-투표---가장-효과적" class="nav-link" data-scroll-target="#majority-voting-다수결-투표---가장-효과적"><span class="header-section-number">1.6.1</span> 1. Majority Voting (다수결 투표) - 가장 효과적</a></li>
+  <li><a href="#weighted-voting-가중-투표" id="toc-weighted-voting-가중-투표" class="nav-link" data-scroll-target="#weighted-voting-가중-투표"><span class="header-section-number">1.6.2</span> 2. Weighted Voting (가중 투표)</a></li>
+  <li><a href="#first-valid-answer-첫-유효-답변" id="toc-first-valid-answer-첫-유효-답변" class="nav-link" data-scroll-target="#first-valid-answer-첫-유효-답변"><span class="header-section-number">1.6.3</span> 3. First Valid Answer (첫 유효 답변)</a></li>
+  <li><a href="#연구-결과-majority-voting이-최선" id="toc-연구-결과-majority-voting이-최선" class="nav-link" data-scroll-target="#연구-결과-majority-voting이-최선"><span class="header-section-number">1.6.4</span> 연구 결과: Majority Voting이 최선</a></li>
+  </ul></li>
+  <li><a href="#실습-self-consistency-적용하기" id="toc-실습-self-consistency-적용하기" class="nav-link" data-scroll-target="#실습-self-consistency-적용하기"><span class="header-section-number">1.7</span> 실습: Self-Consistency 적용하기</a>
+  <ul class="collapse">
+  <li><a href="#실습-준비" id="toc-실습-준비" class="nav-link" data-scroll-target="#실습-준비"><span class="header-section-number">1.7.1</span> 실습 준비</a></li>
+  <li><a href="#실습-1-재닛의-오리-문제" id="toc-실습-1-재닛의-오리-문제" class="nav-link" data-scroll-target="#실습-1-재닛의-오리-문제"><span class="header-section-number">1.7.2</span> 실습 1: 재닛의 오리 문제</a></li>
+  <li><a href="#실습-2-보안-이메일-분류" id="toc-실습-2-보안-이메일-분류" class="nav-link" data-scroll-target="#실습-2-보안-이메일-분류"><span class="header-section-number">1.7.3</span> 실습 2: 보안 이메일 분류</a></li>
+  <li><a href="#실습-3-복잡한-산술-문제" id="toc-실습-3-복잡한-산술-문제" class="nav-link" data-scroll-target="#실습-3-복잡한-산술-문제"><span class="header-section-number">1.7.4</span> 실습 3: 복잡한 산술 문제</a></li>
+  </ul></li>
+  <li><a href="#self-consistency-최적화-가이드" id="toc-self-consistency-최적화-가이드" class="nav-link" data-scroll-target="#self-consistency-최적화-가이드"><span class="header-section-number">1.8</span> Self-Consistency 최적화 가이드</a>
+  <ul class="collapse">
+  <li><a href="#temperature-설정" id="toc-temperature-설정" class="nav-link" data-scroll-target="#temperature-설정"><span class="header-section-number">1.8.1</span> 1. Temperature 설정</a></li>
+  <li><a href="#샘플-수-선택" id="toc-샘플-수-선택" class="nav-link" data-scroll-target="#샘플-수-선택"><span class="header-section-number">1.8.2</span> 2. 샘플 수 선택</a></li>
+  <li><a href="#답-추출-패턴-정교화" id="toc-답-추출-패턴-정교화" class="nav-link" data-scroll-target="#답-추출-패턴-정교화"><span class="header-section-number">1.8.3</span> 3. 답 추출 패턴 정교화</a></li>
+  <li><a href="#프롬프트-엔지니어링" id="toc-프롬프트-엔지니어링" class="nav-link" data-scroll-target="#프롬프트-엔지니어링"><span class="header-section-number">1.8.4</span> 4. 프롬프트 엔지니어링</a></li>
+  </ul></li>
+  <li><a href="#self-consistency의-장점과-한계" id="toc-self-consistency의-장점과-한계" class="nav-link" data-scroll-target="#self-consistency의-장점과-한계"><span class="header-section-number">1.9</span> Self-Consistency의 장점과 한계</a>
+  <ul class="collapse">
+  <li><a href="#장점" id="toc-장점" class="nav-link" data-scroll-target="#장점"><span class="header-section-number">1.9.1</span> 장점</a></li>
+  <li><a href="#한계" id="toc-한계" class="nav-link" data-scroll-target="#한계"><span class="header-section-number">1.9.2</span> 한계</a></li>
+  </ul></li>
+  <li><a href="#언제-self-consistency를-사용해야-할까" id="toc-언제-self-consistency를-사용해야-할까" class="nav-link" data-scroll-target="#언제-self-consistency를-사용해야-할까"><span class="header-section-number">1.10</span> 언제 Self-Consistency를 사용해야 할까?</a>
+  <ul class="collapse">
+  <li><a href="#self-consistency가-적합한-경우" id="toc-self-consistency가-적합한-경우" class="nav-link" data-scroll-target="#self-consistency가-적합한-경우"><span class="header-section-number">1.10.1</span> Self-Consistency가 적합한 경우</a></li>
+  <li><a href="#chain-of-thought로-충분한-경우" id="toc-chain-of-thought로-충분한-경우" class="nav-link" data-scroll-target="#chain-of-thought로-충분한-경우"><span class="header-section-number">1.10.2</span> Chain-of-Thought로 충분한 경우</a></li>
+  </ul></li>
+  <li><a href="#비용-성능-분석" id="toc-비용-성능-분석" class="nav-link" data-scroll-target="#비용-성능-분석"><span class="header-section-number">1.11</span> 비용-성능 분석</a>
+  <ul class="collapse">
+  <li><a href="#시나리오별-권장사항" id="toc-시나리오별-권장사항" class="nav-link" data-scroll-target="#시나리오별-권장사항"><span class="header-section-number">1.11.1</span> 시나리오별 권장사항</a></li>
+  <li><a href="#roi-계산-예시" id="toc-roi-계산-예시" class="nav-link" data-scroll-target="#roi-계산-예시"><span class="header-section-number">1.11.2</span> ROI 계산 예시</a></li>
+  </ul></li>
+  <li><a href="#실전-활용-패턴" id="toc-실전-활용-패턴" class="nav-link" data-scroll-target="#실전-활용-패턴"><span class="header-section-number">1.12</span> 실전 활용 패턴</a>
+  <ul class="collapse">
+  <li><a href="#패턴-1-hybrid-approach-하이브리드" id="toc-패턴-1-hybrid-approach-하이브리드" class="nav-link" data-scroll-target="#패턴-1-hybrid-approach-하이브리드"><span class="header-section-number">1.12.1</span> 패턴 1: Hybrid Approach (하이브리드)</a></li>
+  <li><a href="#패턴-2-confidence-based-re-sampling" id="toc-패턴-2-confidence-based-re-sampling" class="nav-link" data-scroll-target="#패턴-2-confidence-based-re-sampling"><span class="header-section-number">1.12.2</span> 패턴 2: Confidence-Based Re-sampling</a></li>
+  <li><a href="#패턴-3-ensemble-with-multiple-prompts" id="toc-패턴-3-ensemble-with-multiple-prompts" class="nav-link" data-scroll-target="#패턴-3-ensemble-with-multiple-prompts"><span class="header-section-number">1.12.3</span> 패턴 3: Ensemble with Multiple Prompts</a></li>
+  </ul></li>
+  <li><a href="#종합-실습-완전한-self-consistency-시스템" id="toc-종합-실습-완전한-self-consistency-시스템" class="nav-link" data-scroll-target="#종합-실습-완전한-self-consistency-시스템"><span class="header-section-number">1.13</span> 종합 실습: 완전한 Self-Consistency 시스템</a></li>
+  <li><a href="#마무리-프롬프트-엔지니어링-여정의-완성" id="toc-마무리-프롬프트-엔지니어링-여정의-완성" class="nav-link" data-scroll-target="#마무리-프롬프트-엔지니어링-여정의-완성"><span class="header-section-number">1.14</span> 마무리: 프롬프트 엔지니어링 여정의 완성</a>
+  <ul class="collapse">
+  <li><a href="#전체-여정-요약" id="toc-전체-여정-요약" class="nav-link" data-scroll-target="#전체-여정-요약"><span class="header-section-number">1.14.1</span> 전체 여정 요약</a></li>
+  <li><a href="#기법-선택-가이드-최종" id="toc-기법-선택-가이드-최종" class="nav-link" data-scroll-target="#기법-선택-가이드-최종"><span class="header-section-number">1.14.2</span> 기법 선택 가이드 (최종)</a></li>
+  <li><a href="#성능-비용-비교-최종" id="toc-성능-비용-비교-최종" class="nav-link" data-scroll-target="#성능-비용-비교-최종"><span class="header-section-number">1.14.3</span> 성능-비용 비교 (최종)</a></li>
+  <li><a href="#핵심-원칙" id="toc-핵심-원칙" class="nav-link" data-scroll-target="#핵심-원칙"><span class="header-section-number">1.14.4</span> 핵심 원칙</a></li>
+  </ul></li>
+  <li><a href="#다음-단계-advanced-techniques" id="toc-다음-단계-advanced-techniques" class="nav-link" data-scroll-target="#다음-단계-advanced-techniques"><span class="header-section-number">1.15</span> 다음 단계: Advanced Techniques</a></li>
+  <li><a href="#마지막-실습-종합-문제" id="toc-마지막-실습-종합-문제" class="nav-link" data-scroll-target="#마지막-실습-종합-문제"><span class="header-section-number">1.16</span> 마지막 실습: 종합 문제</a></li>
+  <li><a href="#참고문헌" id="toc-참고문헌" class="nav-link" data-scroll-target="#참고문헌"><span class="header-section-number">1.17</span> 참고문헌</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block column-page-left" id="quarto-document-content">
+
+
+
+
+
+<section id="part-6-self-consistency---다수결로-정확도를-높이는-법" class="level1" data-number="1">
+<h1 data-number="1"><span class="header-section-number">1</span> Part 6: Self-Consistency - 다수결로 정확도를 높이는 법</h1>
+<section id="들어가며" class="level2" data-number="1.1">
+<h2 data-number="1.1" class="anchored" data-anchor-id="들어가며"><span class="header-section-number">1.1</span> 들어가며</h2>
+<p>지금까지 우리는 프롬프트 엔지니어링의 핵심 기법들을 배워왔습니다: - Zero-Shot: 예시 없이 작업 수행 - Few-Shot: 소수의 예시로 성능 향상 - Chain-of-Thought: 단계별 추론으로 복잡한 문제 해결 - Zero-Shot CoT: “단계적으로 생각해봅시다”만으로 추론 능력 획득</p>
+<p>하지만 여전히 한 가지 문제가 남아있습니다. <strong>한 번의 추론이 틀릴 수 있다</strong>는 것입니다.</p>
+<pre><code>같은 문제를 풀어도:
+시도 1: 답 = 18 ✅
+시도 2: 답 = 16 ❌
+시도 3: 답 = 18 ✅
+시도 4: 답 = 20 ❌
+시도 5: 답 = 18 ✅
+
+어느 것이 정답일까?</code></pre>
+<p>이번 글에서는 <strong>Self-Consistency</strong>를 통해 여러 추론 경로를 활용하여 더 정확한 답을 얻는 방법을 알아보겠습니다.</p>
+</section>
+<section id="self-consistency란" class="level2" data-number="1.2">
+<h2 data-number="1.2" class="anchored" data-anchor-id="self-consistency란"><span class="header-section-number">1.2</span> Self-Consistency란?</h2>
+<section id="정의" class="level3" data-number="1.2.1">
+<h3 data-number="1.2.1" class="anchored" data-anchor-id="정의"><span class="header-section-number">1.2.1</span> 정의</h3>
+<p>Self-Consistency는 <strong>같은 문제에 대해 여러 개의 추론 경로를 생성하고, 가장 일관되게 나타나는 답을 최종 답으로 선택하는 방법</strong>입니다.</p>
+<pre><code>┌─────────────────────────────────────┐
+│  Chain-of-Thought (기존)             │
+├─────────────────────────────────────┤
+│  문제 → 추론 경로 1개 → 답 1개      │
+│  (한 번의 시도)                      │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│  Self-Consistency (본 기법)          │
+├─────────────────────────────────────┤
+│  문제 → 추론 경로 여러 개 생성       │
+│       → 답 여러 개                   │
+│       → 다수결 투표                  │
+│       → 최종 답                      │
+└─────────────────────────────────────┘</code></pre>
+</section>
+<section id="핵심-아이디어" class="level3" data-number="1.2.2">
+<h3 data-number="1.2.2" class="anchored" data-anchor-id="핵심-아이디어"><span class="header-section-number">1.2.2</span> 핵심 아이디어</h3>
+<p>“여러 사람에게 같은 문제를 풀게 하고, 다수결로 정하자”</p>
+<p>마치 시험에서 어려운 문제를 만났을 때: - 한 명에게만 물어보면 틀릴 수 있음 - 여러 명에게 물어보고 가장 많이 나온 답을 선택하면 더 정확함</p>
+</section>
+</section>
+<section id="연구-배경-wang-et-al.-2022" class="level2" data-number="1.3">
+<h2 data-number="1.3" class="anchored" data-anchor-id="연구-배경-wang-et-al.-2022"><span class="header-section-number">1.3</span> 연구 배경: Wang et al.&nbsp;(2022)</h2>
+<section id="self-consistency-improves-chain-of-thought-reasoning" class="level3" data-number="1.3.1">
+<h3 data-number="1.3.1" class="anchored" data-anchor-id="self-consistency-improves-chain-of-thought-reasoning"><span class="header-section-number">1.3.1</span> “Self-Consistency Improves Chain of Thought Reasoning”</h3>
+<p>Google Research의 연구팀이 제안한 이 기법은 Chain-of-Thought의 성능을 크게 향상시켰습니다.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="이미지 생략.png" class="img-fluid figure-img"></p>
+<figcaption>Self-Consistency 다이어그램</figcaption>
+</figure>
+</div>
+</section>
+<section id="self-consistency의-3단계-프로세스" class="level3" data-number="1.3.2">
+<h3 data-number="1.3.2" class="anchored" data-anchor-id="self-consistency의-3단계-프로세스"><span class="header-section-number">1.3.2</span> Self-Consistency의 3단계 프로세스</h3>
+<pre><code>┌─────────────────────────────────────────┐
+│ 1단계: 다양한 추론 경로 생성             │
+├─────────────────────────────────────────┤
+│ 같은 문제를 여러 번 풀게 함              │
+│ (Temperature를 높여 다양성 확보)         │
+└─────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────┐
+│ 2단계: 각 경로에서 최종 답 추출          │
+├─────────────────────────────────────────┤
+│ 추론 과정은 다르지만 답은 명확히 식별    │
+└─────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────┐
+│ 3단계: 다수결 투표 (Majority Voting)     │
+├─────────────────────────────────────────┤
+│ 가장 많이 나온 답을 최종 답으로 선택     │
+└─────────────────────────────────────────┘</code></pre>
+</section>
+</section>
+<section id="실제-예시-재닛의-오리-문제" class="level2" data-number="1.4">
+<h2 data-number="1.4" class="anchored" data-anchor-id="실제-예시-재닛의-오리-문제"><span class="header-section-number">1.4</span> 실제 예시: 재닛의 오리 문제</h2>
+<section id="문제-설정" class="level3" data-number="1.4.1">
+<h3 data-number="1.4.1" class="anchored" data-anchor-id="문제-설정"><span class="header-section-number">1.4.1</span> 문제 설정</h3>
+<pre><code>재닛의 오리들은 하루에 알을 16개 낳습니다.
+재닛은 매일 아침 3개의 알을 먹고,
+매일 4개의 알을 머핀을 굽는데 사용합니다.
+나머지 알은 하나에 2달러씩 판매합니다.
+재닛은 매일 얼마를 벌까요?</code></pre>
+</section>
+<section id="다양한-추론-경로-생성" class="level3" data-number="1.4.2">
+<h3 data-number="1.4.2" class="anchored" data-anchor-id="다양한-추론-경로-생성"><span class="header-section-number">1.4.2</span> 다양한 추론 경로 생성</h3>
+<p><strong>경로 1:</strong></p>
+<pre><code>재닛은 16개의 알로 시작합니다.
+그녀는 3개를 먹고 4개를 머핀에 사용하므로,
+3 + 4 = 7개를 사용합니다.
+남은 알은 16 - 7 = 9개입니다.
+각 알을 2달러에 팔므로, 9 × 2 = 18달러를 벌게 됩니다.
+
+답: 18달러</code></pre>
+<p><strong>경로 2:</strong></p>
+<pre><code>오리들이 낳는 알: 16개
+먹는 알: 3개
+머핀용 알: 4개
+판매 가능한 알: 16 - 3 - 4 = 9개
+수익: 9 × 2 = 18달러
+
+답: 18달러</code></pre>
+<p><strong>경로 3:</strong></p>
+<pre><code>하루 생산량: 16개
+재닛의 소비: 3개 (아침)
+제빵 사용: 4개 (머핀)
+판매량 = 16 - (3 + 4) = 16 - 7 = 9개
+판매 금액 = 9개 × $2/개 = $18
+
+답: 18달러</code></pre>
+<p><strong>경로 4 (잘못된 추론):</strong></p>
+<pre><code>오리가 16개를 낳고, 재닛이 3개를 먹습니다.
+16 - 3 = 13개
+13개를 2달러에 팔면 26달러입니다.
+
+답: 26달러 ❌</code></pre>
+<p><strong>경로 5:</strong></p>
+<pre><code>총 알: 16
+사용량: 3 (식사) + 4 (요리) = 7
+판매량: 16 - 7 = 9
+벌이: 9 × 2 = 18
+
+답: 18달러</code></pre>
+</section>
+<section id="다수결-투표" class="level3" data-number="1.4.3">
+<h3 data-number="1.4.3" class="anchored" data-anchor-id="다수결-투표"><span class="header-section-number">1.4.3</span> 다수결 투표</h3>
+<pre><code>답변 집계:
+- 18달러: 4표 ⭐⭐⭐⭐
+- 26달러: 1표 ⭐
+
+최종 답: 18달러 ✅</code></pre>
+<p><strong>분석:</strong> - 5개의 추론 경로 중 4개가 올바른 답(18달러)을 도출했습니다 - 1개는 잘못된 추론(머핀용 알을 고려하지 않음)으로 26달러를 냈습니다 - 다수결로 올바른 답을 선택할 수 있었습니다</p>
+</section>
+</section>
+<section id="연구-결과-self-consistency의-효과" class="level2" data-number="1.5">
+<h2 data-number="1.5" class="anchored" data-anchor-id="연구-결과-self-consistency의-효과"><span class="header-section-number">1.5</span> 연구 결과: Self-Consistency의 효과</h2>
+<section id="산술-추론-arithmetic-reasoning-성능" class="level3" data-number="1.5.1">
+<h3 data-number="1.5.1" class="anchored" data-anchor-id="산술-추론-arithmetic-reasoning-성능"><span class="header-section-number">1.5.1</span> 산술 추론 (Arithmetic Reasoning) 성능</h3>
+<p>Wang et al.&nbsp;(2022)의 연구에서 다양한 벤치마크에 대한 성능을 측정했습니다.</p>
+<p><strong>GSM8K 데이터셋 (초등학교 수준 수학):</strong></p>
+<pre><code>모델: PaLM 540B
+
+Standard Prompting: 18%
+Chain-of-Thought: 57%
+Self-Consistency: 74% ⭐
+→ CoT 대비 +17%p 향상!</code></pre>
+<p><strong>MultiArith 데이터셋:</strong></p>
+<pre><code>Chain-of-Thought: 78.7%
+Self-Consistency: 91.2% ⭐
+→ +12.5%p 향상!</code></pre>
+<p><strong>ASDiv 데이터셋:</strong></p>
+<pre><code>Chain-of-Thought: 75.3%
+Self-Consistency: 88.6% ⭐
+→ +13.3%p 향상!</code></pre>
+</section>
+<section id="상식-추론-commonsense-reasoning-성능" class="level3" data-number="1.5.2">
+<h3 data-number="1.5.2" class="anchored" data-anchor-id="상식-추론-commonsense-reasoning-성능"><span class="header-section-number">1.5.2</span> 상식 추론 (Commonsense Reasoning) 성능</h3>
+<p><strong>CommonsenseQA:</strong></p>
+<pre><code>Chain-of-Thought: 79.2%
+Self-Consistency: 83.7% ⭐
+→ +4.5%p 향상</code></pre>
+<p><strong>StrategyQA:</strong></p>
+<pre><code>Chain-of-Thought: 69.4%
+Self-Consistency: 75.6% ⭐
+→ +6.2%p 향상</code></pre>
+</section>
+<section id="샘플링-수에-따른-성능-변화" class="level3" data-number="1.5.3">
+<h3 data-number="1.5.3" class="anchored" data-anchor-id="샘플링-수에-따른-성능-변화"><span class="header-section-number">1.5.3</span> 샘플링 수에 따른 성능 변화</h3>
+<p>연구진은 몇 개의 추론 경로를 생성하는 것이 최적인지 실험했습니다.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="이미지 생략.png" class="img-fluid figure-img"></p>
+<figcaption>샘플링 수에 따른 정확도 그래프</figcaption>
+</figure>
+</div>
+<pre><code>GSM8K 데이터셋 (PaLM 540B):
+
+샘플링 수 | 정확도
+----------|--------
+1 (CoT)   | 57%
+5         | 68%
+10        | 71%
+20        | 73%
+40        | 74%
+80        | 74.4%
+
+→ 약 40개 샘플에서 수렴</code></pre>
+<p><strong>주요 발견:</strong> - 샘플 수가 증가할수록 성능이 향상됩니다 - 하지만 약 40개 이후로는 향상폭이 미미합니다 - 비용-성능 트레이드오프 고려 시 <strong>10-20개가 실용적</strong>입니다</p>
+</section>
+</section>
+<section id="aggregation-전략-어떻게-투표할까" class="level2" data-number="1.6">
+<h2 data-number="1.6" class="anchored" data-anchor-id="aggregation-전략-어떻게-투표할까"><span class="header-section-number">1.6</span> Aggregation 전략: 어떻게 투표할까?</h2>
+<p>Self-Consistency에서는 여러 답을 어떻게 집계할지가 중요합니다.</p>
+<section id="majority-voting-다수결-투표---가장-효과적" class="level3" data-number="1.6.1">
+<h3 data-number="1.6.1" class="anchored" data-anchor-id="majority-voting-다수결-투표---가장-효과적"><span class="header-section-number">1.6.1</span> 1. Majority Voting (다수결 투표) - 가장 효과적</h3>
+<pre><code>예시 결과:
+답 A: 7번 등장 ⭐⭐⭐⭐⭐⭐⭐
+답 B: 2번 등장 ⭐⭐
+답 C: 1번 등장 ⭐
+
+최종 선택: 답 A</code></pre>
+<p><strong>장점:</strong> - 간단하고 직관적 - 대부분의 경우 최고 성능 - 구현이 쉬움</p>
+<p><strong>적용 분야:</strong> - 산술 문제 (명확한 답이 있는 경우) - 분류 문제 - 객관식 문제</p>
+</section>
+<section id="weighted-voting-가중-투표" class="level3" data-number="1.6.2">
+<h3 data-number="1.6.2" class="anchored" data-anchor-id="weighted-voting-가중-투표"><span class="header-section-number">1.6.2</span> 2. Weighted Voting (가중 투표)</h3>
+<pre><code>각 추론 경로에 확신도(confidence) 점수 부여:
+
+경로 1: 답 A, 확신도 0.9
+경로 2: 답 A, 확신도 0.7
+경로 3: 답 B, 확신도 0.4
+
+답 A 총점: 0.9 + 0.7 = 1.6 ⭐
+답 B 총점: 0.4
+
+최종 선택: 답 A</code></pre>
+<p><strong>장점:</strong> - 더 신뢰할 만한 추론에 가중치 - 세밀한 제어 가능</p>
+<p><strong>단점:</strong> - 확신도 계산이 어려움 - 구현 복잡도 증가</p>
+</section>
+<section id="first-valid-answer-첫-유효-답변" class="level3" data-number="1.6.3">
+<h3 data-number="1.6.3" class="anchored" data-anchor-id="first-valid-answer-첫-유효-답변"><span class="header-section-number">1.6.3</span> 3. First Valid Answer (첫 유효 답변)</h3>
+<pre><code>순서대로 확인하여 첫 번째로 유효한 답 선택
+→ Self-Consistency의 이점을 살리지 못함
+→ 비추천</code></pre>
+</section>
+<section id="연구-결과-majority-voting이-최선" class="level3" data-number="1.6.4">
+<h3 data-number="1.6.4" class="anchored" data-anchor-id="연구-결과-majority-voting이-최선"><span class="header-section-number">1.6.4</span> 연구 결과: Majority Voting이 최선</h3>
+<pre><code>다양한 aggregation 전략 비교:
+
+Majority Voting:     74.4%  ⭐ (최고)
+Weighted by log-prob: 73.1%
+First valid answer:   57.0%
+Random selection:     57.0%
+
+→ Simple Majority Voting이 가장 효과적!</code></pre>
+</section>
+</section>
+<section id="실습-self-consistency-적용하기" class="level2" data-number="1.7">
+<h2 data-number="1.7" class="anchored" data-anchor-id="실습-self-consistency-적용하기"><span class="header-section-number">1.7</span> 실습: Self-Consistency 적용하기</h2>
+<section id="실습-준비" class="level3" data-number="1.7.1">
+<h3 data-number="1.7.1" class="anchored" data-anchor-id="실습-준비"><span class="header-section-number">1.7.1</span> 실습 준비</h3>
+<p><strong>OpenAI API 설정 (Python):</strong></p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1"></a><span class="im">import</span> openai</span>
+<span id="cb21-2"><a href="#cb21-2"></a><span class="im">from</span> collections <span class="im">import</span> Counter</span>
+<span id="cb21-3"><a href="#cb21-3"></a></span>
+<span id="cb21-4"><a href="#cb21-4"></a>openai.api_key <span class="op">=</span> <span class="st">"your-api-key"</span></span>
+<span id="cb21-5"><a href="#cb21-5"></a></span>
+<span id="cb21-6"><a href="#cb21-6"></a><span class="kw">def</span> generate_multiple_responses(prompt, n<span class="op">=</span><span class="dv">10</span>, temperature<span class="op">=</span><span class="fl">0.7</span>):</span>
+<span id="cb21-7"><a href="#cb21-7"></a>    <span class="co">"""여러 개의 추론 경로 생성"""</span></span>
+<span id="cb21-8"><a href="#cb21-8"></a>    responses <span class="op">=</span> []</span>
+<span id="cb21-9"><a href="#cb21-9"></a>    </span>
+<span id="cb21-10"><a href="#cb21-10"></a>    <span class="cf">for</span> i <span class="kw">in</span> <span class="bu">range</span>(n):</span>
+<span id="cb21-11"><a href="#cb21-11"></a>        response <span class="op">=</span> openai.ChatCompletion.create(</span>
+<span id="cb21-12"><a href="#cb21-12"></a>            model<span class="op">=</span><span class="st">"gpt-3.5-turbo"</span>,</span>
+<span id="cb21-13"><a href="#cb21-13"></a>            messages<span class="op">=</span>[</span>
+<span id="cb21-14"><a href="#cb21-14"></a>                {<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: prompt}</span>
+<span id="cb21-15"><a href="#cb21-15"></a>            ],</span>
+<span id="cb21-16"><a href="#cb21-16"></a>            temperature<span class="op">=</span>temperature,</span>
+<span id="cb21-17"><a href="#cb21-17"></a>            max_tokens<span class="op">=</span><span class="dv">400</span></span>
+<span id="cb21-18"><a href="#cb21-18"></a>        )</span>
+<span id="cb21-19"><a href="#cb21-19"></a>        responses.append(response.choices[<span class="dv">0</span>].message.content)</span>
+<span id="cb21-20"><a href="#cb21-20"></a>    </span>
+<span id="cb21-21"><a href="#cb21-21"></a>    <span class="cf">return</span> responses</span>
+<span id="cb21-22"><a href="#cb21-22"></a></span>
+<span id="cb21-23"><a href="#cb21-23"></a><span class="kw">def</span> extract_answer(response):</span>
+<span id="cb21-24"><a href="#cb21-24"></a>    <span class="co">"""응답에서 최종 답 추출"""</span></span>
+<span id="cb21-25"><a href="#cb21-25"></a>    <span class="co"># 간단한 예시: "답:" 또는 "정답:" 뒤의 숫자 추출</span></span>
+<span id="cb21-26"><a href="#cb21-26"></a>    <span class="im">import</span> re</span>
+<span id="cb21-27"><a href="#cb21-27"></a>    </span>
+<span id="cb21-28"><a href="#cb21-28"></a>    patterns <span class="op">=</span> [</span>
+<span id="cb21-29"><a href="#cb21-29"></a>        <span class="vs">r'답:\s*(\d+)'</span>,</span>
+<span id="cb21-30"><a href="#cb21-30"></a>        <span class="vs">r'정답:\s*(\d+)'</span>,</span>
+<span id="cb21-31"><a href="#cb21-31"></a>        <span class="vs">r'답은\s*(\d+)'</span>,</span>
+<span id="cb21-32"><a href="#cb21-32"></a>        <span class="vs">r'=\s*(\d+)\s*달러'</span></span>
+<span id="cb21-33"><a href="#cb21-33"></a>    ]</span>
+<span id="cb21-34"><a href="#cb21-34"></a>    </span>
+<span id="cb21-35"><a href="#cb21-35"></a>    <span class="cf">for</span> pattern <span class="kw">in</span> patterns:</span>
+<span id="cb21-36"><a href="#cb21-36"></a>        match <span class="op">=</span> re.search(pattern, response)</span>
+<span id="cb21-37"><a href="#cb21-37"></a>        <span class="cf">if</span> match:</span>
+<span id="cb21-38"><a href="#cb21-38"></a>            <span class="cf">return</span> match.group(<span class="dv">1</span>)</span>
+<span id="cb21-39"><a href="#cb21-39"></a>    </span>
+<span id="cb21-40"><a href="#cb21-40"></a>    <span class="cf">return</span> <span class="va">None</span></span>
+<span id="cb21-41"><a href="#cb21-41"></a></span>
+<span id="cb21-42"><a href="#cb21-42"></a><span class="kw">def</span> majority_vote(responses):</span>
+<span id="cb21-43"><a href="#cb21-43"></a>    <span class="co">"""다수결 투표로 최종 답 선택"""</span></span>
+<span id="cb21-44"><a href="#cb21-44"></a>    answers <span class="op">=</span> [extract_answer(r) <span class="cf">for</span> r <span class="kw">in</span> responses]</span>
+<span id="cb21-45"><a href="#cb21-45"></a>    answers <span class="op">=</span> [a <span class="cf">for</span> a <span class="kw">in</span> answers <span class="cf">if</span> a <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>]</span>
+<span id="cb21-46"><a href="#cb21-46"></a>    </span>
+<span id="cb21-47"><a href="#cb21-47"></a>    <span class="cf">if</span> <span class="kw">not</span> answers:</span>
+<span id="cb21-48"><a href="#cb21-48"></a>        <span class="cf">return</span> <span class="va">None</span></span>
+<span id="cb21-49"><a href="#cb21-49"></a>    </span>
+<span id="cb21-50"><a href="#cb21-50"></a>    <span class="co"># 가장 많이 나온 답 선택</span></span>
+<span id="cb21-51"><a href="#cb21-51"></a>    vote_counts <span class="op">=</span> Counter(answers)</span>
+<span id="cb21-52"><a href="#cb21-52"></a>    most_common <span class="op">=</span> vote_counts.most_common(<span class="dv">1</span>)[<span class="dv">0</span>]</span>
+<span id="cb21-53"><a href="#cb21-53"></a>    </span>
+<span id="cb21-54"><a href="#cb21-54"></a>    <span class="cf">return</span> most_common[<span class="dv">0</span>], most_common[<span class="dv">1</span>], <span class="bu">len</span>(answers)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="실습-1-재닛의-오리-문제" class="level3" data-number="1.7.2">
+<h3 data-number="1.7.2" class="anchored" data-anchor-id="실습-1-재닛의-오리-문제"><span class="header-section-number">1.7.2</span> 실습 1: 재닛의 오리 문제</h3>
+<p><strong>프롬프트:</strong></p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1"></a>prompt <span class="op">=</span> <span class="st">"""</span></span>
+<span id="cb22-2"><a href="#cb22-2"></a><span class="st">재닛의 오리들은 하루에 알을 16개 낳습니다.</span></span>
+<span id="cb22-3"><a href="#cb22-3"></a><span class="st">재닛은 매일 아침 3개의 알을 먹고,</span></span>
+<span id="cb22-4"><a href="#cb22-4"></a><span class="st">매일 4개의 알을 머핀을 굽는데 사용합니다.</span></span>
+<span id="cb22-5"><a href="#cb22-5"></a><span class="st">나머지 알은 하나에 2달러씩 판매합니다.</span></span>
+<span id="cb22-6"><a href="#cb22-6"></a><span class="st">재닛은 매일 얼마를 벌까요?</span></span>
+<span id="cb22-7"><a href="#cb22-7"></a></span>
+<span id="cb22-8"><a href="#cb22-8"></a><span class="st">단계적으로 생각해서 풀어주세요.</span></span>
+<span id="cb22-9"><a href="#cb22-9"></a><span class="st">마지막에 "답: [숫자]달러" 형식으로 답해주세요.</span></span>
+<span id="cb22-10"><a href="#cb22-10"></a><span class="st">"""</span></span>
+<span id="cb22-11"><a href="#cb22-11"></a></span>
+<span id="cb22-12"><a href="#cb22-12"></a><span class="co"># 10개의 추론 경로 생성</span></span>
+<span id="cb22-13"><a href="#cb22-13"></a>responses <span class="op">=</span> generate_multiple_responses(prompt, n<span class="op">=</span><span class="dv">10</span>, temperature<span class="op">=</span><span class="fl">0.7</span>)</span>
+<span id="cb22-14"><a href="#cb22-14"></a></span>
+<span id="cb22-15"><a href="#cb22-15"></a><span class="co"># 각 응답 출력</span></span>
+<span id="cb22-16"><a href="#cb22-16"></a><span class="cf">for</span> i, response <span class="kw">in</span> <span class="bu">enumerate</span>(responses, <span class="dv">1</span>):</span>
+<span id="cb22-17"><a href="#cb22-17"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">경로 </span><span class="sc">{</span>i<span class="sc">}</span><span class="ss">:"</span>)</span>
+<span id="cb22-18"><a href="#cb22-18"></a>    <span class="bu">print</span>(response)</span>
+<span id="cb22-19"><a href="#cb22-19"></a>    <span class="bu">print</span>(<span class="ss">f"추출된 답: </span><span class="sc">{</span>extract_answer(response)<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb22-20"><a href="#cb22-20"></a></span>
+<span id="cb22-21"><a href="#cb22-21"></a><span class="co"># 다수결 투표</span></span>
+<span id="cb22-22"><a href="#cb22-22"></a>final_answer, vote_count, total <span class="op">=</span> majority_vote(responses)</span>
+<span id="cb22-23"><a href="#cb22-23"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">최종 답: </span><span class="sc">{</span>final_answer<span class="sc">}</span><span class="ss">달러 (</span><span class="sc">{</span>vote_count<span class="sc">}</span><span class="ss">/</span><span class="sc">{</span>total<span class="sc">}</span><span class="ss">표)"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>기대 출력:</strong></p>
+<pre><code>경로 1:
+재닛은 16개로 시작합니다...
+답: 18달러
+추출된 답: 18
+
+경로 2:
+오리들이 낳는 알은 16개입니다...
+답: 18달러
+추출된 답: 18
+
+...
+
+경로 9:
+16개에서 7개를 빼면...
+답: 18달러
+추출된 답: 18
+
+경로 10:
+계산해보면 16-3-4=9, 9×2=18...
+답: 18달러
+추출된 답: 18
+
+최종 답: 18달러 (9/10표)</code></pre>
+</section>
+<section id="실습-2-보안-이메일-분류" class="level3" data-number="1.7.3">
+<h3 data-number="1.7.3" class="anchored" data-anchor-id="실습-2-보안-이메일-분류"><span class="header-section-number">1.7.3</span> 실습 2: 보안 이메일 분류</h3>
+<p>강의 자료의 실습 예제를 활용해봅시다.</p>
+<p><strong>프롬프트:</strong></p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1"></a>prompt <span class="op">=</span> <span class="st">"""</span></span>
+<span id="cb24-2"><a href="#cb24-2"></a><span class="st">다음 이메일을 "IMPORTANT"(중요) 또는 "NOT IMPORTANT"(중요하지 않음)로 분류해주세요.</span></span>
+<span id="cb24-3"><a href="#cb24-3"></a></span>
+<span id="cb24-4"><a href="#cb24-4"></a><span class="st">이메일:</span></span>
+<span id="cb24-5"><a href="#cb24-5"></a><span class="st">제목: 긴급: 보안 업데이트 필요</span></span>
+<span id="cb24-6"><a href="#cb24-6"></a><span class="st">발신자: security@company.com</span></span>
+<span id="cb24-7"><a href="#cb24-7"></a><span class="st">내용: 귀하의 계정에서 비정상적인 로그인 시도가 감지되었습니다. </span></span>
+<span id="cb24-8"><a href="#cb24-8"></a><span class="st">즉시 비밀번호를 변경해주시기 바랍니다.</span></span>
+<span id="cb24-9"><a href="#cb24-9"></a></span>
+<span id="cb24-10"><a href="#cb24-10"></a><span class="st">단계적으로 생각해서 분류해주세요.</span></span>
+<span id="cb24-11"><a href="#cb24-11"></a><span class="st">마지막에 "분류: IMPORTANT" 또는 "분류: NOT IMPORTANT" 형식으로 답해주세요.</span></span>
+<span id="cb24-12"><a href="#cb24-12"></a><span class="st">"""</span></span>
+<span id="cb24-13"><a href="#cb24-13"></a></span>
+<span id="cb24-14"><a href="#cb24-14"></a>responses <span class="op">=</span> generate_multiple_responses(prompt, n<span class="op">=</span><span class="dv">10</span>, temperature<span class="op">=</span><span class="fl">0.7</span>)</span>
+<span id="cb24-15"><a href="#cb24-15"></a></span>
+<span id="cb24-16"><a href="#cb24-16"></a><span class="co"># 답 추출 함수 수정</span></span>
+<span id="cb24-17"><a href="#cb24-17"></a><span class="kw">def</span> extract_classification(response):</span>
+<span id="cb24-18"><a href="#cb24-18"></a>    <span class="im">import</span> re</span>
+<span id="cb24-19"><a href="#cb24-19"></a>    <span class="cf">if</span> re.search(<span class="vs">r'분류:\s*IMPORTANT'</span>, response, re.IGNORECASE):</span>
+<span id="cb24-20"><a href="#cb24-20"></a>        <span class="cf">return</span> <span class="st">"IMPORTANT"</span></span>
+<span id="cb24-21"><a href="#cb24-21"></a>    <span class="cf">elif</span> re.search(<span class="vs">r'분류:\s*NOT IMPORTANT'</span>, response, re.IGNORECASE):</span>
+<span id="cb24-22"><a href="#cb24-22"></a>        <span class="cf">return</span> <span class="st">"NOT IMPORTANT"</span></span>
+<span id="cb24-23"><a href="#cb24-23"></a>    <span class="cf">return</span> <span class="va">None</span></span>
+<span id="cb24-24"><a href="#cb24-24"></a></span>
+<span id="cb24-25"><a href="#cb24-25"></a>classifications <span class="op">=</span> [extract_classification(r) <span class="cf">for</span> r <span class="kw">in</span> responses]</span>
+<span id="cb24-26"><a href="#cb24-26"></a>classifications <span class="op">=</span> [c <span class="cf">for</span> c <span class="kw">in</span> classifications <span class="cf">if</span> c <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>]</span>
+<span id="cb24-27"><a href="#cb24-27"></a></span>
+<span id="cb24-28"><a href="#cb24-28"></a>vote_counts <span class="op">=</span> Counter(classifications)</span>
+<span id="cb24-29"><a href="#cb24-29"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">투표 결과:"</span>)</span>
+<span id="cb24-30"><a href="#cb24-30"></a><span class="cf">for</span> label, count <span class="kw">in</span> vote_counts.items():</span>
+<span id="cb24-31"><a href="#cb24-31"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>label<span class="sc">}</span><span class="ss">: </span><span class="sc">{</span>count<span class="sc">}</span><span class="ss">표"</span>)</span>
+<span id="cb24-32"><a href="#cb24-32"></a></span>
+<span id="cb24-33"><a href="#cb24-33"></a>final <span class="op">=</span> vote_counts.most_common(<span class="dv">1</span>)[<span class="dv">0</span>][<span class="dv">0</span>]</span>
+<span id="cb24-34"><a href="#cb24-34"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">최종 분류: </span><span class="sc">{</span>final<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>기대 출력:</strong></p>
+<pre><code>투표 결과:
+IMPORTANT: 10표
+NOT IMPORTANT: 0표
+
+최종 분류: IMPORTANT</code></pre>
+</section>
+<section id="실습-3-복잡한-산술-문제" class="level3" data-number="1.7.4">
+<h3 data-number="1.7.4" class="anchored" data-anchor-id="실습-3-복잡한-산술-문제"><span class="header-section-number">1.7.4</span> 실습 3: 복잡한 산술 문제</h3>
+<p><strong>프롬프트:</strong></p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1"></a>prompt <span class="op">=</span> <span class="st">"""</span></span>
+<span id="cb26-2"><a href="#cb26-2"></a><span class="st">한 학급에 학생이 24명 있습니다.</span></span>
+<span id="cb26-3"><a href="#cb26-3"></a><span class="st">이 중 1/3은 안경을 쓰고,</span></span>
+<span id="cb26-4"><a href="#cb26-4"></a><span class="st">안경을 쓴 학생 중 절반은 여학생입니다.</span></span>
+<span id="cb26-5"><a href="#cb26-5"></a><span class="st">안경을 쓴 여학생은 몇 명인가요?</span></span>
+<span id="cb26-6"><a href="#cb26-6"></a></span>
+<span id="cb26-7"><a href="#cb26-7"></a><span class="st">단계적으로 계산해주세요.</span></span>
+<span id="cb26-8"><a href="#cb26-8"></a><span class="st">마지막에 "답: [숫자]명" 형식으로 답해주세요.</span></span>
+<span id="cb26-9"><a href="#cb26-9"></a><span class="st">"""</span></span>
+<span id="cb26-10"><a href="#cb26-10"></a></span>
+<span id="cb26-11"><a href="#cb26-11"></a>responses <span class="op">=</span> generate_multiple_responses(prompt, n<span class="op">=</span><span class="dv">15</span>, temperature<span class="op">=</span><span class="fl">0.8</span>)</span>
+<span id="cb26-12"><a href="#cb26-12"></a></span>
+<span id="cb26-13"><a href="#cb26-13"></a><span class="cf">for</span> i, response <span class="kw">in</span> <span class="bu">enumerate</span>(responses, <span class="dv">1</span>):</span>
+<span id="cb26-14"><a href="#cb26-14"></a>    answer <span class="op">=</span> extract_answer(response)</span>
+<span id="cb26-15"><a href="#cb26-15"></a>    <span class="bu">print</span>(<span class="ss">f"경로 </span><span class="sc">{</span>i<span class="sc">}</span><span class="ss">: </span><span class="sc">{</span>answer<span class="sc">}</span><span class="ss">명"</span>)</span>
+<span id="cb26-16"><a href="#cb26-16"></a></span>
+<span id="cb26-17"><a href="#cb26-17"></a>final_answer, vote_count, total <span class="op">=</span> majority_vote(responses)</span>
+<span id="cb26-18"><a href="#cb26-18"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">최종 답: </span><span class="sc">{</span>final_answer<span class="sc">}</span><span class="ss">명 (</span><span class="sc">{</span>vote_count<span class="sc">}</span><span class="ss">/</span><span class="sc">{</span>total<span class="sc">}</span><span class="ss">표)"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>분석:</strong></p>
+<pre><code>정답: 4명
+- 24명의 1/3 = 8명이 안경 착용
+- 8명의 절반 = 4명이 여학생
+
+예상 결과:
+경로 1-12: 4명 ✅
+경로 13: 12명 ❌ (계산 오류)
+경로 14: 4명 ✅
+경로 15: 8명 ❌ (절반 계산 누락)
+
+최종 답: 4명 (13/15표)</code></pre>
+</section>
+</section>
+<section id="self-consistency-최적화-가이드" class="level2" data-number="1.8">
+<h2 data-number="1.8" class="anchored" data-anchor-id="self-consistency-최적화-가이드"><span class="header-section-number">1.8</span> Self-Consistency 최적화 가이드</h2>
+<section id="temperature-설정" class="level3" data-number="1.8.1">
+<h3 data-number="1.8.1" class="anchored" data-anchor-id="temperature-설정"><span class="header-section-number">1.8.1</span> 1. Temperature 설정</h3>
+<div class="sourceCode" id="cb28"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1"></a><span class="co"># Temperature가 너무 낮으면</span></span>
+<span id="cb28-2"><a href="#cb28-2"></a>temperature <span class="op">=</span> <span class="fl">0.1</span></span>
+<span id="cb28-3"><a href="#cb28-3"></a>→ 추론 경로가 비슷해짐</span>
+<span id="cb28-4"><a href="#cb28-4"></a>→ 다양성 부족</span>
+<span id="cb28-5"><a href="#cb28-5"></a>→ Self<span class="op">-</span>Consistency의 이점 감소</span>
+<span id="cb28-6"><a href="#cb28-6"></a></span>
+<span id="cb28-7"><a href="#cb28-7"></a><span class="co"># Temperature가 적절하면</span></span>
+<span id="cb28-8"><a href="#cb28-8"></a>temperature <span class="op">=</span> <span class="fl">0.7</span> <span class="op">~</span> <span class="fl">0.9</span>  ⭐ 권장</span>
+<span id="cb28-9"><a href="#cb28-9"></a>→ 다양한 추론 경로</span>
+<span id="cb28-10"><a href="#cb28-10"></a>→ 다수결의 효과 극대화</span>
+<span id="cb28-11"><a href="#cb28-11"></a></span>
+<span id="cb28-12"><a href="#cb28-12"></a><span class="co"># Temperature가 너무 높으면</span></span>
+<span id="cb28-13"><a href="#cb28-13"></a>temperature <span class="op">=</span> <span class="fl">1.5</span></span>
+<span id="cb28-14"><a href="#cb28-14"></a>→ 무작위성 너무 높음</span>
+<span id="cb28-15"><a href="#cb28-15"></a>→ 오답 생성 증가</span>
+<span id="cb28-16"><a href="#cb28-16"></a>→ 다수결도 틀릴 수 있음</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="샘플-수-선택" class="level3" data-number="1.8.2">
+<h3 data-number="1.8.2" class="anchored" data-anchor-id="샘플-수-선택"><span class="header-section-number">1.8.2</span> 2. 샘플 수 선택</h3>
+<div class="sourceCode" id="cb29"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1"></a><span class="co"># 비용-성능 트레이드오프</span></span>
+<span id="cb29-2"><a href="#cb29-2"></a></span>
+<span id="cb29-3"><a href="#cb29-3"></a>매우 저렴하게: n <span class="op">=</span> <span class="dv">3</span><span class="op">-</span><span class="dv">5</span></span>
+<span id="cb29-4"><a href="#cb29-4"></a>→ 최소한의 개선</span>
+<span id="cb29-5"><a href="#cb29-5"></a>→ 빠른 프로토타이핑</span>
+<span id="cb29-6"><a href="#cb29-6"></a></span>
+<span id="cb29-7"><a href="#cb29-7"></a>균형 잡힌 선택: n <span class="op">=</span> <span class="dv">10</span><span class="op">-</span><span class="dv">20</span>  ⭐ 권장</span>
+<span id="cb29-8"><a href="#cb29-8"></a>→ 좋은 성능 향상</span>
+<span id="cb29-9"><a href="#cb29-9"></a>→ 적절한 비용</span>
+<span id="cb29-10"><a href="#cb29-10"></a></span>
+<span id="cb29-11"><a href="#cb29-11"></a>최고 성능: n <span class="op">=</span> <span class="dv">40</span><span class="op">+</span></span>
+<span id="cb29-12"><a href="#cb29-12"></a>→ 최대 성능</span>
+<span id="cb29-13"><a href="#cb29-13"></a>→ 높은 비용</span>
+<span id="cb29-14"><a href="#cb29-14"></a>→ 중요한 결정에만 사용</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="답-추출-패턴-정교화" class="level3" data-number="1.8.3">
+<h3 data-number="1.8.3" class="anchored" data-anchor-id="답-추출-패턴-정교화"><span class="header-section-number">1.8.3</span> 3. 답 추출 패턴 정교화</h3>
+<div class="sourceCode" id="cb30"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb30-1"><a href="#cb30-1"></a><span class="kw">def</span> extract_answer_advanced(response):</span>
+<span id="cb30-2"><a href="#cb30-2"></a>    <span class="co">"""더 정교한 답 추출"""</span></span>
+<span id="cb30-3"><a href="#cb30-3"></a>    <span class="im">import</span> re</span>
+<span id="cb30-4"><a href="#cb30-4"></a>    </span>
+<span id="cb30-5"><a href="#cb30-5"></a>    <span class="co"># 여러 패턴 시도</span></span>
+<span id="cb30-6"><a href="#cb30-6"></a>    patterns <span class="op">=</span> [</span>
+<span id="cb30-7"><a href="#cb30-7"></a>        <span class="vs">r'답:\s*([^\n]+)'</span>,</span>
+<span id="cb30-8"><a href="#cb30-8"></a>        <span class="vs">r'정답:\s*([^\n]+)'</span>,</span>
+<span id="cb30-9"><a href="#cb30-9"></a>        <span class="vs">r'최종\s*답:\s*([^\n]+)'</span>,</span>
+<span id="cb30-10"><a href="#cb30-10"></a>        <span class="vs">r'따라서\s+답은\s+([^\n]+)'</span>,</span>
+<span id="cb30-11"><a href="#cb30-11"></a>        <span class="vs">r'결과는\s+([^\n]+)'</span></span>
+<span id="cb30-12"><a href="#cb30-12"></a>    ]</span>
+<span id="cb30-13"><a href="#cb30-13"></a>    </span>
+<span id="cb30-14"><a href="#cb30-14"></a>    <span class="cf">for</span> pattern <span class="kw">in</span> patterns:</span>
+<span id="cb30-15"><a href="#cb30-15"></a>        match <span class="op">=</span> re.search(pattern, response, re.IGNORECASE)</span>
+<span id="cb30-16"><a href="#cb30-16"></a>        <span class="cf">if</span> match:</span>
+<span id="cb30-17"><a href="#cb30-17"></a>            answer <span class="op">=</span> match.group(<span class="dv">1</span>).strip()</span>
+<span id="cb30-18"><a href="#cb30-18"></a>            <span class="co"># 숫자만 추출</span></span>
+<span id="cb30-19"><a href="#cb30-19"></a>            numbers <span class="op">=</span> re.findall(<span class="vs">r'\d+'</span>, answer)</span>
+<span id="cb30-20"><a href="#cb30-20"></a>            <span class="cf">if</span> numbers:</span>
+<span id="cb30-21"><a href="#cb30-21"></a>                <span class="cf">return</span> numbers[<span class="dv">0</span>]</span>
+<span id="cb30-22"><a href="#cb30-22"></a>    </span>
+<span id="cb30-23"><a href="#cb30-23"></a>    <span class="cf">return</span> <span class="va">None</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="프롬프트-엔지니어링" class="level3" data-number="1.8.4">
+<h3 data-number="1.8.4" class="anchored" data-anchor-id="프롬프트-엔지니어링"><span class="header-section-number">1.8.4</span> 4. 프롬프트 엔지니어링</h3>
+<div class="sourceCode" id="cb31"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1"></a><span class="co"># 명확한 형식 지정</span></span>
+<span id="cb31-2"><a href="#cb31-2"></a>prompt <span class="op">=</span> <span class="st">"""</span></span>
+<span id="cb31-3"><a href="#cb31-3"></a><span class="st">[문제]</span></span>
+<span id="cb31-4"><a href="#cb31-4"></a></span>
+<span id="cb31-5"><a href="#cb31-5"></a><span class="st">다음 규칙을 따라주세요:</span></span>
+<span id="cb31-6"><a href="#cb31-6"></a><span class="st">1. 단계적으로 생각하세요</span></span>
+<span id="cb31-7"><a href="#cb31-7"></a><span class="st">2. 각 단계를 명확히 표시하세요</span></span>
+<span id="cb31-8"><a href="#cb31-8"></a><span class="st">3. 마지막에 반드시 "답: [숫자]" 형식으로 답하세요</span></span>
+<span id="cb31-9"><a href="#cb31-9"></a></span>
+<span id="cb31-10"><a href="#cb31-10"></a><span class="st">[문제 내용]</span></span>
+<span id="cb31-11"><a href="#cb31-11"></a><span class="st">"""</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="self-consistency의-장점과-한계" class="level2" data-number="1.9">
+<h2 data-number="1.9" class="anchored" data-anchor-id="self-consistency의-장점과-한계"><span class="header-section-number">1.9</span> Self-Consistency의 장점과 한계</h2>
+<section id="장점" class="level3" data-number="1.9.1">
+<h3 data-number="1.9.1" class="anchored" data-anchor-id="장점"><span class="header-section-number">1.9.1</span> 장점</h3>
+<p><strong>1. 정확도 대폭 향상</strong></p>
+<pre><code>Chain-of-Thought: 57%
+Self-Consistency: 74%
+→ +17%p 향상!</code></pre>
+<p><strong>2. 오류에 대한 강건성</strong> - 일부 추론 경로가 틀려도 괜찮음 - 다수결로 오류 보정 - 노이즈에 강함</p>
+<p><strong>3. 신뢰도 측정 가능</strong></p>
+<pre><code>10개 중 9개가 같은 답 → 높은 신뢰도
+10개 중 5개가 같은 답 → 낮은 신뢰도
+→ 불확실성을 정량화할 수 있음</code></pre>
+<p><strong>4. 추가 학습 불필요</strong> - 모델 재학습 없음 - 프롬프트 수정만으로 적용 - 즉시 사용 가능</p>
+</section>
+<section id="한계" class="level3" data-number="1.9.2">
+<h3 data-number="1.9.2" class="anchored" data-anchor-id="한계"><span class="header-section-number">1.9.2</span> 한계</h3>
+<p><strong>1. 계산 비용 증가</strong></p>
+<pre><code>Chain-of-Thought: 1회 추론
+Self-Consistency: 10-40회 추론
+→ 10-40배 비용 증가
+→ 시간도 10-40배 증가</code></pre>
+<p><strong>2. 토큰 사용량 급증</strong></p>
+<pre><code>단일 CoT: 500 tokens
+Self-Consistency (n=20): 10,000 tokens
+→ API 비용 20배</code></pre>
+<p><strong>3. 답 추출의 어려움</strong></p>
+<pre><code>자유 형식 답변에서는 추출이 어려움:
+- "약 18달러 정도입니다"
+- "18달러가 답입니다"
+- "재닛은 $18를 벌게 됩니다"
+
+→ 정규표현식이 복잡해짐
+→ 때로는 추출 실패</code></pre>
+<p><strong>4. 주관적 문제에는 부적합</strong></p>
+<pre><code>❌ 창작: "이야기를 써주세요"
+❌ 의견: "어떤 선택이 더 나을까요?"
+✅ 객관식: "답은 A, B, C 중 무엇?"
+✅ 수학: "계산 결과는?"</code></pre>
+<p><strong>5. 모델의 편향 증폭 가능</strong></p>
+<pre><code>모델이 특정 오답으로 편향되어 있으면:
+10개 추론 모두 같은 오답 → 다수결도 오답</code></pre>
+</section>
+</section>
+<section id="언제-self-consistency를-사용해야-할까" class="level2" data-number="1.10">
+<h2 data-number="1.10" class="anchored" data-anchor-id="언제-self-consistency를-사용해야-할까"><span class="header-section-number">1.10</span> 언제 Self-Consistency를 사용해야 할까?</h2>
+<section id="self-consistency가-적합한-경우" class="level3" data-number="1.10.1">
+<h3 data-number="1.10.1" class="anchored" data-anchor-id="self-consistency가-적합한-경우"><span class="header-section-number">1.10.1</span> Self-Consistency가 적합한 경우</h3>
+<p>✅ <strong>높은 정확도가 중요한 작업</strong> - 의료 진단 보조 - 금융 계산 - 법률 분석 - 안전 critical 시스템</p>
+<p>✅ <strong>명확한 정답이 있는 문제</strong> - 수학 문제 - 논리 퍼즐 - 객관식 문제 - 사실 확인</p>
+<p>✅ <strong>비용을 감수할 수 있을 때</strong> - 중요한 의사결정 - 대량 처리보다 품질 우선 - 재처리 비용이 더 클 때</p>
+<p>✅ <strong>불확실성 정량화가 필요할 때</strong> - 신뢰도 점수 필요 - 리스크 관리 필요 - 여러 가능성 탐색</p>
+</section>
+<section id="chain-of-thought로-충분한-경우" class="level3" data-number="1.10.2">
+<h3 data-number="1.10.2" class="anchored" data-anchor-id="chain-of-thought로-충분한-경우"><span class="header-section-number">1.10.2</span> Chain-of-Thought로 충분한 경우</h3>
+<p>✅ <strong>비용이 중요할 때</strong> - 대량 처리 - 실시간 응답 필요 - 예산 제약</p>
+<p>✅ <strong>중간 정확도로 충분할 때</strong> - 프로토타이핑 - 탐색적 분석 - 일반적인 질문 답변</p>
+<p>✅ <strong>창작이나 주관적 작업</strong> - 글쓰기 - 브레인스토밍 - 아이디어 생성</p>
+</section>
+</section>
+<section id="비용-성능-분석" class="level2" data-number="1.11">
+<h2 data-number="1.11" class="anchored" data-anchor-id="비용-성능-분석"><span class="header-section-number">1.11</span> 비용-성능 분석</h2>
+<section id="시나리오별-권장사항" class="level3" data-number="1.11.1">
+<h3 data-number="1.11.1" class="anchored" data-anchor-id="시나리오별-권장사항"><span class="header-section-number">1.11.1</span> 시나리오별 권장사항</h3>
+<div class="sourceCode" id="cb39"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb39-1"><a href="#cb39-1"></a><span class="co"># 시나리오 1: 일반 사용</span></span>
+<span id="cb39-2"><a href="#cb39-2"></a>method <span class="op">=</span> <span class="st">"Chain-of-Thought"</span></span>
+<span id="cb39-3"><a href="#cb39-3"></a>cost_multiplier <span class="op">=</span> <span class="dv">1</span></span>
+<span id="cb39-4"><a href="#cb39-4"></a>accuracy <span class="op">=</span> <span class="st">"중간"</span></span>
+<span id="cb39-5"><a href="#cb39-5"></a>use_case <span class="op">=</span> <span class="st">"일상적 작업, 프로토타이핑"</span></span>
+<span id="cb39-6"><a href="#cb39-6"></a></span>
+<span id="cb39-7"><a href="#cb39-7"></a><span class="co"># 시나리오 2: 중요한 결정</span></span>
+<span id="cb39-8"><a href="#cb39-8"></a>method <span class="op">=</span> <span class="st">"Self-Consistency (n=10)"</span></span>
+<span id="cb39-9"><a href="#cb39-9"></a>cost_multiplier <span class="op">=</span> <span class="dv">10</span></span>
+<span id="cb39-10"><a href="#cb39-10"></a>accuracy <span class="op">=</span> <span class="st">"높음"</span></span>
+<span id="cb39-11"><a href="#cb39-11"></a>use_case <span class="op">=</span> <span class="st">"비즈니스 의사결정, 재무 계산"</span></span>
+<span id="cb39-12"><a href="#cb39-12"></a></span>
+<span id="cb39-13"><a href="#cb39-13"></a><span class="co"># 시나리오 3: 매우 중요한 결정</span></span>
+<span id="cb39-14"><a href="#cb39-14"></a>method <span class="op">=</span> <span class="st">"Self-Consistency (n=20-40)"</span></span>
+<span id="cb39-15"><a href="#cb39-15"></a>cost_multiplier <span class="op">=</span> <span class="dv">20</span><span class="op">-</span><span class="dv">40</span></span>
+<span id="cb39-16"><a href="#cb39-16"></a>accuracy <span class="op">=</span> <span class="st">"매우 높음"</span></span>
+<span id="cb39-17"><a href="#cb39-17"></a>use_case <span class="op">=</span> <span class="st">"의료, 법률, 안전 관련"</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="roi-계산-예시" class="level3" data-number="1.11.2">
+<h3 data-number="1.11.2" class="anchored" data-anchor-id="roi-계산-예시"><span class="header-section-number">1.11.2</span> ROI 계산 예시</h3>
+<div class="sourceCode" id="cb40"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb40-1"><a href="#cb40-1"></a><span class="co"># 오답으로 인한 비용이 큰 경우</span></span>
+<span id="cb40-2"><a href="#cb40-2"></a></span>
+<span id="cb40-3"><a href="#cb40-3"></a>시나리오: 재무 계산 오류</span>
+<span id="cb40-4"><a href="#cb40-4"></a><span class="op">-</span> Chain<span class="op">-</span>of<span class="op">-</span>Thought 비용: $<span class="fl">0.01</span></span>
+<span id="cb40-5"><a href="#cb40-5"></a><span class="op">-</span> Chain<span class="op">-</span>of<span class="op">-</span>Thought 정확도: <span class="dv">57</span><span class="op">%</span></span>
+<span id="cb40-6"><a href="#cb40-6"></a><span class="op">-</span> 오답 시 재처리 비용: $<span class="dv">100</span></span>
+<span id="cb40-7"><a href="#cb40-7"></a></span>
+<span id="cb40-8"><a href="#cb40-8"></a>기대 비용 <span class="op">=</span> $<span class="fl">0.01</span> <span class="op">+</span> (<span class="fl">0.43</span> × $<span class="dv">100</span>) <span class="op">=</span> $<span class="fl">43.01</span></span>
+<span id="cb40-9"><a href="#cb40-9"></a></span>
+<span id="cb40-10"><a href="#cb40-10"></a>vs.</span>
+<span id="cb40-11"><a href="#cb40-11"></a></span>
+<span id="cb40-12"><a href="#cb40-12"></a><span class="op">-</span> Self<span class="op">-</span>Consistency 비용: $<span class="fl">0.20</span> (n<span class="op">=</span><span class="dv">20</span>)</span>
+<span id="cb40-13"><a href="#cb40-13"></a><span class="op">-</span> Self<span class="op">-</span>Consistency 정확도: <span class="dv">74</span><span class="op">%</span></span>
+<span id="cb40-14"><a href="#cb40-14"></a><span class="op">-</span> 오답 시 재처리 비용: $<span class="dv">100</span></span>
+<span id="cb40-15"><a href="#cb40-15"></a></span>
+<span id="cb40-16"><a href="#cb40-16"></a>기대 비용 <span class="op">=</span> $<span class="fl">0.20</span> <span class="op">+</span> (<span class="fl">0.26</span> × $<span class="dv">100</span>) <span class="op">=</span> $<span class="fl">26.20</span></span>
+<span id="cb40-17"><a href="#cb40-17"></a></span>
+<span id="cb40-18"><a href="#cb40-18"></a>→ Self<span class="op">-</span>Consistency가 더 경제적<span class="op">!</span> ✅</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="실전-활용-패턴" class="level2" data-number="1.12">
+<h2 data-number="1.12" class="anchored" data-anchor-id="실전-활용-패턴"><span class="header-section-number">1.12</span> 실전 활용 패턴</h2>
+<section id="패턴-1-hybrid-approach-하이브리드" class="level3" data-number="1.12.1">
+<h3 data-number="1.12.1" class="anchored" data-anchor-id="패턴-1-hybrid-approach-하이브리드"><span class="header-section-number">1.12.1</span> 패턴 1: Hybrid Approach (하이브리드)</h3>
+<div class="sourceCode" id="cb41"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb41-1"><a href="#cb41-1"></a><span class="kw">def</span> smart_solve(problem, importance<span class="op">=</span><span class="st">"medium"</span>):</span>
+<span id="cb41-2"><a href="#cb41-2"></a>    <span class="co">"""중요도에 따라 전략 선택"""</span></span>
+<span id="cb41-3"><a href="#cb41-3"></a>    </span>
+<span id="cb41-4"><a href="#cb41-4"></a>    <span class="cf">if</span> importance <span class="op">==</span> <span class="st">"low"</span>:</span>
+<span id="cb41-5"><a href="#cb41-5"></a>        <span class="co"># Zero-Shot CoT</span></span>
+<span id="cb41-6"><a href="#cb41-6"></a>        <span class="cf">return</span> solve_with_zero_shot_cot(problem, n<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb41-7"><a href="#cb41-7"></a>    </span>
+<span id="cb41-8"><a href="#cb41-8"></a>    <span class="cf">elif</span> importance <span class="op">==</span> <span class="st">"medium"</span>:</span>
+<span id="cb41-9"><a href="#cb41-9"></a>        <span class="co"># Chain-of-Thought</span></span>
+<span id="cb41-10"><a href="#cb41-10"></a>        <span class="cf">return</span> solve_with_cot(problem, n<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb41-11"><a href="#cb41-11"></a>    </span>
+<span id="cb41-12"><a href="#cb41-12"></a>    <span class="cf">elif</span> importance <span class="op">==</span> <span class="st">"high"</span>:</span>
+<span id="cb41-13"><a href="#cb41-13"></a>        <span class="co"># Self-Consistency (소규모)</span></span>
+<span id="cb41-14"><a href="#cb41-14"></a>        <span class="cf">return</span> solve_with_self_consistency(problem, n<span class="op">=</span><span class="dv">10</span>)</span>
+<span id="cb41-15"><a href="#cb41-15"></a>    </span>
+<span id="cb41-16"><a href="#cb41-16"></a>    <span class="cf">else</span>:  <span class="co"># "critical"</span></span>
+<span id="cb41-17"><a href="#cb41-17"></a>        <span class="co"># Self-Consistency (대규모)</span></span>
+<span id="cb41-18"><a href="#cb41-18"></a>        <span class="cf">return</span> solve_with_self_consistency(problem, n<span class="op">=</span><span class="dv">40</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="패턴-2-confidence-based-re-sampling" class="level3" data-number="1.12.2">
+<h3 data-number="1.12.2" class="anchored" data-anchor-id="패턴-2-confidence-based-re-sampling"><span class="header-section-number">1.12.2</span> 패턴 2: Confidence-Based Re-sampling</h3>
+<div class="sourceCode" id="cb42"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb42-1"><a href="#cb42-1"></a><span class="kw">def</span> adaptive_solve(problem):</span>
+<span id="cb42-2"><a href="#cb42-2"></a>    <span class="co">"""신뢰도에 따라 샘플링 수 조정"""</span></span>
+<span id="cb42-3"><a href="#cb42-3"></a>    </span>
+<span id="cb42-4"><a href="#cb42-4"></a>    <span class="co"># 초기: 5개 샘플</span></span>
+<span id="cb42-5"><a href="#cb42-5"></a>    responses <span class="op">=</span> generate_multiple_responses(problem, n<span class="op">=</span><span class="dv">5</span>)</span>
+<span id="cb42-6"><a href="#cb42-6"></a>    vote_counts <span class="op">=</span> get_vote_counts(responses)</span>
+<span id="cb42-7"><a href="#cb42-7"></a>    </span>
+<span id="cb42-8"><a href="#cb42-8"></a>    <span class="co"># 신뢰도 계산</span></span>
+<span id="cb42-9"><a href="#cb42-9"></a>    max_votes <span class="op">=</span> <span class="bu">max</span>(vote_counts.values())</span>
+<span id="cb42-10"><a href="#cb42-10"></a>    confidence <span class="op">=</span> max_votes <span class="op">/</span> <span class="bu">len</span>(responses)</span>
+<span id="cb42-11"><a href="#cb42-11"></a>    </span>
+<span id="cb42-12"><a href="#cb42-12"></a>    <span class="cf">if</span> confidence <span class="op">&gt;=</span> <span class="fl">0.8</span>:</span>
+<span id="cb42-13"><a href="#cb42-13"></a>        <span class="co"># 높은 신뢰도 → 충분함</span></span>
+<span id="cb42-14"><a href="#cb42-14"></a>        <span class="cf">return</span> majority_vote(responses)</span>
+<span id="cb42-15"><a href="#cb42-15"></a>    </span>
+<span id="cb42-16"><a href="#cb42-16"></a>    <span class="cf">elif</span> confidence <span class="op">&gt;=</span> <span class="fl">0.6</span>:</span>
+<span id="cb42-17"><a href="#cb42-17"></a>        <span class="co"># 중간 신뢰도 → 5개 더 추가</span></span>
+<span id="cb42-18"><a href="#cb42-18"></a>        additional <span class="op">=</span> generate_multiple_responses(problem, n<span class="op">=</span><span class="dv">5</span>)</span>
+<span id="cb42-19"><a href="#cb42-19"></a>        <span class="cf">return</span> majority_vote(responses <span class="op">+</span> additional)</span>
+<span id="cb42-20"><a href="#cb42-20"></a>    </span>
+<span id="cb42-21"><a href="#cb42-21"></a>    <span class="cf">else</span>:</span>
+<span id="cb42-22"><a href="#cb42-22"></a>        <span class="co"># 낮은 신뢰도 → 10개 더 추가</span></span>
+<span id="cb42-23"><a href="#cb42-23"></a>        additional <span class="op">=</span> generate_multiple_responses(problem, n<span class="op">=</span><span class="dv">10</span>)</span>
+<span id="cb42-24"><a href="#cb42-24"></a>        <span class="cf">return</span> majority_vote(responses <span class="op">+</span> additional)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="패턴-3-ensemble-with-multiple-prompts" class="level3" data-number="1.12.3">
+<h3 data-number="1.12.3" class="anchored" data-anchor-id="패턴-3-ensemble-with-multiple-prompts"><span class="header-section-number">1.12.3</span> 패턴 3: Ensemble with Multiple Prompts</h3>
+<div class="sourceCode" id="cb43"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb43-1"><a href="#cb43-1"></a><span class="kw">def</span> ensemble_solve(problem):</span>
+<span id="cb43-2"><a href="#cb43-2"></a>    <span class="co">"""여러 프롬프트 스타일 결합"""</span></span>
+<span id="cb43-3"><a href="#cb43-3"></a>    </span>
+<span id="cb43-4"><a href="#cb43-4"></a>    prompts <span class="op">=</span> [</span>
+<span id="cb43-5"><a href="#cb43-5"></a>        <span class="ss">f"단계적으로 풀어주세요:</span><span class="ch">\n</span><span class="sc">{</span>problem<span class="sc">}</span><span class="ss">"</span>,</span>
+<span id="cb43-6"><a href="#cb43-6"></a>        <span class="ss">f"논리적으로 생각해봅시다:</span><span class="ch">\n</span><span class="sc">{</span>problem<span class="sc">}</span><span class="ss">"</span>,</span>
+<span id="cb43-7"><a href="#cb43-7"></a>        <span class="ss">f"먼저 문제를 분해해봅시다:</span><span class="ch">\n</span><span class="sc">{</span>problem<span class="sc">}</span><span class="ss">"</span></span>
+<span id="cb43-8"><a href="#cb43-8"></a>    ]</span>
+<span id="cb43-9"><a href="#cb43-9"></a>    </span>
+<span id="cb43-10"><a href="#cb43-10"></a>    all_responses <span class="op">=</span> []</span>
+<span id="cb43-11"><a href="#cb43-11"></a>    <span class="cf">for</span> prompt <span class="kw">in</span> prompts:</span>
+<span id="cb43-12"><a href="#cb43-12"></a>        responses <span class="op">=</span> generate_multiple_responses(prompt, n<span class="op">=</span><span class="dv">5</span>)</span>
+<span id="cb43-13"><a href="#cb43-13"></a>        all_responses.extend(responses)</span>
+<span id="cb43-14"><a href="#cb43-14"></a>    </span>
+<span id="cb43-15"><a href="#cb43-15"></a>    <span class="co"># 총 15개(3×5) 응답에서 다수결</span></span>
+<span id="cb43-16"><a href="#cb43-16"></a>    <span class="cf">return</span> majority_vote(all_responses)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="종합-실습-완전한-self-consistency-시스템" class="level2" data-number="1.13">
+<h2 data-number="1.13" class="anchored" data-anchor-id="종합-실습-완전한-self-consistency-시스템"><span class="header-section-number">1.13</span> 종합 실습: 완전한 Self-Consistency 시스템</h2>
+<div class="sourceCode" id="cb44"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb44-1"><a href="#cb44-1"></a><span class="im">import</span> openai</span>
+<span id="cb44-2"><a href="#cb44-2"></a><span class="im">from</span> collections <span class="im">import</span> Counter</span>
+<span id="cb44-3"><a href="#cb44-3"></a><span class="im">import</span> re</span>
+<span id="cb44-4"><a href="#cb44-4"></a><span class="im">from</span> typing <span class="im">import</span> List, Tuple, Optional</span>
+<span id="cb44-5"><a href="#cb44-5"></a></span>
+<span id="cb44-6"><a href="#cb44-6"></a><span class="kw">class</span> SelfConsistencySolver:</span>
+<span id="cb44-7"><a href="#cb44-7"></a>    <span class="co">"""Self-Consistency를 구현한 문제 해결 시스템"""</span></span>
+<span id="cb44-8"><a href="#cb44-8"></a>    </span>
+<span id="cb44-9"><a href="#cb44-9"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, api_key: <span class="bu">str</span>, model: <span class="bu">str</span> <span class="op">=</span> <span class="st">"gpt-3.5-turbo"</span>):</span>
+<span id="cb44-10"><a href="#cb44-10"></a>        openai.api_key <span class="op">=</span> api_key</span>
+<span id="cb44-11"><a href="#cb44-11"></a>        <span class="va">self</span>.model <span class="op">=</span> model</span>
+<span id="cb44-12"><a href="#cb44-12"></a>    </span>
+<span id="cb44-13"><a href="#cb44-13"></a>    <span class="kw">def</span> generate_responses(</span>
+<span id="cb44-14"><a href="#cb44-14"></a>        <span class="va">self</span>, </span>
+<span id="cb44-15"><a href="#cb44-15"></a>        prompt: <span class="bu">str</span>, </span>
+<span id="cb44-16"><a href="#cb44-16"></a>        n: <span class="bu">int</span> <span class="op">=</span> <span class="dv">10</span>, </span>
+<span id="cb44-17"><a href="#cb44-17"></a>        temperature: <span class="bu">float</span> <span class="op">=</span> <span class="fl">0.7</span></span>
+<span id="cb44-18"><a href="#cb44-18"></a>    ) <span class="op">-&gt;</span> List[<span class="bu">str</span>]:</span>
+<span id="cb44-19"><a href="#cb44-19"></a>        <span class="co">"""여러 추론 경로 생성"""</span></span>
+<span id="cb44-20"><a href="#cb44-20"></a>        responses <span class="op">=</span> []</span>
+<span id="cb44-21"><a href="#cb44-21"></a>        </span>
+<span id="cb44-22"><a href="#cb44-22"></a>        <span class="cf">for</span> _ <span class="kw">in</span> <span class="bu">range</span>(n):</span>
+<span id="cb44-23"><a href="#cb44-23"></a>            <span class="cf">try</span>:</span>
+<span id="cb44-24"><a href="#cb44-24"></a>                response <span class="op">=</span> openai.ChatCompletion.create(</span>
+<span id="cb44-25"><a href="#cb44-25"></a>                    model<span class="op">=</span><span class="va">self</span>.model,</span>
+<span id="cb44-26"><a href="#cb44-26"></a>                    messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: prompt}],</span>
+<span id="cb44-27"><a href="#cb44-27"></a>                    temperature<span class="op">=</span>temperature,</span>
+<span id="cb44-28"><a href="#cb44-28"></a>                    max_tokens<span class="op">=</span><span class="dv">500</span></span>
+<span id="cb44-29"><a href="#cb44-29"></a>                )</span>
+<span id="cb44-30"><a href="#cb44-30"></a>                content <span class="op">=</span> response.choices[<span class="dv">0</span>].message.content</span>
+<span id="cb44-31"><a href="#cb44-31"></a>                responses.append(content)</span>
+<span id="cb44-32"><a href="#cb44-32"></a>            <span class="cf">except</span> <span class="pp">Exception</span> <span class="im">as</span> e:</span>
+<span id="cb44-33"><a href="#cb44-33"></a>                <span class="bu">print</span>(<span class="ss">f"Error: </span><span class="sc">{</span>e<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb44-34"><a href="#cb44-34"></a>                <span class="cf">continue</span></span>
+<span id="cb44-35"><a href="#cb44-35"></a>        </span>
+<span id="cb44-36"><a href="#cb44-36"></a>        <span class="cf">return</span> responses</span>
+<span id="cb44-37"><a href="#cb44-37"></a>    </span>
+<span id="cb44-38"><a href="#cb44-38"></a>    <span class="kw">def</span> extract_answer(<span class="va">self</span>, response: <span class="bu">str</span>) <span class="op">-&gt;</span> Optional[<span class="bu">str</span>]:</span>
+<span id="cb44-39"><a href="#cb44-39"></a>        <span class="co">"""응답에서 답 추출"""</span></span>
+<span id="cb44-40"><a href="#cb44-40"></a>        patterns <span class="op">=</span> [</span>
+<span id="cb44-41"><a href="#cb44-41"></a>            <span class="vs">r'답:\s*([^\n]+)'</span>,</span>
+<span id="cb44-42"><a href="#cb44-42"></a>            <span class="vs">r'정답:\s*([^\n]+)'</span>,</span>
+<span id="cb44-43"><a href="#cb44-43"></a>            <span class="vs">r'최종\s*답:\s*([^\n]+)'</span>,</span>
+<span id="cb44-44"><a href="#cb44-44"></a>            <span class="vs">r'결과는\s*([^\n]+)'</span>,</span>
+<span id="cb44-45"><a href="#cb44-45"></a>        ]</span>
+<span id="cb44-46"><a href="#cb44-46"></a>        </span>
+<span id="cb44-47"><a href="#cb44-47"></a>        <span class="cf">for</span> pattern <span class="kw">in</span> patterns:</span>
+<span id="cb44-48"><a href="#cb44-48"></a>            match <span class="op">=</span> re.search(pattern, response, re.IGNORECASE)</span>
+<span id="cb44-49"><a href="#cb44-49"></a>            <span class="cf">if</span> match:</span>
+<span id="cb44-50"><a href="#cb44-50"></a>                answer <span class="op">=</span> match.group(<span class="dv">1</span>).strip()</span>
+<span id="cb44-51"><a href="#cb44-51"></a>                <span class="co"># 숫자 추출 시도</span></span>
+<span id="cb44-52"><a href="#cb44-52"></a>                numbers <span class="op">=</span> re.findall(<span class="vs">r'\d+'</span>, answer)</span>
+<span id="cb44-53"><a href="#cb44-53"></a>                <span class="cf">if</span> numbers:</span>
+<span id="cb44-54"><a href="#cb44-54"></a>                    <span class="cf">return</span> numbers[<span class="dv">0</span>]</span>
+<span id="cb44-55"><a href="#cb44-55"></a>                <span class="cf">return</span> answer</span>
+<span id="cb44-56"><a href="#cb44-56"></a>        </span>
+<span id="cb44-57"><a href="#cb44-57"></a>        <span class="cf">return</span> <span class="va">None</span></span>
+<span id="cb44-58"><a href="#cb44-58"></a>    </span>
+<span id="cb44-59"><a href="#cb44-59"></a>    <span class="kw">def</span> majority_vote(</span>
+<span id="cb44-60"><a href="#cb44-60"></a>        <span class="va">self</span>, </span>
+<span id="cb44-61"><a href="#cb44-61"></a>        responses: List[<span class="bu">str</span>]</span>
+<span id="cb44-62"><a href="#cb44-62"></a>    ) <span class="op">-&gt;</span> Tuple[Optional[<span class="bu">str</span>], <span class="bu">int</span>, <span class="bu">int</span>, <span class="bu">float</span>]:</span>
+<span id="cb44-63"><a href="#cb44-63"></a>        <span class="co">"""다수결 투표"""</span></span>
+<span id="cb44-64"><a href="#cb44-64"></a>        answers <span class="op">=</span> [<span class="va">self</span>.extract_answer(r) <span class="cf">for</span> r <span class="kw">in</span> responses]</span>
+<span id="cb44-65"><a href="#cb44-65"></a>        answers <span class="op">=</span> [a <span class="cf">for</span> a <span class="kw">in</span> answers <span class="cf">if</span> a <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>]</span>
+<span id="cb44-66"><a href="#cb44-66"></a>        </span>
+<span id="cb44-67"><a href="#cb44-67"></a>        <span class="cf">if</span> <span class="kw">not</span> answers:</span>
+<span id="cb44-68"><a href="#cb44-68"></a>            <span class="cf">return</span> <span class="va">None</span>, <span class="dv">0</span>, <span class="dv">0</span>, <span class="fl">0.0</span></span>
+<span id="cb44-69"><a href="#cb44-69"></a>        </span>
+<span id="cb44-70"><a href="#cb44-70"></a>        vote_counts <span class="op">=</span> Counter(answers)</span>
+<span id="cb44-71"><a href="#cb44-71"></a>        most_common <span class="op">=</span> vote_counts.most_common(<span class="dv">1</span>)[<span class="dv">0</span>]</span>
+<span id="cb44-72"><a href="#cb44-72"></a>        </span>
+<span id="cb44-73"><a href="#cb44-73"></a>        answer <span class="op">=</span> most_common[<span class="dv">0</span>]</span>
+<span id="cb44-74"><a href="#cb44-74"></a>        votes <span class="op">=</span> most_common[<span class="dv">1</span>]</span>
+<span id="cb44-75"><a href="#cb44-75"></a>        total <span class="op">=</span> <span class="bu">len</span>(answers)</span>
+<span id="cb44-76"><a href="#cb44-76"></a>        confidence <span class="op">=</span> votes <span class="op">/</span> total</span>
+<span id="cb44-77"><a href="#cb44-77"></a>        </span>
+<span id="cb44-78"><a href="#cb44-78"></a>        <span class="cf">return</span> answer, votes, total, confidence</span>
+<span id="cb44-79"><a href="#cb44-79"></a>    </span>
+<span id="cb44-80"><a href="#cb44-80"></a>    <span class="kw">def</span> solve(</span>
+<span id="cb44-81"><a href="#cb44-81"></a>        <span class="va">self</span>, </span>
+<span id="cb44-82"><a href="#cb44-82"></a>        problem: <span class="bu">str</span>, </span>
+<span id="cb44-83"><a href="#cb44-83"></a>        n: <span class="bu">int</span> <span class="op">=</span> <span class="dv">10</span>, </span>
+<span id="cb44-84"><a href="#cb44-84"></a>        temperature: <span class="bu">float</span> <span class="op">=</span> <span class="fl">0.7</span>,</span>
+<span id="cb44-85"><a href="#cb44-85"></a>        verbose: <span class="bu">bool</span> <span class="op">=</span> <span class="va">False</span></span>
+<span id="cb44-86"><a href="#cb44-86"></a>    ) <span class="op">-&gt;</span> <span class="bu">dict</span>:</span>
+<span id="cb44-87"><a href="#cb44-87"></a>        <span class="co">"""문제 해결"""</span></span>
+<span id="cb44-88"><a href="#cb44-88"></a>        </span>
+<span id="cb44-89"><a href="#cb44-89"></a>        <span class="co"># 프롬프트 구성</span></span>
+<span id="cb44-90"><a href="#cb44-90"></a>        prompt <span class="op">=</span> <span class="ss">f"""</span></span>
+<span id="cb44-91"><a href="#cb44-91"></a><span class="sc">{</span>problem<span class="sc">}</span></span>
+<span id="cb44-92"><a href="#cb44-92"></a></span>
+<span id="cb44-93"><a href="#cb44-93"></a><span class="ss">단계적으로 생각해서 풀어주세요.</span></span>
+<span id="cb44-94"><a href="#cb44-94"></a><span class="ss">마지막에 "답: [답변]" 형식으로 명확히 답해주세요.</span></span>
+<span id="cb44-95"><a href="#cb44-95"></a><span class="ss">"""</span></span>
+<span id="cb44-96"><a href="#cb44-96"></a>        </span>
+<span id="cb44-97"><a href="#cb44-97"></a>        <span class="co"># 여러 응답 생성</span></span>
+<span id="cb44-98"><a href="#cb44-98"></a>        responses <span class="op">=</span> <span class="va">self</span>.generate_responses(prompt, n, temperature)</span>
+<span id="cb44-99"><a href="#cb44-99"></a>        </span>
+<span id="cb44-100"><a href="#cb44-100"></a>        <span class="cf">if</span> verbose:</span>
+<span id="cb44-101"><a href="#cb44-101"></a>            <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">생성된 응답 </span><span class="sc">{</span><span class="bu">len</span>(responses)<span class="sc">}</span><span class="ss">개:"</span>)</span>
+<span id="cb44-102"><a href="#cb44-102"></a>            <span class="cf">for</span> i, response <span class="kw">in</span> <span class="bu">enumerate</span>(responses, <span class="dv">1</span>):</span>
+<span id="cb44-103"><a href="#cb44-103"></a>                answer <span class="op">=</span> <span class="va">self</span>.extract_answer(response)</span>
+<span id="cb44-104"><a href="#cb44-104"></a>                <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">경로 </span><span class="sc">{</span>i<span class="sc">}</span><span class="ss">:"</span>)</span>
+<span id="cb44-105"><a href="#cb44-105"></a>                <span class="bu">print</span>(<span class="ss">f"추출된 답: </span><span class="sc">{</span>answer<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb44-106"><a href="#cb44-106"></a>        </span>
+<span id="cb44-107"><a href="#cb44-107"></a>        <span class="co"># 다수결 투표</span></span>
+<span id="cb44-108"><a href="#cb44-108"></a>        final_answer, votes, total, confidence <span class="op">=</span> <span class="va">self</span>.majority_vote(responses)</span>
+<span id="cb44-109"><a href="#cb44-109"></a>        </span>
+<span id="cb44-110"><a href="#cb44-110"></a>        <span class="cf">return</span> {</span>
+<span id="cb44-111"><a href="#cb44-111"></a>            <span class="st">"answer"</span>: final_answer,</span>
+<span id="cb44-112"><a href="#cb44-112"></a>            <span class="st">"votes"</span>: votes,</span>
+<span id="cb44-113"><a href="#cb44-113"></a>            <span class="st">"total"</span>: total,</span>
+<span id="cb44-114"><a href="#cb44-114"></a>            <span class="st">"confidence"</span>: confidence,</span>
+<span id="cb44-115"><a href="#cb44-115"></a>            <span class="st">"all_responses"</span>: responses</span>
+<span id="cb44-116"><a href="#cb44-116"></a>        }</span>
+<span id="cb44-117"><a href="#cb44-117"></a></span>
+<span id="cb44-118"><a href="#cb44-118"></a><span class="co"># 사용 예시</span></span>
+<span id="cb44-119"><a href="#cb44-119"></a><span class="cf">if</span> <span class="va">__name__</span> <span class="op">==</span> <span class="st">"__main__"</span>:</span>
+<span id="cb44-120"><a href="#cb44-120"></a>    solver <span class="op">=</span> SelfConsistencySolver(api_key<span class="op">=</span><span class="st">"your-api-key"</span>)</span>
+<span id="cb44-121"><a href="#cb44-121"></a>    </span>
+<span id="cb44-122"><a href="#cb44-122"></a>    problem <span class="op">=</span> <span class="st">"""</span></span>
+<span id="cb44-123"><a href="#cb44-123"></a><span class="st">재닛의 오리들은 하루에 알을 16개 낳습니다.</span></span>
+<span id="cb44-124"><a href="#cb44-124"></a><span class="st">재닛은 매일 아침 3개의 알을 먹고,</span></span>
+<span id="cb44-125"><a href="#cb44-125"></a><span class="st">매일 4개의 알을 머핀을 굽는데 사용합니다.</span></span>
+<span id="cb44-126"><a href="#cb44-126"></a><span class="st">나머지 알은 하나에 2달러씩 판매합니다.</span></span>
+<span id="cb44-127"><a href="#cb44-127"></a><span class="st">재닛은 매일 얼마를 벌까요?</span></span>
+<span id="cb44-128"><a href="#cb44-128"></a><span class="st">"""</span></span>
+<span id="cb44-129"><a href="#cb44-129"></a>    </span>
+<span id="cb44-130"><a href="#cb44-130"></a>    result <span class="op">=</span> solver.solve(problem, n<span class="op">=</span><span class="dv">15</span>, temperature<span class="op">=</span><span class="fl">0.8</span>, verbose<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb44-131"><a href="#cb44-131"></a>    </span>
+<span id="cb44-132"><a href="#cb44-132"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">"</span> <span class="op">+</span> <span class="st">"="</span><span class="op">*</span><span class="dv">50</span>)</span>
+<span id="cb44-133"><a href="#cb44-133"></a>    <span class="bu">print</span>(<span class="ss">f"최종 답: </span><span class="sc">{</span>result[<span class="st">'answer'</span>]<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb44-134"><a href="#cb44-134"></a>    <span class="bu">print</span>(<span class="ss">f"득표: </span><span class="sc">{</span>result[<span class="st">'votes'</span>]<span class="sc">}</span><span class="ss">/</span><span class="sc">{</span>result[<span class="st">'total'</span>]<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb44-135"><a href="#cb44-135"></a>    <span class="bu">print</span>(<span class="ss">f"신뢰도: </span><span class="sc">{</span>result[<span class="st">'confidence'</span>]<span class="sc">:.1%}</span><span class="ss">"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="마무리-프롬프트-엔지니어링-여정의-완성" class="level2" data-number="1.14">
+<h2 data-number="1.14" class="anchored" data-anchor-id="마무리-프롬프트-엔지니어링-여정의-완성"><span class="header-section-number">1.14</span> 마무리: 프롬프트 엔지니어링 여정의 완성</h2>
+<p>이제 우리는 프롬프트 엔지니어링의 기초 기법 전체를 배웠습니다!</p>
+<section id="전체-여정-요약" class="level3" data-number="1.14.1">
+<h3 data-number="1.14.1" class="anchored" data-anchor-id="전체-여정-요약"><span class="header-section-number">1.14.1</span> 전체 여정 요약</h3>
+<pre><code>Part 1: 개요
+→ 기법들의 분류 체계 이해
+
+Part 2: Zero-Shot
+→ 예시 없이 작업 수행
+→ Instruction Tuning &amp; RLHF
+
+Part 3: Few-Shot
+→ 소수의 예시로 성능 향상
+→ 형식의 중요성
+
+Part 4: Chain-of-Thought
+→ 단계별 추론 명시
+→ 복잡한 문제 해결
+
+Part 5: Zero-Shot CoT
+→ "단계적으로 생각해봅시다"
+→ 예시 작성 부담 제거
+
+Part 6: Self-Consistency (현재)
+→ 다수결로 정확도 향상
+→ 최고 성능 달성</code></pre>
+</section>
+<section id="기법-선택-가이드-최종" class="level3" data-number="1.14.2">
+<h3 data-number="1.14.2" class="anchored" data-anchor-id="기법-선택-가이드-최종"><span class="header-section-number">1.14.2</span> 기법 선택 가이드 (최종)</h3>
+<div class="sourceCode" id="cb46"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb46-1"><a href="#cb46-1"></a><span class="kw">def</span> choose_technique(problem_type, importance, budget):</span>
+<span id="cb46-2"><a href="#cb46-2"></a>    <span class="co">"""상황에 맞는 최적 기법 선택"""</span></span>
+<span id="cb46-3"><a href="#cb46-3"></a>    </span>
+<span id="cb46-4"><a href="#cb46-4"></a>    <span class="co"># 간단한 작업</span></span>
+<span id="cb46-5"><a href="#cb46-5"></a>    <span class="cf">if</span> problem_type <span class="op">==</span> <span class="st">"simple"</span>:</span>
+<span id="cb46-6"><a href="#cb46-6"></a>        <span class="cf">return</span> <span class="st">"Zero-Shot"</span></span>
+<span id="cb46-7"><a href="#cb46-7"></a>    </span>
+<span id="cb46-8"><a href="#cb46-8"></a>    <span class="co"># 복잡하지만 예산 제약</span></span>
+<span id="cb46-9"><a href="#cb46-9"></a>    <span class="cf">if</span> problem_type <span class="op">==</span> <span class="st">"complex"</span> <span class="kw">and</span> budget <span class="op">==</span> <span class="st">"low"</span>:</span>
+<span id="cb46-10"><a href="#cb46-10"></a>        <span class="cf">return</span> <span class="st">"Zero-Shot CoT"</span></span>
+<span id="cb46-11"><a href="#cb46-11"></a>    </span>
+<span id="cb46-12"><a href="#cb46-12"></a>    <span class="co"># 복잡하고 특정 형식 필요</span></span>
+<span id="cb46-13"><a href="#cb46-13"></a>    <span class="cf">if</span> problem_type <span class="op">==</span> <span class="st">"complex"</span> <span class="kw">and</span> need_format():</span>
+<span id="cb46-14"><a href="#cb46-14"></a>        <span class="cf">return</span> <span class="st">"Few-Shot CoT"</span></span>
+<span id="cb46-15"><a href="#cb46-15"></a>    </span>
+<span id="cb46-16"><a href="#cb46-16"></a>    <span class="co"># 매우 중요하고 예산 충분</span></span>
+<span id="cb46-17"><a href="#cb46-17"></a>    <span class="cf">if</span> importance <span class="op">==</span> <span class="st">"critical"</span> <span class="kw">and</span> budget <span class="op">==</span> <span class="st">"high"</span>:</span>
+<span id="cb46-18"><a href="#cb46-18"></a>        <span class="cf">return</span> <span class="st">"Self-Consistency"</span></span>
+<span id="cb46-19"><a href="#cb46-19"></a>    </span>
+<span id="cb46-20"><a href="#cb46-20"></a>    <span class="co"># 기본: Chain-of-Thought</span></span>
+<span id="cb46-21"><a href="#cb46-21"></a>    <span class="cf">return</span> <span class="st">"Chain-of-Thought"</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="성능-비용-비교-최종" class="level3" data-number="1.14.3">
+<h3 data-number="1.14.3" class="anchored" data-anchor-id="성능-비용-비교-최종"><span class="header-section-number">1.14.3</span> 성능-비용 비교 (최종)</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th>기법</th>
+<th>상대 비용</th>
+<th>상대 성능</th>
+<th>추천 사용처</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Zero-Shot</td>
+<td>1x</td>
+<td>★★☆☆☆</td>
+<td>간단한 작업, 프로토타이핑</td>
+</tr>
+<tr class="even">
+<td>Few-Shot</td>
+<td>3x</td>
+<td>★★★☆☆</td>
+<td>형식 중요, 도메인 특화</td>
+</tr>
+<tr class="odd">
+<td>Chain-of-Thought</td>
+<td>2x</td>
+<td>★★★★☆</td>
+<td>복잡한 추론, 일반적 사용</td>
+</tr>
+<tr class="even">
+<td>Zero-Shot CoT</td>
+<td>2x</td>
+<td>★★★☆☆</td>
+<td>빠른 적용, 다양한 문제</td>
+</tr>
+<tr class="odd">
+<td>Self-Consistency</td>
+<td>10-40x</td>
+<td>★★★★★</td>
+<td>중요한 결정, 최고 정확도</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="핵심-원칙" class="level3" data-number="1.14.4">
+<h3 data-number="1.14.4" class="anchored" data-anchor-id="핵심-원칙"><span class="header-section-number">1.14.4</span> 핵심 원칙</h3>
+<p><strong>1. 항상 간단한 것부터 시작하세요</strong></p>
+<pre><code>Zero-Shot → Few-Shot → CoT → Self-Consistency
+필요한 만큼만 복잡하게!</code></pre>
+<p><strong>2. 비용과 성능의 균형을 고려하세요</strong></p>
+<pre><code>무조건 복잡한 기법 ≠ 항상 좋음
+상황에 맞는 선택이 중요</code></pre>
+<p><strong>3. 실험하고 측정하세요</strong></p>
+<pre><code>이론 &lt; 실제 결과
+A/B 테스트로 검증</code></pre>
+<p><strong>4. 프롬프트 품질이 핵심입니다</strong></p>
+<pre><code>좋은 프롬프트 + 간단한 기법
+&gt; 나쁜 프롬프트 + 복잡한 기법</code></pre>
+</section>
+</section>
+<section id="다음-단계-advanced-techniques" class="level2" data-number="1.15">
+<h2 data-number="1.15" class="anchored" data-anchor-id="다음-단계-advanced-techniques"><span class="header-section-number">1.15</span> 다음 단계: Advanced Techniques</h2>
+<p>기초를 마스터했다면, 이제 고급 기법들을 탐험할 차례입니다:</p>
+<ul>
+<li><strong>Generate Knowledge Prompting</strong>: 먼저 관련 지식을 생성한 후 문제 해결</li>
+<li><strong>Tree of Thoughts</strong>: 트리 구조로 사고 과정 탐색</li>
+<li><strong>RAG (Retrieval-Augmented Generation)</strong>: 외부 지식 검색 결합</li>
+<li><strong>Automatic Prompt Engineer</strong>: 프롬프트 자동 최적화</li>
+<li><strong>ReAct</strong>: 추론과 행동을 결합</li>
+</ul>
+<p>하지만 이 기초 6가지 기법만으로도 대부분의 실무 문제를 효과적으로 해결할 수 있습니다!</p>
+</section>
+<section id="마지막-실습-종합-문제" class="level2" data-number="1.16">
+<h2 data-number="1.16" class="anchored" data-anchor-id="마지막-실습-종합-문제"><span class="header-section-number">1.16</span> 마지막 실습: 종합 문제</h2>
+<p>이제 배운 모든 것을 활용하여 실제 문제를 해결해봅시다.</p>
+<p><strong>문제:</strong></p>
+<pre><code>한 회사에서 신제품 출시를 고려하고 있습니다.
+- 개발 비용: 5천만원
+- 예상 판매가: 개당 10만원
+- 예상 판매량: 월 50~100개 (평균 75개)
+- 운영 기간: 12개월
+- 고정비: 월 200만원
+
+손익분기점은 몇 개월 후이며,
+12개월 후 예상 순이익은 얼마인가요?</code></pre>
+<p><strong>시도해볼 것:</strong> 1. Zero-Shot CoT로 먼저 풀어보기 2. Self-Consistency (n=10)로 정확도 높이기 3. 신뢰도 확인하기</p>
+<p>이 문제를 통해 여러분의 프롬프트 엔지니어링 실력을 확인해보세요!</p>
+<hr>
+<p><strong>축하합니다!</strong> 프롬프트 엔지니어링 기초 시리즈를 완료하셨습니다! 🎉</p>
+<p>이제 여러분은 현대 언어 모델을 효과적으로 활용할 수 있는 탄탄한 기초를 갖추었습니다. 계속 실험하고, 측정하고, 개선하세요. 프롬프트 엔지니어링의 세계는 여전히 빠르게 진화하고 있으며, 여러분의 창의적인 응용을 기다리고 있습니다!</p>
+</section>
+<section id="참고문헌" class="level2" data-number="1.17">
+<h2 data-number="1.17" class="anchored" data-anchor-id="참고문헌"><span class="header-section-number">1.17</span> 참고문헌</h2>
+<ul>
+<li>Wang, X., Wei, J., Schuurmans, D., Le, Q., Chi, E., Narang, S., … &amp; Zhou, D. (2022). Self-consistency improves chain of thought reasoning in language models. <em>arXiv preprint arXiv:2203.11171</em>.</li>
+<li>Wei, J., Wang, X., Schuurmans, D., Bosma, M., Xia, F., Chi, E., … &amp; Zhou, D. (2022). Chain-of-thought prompting elicits reasoning in large language models. <em>Advances in Neural Information Processing Systems, 35</em>, 24824-24837.</li>
+</ul>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

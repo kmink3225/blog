@@ -1,0 +1,1147 @@
+---
+title: "Self-Consistency"
+subtitle: 다수결 투표로 LLM 추론 정확도를 극대화하는 고급 프롬프팅 기법
+description: |
+  Self-Consistency의 정의부터 실전 구현까지 체계적으로 설명한다.
+  Wang et al. (2022) "Self-Consistency Improves Chain of Thought Reasoning" 연구를 바탕으로
+  다수결 투표(Majority Voting)의 원리, 여러 추론 경로 생성 메커니즘,
+  샘플링 수와 Temperature 설정의 최적화 전략을 분석한다.
+  GSM8K, MultiArith, CommonsenseQA 등 벤치마크에서 CoT 대비 최대 17%p 성능 향상 결과를 제시하고,
+  재닛의 오리 문제, 보안 이메일 분류, 복잡한 산술 문제 등 실무 예시와
+  Python 구현 코드(OpenAI API 활용)를 통해 실전 활용 방법을 상세히 다룬다.
+  비용-성능 트레이드오프 분석, 적용 시나리오별 권장사항, 
+  Hybrid Approach와 Confidence-Based Re-sampling 등 최적화 패턴을 제시한다.
+categories:
+  - Prompt Engineering
+  - LLM
+  - AI
+  - Agent
+author: Kwangmin Kim
+date: 01/30/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+---
+
+# Part 6: Self-Consistency - 다수결로 정확도를 높이는 법
+
+## 들어가며
+
+지금까지 우리는 프롬프트 엔지니어링의 핵심 기법들을 배워왔습니다:
+- Zero-Shot: 예시 없이 작업 수행
+- Few-Shot: 소수의 예시로 성능 향상
+- Chain-of-Thought: 단계별 추론으로 복잡한 문제 해결
+- Zero-Shot CoT: "단계적으로 생각해봅시다"만으로 추론 능력 획득
+
+하지만 여전히 한 가지 문제가 남아있습니다. **한 번의 추론이 틀릴 수 있다**는 것입니다.
+
+```
+같은 문제를 풀어도:
+시도 1: 답 = 18 ✅
+시도 2: 답 = 16 ❌
+시도 3: 답 = 18 ✅
+시도 4: 답 = 20 ❌
+시도 5: 답 = 18 ✅
+
+어느 것이 정답일까?
+```
+
+이번 글에서는 **Self-Consistency**를 통해 여러 추론 경로를 활용하여 더 정확한 답을 얻는 방법을 알아보겠습니다.
+
+## Self-Consistency란?
+
+### 정의
+
+Self-Consistency는 **같은 문제에 대해 여러 개의 추론 경로를 생성하고, 가장 일관되게 나타나는 답을 최종 답으로 선택하는 방법**입니다.
+
+```
+┌─────────────────────────────────────┐
+│  Chain-of-Thought (기존)             │
+├─────────────────────────────────────┤
+│  문제 → 추론 경로 1개 → 답 1개      │
+│  (한 번의 시도)                      │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│  Self-Consistency (본 기법)          │
+├─────────────────────────────────────┤
+│  문제 → 추론 경로 여러 개 생성       │
+│       → 답 여러 개                   │
+│       → 다수결 투표                  │
+│       → 최종 답                      │
+└─────────────────────────────────────┘
+```
+
+### 핵심 아이디어
+
+"여러 사람에게 같은 문제를 풀게 하고, 다수결로 정하자"
+
+마치 시험에서 어려운 문제를 만났을 때:
+- 한 명에게만 물어보면 틀릴 수 있음
+- 여러 명에게 물어보고 가장 많이 나온 답을 선택하면 더 정확함
+
+## 연구 배경: Wang et al. (2022)
+
+### "Self-Consistency Improves Chain of Thought Reasoning"
+
+Google Research의 연구팀이 제안한 이 기법은 Chain-of-Thought의 성능을 크게 향상시켰습니다.
+
+![Self-Consistency 다이어그램](이미지 생략)
+
+### Self-Consistency의 3단계 프로세스
+
+```
+┌─────────────────────────────────────────┐
+│ 1단계: 다양한 추론 경로 생성             │
+├─────────────────────────────────────────┤
+│ 같은 문제를 여러 번 풀게 함              │
+│ (Temperature를 높여 다양성 확보)         │
+└─────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────┐
+│ 2단계: 각 경로에서 최종 답 추출          │
+├─────────────────────────────────────────┤
+│ 추론 과정은 다르지만 답은 명확히 식별    │
+└─────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────┐
+│ 3단계: 다수결 투표 (Majority Voting)     │
+├─────────────────────────────────────────┤
+│ 가장 많이 나온 답을 최종 답으로 선택     │
+└─────────────────────────────────────────┘
+```
+
+## 실제 예시: 재닛의 오리 문제
+
+### 문제 설정
+
+```
+재닛의 오리들은 하루에 알을 16개 낳습니다.
+재닛은 매일 아침 3개의 알을 먹고,
+매일 4개의 알을 머핀을 굽는데 사용합니다.
+나머지 알은 하나에 2달러씩 판매합니다.
+재닛은 매일 얼마를 벌까요?
+```
+
+### 다양한 추론 경로 생성
+
+**경로 1:**
+```
+재닛은 16개의 알로 시작합니다.
+그녀는 3개를 먹고 4개를 머핀에 사용하므로,
+3 + 4 = 7개를 사용합니다.
+남은 알은 16 - 7 = 9개입니다.
+각 알을 2달러에 팔므로, 9 × 2 = 18달러를 벌게 됩니다.
+
+답: 18달러
+```
+
+**경로 2:**
+```
+오리들이 낳는 알: 16개
+먹는 알: 3개
+머핀용 알: 4개
+판매 가능한 알: 16 - 3 - 4 = 9개
+수익: 9 × 2 = 18달러
+
+답: 18달러
+```
+
+**경로 3:**
+```
+하루 생산량: 16개
+재닛의 소비: 3개 (아침)
+제빵 사용: 4개 (머핀)
+판매량 = 16 - (3 + 4) = 16 - 7 = 9개
+판매 금액 = 9개 × $2/개 = $18
+
+답: 18달러
+```
+
+**경로 4 (잘못된 추론):**
+```
+오리가 16개를 낳고, 재닛이 3개를 먹습니다.
+16 - 3 = 13개
+13개를 2달러에 팔면 26달러입니다.
+
+답: 26달러 ❌
+```
+
+**경로 5:**
+```
+총 알: 16
+사용량: 3 (식사) + 4 (요리) = 7
+판매량: 16 - 7 = 9
+벌이: 9 × 2 = 18
+
+답: 18달러
+```
+
+### 다수결 투표
+
+```
+답변 집계:
+- 18달러: 4표 ⭐⭐⭐⭐
+- 26달러: 1표 ⭐
+
+최종 답: 18달러 ✅
+```
+
+**분석:**
+- 5개의 추론 경로 중 4개가 올바른 답(18달러)을 도출했습니다
+- 1개는 잘못된 추론(머핀용 알을 고려하지 않음)으로 26달러를 냈습니다
+- 다수결로 올바른 답을 선택할 수 있었습니다
+
+## 연구 결과: Self-Consistency의 효과
+
+### 산술 추론 (Arithmetic Reasoning) 성능
+
+Wang et al. (2022)의 연구에서 다양한 벤치마크에 대한 성능을 측정했습니다.
+
+**GSM8K 데이터셋 (초등학교 수준 수학):**
+```
+모델: PaLM 540B
+
+Standard Prompting: 18%
+Chain-of-Thought: 57%
+Self-Consistency: 74% ⭐
+→ CoT 대비 +17%p 향상!
+```
+
+**MultiArith 데이터셋:**
+```
+Chain-of-Thought: 78.7%
+Self-Consistency: 91.2% ⭐
+→ +12.5%p 향상!
+```
+
+**ASDiv 데이터셋:**
+```
+Chain-of-Thought: 75.3%
+Self-Consistency: 88.6% ⭐
+→ +13.3%p 향상!
+```
+
+### 상식 추론 (Commonsense Reasoning) 성능
+
+**CommonsenseQA:**
+```
+Chain-of-Thought: 79.2%
+Self-Consistency: 83.7% ⭐
+→ +4.5%p 향상
+```
+
+**StrategyQA:**
+```
+Chain-of-Thought: 69.4%
+Self-Consistency: 75.6% ⭐
+→ +6.2%p 향상
+```
+
+### 샘플링 수에 따른 성능 변화
+
+연구진은 몇 개의 추론 경로를 생성하는 것이 최적인지 실험했습니다.
+
+![샘플링 수에 따른 정확도 그래프](이미지 생략)
+
+```
+GSM8K 데이터셋 (PaLM 540B):
+
+샘플링 수 | 정확도
+----------|--------
+1 (CoT)   | 57%
+5         | 68%
+10        | 71%
+20        | 73%
+40        | 74%
+80        | 74.4%
+
+→ 약 40개 샘플에서 수렴
+```
+
+**주요 발견:**
+- 샘플 수가 증가할수록 성능이 향상됩니다
+- 하지만 약 40개 이후로는 향상폭이 미미합니다
+- 비용-성능 트레이드오프 고려 시 **10-20개가 실용적**입니다
+
+## Aggregation 전략: 어떻게 투표할까?
+
+Self-Consistency에서는 여러 답을 어떻게 집계할지가 중요합니다.
+
+### 1. Majority Voting (다수결 투표) - 가장 효과적
+
+```
+예시 결과:
+답 A: 7번 등장 ⭐⭐⭐⭐⭐⭐⭐
+답 B: 2번 등장 ⭐⭐
+답 C: 1번 등장 ⭐
+
+최종 선택: 답 A
+```
+
+**장점:**
+- 간단하고 직관적
+- 대부분의 경우 최고 성능
+- 구현이 쉬움
+
+**적용 분야:**
+- 산술 문제 (명확한 답이 있는 경우)
+- 분류 문제
+- 객관식 문제
+
+### 2. Weighted Voting (가중 투표)
+
+```
+각 추론 경로에 확신도(confidence) 점수 부여:
+
+경로 1: 답 A, 확신도 0.9
+경로 2: 답 A, 확신도 0.7
+경로 3: 답 B, 확신도 0.4
+
+답 A 총점: 0.9 + 0.7 = 1.6 ⭐
+답 B 총점: 0.4
+
+최종 선택: 답 A
+```
+
+**장점:**
+- 더 신뢰할 만한 추론에 가중치
+- 세밀한 제어 가능
+
+**단점:**
+- 확신도 계산이 어려움
+- 구현 복잡도 증가
+
+### 3. First Valid Answer (첫 유효 답변)
+
+```
+순서대로 확인하여 첫 번째로 유효한 답 선택
+→ Self-Consistency의 이점을 살리지 못함
+→ 비추천
+```
+
+### 연구 결과: Majority Voting이 최선
+
+```
+다양한 aggregation 전략 비교:
+
+Majority Voting:     74.4%  ⭐ (최고)
+Weighted by log-prob: 73.1%
+First valid answer:   57.0%
+Random selection:     57.0%
+
+→ Simple Majority Voting이 가장 효과적!
+```
+
+## 실습: Self-Consistency 적용하기
+
+### 실습 준비
+
+**OpenAI API 설정 (Python):**
+```python
+import openai
+from collections import Counter
+
+openai.api_key = "your-api-key"
+
+def generate_multiple_responses(prompt, n=10, temperature=0.7):
+    """여러 개의 추론 경로 생성"""
+    responses = []
+    
+    for i in range(n):
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=temperature,
+            max_tokens=400
+        )
+        responses.append(response.choices[0].message.content)
+    
+    return responses
+
+def extract_answer(response):
+    """응답에서 최종 답 추출"""
+    # 간단한 예시: "답:" 또는 "정답:" 뒤의 숫자 추출
+    import re
+    
+    patterns = [
+        r'답:\s*(\d+)',
+        r'정답:\s*(\d+)',
+        r'답은\s*(\d+)',
+        r'=\s*(\d+)\s*달러'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, response)
+        if match:
+            return match.group(1)
+    
+    return None
+
+def majority_vote(responses):
+    """다수결 투표로 최종 답 선택"""
+    answers = [extract_answer(r) for r in responses]
+    answers = [a for a in answers if a is not None]
+    
+    if not answers:
+        return None
+    
+    # 가장 많이 나온 답 선택
+    vote_counts = Counter(answers)
+    most_common = vote_counts.most_common(1)[0]
+    
+    return most_common[0], most_common[1], len(answers)
+```
+
+### 실습 1: 재닛의 오리 문제
+
+**프롬프트:**
+```python
+prompt = """
+재닛의 오리들은 하루에 알을 16개 낳습니다.
+재닛은 매일 아침 3개의 알을 먹고,
+매일 4개의 알을 머핀을 굽는데 사용합니다.
+나머지 알은 하나에 2달러씩 판매합니다.
+재닛은 매일 얼마를 벌까요?
+
+단계적으로 생각해서 풀어주세요.
+마지막에 "답: [숫자]달러" 형식으로 답해주세요.
+"""
+
+# 10개의 추론 경로 생성
+responses = generate_multiple_responses(prompt, n=10, temperature=0.7)
+
+# 각 응답 출력
+for i, response in enumerate(responses, 1):
+    print(f"\n경로 {i}:")
+    print(response)
+    print(f"추출된 답: {extract_answer(response)}")
+
+# 다수결 투표
+final_answer, vote_count, total = majority_vote(responses)
+print(f"\n최종 답: {final_answer}달러 ({vote_count}/{total}표)")
+```
+
+**기대 출력:**
+```
+경로 1:
+재닛은 16개로 시작합니다...
+답: 18달러
+추출된 답: 18
+
+경로 2:
+오리들이 낳는 알은 16개입니다...
+답: 18달러
+추출된 답: 18
+
+...
+
+경로 9:
+16개에서 7개를 빼면...
+답: 18달러
+추출된 답: 18
+
+경로 10:
+계산해보면 16-3-4=9, 9×2=18...
+답: 18달러
+추출된 답: 18
+
+최종 답: 18달러 (9/10표)
+```
+
+### 실습 2: 보안 이메일 분류
+
+강의 자료의 실습 예제를 활용해봅시다.
+
+**프롬프트:**
+```python
+prompt = """
+다음 이메일을 "IMPORTANT"(중요) 또는 "NOT IMPORTANT"(중요하지 않음)로 분류해주세요.
+
+이메일:
+제목: 긴급: 보안 업데이트 필요
+발신자: security@company.com
+내용: 귀하의 계정에서 비정상적인 로그인 시도가 감지되었습니다. 
+즉시 비밀번호를 변경해주시기 바랍니다.
+
+단계적으로 생각해서 분류해주세요.
+마지막에 "분류: IMPORTANT" 또는 "분류: NOT IMPORTANT" 형식으로 답해주세요.
+"""
+
+responses = generate_multiple_responses(prompt, n=10, temperature=0.7)
+
+# 답 추출 함수 수정
+def extract_classification(response):
+    import re
+    if re.search(r'분류:\s*IMPORTANT', response, re.IGNORECASE):
+        return "IMPORTANT"
+    elif re.search(r'분류:\s*NOT IMPORTANT', response, re.IGNORECASE):
+        return "NOT IMPORTANT"
+    return None
+
+classifications = [extract_classification(r) for r in responses]
+classifications = [c for c in classifications if c is not None]
+
+vote_counts = Counter(classifications)
+print(f"\n투표 결과:")
+for label, count in vote_counts.items():
+    print(f"{label}: {count}표")
+
+final = vote_counts.most_common(1)[0][0]
+print(f"\n최종 분류: {final}")
+```
+
+**기대 출력:**
+```
+투표 결과:
+IMPORTANT: 10표
+NOT IMPORTANT: 0표
+
+최종 분류: IMPORTANT
+```
+
+### 실습 3: 복잡한 산술 문제
+
+**프롬프트:**
+```python
+prompt = """
+한 학급에 학생이 24명 있습니다.
+이 중 1/3은 안경을 쓰고,
+안경을 쓴 학생 중 절반은 여학생입니다.
+안경을 쓴 여학생은 몇 명인가요?
+
+단계적으로 계산해주세요.
+마지막에 "답: [숫자]명" 형식으로 답해주세요.
+"""
+
+responses = generate_multiple_responses(prompt, n=15, temperature=0.8)
+
+for i, response in enumerate(responses, 1):
+    answer = extract_answer(response)
+    print(f"경로 {i}: {answer}명")
+
+final_answer, vote_count, total = majority_vote(responses)
+print(f"\n최종 답: {final_answer}명 ({vote_count}/{total}표)")
+```
+
+**분석:**
+```
+정답: 4명
+- 24명의 1/3 = 8명이 안경 착용
+- 8명의 절반 = 4명이 여학생
+
+예상 결과:
+경로 1-12: 4명 ✅
+경로 13: 12명 ❌ (계산 오류)
+경로 14: 4명 ✅
+경로 15: 8명 ❌ (절반 계산 누락)
+
+최종 답: 4명 (13/15표)
+```
+
+## Self-Consistency 최적화 가이드
+
+### 1. Temperature 설정
+
+```python
+# Temperature가 너무 낮으면
+temperature = 0.1
+→ 추론 경로가 비슷해짐
+→ 다양성 부족
+→ Self-Consistency의 이점 감소
+
+# Temperature가 적절하면
+temperature = 0.7 ~ 0.9  ⭐ 권장
+→ 다양한 추론 경로
+→ 다수결의 효과 극대화
+
+# Temperature가 너무 높으면
+temperature = 1.5
+→ 무작위성 너무 높음
+→ 오답 생성 증가
+→ 다수결도 틀릴 수 있음
+```
+
+### 2. 샘플 수 선택
+
+```python
+# 비용-성능 트레이드오프
+
+매우 저렴하게: n = 3-5
+→ 최소한의 개선
+→ 빠른 프로토타이핑
+
+균형 잡힌 선택: n = 10-20  ⭐ 권장
+→ 좋은 성능 향상
+→ 적절한 비용
+
+최고 성능: n = 40+
+→ 최대 성능
+→ 높은 비용
+→ 중요한 결정에만 사용
+```
+
+### 3. 답 추출 패턴 정교화
+
+```python
+def extract_answer_advanced(response):
+    """더 정교한 답 추출"""
+    import re
+    
+    # 여러 패턴 시도
+    patterns = [
+        r'답:\s*([^\n]+)',
+        r'정답:\s*([^\n]+)',
+        r'최종\s*답:\s*([^\n]+)',
+        r'따라서\s+답은\s+([^\n]+)',
+        r'결과는\s+([^\n]+)'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, response, re.IGNORECASE)
+        if match:
+            answer = match.group(1).strip()
+            # 숫자만 추출
+            numbers = re.findall(r'\d+', answer)
+            if numbers:
+                return numbers[0]
+    
+    return None
+```
+
+### 4. 프롬프트 엔지니어링
+
+```python
+# 명확한 형식 지정
+prompt = """
+[문제]
+
+다음 규칙을 따라주세요:
+1. 단계적으로 생각하세요
+2. 각 단계를 명확히 표시하세요
+3. 마지막에 반드시 "답: [숫자]" 형식으로 답하세요
+
+[문제 내용]
+"""
+```
+
+## Self-Consistency의 장점과 한계
+
+### 장점
+
+**1. 정확도 대폭 향상**
+```
+Chain-of-Thought: 57%
+Self-Consistency: 74%
+→ +17%p 향상!
+```
+
+**2. 오류에 대한 강건성**
+- 일부 추론 경로가 틀려도 괜찮음
+- 다수결로 오류 보정
+- 노이즈에 강함
+
+**3. 신뢰도 측정 가능**
+```
+10개 중 9개가 같은 답 → 높은 신뢰도
+10개 중 5개가 같은 답 → 낮은 신뢰도
+→ 불확실성을 정량화할 수 있음
+```
+
+**4. 추가 학습 불필요**
+- 모델 재학습 없음
+- 프롬프트 수정만으로 적용
+- 즉시 사용 가능
+
+### 한계
+
+**1. 계산 비용 증가**
+```
+Chain-of-Thought: 1회 추론
+Self-Consistency: 10-40회 추론
+→ 10-40배 비용 증가
+→ 시간도 10-40배 증가
+```
+
+**2. 토큰 사용량 급증**
+```
+단일 CoT: 500 tokens
+Self-Consistency (n=20): 10,000 tokens
+→ API 비용 20배
+```
+
+**3. 답 추출의 어려움**
+```
+자유 형식 답변에서는 추출이 어려움:
+- "약 18달러 정도입니다"
+- "18달러가 답입니다"
+- "재닛은 $18를 벌게 됩니다"
+
+→ 정규표현식이 복잡해짐
+→ 때로는 추출 실패
+```
+
+**4. 주관적 문제에는 부적합**
+```
+❌ 창작: "이야기를 써주세요"
+❌ 의견: "어떤 선택이 더 나을까요?"
+✅ 객관식: "답은 A, B, C 중 무엇?"
+✅ 수학: "계산 결과는?"
+```
+
+**5. 모델의 편향 증폭 가능**
+```
+모델이 특정 오답으로 편향되어 있으면:
+10개 추론 모두 같은 오답 → 다수결도 오답
+```
+
+## 언제 Self-Consistency를 사용해야 할까?
+
+### Self-Consistency가 적합한 경우
+
+✅ **높은 정확도가 중요한 작업**
+- 의료 진단 보조
+- 금융 계산
+- 법률 분석
+- 안전 critical 시스템
+
+✅ **명확한 정답이 있는 문제**
+- 수학 문제
+- 논리 퍼즐
+- 객관식 문제
+- 사실 확인
+
+✅ **비용을 감수할 수 있을 때**
+- 중요한 의사결정
+- 대량 처리보다 품질 우선
+- 재처리 비용이 더 클 때
+
+✅ **불확실성 정량화가 필요할 때**
+- 신뢰도 점수 필요
+- 리스크 관리 필요
+- 여러 가능성 탐색
+
+### Chain-of-Thought로 충분한 경우
+
+✅ **비용이 중요할 때**
+- 대량 처리
+- 실시간 응답 필요
+- 예산 제약
+
+✅ **중간 정확도로 충분할 때**
+- 프로토타이핑
+- 탐색적 분석
+- 일반적인 질문 답변
+
+✅ **창작이나 주관적 작업**
+- 글쓰기
+- 브레인스토밍
+- 아이디어 생성
+
+## 비용-성능 분석
+
+### 시나리오별 권장사항
+
+```python
+# 시나리오 1: 일반 사용
+method = "Chain-of-Thought"
+cost_multiplier = 1
+accuracy = "중간"
+use_case = "일상적 작업, 프로토타이핑"
+
+# 시나리오 2: 중요한 결정
+method = "Self-Consistency (n=10)"
+cost_multiplier = 10
+accuracy = "높음"
+use_case = "비즈니스 의사결정, 재무 계산"
+
+# 시나리오 3: 매우 중요한 결정
+method = "Self-Consistency (n=20-40)"
+cost_multiplier = 20-40
+accuracy = "매우 높음"
+use_case = "의료, 법률, 안전 관련"
+```
+
+### ROI 계산 예시
+
+```python
+# 오답으로 인한 비용이 큰 경우
+
+시나리오: 재무 계산 오류
+- Chain-of-Thought 비용: $0.01
+- Chain-of-Thought 정확도: 57%
+- 오답 시 재처리 비용: $100
+
+기대 비용 = $0.01 + (0.43 × $100) = $43.01
+
+vs.
+
+- Self-Consistency 비용: $0.20 (n=20)
+- Self-Consistency 정확도: 74%
+- 오답 시 재처리 비용: $100
+
+기대 비용 = $0.20 + (0.26 × $100) = $26.20
+
+→ Self-Consistency가 더 경제적! ✅
+```
+
+## 실전 활용 패턴
+
+### 패턴 1: Hybrid Approach (하이브리드)
+
+```python
+def smart_solve(problem, importance="medium"):
+    """중요도에 따라 전략 선택"""
+    
+    if importance == "low":
+        # Zero-Shot CoT
+        return solve_with_zero_shot_cot(problem, n=1)
+    
+    elif importance == "medium":
+        # Chain-of-Thought
+        return solve_with_cot(problem, n=1)
+    
+    elif importance == "high":
+        # Self-Consistency (소규모)
+        return solve_with_self_consistency(problem, n=10)
+    
+    else:  # "critical"
+        # Self-Consistency (대규모)
+        return solve_with_self_consistency(problem, n=40)
+```
+
+### 패턴 2: Confidence-Based Re-sampling
+
+```python
+def adaptive_solve(problem):
+    """신뢰도에 따라 샘플링 수 조정"""
+    
+    # 초기: 5개 샘플
+    responses = generate_multiple_responses(problem, n=5)
+    vote_counts = get_vote_counts(responses)
+    
+    # 신뢰도 계산
+    max_votes = max(vote_counts.values())
+    confidence = max_votes / len(responses)
+    
+    if confidence >= 0.8:
+        # 높은 신뢰도 → 충분함
+        return majority_vote(responses)
+    
+    elif confidence >= 0.6:
+        # 중간 신뢰도 → 5개 더 추가
+        additional = generate_multiple_responses(problem, n=5)
+        return majority_vote(responses + additional)
+    
+    else:
+        # 낮은 신뢰도 → 10개 더 추가
+        additional = generate_multiple_responses(problem, n=10)
+        return majority_vote(responses + additional)
+```
+
+### 패턴 3: Ensemble with Multiple Prompts
+
+```python
+def ensemble_solve(problem):
+    """여러 프롬프트 스타일 결합"""
+    
+    prompts = [
+        f"단계적으로 풀어주세요:\n{problem}",
+        f"논리적으로 생각해봅시다:\n{problem}",
+        f"먼저 문제를 분해해봅시다:\n{problem}"
+    ]
+    
+    all_responses = []
+    for prompt in prompts:
+        responses = generate_multiple_responses(prompt, n=5)
+        all_responses.extend(responses)
+    
+    # 총 15개(3×5) 응답에서 다수결
+    return majority_vote(all_responses)
+```
+
+## 종합 실습: 완전한 Self-Consistency 시스템
+
+```python
+import openai
+from collections import Counter
+import re
+from typing import List, Tuple, Optional
+
+class SelfConsistencySolver:
+    """Self-Consistency를 구현한 문제 해결 시스템"""
+    
+    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo"):
+        openai.api_key = api_key
+        self.model = model
+    
+    def generate_responses(
+        self, 
+        prompt: str, 
+        n: int = 10, 
+        temperature: float = 0.7
+    ) -> List[str]:
+        """여러 추론 경로 생성"""
+        responses = []
+        
+        for _ in range(n):
+            try:
+                response = openai.ChatCompletion.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=500
+                )
+                content = response.choices[0].message.content
+                responses.append(content)
+            except Exception as e:
+                print(f"Error: {e}")
+                continue
+        
+        return responses
+    
+    def extract_answer(self, response: str) -> Optional[str]:
+        """응답에서 답 추출"""
+        patterns = [
+            r'답:\s*([^\n]+)',
+            r'정답:\s*([^\n]+)',
+            r'최종\s*답:\s*([^\n]+)',
+            r'결과는\s*([^\n]+)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, response, re.IGNORECASE)
+            if match:
+                answer = match.group(1).strip()
+                # 숫자 추출 시도
+                numbers = re.findall(r'\d+', answer)
+                if numbers:
+                    return numbers[0]
+                return answer
+        
+        return None
+    
+    def majority_vote(
+        self, 
+        responses: List[str]
+    ) -> Tuple[Optional[str], int, int, float]:
+        """다수결 투표"""
+        answers = [self.extract_answer(r) for r in responses]
+        answers = [a for a in answers if a is not None]
+        
+        if not answers:
+            return None, 0, 0, 0.0
+        
+        vote_counts = Counter(answers)
+        most_common = vote_counts.most_common(1)[0]
+        
+        answer = most_common[0]
+        votes = most_common[1]
+        total = len(answers)
+        confidence = votes / total
+        
+        return answer, votes, total, confidence
+    
+    def solve(
+        self, 
+        problem: str, 
+        n: int = 10, 
+        temperature: float = 0.7,
+        verbose: bool = False
+    ) -> dict:
+        """문제 해결"""
+        
+        # 프롬프트 구성
+        prompt = f"""
+{problem}
+
+단계적으로 생각해서 풀어주세요.
+마지막에 "답: [답변]" 형식으로 명확히 답해주세요.
+"""
+        
+        # 여러 응답 생성
+        responses = self.generate_responses(prompt, n, temperature)
+        
+        if verbose:
+            print(f"\n생성된 응답 {len(responses)}개:")
+            for i, response in enumerate(responses, 1):
+                answer = self.extract_answer(response)
+                print(f"\n경로 {i}:")
+                print(f"추출된 답: {answer}")
+        
+        # 다수결 투표
+        final_answer, votes, total, confidence = self.majority_vote(responses)
+        
+        return {
+            "answer": final_answer,
+            "votes": votes,
+            "total": total,
+            "confidence": confidence,
+            "all_responses": responses
+        }
+
+# 사용 예시
+if __name__ == "__main__":
+    solver = SelfConsistencySolver(api_key="your-api-key")
+    
+    problem = """
+재닛의 오리들은 하루에 알을 16개 낳습니다.
+재닛은 매일 아침 3개의 알을 먹고,
+매일 4개의 알을 머핀을 굽는데 사용합니다.
+나머지 알은 하나에 2달러씩 판매합니다.
+재닛은 매일 얼마를 벌까요?
+"""
+    
+    result = solver.solve(problem, n=15, temperature=0.8, verbose=True)
+    
+    print(f"\n" + "="*50)
+    print(f"최종 답: {result['answer']}")
+    print(f"득표: {result['votes']}/{result['total']}")
+    print(f"신뢰도: {result['confidence']:.1%}")
+```
+
+## 마무리: 프롬프트 엔지니어링 여정의 완성
+
+이제 우리는 프롬프트 엔지니어링의 기초 기법 전체를 배웠습니다!
+
+### 전체 여정 요약
+
+```
+Part 1: 개요
+→ 기법들의 분류 체계 이해
+
+Part 2: Zero-Shot
+→ 예시 없이 작업 수행
+→ Instruction Tuning & RLHF
+
+Part 3: Few-Shot
+→ 소수의 예시로 성능 향상
+→ 형식의 중요성
+
+Part 4: Chain-of-Thought
+→ 단계별 추론 명시
+→ 복잡한 문제 해결
+
+Part 5: Zero-Shot CoT
+→ "단계적으로 생각해봅시다"
+→ 예시 작성 부담 제거
+
+Part 6: Self-Consistency (현재)
+→ 다수결로 정확도 향상
+→ 최고 성능 달성
+```
+
+### 기법 선택 가이드 (최종)
+
+```python
+def choose_technique(problem_type, importance, budget):
+    """상황에 맞는 최적 기법 선택"""
+    
+    # 간단한 작업
+    if problem_type == "simple":
+        return "Zero-Shot"
+    
+    # 복잡하지만 예산 제약
+    if problem_type == "complex" and budget == "low":
+        return "Zero-Shot CoT"
+    
+    # 복잡하고 특정 형식 필요
+    if problem_type == "complex" and need_format():
+        return "Few-Shot CoT"
+    
+    # 매우 중요하고 예산 충분
+    if importance == "critical" and budget == "high":
+        return "Self-Consistency"
+    
+    # 기본: Chain-of-Thought
+    return "Chain-of-Thought"
+```
+
+### 성능-비용 비교 (최종)
+
+| 기법 | 상대 비용 | 상대 성능 | 추천 사용처 |
+|------|-----------|-----------|-------------|
+| Zero-Shot | 1x | ★★☆☆☆ | 간단한 작업, 프로토타이핑 |
+| Few-Shot | 3x | ★★★☆☆ | 형식 중요, 도메인 특화 |
+| Chain-of-Thought | 2x | ★★★★☆ | 복잡한 추론, 일반적 사용 |
+| Zero-Shot CoT | 2x | ★★★☆☆ | 빠른 적용, 다양한 문제 |
+| Self-Consistency | 10-40x | ★★★★★ | 중요한 결정, 최고 정확도 |
+
+### 핵심 원칙
+
+**1. 항상 간단한 것부터 시작하세요**
+```
+Zero-Shot → Few-Shot → CoT → Self-Consistency
+필요한 만큼만 복잡하게!
+```
+
+**2. 비용과 성능의 균형을 고려하세요**
+```
+무조건 복잡한 기법 ≠ 항상 좋음
+상황에 맞는 선택이 중요
+```
+
+**3. 실험하고 측정하세요**
+```
+이론 < 실제 결과
+A/B 테스트로 검증
+```
+
+**4. 프롬프트 품질이 핵심입니다**
+```
+좋은 프롬프트 + 간단한 기법
+> 나쁜 프롬프트 + 복잡한 기법
+```
+
+## 다음 단계: Advanced Techniques
+
+기초를 마스터했다면, 이제 고급 기법들을 탐험할 차례입니다:
+
+- **Generate Knowledge Prompting**: 먼저 관련 지식을 생성한 후 문제 해결
+- **Tree of Thoughts**: 트리 구조로 사고 과정 탐색
+- **RAG (Retrieval-Augmented Generation)**: 외부 지식 검색 결합
+- **Automatic Prompt Engineer**: 프롬프트 자동 최적화
+- **ReAct**: 추론과 행동을 결합
+
+하지만 이 기초 6가지 기법만으로도 대부분의 실무 문제를 효과적으로 해결할 수 있습니다!
+
+## 마지막 실습: 종합 문제
+
+이제 배운 모든 것을 활용하여 실제 문제를 해결해봅시다.
+
+**문제:**
+```
+한 회사에서 신제품 출시를 고려하고 있습니다.
+- 개발 비용: 5천만원
+- 예상 판매가: 개당 10만원
+- 예상 판매량: 월 50~100개 (평균 75개)
+- 운영 기간: 12개월
+- 고정비: 월 200만원
+
+손익분기점은 몇 개월 후이며,
+12개월 후 예상 순이익은 얼마인가요?
+```
+
+**시도해볼 것:**
+1. Zero-Shot CoT로 먼저 풀어보기
+2. Self-Consistency (n=10)로 정확도 높이기
+3. 신뢰도 확인하기
+
+이 문제를 통해 여러분의 프롬프트 엔지니어링 실력을 확인해보세요!
+
+---
+
+**축하합니다!** 프롬프트 엔지니어링 기초 시리즈를 완료하셨습니다! 🎉
+
+이제 여러분은 현대 언어 모델을 효과적으로 활용할 수 있는 탄탄한 기초를 갖추었습니다. 계속 실험하고, 측정하고, 개선하세요. 프롬프트 엔지니어링의 세계는 여전히 빠르게 진화하고 있으며, 여러분의 창의적인 응용을 기다리고 있습니다!
+
+## 참고문헌
+
+- Wang, X., Wei, J., Schuurmans, D., Le, Q., Chi, E., Narang, S., ... & Zhou, D. (2022). Self-consistency improves chain of thought reasoning in language models. *arXiv preprint arXiv:2203.11171*.
+- Wei, J., Wang, X., Schuurmans, D., Bosma, M., Xia, F., Chi, E., ... & Zhou, D. (2022). Chain-of-thought prompting elicits reasoning in large language models. *Advances in Neural Information Processing Systems, 35*, 24824-24837.
