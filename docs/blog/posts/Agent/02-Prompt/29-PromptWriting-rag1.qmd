@@ -1,0 +1,1887 @@
+---
+title: "RAG (Retrieval Augmented Generation): 외부 지식과 생성의 결합"
+subtitle: 검색과 생성을 결합하여 LLM의 지식 한계를 극복하는 핵심 기법
+description: |
+  Retrieval Augmented Generation (RAG)의 정의부터 실전 구현까지 체계적으로 설명한다.
+  Lewis et al. (2020) "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" 연구를 바탕으로
+  외부 지식베이스 검색(Retrieval)과 답변 생성(Generation)의 결합 원리, 벡터 임베딩과 유사도 검색 메커니즘,
+  문서 청킹(Chunking) 전략(토큰 기반, 문장 기반, 의미론적, 구조 기반)을 분석한다.
+  Indexing과 Query 단계의 2단계 프로세스, BM25/Dense/Hybrid 검색 방법, Re-ranking 최적화를 제시하고,
+  간단한 Q&A 시스템, 고객 지원 챗봇, 문서 분석 도구 등 실무 예시와
+  Python 구현 코드(벡터 DB, 임베딩 모델 활용)를 통해 실전 구축 방법을 상세히 다룬다.
+  청크 크기 최적화, top_k 설정, 검색 품질 평가(Precision, Recall, MRR),
+  할루시네이션 방지 전략과 출처 추적 패턴을 제시한다.
+categories:
+  - Prompt Engineering
+  - LLM
+  - AI
+  - Agent
+author: Kwangmin Kim
+date: 02/05/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+---
+
+## 들어가며
+
+대형 언어 모델(LLM)이 아무리 방대한 지식을 학습했더라도, 다음과 같은 근본적인 한계가 있다:
+
+1. **지식의 시간적 한계**: 학습 데이터의 컷오프 이후 정보를 모름
+2. **도메인 특화 지식 부족**: 기업 내부 문서, 전문 분야 지식 부재
+3. **할루시네이션**: 확신 있게 틀린 정보를 생성
+4. **출처 불명확**: 어디서 얻은 정보인지 추적 불가
+
+예를 들어, "우리 회사의 최신 휴가 정책은?"이라는 질문에 LLM은 답할 수 없다. 이 정보는 학습 데이터에 없기 때문이다.
+
+**Retrieval Augmented Generation (RAG)**은 이러한 문제를 해결한다. 외부 데이터베이스에서 관련 정보를 검색한 후, 그 정보를 바탕으로 답변을 생성하는 방식이다. 이는 LLM에게 "참고 자료"를 제공하는 것과 같다.
+
+이번 포스트에서는 RAG의 원리부터 실전 구축까지 상세히 다룬다.
+
+## RAG란?
+
+### 핵심 개념
+
+**RAG (Retrieval Augmented Generation)**는 질문에 답하기 전에:
+1. 먼저 외부 지식베이스에서 관련 정보를 **검색(Retrieve)**
+2. 검색된 정보를 바탕으로 답변을 **생성(Generate)**
+
+```
+Question → [Retriever] → Relevant Documents → [LLM + Documents] → Answer
+              ↓                                        ↑
+           Knowledge Base ─────────────────────────────┘
+```
+
+### 전통적 접근법과의 차이
+
+**Before RAG (모델 지식만 사용)**:
+```python
+question = "Anthropic의 CEO는 누구인가?"
+
+# 모델이 학습한 지식에만 의존
+answer = llm.generate(question)
+# → "저는 확실하지 않습니다..." (또는 할루시네이션)
+```
+
+**After RAG (외부 지식 활용)**:
+```python
+question = "Anthropic의 CEO는 누구인가?"
+
+# Step 1: 관련 문서 검색
+docs = retrieve_from_knowledge_base(question)
+# → ["Anthropic was founded by Dario Amodei...", ...]
+
+# Step 2: 문서와 함께 답변 생성
+context = "\n".join(docs)
+prompt = f"Context: {context}\n\nQuestion: {question}"
+answer = llm.generate(prompt)
+# → "Dario Amodei가 Anthropic의 CEO입니다."
+```
+
+### RAG의 장점
+
+* **최신 정보 활용**: 지식베이스만 업데이트하면 최신 정보 사용 가능  
+* **도메인 특화**: 회사 내부 문서, 전문 지식 추가 가능  
+* **할루시네이션 감소**: 실제 문서 기반 답변으로 신뢰도 향상  
+* **출처 추적**: 어떤 문서에서 정보를 가져왔는지 명확  
+* **비용 효율적**: 모델 재학습 없이 지식 확장  
+* **개인정보 보호**: 민감 정보를 모델에 넣지 않고 DB에만 저장
+
+### RAG의 제약
+
+* **검색 품질 의존**: 잘못된 문서 검색 시 잘못된 답변  
+* **지연 시간**: 검색 단계로 인한 추가 레이턴시  
+* **인프라 필요**: Vector DB, 임베딩 모델 등 추가 시스템  
+* **컨텍스트 길이 제한**: 검색된 문서가 너무 많으면 처리 불가  
+* **복잡도 증가**: 단순 LLM 호출보다 구현 복잡
+
+## RAG의 2단계 프로세스
+
+### Indexing (오프라인)
+
+지식베이스를 준비하는 단계다. 사용자가 질문하기 전에 미리 수행된다.
+
+```
+Documents → [Chunking] → Chunks → [Embedding] → Vectors → [Store] → Vector DB
+```
+
+#### 문서 수집
+
+다양한 소스에서 문서를 수집한다:
+
+```python
+from typing import List, Dict
+
+class DocumentLoader:
+    """
+    다양한 소스에서 문서 로드
+    """
+    
+    def load_from_files(self, file_paths: List[str]) -> List[Dict]:
+        """파일에서 문서 로드"""
+        documents = []
+        
+        for path in file_paths:
+            if path.endswith('.pdf'):
+                text = self.extract_from_pdf(path)
+            elif path.endswith('.docx'):
+                text = self.extract_from_docx(path)
+            elif path.endswith('.txt'):
+                with open(path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+            else:
+                continue
+            
+            documents.append({
+                'text': text,
+                'metadata': {
+                    'source': path,
+                    'type': path.split('.')[-1]
+                }
+            })
+        
+        return documents
+    
+    def load_from_web(self, urls: List[str]) -> List[Dict]:
+        """웹페이지에서 문서 로드"""
+        import requests
+        from bs4 import BeautifulSoup
+        
+        documents = []
+        
+        for url in urls:
+            response = requests.get(url)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # 본문 추출 (사이트마다 다를 수 있음)
+            text = soup.get_text()
+            
+            documents.append({
+                'text': text,
+                'metadata': {
+                    'source': url,
+                    'type': 'web'
+                }
+            })
+        
+        return documents
+    
+    def load_from_database(self, query: str) -> List[Dict]:
+        """데이터베이스에서 문서 로드"""
+        # SQL 쿼리 실행
+        # results = db.execute(query)
+        # return results
+        pass
+```
+
+#### 문서 청킹 (Chunking)
+
+긴 문서를 작은 청크로 나눈다. 
+
+**왜 청킹이 필요한가?**
+- LLM 컨텍스트 길이 제한
+- 검색 정확도 향상 (작은 단위가 더 정확)
+- 문맥의 범위 및 관련성 높은 부분만 선택 가능
+
+**청킹 전략**:
+
+```python
+class TextChunker:
+    """
+    다양한 청킹 전략 구현
+    """
+    
+    def chunk_by_tokens(
+        self, 
+        text: str, 
+        chunk_size: int = 512,
+        overlap: int = 50
+    ) -> List[str]:
+        """
+        토큰 기반 청킹 (가장 일반적)
+        
+        Args:
+            chunk_size: 청크당 토큰 수
+            overlap: 청크 간 겹치는 토큰 수
+        """
+        # 토큰화 (tiktoken 사용)
+        import tiktoken
+        
+        encoding = tiktoken.get_encoding("cl100k_base")
+        tokens = encoding.encode(text)
+        
+        chunks = []
+        start = 0
+        
+        while start < len(tokens):
+            end = start + chunk_size
+            chunk_tokens = tokens[start:end]
+            chunk_text = encoding.decode(chunk_tokens)
+            chunks.append(chunk_text)
+            
+            start += chunk_size - overlap  # 오버랩 적용
+        
+        return chunks
+    
+    def chunk_by_sentences(
+        self, 
+        text: str, 
+        sentences_per_chunk: int = 5,
+        overlap_sentences: int = 1
+    ) -> List[str]:
+        """
+        문장 기반 청킹 (의미 보존)
+        """
+        import re
+        
+        # 문장 분리
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        
+        chunks = []
+        start = 0
+        
+        while start < len(sentences):
+            end = start + sentences_per_chunk
+            chunk = ' '.join(sentences[start:end])
+            chunks.append(chunk)
+            
+            start += sentences_per_chunk - overlap_sentences
+        
+        return chunks
+    
+    def chunk_by_semantic(
+        self, 
+        text: str,
+        similarity_threshold: float = 0.7
+    ) -> List[str]:
+        """
+        의미론적 청킹 (문장 간 유사도 기반)
+        
+        문장들을 임베딩하고, 유사도가 낮아지는 지점에서 분리
+        """
+        import re
+        
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        
+        if len(sentences) <= 1:
+            return [text]
+        
+        # 각 문장 임베딩
+        embeddings = [self.embed_text(s) for s in sentences]
+        
+        chunks = []
+        current_chunk = [sentences[0]]
+        
+        for i in range(1, len(sentences)):
+            # 이전 문장과의 유사도 계산
+            similarity = self.cosine_similarity(
+                embeddings[i-1], 
+                embeddings[i]
+            )
+            
+            if similarity >= similarity_threshold:
+                # 유사도 높음 → 같은 청크
+                current_chunk.append(sentences[i])
+            else:
+                # 유사도 낮음 → 새 청크 시작
+                chunks.append(' '.join(current_chunk))
+                current_chunk = [sentences[i]]
+        
+        # 마지막 청크 추가
+        if current_chunk:
+            chunks.append(' '.join(current_chunk))
+        
+        return chunks
+    
+    def chunk_by_structure(self, text: str, format_type: str) -> List[str]:
+        """
+        문서 구조 기반 청킹 (마크다운, HTML 등)
+        """
+        if format_type == 'markdown':
+            # 헤더 기준으로 분리
+            import re
+            chunks = re.split(r'\n#+\s', text)
+            return [c.strip() for c in chunks if c.strip()]
+        
+        elif format_type == 'html':
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(text, 'html.parser')
+            
+            # 섹션별로 분리
+            chunks = []
+            for section in soup.find_all(['section', 'article', 'div']):
+                chunk_text = section.get_text()
+                if chunk_text.strip():
+                    chunks.append(chunk_text.strip())
+            
+            return chunks
+        
+        else:
+            # 기본: 문단 기준
+            paragraphs = text.split('\n\n')
+            return [p.strip() for p in paragraphs if p.strip()]
+```
+
+**청킹 파라미터 선택 가이드**:
+
+| 청크 크기 | 장점 | 단점 | 권장 용도 |
+|---------|------|------|----------|
+| 작음 (128-256) | 검색 정확도 높음 | 컨텍스트 부족 | Q&A, 팩트 체크 |
+| 중간 (512-1024) | 균형 잡힘 | - | 일반적 사용 ⭐ |
+| 큼 (2048+) | 컨텍스트 풍부 | 노이즈 증가 | 요약, 분석 |
+
+**Chunking간 오버랩 범위**:
+- 0-50 토큰: 표준
+- 50-100 토큰: 문맥 연결 중요 시
+- 100+ 토큰: 과도, 비효율적
+
+#### 임베딩 생성
+
+각 청크를 벡터로 변환한다.
+
+```python
+class EmbeddingGenerator:
+    """
+    텍스트를 벡터로 변환
+    """
+    
+    def __init__(self, model_name: str = "text-embedding-3-large"):
+        """
+        OpenAI Embeddings 사용 예시
+        다른 옵션: sentence-transformers, Cohere, etc.
+        """
+        import openai
+        self.client = openai.OpenAI()
+        self.model = model_name
+    
+    def embed_text(self, text: str) -> List[float]:
+        """
+        단일 텍스트 임베딩
+        """
+        response = self.client.embeddings.create(
+            input=text,
+            model=self.model
+        )
+        
+        return response.data[0].embedding
+    
+    def embed_batch(self, texts: List[str], batch_size: int = 100) -> List[List[float]]:
+        """
+        배치 임베딩 (효율성)
+        """
+        embeddings = []
+        
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i+batch_size]
+            
+            response = self.client.embeddings.create(
+                input=batch,
+                model=self.model
+            )
+            
+            batch_embeddings = [item.embedding for item in response.data]
+            embeddings.extend(batch_embeddings)
+        
+        return embeddings
+```
+
+**임베딩 모델 선택**:
+
+| 모델 | 차원 | 성능 | 비용 | 추천 용도 |
+|-----|------|------|------|----------|
+| text-embedding-3-small | 1536 | 중 | 낮음 | 개발/테스트 |
+| text-embedding-3-large | 3072 | 높음 | 중간 | 프로덕션 ⭐ |
+| sentence-transformers | 384-768 | 중 | 무료 | 로컬/오픈소스 |
+| Cohere embed-v3 | 1024 | 높음 | 중간 | 다국어 지원 |
+
+#### Vector DB 저장
+
+임베딩을 검색 가능한 형태로 저장한다.
+
+```python
+import chromadb
+from typing import List, Dict
+
+class VectorStore:
+    """
+    ChromaDB를 사용한 벡터 저장소
+    """
+    
+    def __init__(self, collection_name: str = "documents"):
+        self.client = chromadb.Client()
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"}  # 코사인 유사도
+        )
+    
+    def add_documents(
+        self, 
+        texts: List[str],
+        embeddings: List[List[float]],
+        metadatas: List[Dict] = None,
+        ids: List[str] = None
+    ):
+        """
+        문서 추가
+        """
+        if ids is None:
+            ids = [f"doc_{i}" for i in range(len(texts))]
+        
+        if metadatas is None:
+            metadatas = [{} for _ in texts]
+        
+        self.collection.add(
+            documents=texts,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            ids=ids
+        )
+    
+    def query(
+        self, 
+        query_embedding: List[float],
+        n_results: int = 5
+    ) -> Dict:
+        """
+        유사 문서 검색
+        """
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results
+        )
+        
+        return results
+```
+
+**Vector DB 선택 가이드**:
+
+| DB | 장점 | 단점 | 추천 시나리오 |
+|----|------|------|-------------|
+| **ChromaDB** | 간단, 로컬 가능 | 스케일 제한 | 개발, 중소규모 |
+| **Pinecone** | 관리형, 빠름 | 비용, 벤더락인 | 프로덕션, 고성능 |
+| **Weaviate** | 오픈소스, 기능풍부 | 설정 복잡 | 커스터마이징 필요 |
+| **Qdrant** | 빠름, Rust 기반 | 상대적 신생 | 고성능 필요 |
+| **FAISS** | 매우 빠름, Meta | DB 아님(라이브러리) | 연구, 벤치마크 |
+
+### Query (온라인상 사용자 질문)
+
+사용자 질문에 실시간으로 답변하는 단계다.
+
+```
+Question → [Embed] → Query Vector → [Search] → Top-K Docs → [LLM + Context] → Answer
+              ↓                        ↓
+         Embedding Model            Vector DB
+```
+
+#### 질문 임베딩
+
+```python
+def embed_query(query: str) -> List[float]:
+    """
+    사용자 질문을 벡터로 변환
+    문서와 동일한 임베딩 모델 사용 필수!
+    """
+    embedding_generator = EmbeddingGenerator()
+    return embedding_generator.embed_text(query)
+```
+
+#### 유사 문서 검색
+
+```python
+def retrieve_documents(
+    query: str,
+    vector_store: VectorStore,
+    top_k: int = 5
+) -> List[Dict]:
+    """
+    질문과 가장 유사한 문서 검색
+    """
+    # 질문 임베딩
+    query_embedding = embed_query(query)
+    
+    # 검색
+    results = vector_store.query(
+        query_embedding=query_embedding,
+        n_results=top_k
+    )
+    
+    # 결과 포맷팅
+    documents = []
+    for i in range(len(results['documents'][0])):
+        documents.append({
+            'text': results['documents'][0][i],
+            'metadata': results['metadatas'][0][i],
+            'distance': results['distances'][0][i]
+        })
+    
+    return documents
+```
+
+**top_k 선택 가이드**:
+
+```python
+# top_k가 너무 작으면: 필요한 정보 누락
+top_k = 1  # 단순 팩트 체크에만 적합
+
+# top_k가 적당하면: 균형 (권장)
+top_k = 3-5  # 대부분의 경우 ⭐
+
+# top_k가 너무 크면: 노이즈 증가, 컨텍스트 오염
+top_k = 20+  # 비효율적, 성능 저하
+```
+
+#### 프롬프트 구성
+
+검색된 문서를 프롬프트에 포함한다.
+
+```python
+def construct_rag_prompt(query: str, documents: List[Dict]) -> str:
+    """
+    RAG 프롬프트 구성
+    """
+    # 문서들을 컨텍스트로 결합
+    context_parts = []
+    for i, doc in enumerate(documents, 1):
+        source = doc['metadata'].get('source', 'Unknown')
+        text = doc['text']
+        context_parts.append(f"[Document {i}] (Source: {source})\n{text}")
+    
+    context = "\n\n".join(context_parts)
+    
+    # 프롬프트 템플릿
+    prompt = f"""다음 문서들을 참고하여 질문에 답변하세요.
+
+    <documents>
+    {context}
+    </documents>
+
+    <question>
+    {query}
+    </question>
+
+    답변 작성 시 주의사항:
+    1. 문서의 정보만을 사용하여 답변하세요.
+    2. 문서에 없는 정보는 추측하지 마세요.
+    3. 가능하면 어느 문서에서 정보를 가져왔는지 명시하세요.
+    4. 문서에서 답을 찾을 수 없다면 솔직히 "문서에서 관련 정보를 찾을 수 없습니다"라고 답하세요.
+
+    답변:"""
+    
+    return prompt
+```
+
+**좋은 RAG 프롬프트의 특징**:
+- 문서와 질문을 명확히 구분
+- "문서 기반 답변"을 명시적으로 지시
+- 할루시네이션 방지 지침 포함
+- 출처 언급 유도
+
+#### 답변 생성
+
+```python
+import anthropic
+
+def generate_answer(prompt: str) -> str:
+    """
+    LLM으로 최종 답변 생성
+    """
+    client = anthropic.Anthropic(api_key="your-api-key")
+    
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1000,
+        temperature=0,  # 사실 기반 답변이므로 낮은 temperature
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    return message.content[0].text
+```
+
+## 완전한 RAG 시스템 구현
+
+이제 모든 단계를 결합한 완전한 RAG 시스템을 구현해보자.
+
+```python
+import anthropic
+import chromadb
+import openai
+from typing import List, Dict
+import tiktoken
+
+class SimpleRAGSystem:
+    """
+    간단하지만 완전한 RAG 시스템
+    """
+    
+    def __init__(
+        self,
+        anthropic_api_key: str,
+        openai_api_key: str,
+        collection_name: str = "rag_docs"
+    ):
+        # LLM 클라이언트
+        self.llm_client = anthropic.Anthropic(api_key=anthropic_api_key)
+        
+        # 임베딩 클라이언트
+        self.embedding_client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Vector DB
+        self.chroma_client = chromadb.Client()
+        self.collection = self.chroma_client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
+        
+        # 토크나이저
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")
+    
+    def chunk_text(
+        self, 
+        text: str, 
+        chunk_size: int = 512,
+        overlap: int = 50
+    ) -> List[str]:
+        """
+        텍스트를 청크로 분할
+        """
+        tokens = self.tokenizer.encode(text)
+        chunks = []
+        start = 0
+        
+        while start < len(tokens):
+            end = start + chunk_size
+            chunk_tokens = tokens[start:end]
+            chunk_text = self.tokenizer.decode(chunk_tokens)
+            chunks.append(chunk_text)
+            start += chunk_size - overlap
+        
+        return chunks
+    
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """
+        텍스트 배치 임베딩
+        """
+        response = self.embedding_client.embeddings.create(
+            input=texts,
+            model="text-embedding-3-large"
+        )
+        
+        return [item.embedding for item in response.data]
+    
+    def index_documents(
+        self, 
+        documents: List[Dict[str, str]],
+        chunk_size: int = 512,
+        overlap: int = 50
+    ):
+        """
+        문서들을 인덱싱
+        
+        Args:
+            documents: [{"text": "...", "metadata": {...}}, ...]
+        """
+        print(f"📚 {len(documents)}개 문서 인덱싱 시작...")
+        
+        all_chunks = []
+        all_metadatas = []
+        all_ids = []
+        
+        chunk_counter = 0
+        
+        for doc_idx, doc in enumerate(documents):
+            text = doc['text']
+            metadata = doc.get('metadata', {})
+            
+            # 청킹
+            chunks = self.chunk_text(text, chunk_size, overlap)
+            
+            print(f"  문서 {doc_idx + 1}: {len(chunks)}개 청크 생성")
+            
+            for chunk_idx, chunk in enumerate(chunks):
+                all_chunks.append(chunk)
+                
+                # 메타데이터에 청크 정보 추가
+                chunk_metadata = metadata.copy()
+                chunk_metadata.update({
+                    'doc_index': doc_idx,
+                    'chunk_index': chunk_idx,
+                    'chunk_id': f"doc{doc_idx}_chunk{chunk_idx}"
+                })
+                all_metadatas.append(chunk_metadata)
+                
+                all_ids.append(f"chunk_{chunk_counter}")
+                chunk_counter += 1
+        
+        print(f"\n🔢 총 {len(all_chunks)}개 청크 생성")
+        print(f"🧮 임베딩 생성 중...")
+        
+        # 임베딩 생성 (배치로 처리)
+        batch_size = 100
+        all_embeddings = []
+        
+        for i in range(0, len(all_chunks), batch_size):
+            batch = all_chunks[i:i+batch_size]
+            embeddings = self.embed_texts(batch)
+            all_embeddings.extend(embeddings)
+            print(f"  {i + len(batch)}/{len(all_chunks)} 완료")
+        
+        print(f"\n💾 Vector DB에 저장 중...")
+        
+        # Vector DB에 저장
+        self.collection.add(
+            documents=all_chunks,
+            embeddings=all_embeddings,
+            metadatas=all_metadatas,
+            ids=all_ids
+        )
+        
+        print(f"✅ 인덱싱 완료!\n")
+    
+    def retrieve(self, query: str, top_k: int = 5) -> List[Dict]:
+        """
+        질문과 관련된 문서 검색
+        """
+        # 질문 임베딩
+        query_embedding = self.embed_texts([query])[0]
+        
+        # 검색
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k
+        )
+        
+        # 결과 포맷팅
+        documents = []
+        for i in range(len(results['documents'][0])):
+            documents.append({
+                'text': results['documents'][0][i],
+                'metadata': results['metadatas'][0][i],
+                'distance': results['distances'][0][i]
+            })
+        
+        return documents
+    
+    def generate_answer(self, query: str, documents: List[Dict]) -> Dict:
+        """
+        검색된 문서를 바탕으로 답변 생성
+        """
+        # 컨텍스트 구성
+        context_parts = []
+        for i, doc in enumerate(documents, 1):
+            source = doc['metadata'].get('source', 'Unknown')
+            chunk_id = doc['metadata'].get('chunk_id', 'Unknown')
+            text = doc['text']
+            distance = doc['distance']
+            
+            context_parts.append(
+                f"[Document {i}] (Source: {source}, ID: {chunk_id}, "
+                f"Relevance: {1-distance:.3f})\n{text}"
+            )
+        
+        context = "\n\n".join(context_parts)
+        
+        # 프롬프트 구성
+        prompt = f"""다음 문서들을 참고하여 질문에 답변하세요.
+
+        <documents>
+        {context}
+        </documents>
+
+        <question>
+        {query}
+        </question>
+
+        답변 작성 시 주의사항:
+        1. 문서의 정보만을 사용하여 답변하세요.
+        2. 문서에 없는 정보는 추측하지 마세요.
+        3. 가능하면 어느 문서에서 정보를 가져왔는지 명시하세요 (예: "Document 1에 따르면...").
+        4. 문서에서 답을 찾을 수 없다면 "제공된 문서에서 관련 정보를 찾을 수 없습니다"라고 답하세요.
+
+        답변:"""
+        
+        # LLM 호출
+        message = self.llm_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        answer = message.content[0].text
+        
+        return {
+            'answer': answer,
+            'sources': documents,
+            'prompt': prompt
+        }
+    
+    def query(self, question: str, top_k: int = 5, verbose: bool = True) -> Dict:
+        """
+        RAG 전체 파이프라인 실행
+        """
+        if verbose:
+            print(f"❓ 질문: {question}\n")
+            print(f"🔍 관련 문서 검색 중 (top_k={top_k})...")
+        
+        # Step 1: 검색
+        documents = self.retrieve(question, top_k=top_k)
+        
+        if verbose:
+            print(f"✅ {len(documents)}개 문서 검색 완료\n")
+            for i, doc in enumerate(documents, 1):
+                relevance = 1 - doc['distance']
+                chunk_id = doc['metadata'].get('chunk_id', 'Unknown')
+                print(f"  [{i}] {chunk_id} (관련도: {relevance:.3f})")
+                print(f"      {doc['text'][:100]}...")
+            print()
+        
+        # Step 2: 답변 생성
+        if verbose:
+            print(f"💬 답변 생성 중...")
+        
+        result = self.generate_answer(question, documents)
+        
+        if verbose:
+            print(f"✅ 답변 생성 완료\n")
+            print(f"{'='*80}")
+            print(f"답변:")
+            print(f"{'='*80}")
+            print(result['answer'])
+            print(f"{'='*80}\n")
+        
+        return result
+
+
+# 사용 예시
+def main():
+    # RAG 시스템 초기화
+    rag = SimpleRAGSystem(
+        anthropic_api_key="your-anthropic-key",
+        openai_api_key="your-openai-key",
+        collection_name="company_docs"
+    )
+    
+    # 문서 준비
+    documents = [
+        {
+            "text": """
+Anthropic is an AI safety and research company based in San Francisco. 
+The company was founded in 2021 by former members of OpenAI, including 
+Dario Amodei (CEO) and Daniela Amodei (President).
+
+Anthropic's mission is to build reliable, interpretable, and steerable 
+AI systems. The company is best known for developing Claude, a family 
+of large language models designed with a focus on safety and helpfulness.
+
+Claude is built using Constitutional AI (CAI), a method developed by 
+Anthropic that trains AI systems to be helpful, harmless, and honest.
+            """,
+            "metadata": {
+                "source": "company_overview.txt",
+                "date": "2024-01"
+            }
+        },
+        {
+            "text": """
+In 2023, Anthropic launched Claude 2, which featured improved performance 
+and a larger context window of 100,000 tokens. The company has also 
+developed Claude Pro, a paid subscription service offering priority 
+access and enhanced capabilities.
+
+Anthropic has raised significant funding, including a $4 billion 
+investment from Amazon in 2023. The company partners with various 
+organizations to deploy Claude in different applications, including 
+customer service, content generation, and research assistance.
+
+In 2024, Anthropic released Claude 3 family (Opus, Sonnet, Haiku) and 
+later Claude 3.5 Sonnet, which showed significant improvements in 
+reasoning and coding capabilities.
+            """,
+            "metadata": {
+                "source": "company_history.txt",
+                "date": "2024-06"
+            }
+        },
+        {
+            "text": """
+Claude's architecture is based on transformer models, similar to GPT, 
+but with several key differences in training methodology. The Constitutional 
+AI approach uses a set of principles (a "constitution") to guide the AI's 
+behavior during training.
+
+The training process involves two main phases: supervised learning and 
+reinforcement learning from human feedback (RLHF). However, Anthropic's 
+approach reduces reliance on human feedback by having the model critique 
+and revise its own responses based on constitutional principles.
+
+This approach aims to create AI systems that are more aligned with human 
+values and less likely to produce harmful outputs.
+            """,
+            "metadata": {
+                "source": "technical_details.txt",
+                "date": "2024-03"
+            }
+        }
+    ]
+    
+    # 문서 인덱싱
+    rag.index_documents(documents, chunk_size=256, overlap=30)
+    
+    # 질문들
+    questions = [
+        "Anthropic의 CEO는 누구인가?",
+        "Claude는 어떻게 학습되었나?",
+        "Anthropic은 언제 설립되었나?",
+        "Claude 3의 특징은 무엇인가?",
+        "Anthropic의 직원 수는 몇 명인가?"  # 문서에 없는 정보
+    ]
+    
+    # 각 질문에 대해 RAG 실행
+    for question in questions:
+        print("\n" + "="*100)
+        result = rag.query(question, top_k=3, verbose=True)
+        print("="*100 + "\n")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### 실행 결과 예시
+
+```
+📚 3개 문서 인덱싱 시작...
+  문서 1: 3개 청크 생성
+  문서 2: 3개 청크 생성
+  문서 3: 3개 청크 생성
+
+🔢 총 9개 청크 생성
+🧮 임베딩 생성 중...
+  9/9 완료
+
+💾 Vector DB에 저장 중...
+✅ 인덱싱 완료!
+
+====================================================================================================
+❓ 질문: Anthropic의 CEO는 누구인가?
+
+🔍 관련 문서 검색 중 (top_k=3)...
+✅ 3개 문서 검색 완료
+
+  [1] doc0_chunk0 (관련도: 0.876)
+      Anthropic is an AI safety and research company based in San Francisco. 
+The company was founded...
+  [2] doc1_chunk0 (관련도: 0.745)
+      In 2023, Anthropic launched Claude 2, which featured improved performance...
+  [3] doc2_chunk0 (관련도: 0.698)
+      Claude's architecture is based on transformer models, similar to GPT...
+
+💬 답변 생성 중...
+✅ 답변 생성 완료
+
+================================================================================
+답변:
+================================================================================
+Document 1에 따르면, Anthropic의 CEO는 Dario Amodei입니다. 그는 OpenAI의 
+전 멤버로서 2021년에 Anthropic을 공동 설립했습니다.
+================================================================================
+
+====================================================================================================
+```
+
+## RAG 시스템 최적화 기법
+
+기본 RAG 시스템을 구축했다면, 이제 성능을 개선할 차례다. 실무에서는 단순한 Naive RAG만으로는 부족한 경우가 많다.
+
+### 검색 품질 저하
+
+**증상**: 관련 없는 문서가 검색되거나, 관련 있는 문서를 놓침
+
+**원인**:
+- 의미론적 유사도만으로는 부족
+- 키워드 기반 매칭 필요
+- 문서의 중요도 무시
+
+**해결책**: Hybrid Search (하이브리드 검색)
+
+```python
+from typing import List, Dict, Tuple
+import numpy as np
+
+class HybridSearchRAG:
+    """
+    의미론적 검색 + 키워드 검색을 결합한 하이브리드 RAG
+    """
+    
+    def __init__(self):
+        # 벡터 검색 (Dense)
+        self.vector_store = None  # ChromaDB 등
+        
+        # 키워드 검색 (Sparse) - BM25
+        self.bm25_index = None
+        self.documents = []
+    
+    def index_documents(self, documents: List[Dict]):
+        """
+        문서를 벡터 DB와 BM25 인덱스에 모두 저장
+        """
+        # 1. Vector DB 인덱싱 (기존과 동일)
+        self._index_to_vector_db(documents)
+        
+        # 2. BM25 인덱싱
+        self._index_to_bm25(documents)
+    
+    def _index_to_bm25(self, documents: List[Dict]):
+        """
+        BM25 인덱스 구축
+        """
+        from rank_bm25 import BM25Okapi
+        
+        # 문서 토큰화
+        tokenized_docs = []
+        for doc in documents:
+            tokens = doc['text'].lower().split()
+            tokenized_docs.append(tokens)
+        
+        # BM25 인덱스 생성
+        self.bm25_index = BM25Okapi(tokenized_docs)
+        self.documents = documents
+    
+    def hybrid_search(
+        self, 
+        query: str, 
+        top_k: int = 10,
+        alpha: float = 0.5
+    ) -> List[Dict]:
+        """
+        하이브리드 검색
+        
+        Args:
+            query: 검색 쿼리
+            top_k: 반환할 문서 수
+            alpha: 벡터 검색 가중치 (0~1)
+                   1.0 = 100% 벡터 검색
+                   0.0 = 100% 키워드 검색
+                   0.5 = 균형
+        """
+        # 1. 벡터 검색 (의미론적 유사도)
+        vector_results = self._vector_search(query, top_k=top_k*2)
+        
+        # 2. BM25 검색 (키워드 매칭)
+        bm25_results = self._bm25_search(query, top_k=top_k*2)
+        
+        # 3. 점수 정규화 및 결합
+        combined_scores = self._combine_scores(
+            vector_results, 
+            bm25_results, 
+            alpha
+        )
+        
+        # 4. 상위 k개 반환
+        sorted_results = sorted(
+            combined_scores.items(), 
+            key=lambda x: x[1], 
+            reverse=True
+        )
+        
+        top_docs = []
+        for doc_id, score in sorted_results[:top_k]:
+            top_docs.append({
+                'document': self.documents[doc_id],
+                'score': score
+            })
+        
+        return top_docs
+    
+    def _vector_search(self, query: str, top_k: int) -> Dict[int, float]:
+        """
+        벡터 검색 수행
+        Returns: {doc_id: similarity_score}
+        """
+        # 질문 임베딩
+        query_embedding = self.embed_query(query)
+        
+        # Vector DB 검색
+        results = self.vector_store.query(
+            query_embedding=query_embedding,
+            n_results=top_k
+        )
+        
+        # doc_id: score 매핑
+        scores = {}
+        for i, doc_id in enumerate(results['ids'][0]):
+            # 거리를 유사도로 변환 (코사인 거리 → 유사도)
+            distance = results['distances'][0][i]
+            similarity = 1 - distance
+            scores[doc_id] = similarity
+        
+        return scores
+    
+    def _bm25_search(self, query: str, top_k: int) -> Dict[int, float]:
+        """
+        BM25 검색 수행
+        Returns: {doc_id: bm25_score}
+        """
+        # 쿼리 토큰화
+        query_tokens = query.lower().split()
+        
+        # BM25 점수 계산
+        bm25_scores = self.bm25_index.get_scores(query_tokens)
+        
+        # 상위 k개의 문서 ID와 점수
+        top_indices = np.argsort(bm25_scores)[-top_k:][::-1]
+        
+        scores = {}
+        for idx in top_indices:
+            scores[idx] = bm25_scores[idx]
+        
+        return scores
+    
+    def _combine_scores(
+        self, 
+        vector_scores: Dict[int, float],
+        bm25_scores: Dict[int, float],
+        alpha: float
+    ) -> Dict[int, float]:
+        """
+        두 검색 결과의 점수를 결합
+        
+        Reciprocal Rank Fusion (RRF) 또는 가중 합계 사용 가능
+        여기서는 정규화 후 가중 합계 사용
+        """
+        # 점수 정규화 (0~1 범위로)
+        def normalize_scores(scores: Dict[int, float]) -> Dict[int, float]:
+            if not scores:
+                return {}
+            
+            min_score = min(scores.values())
+            max_score = max(scores.values())
+            
+            if max_score == min_score:
+                return {k: 1.0 for k in scores}
+            
+            return {
+                k: (v - min_score) / (max_score - min_score)
+                for k, v in scores.items()
+            }
+        
+        norm_vector = normalize_scores(vector_scores)
+        norm_bm25 = normalize_scores(bm25_scores)
+        
+        # 모든 문서 ID 수집
+        all_doc_ids = set(norm_vector.keys()) | set(norm_bm25.keys())
+        
+        # 가중 합계
+        combined = {}
+        for doc_id in all_doc_ids:
+            vector_score = norm_vector.get(doc_id, 0.0)
+            bm25_score = norm_bm25.get(doc_id, 0.0)
+            
+            combined[doc_id] = alpha * vector_score + (1 - alpha) * bm25_score
+        
+        return combined
+```
+
+**Hybrid Search 사용 예시**:
+
+```python
+# 초기화
+rag = HybridSearchRAG()
+
+# 문서 인덱싱
+documents = load_documents()
+rag.index_documents(documents)
+
+# 검색
+query = "Anthropic CEO"
+
+# 의미론적 검색만 (alpha=1.0)
+semantic_results = rag.hybrid_search(query, top_k=5, alpha=1.0)
+
+# 키워드 검색만 (alpha=0.0)
+keyword_results = rag.hybrid_search(query, top_k=5, alpha=0.0)
+
+# 하이브리드 (alpha=0.5)
+hybrid_results = rag.hybrid_search(query, top_k=5, alpha=0.5)
+```
+
+**alpha 파라미터 튜닝 가이드**:
+
+| alpha | 특징 | 추천 사용 사례 |
+|-------|------|--------------|
+| 0.0-0.3 | 키워드 중심 | 정확한 용어 매칭 필요 (법률, 의료) |
+| 0.4-0.6 | 균형 | 일반적 Q&A ⭐ |
+| 0.7-1.0 | 의미론 중심 | 개념적 질문, 유연한 표현 |
+
+### 검색 순위가 최적이 아님
+
+**증상**: 관련 문서를 찾았지만, 순서가 잘못됨
+
+**해결책**: Re-ranking (재순위화)
+
+```python
+class RerankerRAG:
+    """
+    검색 후 재순위화를 수행하는 RAG
+    """
+    
+    def __init__(self):
+        self.base_rag = SimpleRAGSystem()
+        self.reranker = self._load_reranker()
+    
+    def _load_reranker(self):
+        """
+        재순위화 모델 로드
+        
+        옵션:
+        1. Cross-encoder 모델 (BERT 기반)
+        2. Cohere Rerank API
+        3. 커스텀 모델
+        """
+        from sentence_transformers import CrossEncoder
+        
+        # MS MARCO 데이터셋으로 학습된 cross-encoder
+        model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        return model
+    
+    def retrieve_and_rerank(
+        self, 
+        query: str,
+        initial_k: int = 20,
+        final_k: int = 5
+    ) -> List[Dict]:
+        """
+        검색 후 재순위화
+        
+        Args:
+            initial_k: 초기 검색 문서 수 (많이 가져옴)
+            final_k: 최종 반환 문서 수 (재순위 후 상위)
+        """
+        # Step 1: 초기 검색 (많은 문서)
+        candidates = self.base_rag.retrieve(query, top_k=initial_k)
+        
+        print(f"🔍 초기 검색: {len(candidates)}개 문서")
+        
+        # Step 2: 재순위화
+        pairs = [[query, doc['text']] for doc in candidates]
+        scores = self.reranker.predict(pairs)
+        
+        # Step 3: 점수 기준으로 재정렬
+        for i, doc in enumerate(candidates):
+            doc['rerank_score'] = scores[i]
+        
+        reranked = sorted(
+            candidates, 
+            key=lambda x: x['rerank_score'], 
+            reverse=True
+        )
+        
+        print(f"🔄 재순위화 완료")
+        print(f"📊 상위 문서 점수 변화:")
+        for i in range(min(3, len(reranked))):
+            doc = reranked[i]
+            print(f"  [{i+1}] 원래 순위: {candidates.index(doc)+1} "
+                  f"→ 재순위 점수: {doc['rerank_score']:.3f}")
+        
+        # Step 4: 상위 k개만 반환
+        return reranked[:final_k]
+```
+
+**재순위화 모델 선택**:
+
+| 모델 | 속도 | 성능 | 비용 | 추천 |
+|-----|------|------|------|------|
+| Cross-encoder (local) | 느림 | 높음 | 무료 | 정확도 중요 시 |
+| Cohere Rerank API | 빠름 | 매우 높음 | 유료 | 프로덕션 ⭐ |
+| LLM-based (GPT/Claude) | 매우 느림 | 높음 | 비쌈 | 특수 도메인 |
+
+**Cohere Rerank 사용 예시**:
+
+```python
+import cohere
+
+def rerank_with_cohere(query: str, documents: List[str], top_k: int = 5):
+    """
+    Cohere Rerank API 사용
+    """
+    co = cohere.Client("your-api-key")
+    
+    results = co.rerank(
+        query=query,
+        documents=documents,
+        top_n=top_k,
+        model="rerank-english-v2.0"
+    )
+    
+    reranked_docs = []
+    for result in results:
+        reranked_docs.append({
+            'text': documents[result.index],
+            'score': result.relevance_score
+        })
+    
+    return reranked_docs
+```
+
+### 쿼리가 모호하거나 부적절함
+
+**증상**: 사용자 질문이 너무 짧거나, 애매하거나, 검색에 적합하지 않음
+
+**해결책**: Query Transformation (쿼리 변환)
+
+#### 기법 1: Query Expansion (쿼리 확장)
+
+```python
+def expand_query(query: str) -> List[str]:
+    """
+    하나의 쿼리를 여러 변형으로 확장
+    """
+    prompt = f"""다음 질문을 다양한 방식으로 3가지 변형하여 표현하세요.
+원래 의미는 유지하되, 다른 단어나 표현을 사용하세요.
+
+원래 질문: {query}
+
+변형 1:
+변형 2:
+변형 3:"""
+
+    client = anthropic.Anthropic(api_key="your-api-key")
+    
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        temperature=0.7,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    response = message.content[0].text
+    
+    # 변형 파싱
+    variations = [query]  # 원래 쿼리 포함
+    for line in response.split('\n'):
+        line = line.strip()
+        if line and not line.startswith('변형'):
+            variations.append(line)
+    
+    return variations[:4]  # 원본 + 3개 변형
+
+def search_with_expanded_query(
+    query: str, 
+    rag: SimpleRAGSystem,
+    top_k_per_query: int = 3
+) -> List[Dict]:
+    """
+    확장된 쿼리들로 검색하고 결과 통합
+    """
+    # 쿼리 확장
+    expanded_queries = expand_query(query)
+    
+    print(f"🔄 쿼리 확장:")
+    for i, q in enumerate(expanded_queries):
+        print(f"  [{i+1}] {q}")
+    
+    # 각 쿼리로 검색
+    all_results = []
+    seen_ids = set()
+    
+    for q in expanded_queries:
+        results = rag.retrieve(q, top_k=top_k_per_query)
+        
+        for doc in results:
+            doc_id = doc['metadata'].get('chunk_id', doc['text'][:50])
+            
+            # 중복 제거
+            if doc_id not in seen_ids:
+                all_results.append(doc)
+                seen_ids.add(doc_id)
+    
+    # 재순위화 (선택적)
+    # ...
+    
+    return all_results
+```
+
+#### Query Decomposition (쿼리 분해)
+
+복잡한 질문을 하위 질문으로 나눈다.
+
+```python
+def decompose_query(query: str) -> List[str]:
+    """
+    복잡한 질문을 하위 질문들로 분해
+    """
+    prompt = f"""다음 복잡한 질문을 답하기 위해 필요한 하위 질문들로 분해하세요.
+
+질문: {query}
+
+하위 질문들 (각 줄에 하나씩):
+1."""
+
+    client = anthropic.Anthropic(api_key="your-api-key")
+    
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        temperature=0,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    response = message.content[0].text
+    
+    # 하위 질문 파싱
+    sub_queries = []
+    for line in response.split('\n'):
+        line = line.strip()
+        # "1. " 같은 번호 제거
+        import re
+        line = re.sub(r'^\d+\.\s*', '', line)
+        
+        if line:
+            sub_queries.append(line)
+    
+    return sub_queries
+
+def answer_with_decomposition(
+    query: str, 
+    rag: SimpleRAGSystem
+) -> str:
+    """
+    쿼리 분해를 사용한 답변 생성
+    """
+    print(f"❓ 원래 질문: {query}\n")
+    
+    # Step 1: 질문 분해
+    sub_queries = decompose_query(query)
+    
+    print(f"🔍 하위 질문들:")
+    for i, sq in enumerate(sub_queries, 1):
+        print(f"  {i}. {sq}")
+    print()
+    
+    # Step 2: 각 하위 질문에 답변
+    sub_answers = []
+    for i, sq in enumerate(sub_queries, 1):
+        print(f"📝 하위 질문 {i} 답변 중...")
+        result = rag.query(sq, top_k=3, verbose=False)
+        sub_answers.append({
+            'question': sq,
+            'answer': result['answer']
+        })
+    
+    # Step 3: 하위 답변들을 종합
+    synthesis_prompt = f"""다음은 복잡한 질문에 대한 하위 질문들과 그 답변들입니다.
+이를 종합하여 원래 질문에 대한 완전한 답변을 작성하세요.
+
+원래 질문: {query}
+
+하위 질문과 답변:
+"""
+    
+    for i, sa in enumerate(sub_answers, 1):
+        synthesis_prompt += f"\n질문 {i}: {sa['question']}\n답변 {i}: {sa['answer']}\n"
+    
+    synthesis_prompt += "\n종합 답변:"
+    
+    client = anthropic.Anthropic(api_key="your-api-key")
+    
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1000,
+        temperature=0,
+        messages=[{"role": "user", "content": synthesis_prompt}]
+    )
+    
+    final_answer = message.content[0].text
+    
+    print(f"\n✅ 최종 답변:")
+    print(final_answer)
+    
+    return final_answer
+```
+
+**사용 예시**:
+
+```python
+# 복잡한 질문
+query = "Anthropic은 어떤 회사이고, 주요 제품은 무엇이며, 최근 투자 현황은 어떤가?"
+
+# 쿼리 분해 방식으로 답변
+answer = answer_with_decomposition(query, rag)
+
+# 출력:
+# 하위 질문들:
+#   1. Anthropic은 어떤 회사인가?
+#   2. Anthropic의 주요 제품은 무엇인가?
+#   3. Anthropic의 최근 투자 현황은?
+# 
+# (각 하위 질문 답변 후)
+# 
+# 최종 답변:
+# Anthropic은 2021년에 설립된 AI 안전성 연구 회사입니다. 
+# 주요 제품은 Claude라는 대형 언어 모델 시리즈이며...
+# 2023년 Amazon으로부터 40억 달러의 투자를 받았습니다.
+```
+
+#### Hypothetical Document Embeddings (HyDE)
+
+실제 답변을 가상으로 생성한 후, 그 답변과 유사한 문서를 검색한다.
+
+```python
+def hyde_search(query: str, rag: SimpleRAGSystem, top_k: int = 5) -> List[Dict]:
+    """
+    HyDE (Hypothetical Document Embeddings) 검색
+    
+    1. 질문에 대한 가상의 답변 생성
+    2. 답변을 임베딩하여 검색
+    3. 유사한 실제 문서 반환
+    """
+    print(f"❓ 질문: {query}\n")
+    
+    # Step 1: 가상 답변 생성
+    hyde_prompt = f"""다음 질문에 대한 답변을 작성하세요.
+실제 정보를 모르더라도 합리적이고 구체적인 답변을 작성하세요.
+
+질문: {query}
+
+답변:"""
+    
+    client = anthropic.Anthropic(api_key="your-api-key")
+    
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        temperature=0.7,
+        messages=[{"role": "user", "content": hyde_prompt}]
+    )
+    
+    hypothetical_answer = message.content[0].text
+    
+    print(f"💭 가상 답변:")
+    print(hypothetical_answer[:200] + "...")
+    print()
+    
+    # Step 2: 가상 답변으로 검색
+    # 원래 질문 대신 가상 답변을 임베딩하여 검색
+    print(f"🔍 가상 답변 기반 검색 중...")
+    
+    # 가상 답변 임베딩
+    hypothetical_embedding = rag.embed_texts([hypothetical_answer])[0]
+    
+    # Vector DB 검색
+    results = rag.collection.query(
+        query_embeddings=[hypothetical_embedding],
+        n_results=top_k
+    )
+    
+    # 결과 포맷팅
+    documents = []
+    for i in range(len(results['documents'][0])):
+        documents.append({
+            'text': results['documents'][0][i],
+            'metadata': results['metadatas'][0][i],
+            'distance': results['distances'][0][i]
+        })
+    
+    print(f"✅ {len(documents)}개 문서 검색 완료\n")
+    
+    return documents
+```
+
+**HyDE가 효과적인 경우**:
+- ✅ 질문이 짧고 모호할 때
+- ✅ 답변 형식이 예측 가능할 때
+- ✅ 도메인 전문 용어가 많을 때
+
+**주의사항**:
+- ❌ 추가 LLM 호출로 인한 비용/지연
+- ❌ 가상 답변이 잘못되면 검색도 실패
+
+## 긴 문서 처리 전략
+
+### 문제: 단일 문서가 컨텍스트 길이를 초과
+
+**시나리오**: 500페이지 PDF 보고서를 RAG에 추가
+
+#### Parent Document Retriever
+
+작은 청크로 검색하되, 전체 문서를 반환한다.
+
+```python
+class ParentDocumentRetriever:
+    """
+    작은 청크로 검색, 부모 문서 전체 반환
+    """
+    
+    def __init__(self):
+        self.chunk_store = {}  # chunk_id → chunk_text
+        self.parent_store = {}  # parent_id → full_document
+        self.chunk_to_parent = {}  # chunk_id → parent_id
+        self.vector_store = None
+    
+    def add_document(
+        self, 
+        document: str,
+        doc_id: str,
+        chunk_size: int = 256
+    ):
+        """
+        문서를 청크로 나누고 인덱싱
+        """
+        # 부모 문서 저장
+        self.parent_store[doc_id] = document
+        
+        # 청크 생성 (작은 크기)
+        chunks = self.chunk_text(document, chunk_size)
+        
+        # 각 청크 인덱싱
+        for i, chunk in enumerate(chunks):
+            chunk_id = f"{doc_id}_chunk_{i}"
+            
+            # 청크 저장
+            self.chunk_store[chunk_id] = chunk
+            
+            # 청크 → 부모 매핑
+            self.chunk_to_parent[chunk_id] = doc_id
+            
+            # 벡터 DB에 청크 인덱싱
+            self._add_to_vector_db(chunk, chunk_id)
+    
+    def retrieve(self, query: str, top_k: int = 5) -> List[Dict]:
+        """
+        검색: 청크로 찾지만 부모 문서 반환
+        """
+        # Step 1: 청크 레벨에서 검색
+        chunk_results = self._search_chunks(query, top_k=top_k)
+        
+        # Step 2: 부모 문서 ID 추출
+        parent_ids = set()
+        for chunk_result in chunk_results:
+            chunk_id = chunk_result['chunk_id']
+            parent_id = self.chunk_to_parent.get(chunk_id)
+            if parent_id:
+                parent_ids.add(parent_id)
+        
+        # Step 3: 부모 문서 반환
+        parent_docs = []
+        for parent_id in parent_ids:
+            parent_docs.append({
+                'id': parent_id,
+                'text': self.parent_store[parent_id]
+            })
+        
+        return parent_docs
+```
+
+**장점**:
+- ✅ 검색 정확도 높음 (작은 청크)
+- ✅ 컨텍스트 풍부 (전체 문서)
+
+**단점**:
+- ❌ 전체 문서가 너무 크면 여전히 문제
+- ❌ 관련 없는 부분도 포함될 수 있음
+
+#### Summary Index
+
+문서를 계층적으로 요약하고, 요약본으로 검색한다.
+
+```python
+class SummaryIndexRAG:
+    """
+    문서 요약 기반 RAG
+    """
+    
+    def __init__(self):
+        self.summaries = {}  # doc_id → summary
+        self.documents = {}  # doc_id → full_document
+        self.vector_store = None
+    
+    def add_document(self, document: str, doc_id: str):
+        """
+        문서와 요약본 모두 인덱싱
+        """
+        # 원본 저장
+        self.documents[doc_id] = document
+        
+        # 요약 생성
+        summary = self._generate_summary(document)
+        self.summaries[doc_id] = summary
+        
+        # 요약본을 벡터 DB에 인덱싱
+        self._index_summary(summary, doc_id)
+    
+    def _generate_summary(self, document: str, max_length: int = 500) -> str:
+        """
+        문서 요약 생성
+        """
+        # 문서가 너무 길면 청크 단위로 요약 후 재요약
+        if len(document) > 10000:
+            return self._hierarchical_summary(document)
+        
+        # 단일 요약
+        prompt = f"""다음 문서를 {max_length}자 이내로 요약하세요.
+핵심 내용과 주요 주제를 포함하세요.
+
+문서:
+{document}
+
+요약:"""
+        
+        client = anthropic.Anthropic(api_key="your-api-key")
+        
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=max_length,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        return message.content[0].text
+    
+    def _hierarchical_summary(self, document: str) -> str:
+        """
+        계층적 요약 (Map-Reduce 패턴)
+        
+        1. 문서를 청크로 나눔
+        2. 각 청크 요약 (Map)
+        3. 요약들을 결합하여 최종 요약 (Reduce)
+        """
+        # Step 1: 청크 생성
+        chunks = self.chunk_text(document, chunk_size=4000)
+        
+        # Step 2: 각 청크 요약 (Map)
+        chunk_summaries = []
+        for chunk in chunks:
+            summary = self._generate_summary(chunk, max_length=300)
+            chunk_summaries.append(summary)
+        
+        # Step 3: 요약들 결합 (Reduce)
+        combined = "\n\n".join(chunk_summaries)
+        final_summary = self._generate_summary(combined, max_length=500)
+        
+        return final_summary
+    
+    def retrieve(self, query: str, top_k: int = 5) -> List[Dict]:
+        """
+        2단계 검색:
+        1. 요약본으로 관련 문서 찾기
+        2. 원본 문서 반환
+        """
+        # Step 1: 요약본으로 검색
+        summary_results = self._search_summaries(query, top_k=top_k)
+        
+        # Step 2: 원본 문서 반환
+        full_docs = []
+        for result in summary_results:
+            doc_id = result['doc_id']
+            full_docs.append({
+                'id': doc_id,
+                'text': self.documents[doc_id],
+                'summary': self.summaries[doc_id]
+            })
+        
+        return full_docs
+```
+
+## 실시간 업데이트 처리
+
+### 문제: 지식베이스가 자주 변경됨
+
+**시나리오**: 뉴스 기사, 제품 정보, 가격 등이 실시간으로 업데이트
+
+#### 해결책: Incremental Indexing
+
+```python
+class IncrementalRAG:
+    """
+    증분 인덱싱을 지원하는 RAG
+    """
+    
+    def __init__(self):
+        self.vector_store = None
+        self.document_index = {}  # doc_id → metadata
+    
+    def add_document(self, document: Dict):
+        """
+        새 문서 추가
+        """
+        doc_id = document['id']
+        
+        # 중복 체크
+        if doc_id in self.document_index:
+            print(f"⚠️  문서 {doc_id} 이미 존재 - 업데이트 필요")
+            return self.update_document(document)
+        
+        # 인덱싱
+        self._index_document(document)
+        self.document_index[doc_id] = {
+            'timestamp': datetime.now(),
+            'version': 1
+        }
+        
+        print(f"✅ 문서 {doc_id} 추가 완료")
+    
+    def update_document(self, document: Dict):
+        """
+        기존 문서 업데이트
+        """
+        doc_id = document['id']
+        
+        # Step 1: 기존 문서 삭제
+        self.delete_document(doc_id)
+        
+        # Step 2: 새 버전 추가
+        self._index_document(document)
+        self.document_index[doc_id] = {
+            'timestamp': datetime.now(),
+            'version': self.document_index[doc_id].get('version', 0) + 1
+        }
+        
+        print(f"🔄 문서 {doc_id} 업데이트 완료 (v{self.document_index[doc_id]['version']})")
+    
+    def delete_document(self, doc_id: str):
+        """
+        문서 삭제
+        """
+        # Vector DB에서 제거
+        self.vector_store.delete(ids=[doc_id])
+        
+        # 인덱스에서 제거
+        if doc_id in self.document_index:
+            del self.document_index[doc_id]
+        
+        print(f"🗑️  문서 {doc_id} 삭제 완료")
+    
+    def get_document_info(self, doc_id: str) -> Dict:
+        """
+        문서 메타데이터 조회
+        """
+        return self.document_index.get(doc_id)
+```
+
+**사용 예시**:
+
+```python
+rag = IncrementalRAG()
+
+# 초기 문서 추가
+rag.add_document({
+    'id': 'product_123',
+    'text': '제품 가격: $99',
+    'metadata': {'category': 'electronics'}
+})
+
+# 나중에 가격 변경
+rag.update_document({
+    'id': 'product_123',
+    'text': '제품 가격: $79 (할인)',
+    'metadata': {'category': 'electronics'}
+})
+
+# 문서 정보 확인
+info = rag.get_document_info('product_123')
+print(f"버전: {info['version']}, 업데이트: {info['timestamp']}")
+```

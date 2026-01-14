@@ -1,0 +1,2644 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.543">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="Automatic Prompt Engineer (APE)와 OPRO의 정의부터 실전 구현까지 체계적으로 설명한다. Zhou et al.&nbsp;(2022) “Large Language Models are Human-Level Prompt Engineers”와 Yang et al.&nbsp;(2023) “Large Language Models as Optimizers” 연구를 바탕으로 프롬프트 자동 생성의 원리, 6단계 워크플로우(후보 생성, 실행, 평가, 제거, 재샘플링, 선택), Forward/Reverse Mode 생성 메커니즘, 평가 메트릭과 반복적 개선 전략을 분석한다. Instruction Induction, BIG-Bench, GSM8K 벤치마크에서 수동 프롬프트 대비 최대 4.5% 성능 향상 결과를 제시하고, “Take a deep breath” 같은 의외의 효과적 프롬프트 발견 사례, 감성 분류/대규모 분류 시스템 등 실무 예시와 Python 구현 코드(Anthropic Claude API 활용)를 통해 실전 자동화 방법을 상세히 다룬다. 비용-ROI 분석($0.72-$6.10 per prompt), 수동 vs 자동 프롬프트 엔지니어링 비교, 하이브리드 접근법과 과적합 방지 전략, 지속적 개선 패턴을 제시한다.">
+
+<title>Kwangmin Kim - APE와 프롬프트 자동 최적화: LLM이 스스로 프롬프트를 개선하는 방법</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete-preset-algolia.umd.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "algolia": {
+    "application-id": "DUOR1DRC9D",
+    "search-only-api-key": "f264da5dea684ffb9e9b4a574af3ed61",
+    "index-name": "prod_QUARTO",
+    "analytics-events": true,
+    "show-logo": true,
+    "libDir": "site_libs"
+  },
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script src="https://cdn.jsdelivr.net/npm/algoliasearch@4.5.1/dist/algoliasearch-lite.umd.js"></script>
+
+
+<script type="text/javascript">
+var ALGOLIA_INSIGHTS_SRC = "https://cdn.jsdelivr.net/npm/search-insights/dist/search-insights.iife.min.js";
+!function(e,a,t,n,s,i,c){e.AlgoliaAnalyticsObject=s,e[s]=e[s]||function(){
+(e[s].queue=e[s].queue||[]).push(arguments)},i=a.createElement(t),c=a.getElementsByTagName(t)[0],
+i.async=1,i.src=n,c.parentNode.insertBefore(i,c)
+}(window,document,"script",ALGOLIA_INSIGHTS_SRC,"aa");
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@algolia/autocomplete-plugin-algolia-insights">
+
+</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Kwangmin Kim - APE와 프롬프트 자동 최적화: LLM이 스스로 프롬프트를 개선하는 방법">
+<meta property="og:description" content="Automatic Prompt Engineer (APE)와 OPRO의 정의부터 실전 구현까지 체계적으로 설명한다. Zhou et al.&nbsp;(2022) “Large Language Models are Human-Level Prompt Engineers”와 Yang et al.&nbsp;(2023) “Large Language Models as Optimizers” 연구를 바탕으로 프롬프트 자동 생성의 원리, 6단계 워크플로우(후보 생성, 실행, 평가, 제거, 재샘플링, 선택), Forward/Reverse Mode 생성 메커니즘, 평가 메트릭과 반복적 개선 전략을 분석한다. Instruction Induction, BIG-Bench, GSM8K 벤치마크에서 수동 프롬프트 대비 최대 4.5% 성능 향상 결과를 제시하고, “Take a deep breath” 같은 의외의 효과적 프롬프트 발견 사례, 감성 분류/대규모 분류 시스템 등 실무 예시와 Python 구현 코드(Anthropic Claude API 활용)를 통해 실전 자동화 방법을 상세히 다룬다. 비용-ROI 분석($0.72-$6.10 per prompt), 수동 vs 자동 프롬프트 엔지니어링 비교, 하이브리드 접근법과 과적합 방지 전략, 지속적 개선 패턴을 제시한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+<meta name="twitter:title" content="Kwangmin Kim - APE와 프롬프트 자동 최적화: LLM이 스스로 프롬프트를 개선하는 방법">
+<meta name="twitter:description" content="Automatic Prompt Engineer (APE)와 OPRO의 정의부터 실전 구현까지 체계적으로 설명한다. Zhou et al.&nbsp;(2022) “Large Language Models are Human-Level Prompt Engineers”와 Yang et al.&nbsp;(2023) “Large Language Models as Optimizers” 연구를 바탕으로 프롬프트 자동 생성의 원리, 6단계 워크플로우(후보 생성, 실행, 평가, 제거, 재샘플링, 선택), Forward/Reverse Mode 생성 메커니즘, 평가 메트릭과 반복적 개선 전략을 분석한다. Instruction Induction, BIG-Bench, GSM8K 벤치마크에서 수동 프롬프트 대비 최대 4.5% 성능 향상 결과를 제시하고, “Take a deep breath” 같은 의외의 효과적 프롬프트 발견 사례, 감성 분류/대규모 분류 시스템 등 실무 예시와 Python 구현 코드(Anthropic Claude API 활용)를 통해 실전 자동화 방법을 상세히 다룬다. 비용-ROI 분석($0.72-$6.10 per prompt), 수동 vs 자동 프롬프트 엔지니어링 비교, 하이브리드 접근법과 과적합 방지 전략, 지속적 개선 패턴을 제시한다.">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+          <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-page-left">
+      <h1 class="title">APE와 프롬프트 자동 최적화: LLM이 스스로 프롬프트를 개선하는 방법</h1>
+            <p class="subtitle lead">LLM을 활용하여 프롬프트를 자동으로 생성하고 최적화하는 메타 레벨 접근법</p>
+                  <div>
+        <div class="description">
+          <p>Automatic Prompt Engineer (APE)와 OPRO의 정의부터 실전 구현까지 체계적으로 설명한다. Zhou et al.&nbsp;(2022) “Large Language Models are Human-Level Prompt Engineers”와 Yang et al.&nbsp;(2023) “Large Language Models as Optimizers” 연구를 바탕으로 프롬프트 자동 생성의 원리, 6단계 워크플로우(후보 생성, 실행, 평가, 제거, 재샘플링, 선택), Forward/Reverse Mode 생성 메커니즘, 평가 메트릭과 반복적 개선 전략을 분석한다. Instruction Induction, BIG-Bench, GSM8K 벤치마크에서 수동 프롬프트 대비 최대 4.5% 성능 향상 결과를 제시하고, “Take a deep breath” 같은 의외의 효과적 프롬프트 발견 사례, 감성 분류/대규모 분류 시스템 등 실무 예시와 Python 구현 코드(Anthropic Claude API 활용)를 통해 실전 자동화 방법을 상세히 다룬다. 비용-ROI 분석($0.72-$6.10 per prompt), 수동 vs 자동 프롬프트 엔지니어링 비교, 하이브리드 접근법과 과적합 방지 전략, 지속적 개선 패턴을 제시한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Prompt Engineering</div>
+                <div class="quarto-category">LLM</div>
+                <div class="quarto-category">AI</div>
+                <div class="quarto-category">Agent</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta column-page-left">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2025년 02월 07일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-full page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#들어가며" id="toc-들어가며" class="nav-link active" data-scroll-target="#들어가며"><span class="header-section-number">1</span> 들어가며</a></li>
+  <li><a href="#automatic-prompt-engineer-ape란" id="toc-automatic-prompt-engineer-ape란" class="nav-link" data-scroll-target="#automatic-prompt-engineer-ape란"><span class="header-section-number">2</span> Automatic Prompt Engineer (APE)란?</a>
+  <ul class="collapse">
+  <li><a href="#핵심-개념" id="toc-핵심-개념" class="nav-link" data-scroll-target="#핵심-개념"><span class="header-section-number">2.1</span> 핵심 개념</a></li>
+  <li><a href="#왜-필요한가" id="toc-왜-필요한가" class="nav-link" data-scroll-target="#왜-필요한가"><span class="header-section-number">2.2</span> 왜 필요한가?</a></li>
+  </ul></li>
+  <li><a href="#ape의-6단계-워크플로우" id="toc-ape의-6단계-워크플로우" class="nav-link" data-scroll-target="#ape의-6단계-워크플로우"><span class="header-section-number">3</span> APE의 6단계 워크플로우</a>
+  <ul class="collapse">
+  <li><a href="#후보-프롬프트-생성-instruction-generation" id="toc-후보-프롬프트-생성-instruction-generation" class="nav-link" data-scroll-target="#후보-프롬프트-생성-instruction-generation"><span class="header-section-number">3.1</span> 후보 프롬프트 생성 (Instruction Generation)</a></li>
+  <li><a href="#후보-프롬프트-실행-execution" id="toc-후보-프롬프트-실행-execution" class="nav-link" data-scroll-target="#후보-프롬프트-실행-execution"><span class="header-section-number">3.2</span> 후보 프롬프트 실행 (Execution)</a></li>
+  <li><a href="#프롬프트-평가-scoring" id="toc-프롬프트-평가-scoring" class="nav-link" data-scroll-target="#프롬프트-평가-scoring"><span class="header-section-number">3.3</span> 프롬프트 평가 (Scoring)</a></li>
+  <li><a href="#하위-후보-제거-pruning" id="toc-하위-후보-제거-pruning" class="nav-link" data-scroll-target="#하위-후보-제거-pruning"><span class="header-section-number">3.4</span> 하위 후보 제거 (Pruning)</a></li>
+  <li><a href="#후보-샘플링-및-개선-resampling-improving" id="toc-후보-샘플링-및-개선-resampling-improving" class="nav-link" data-scroll-target="#후보-샘플링-및-개선-resampling-improving"><span class="header-section-number">3.5</span> 후보 샘플링 및 개선 (Resampling &amp; Improving)</a></li>
+  <li><a href="#최종-선정-selection" id="toc-최종-선정-selection" class="nav-link" data-scroll-target="#최종-선정-selection"><span class="header-section-number">3.6</span> 최종 선정 (Selection)</a></li>
+  <li><a href="#전체-파이프라인-통합" id="toc-전체-파이프라인-통합" class="nav-link" data-scroll-target="#전체-파이프라인-통합"><span class="header-section-number">3.7</span> 전체 파이프라인 통합</a></li>
+  <li><a href="#실행-결과-예시" id="toc-실행-결과-예시" class="nav-link" data-scroll-target="#실행-결과-예시"><span class="header-section-number">3.8</span> 실행 결과 예시</a></li>
+  </ul></li>
+  <li><a href="#opro-optimization-by-prompting" id="toc-opro-optimization-by-prompting" class="nav-link" data-scroll-target="#opro-optimization-by-prompting"><span class="header-section-number">4</span> OPRO: Optimization by PROmpting</a>
+  <ul class="collapse">
+  <li><a href="#핵심-아이디어" id="toc-핵심-아이디어" class="nav-link" data-scroll-target="#핵심-아이디어"><span class="header-section-number">4.1</span> 핵심 아이디어</a></li>
+  <li><a href="#opro의-작동-방식" id="toc-opro의-작동-방식" class="nav-link" data-scroll-target="#opro의-작동-방식"><span class="header-section-number">4.2</span> OPRO의 작동 방식</a></li>
+  <li><a href="#take-a-deep-breath-발견" id="toc-take-a-deep-breath-발견" class="nav-link" data-scroll-target="#take-a-deep-breath-발견"><span class="header-section-number">4.3</span> “Take a deep breath” 발견</a></li>
+  </ul></li>
+  <li><a href="#ape-실험-결과-분석" id="toc-ape-실험-결과-분석" class="nav-link" data-scroll-target="#ape-실험-결과-분석"><span class="header-section-number">5</span> APE 실험 결과 분석</a>
+  <ul class="collapse">
+  <li><a href="#벤치마크-성능" id="toc-벤치마크-성능" class="nav-link" data-scroll-target="#벤치마크-성능"><span class="header-section-number">5.1</span> 벤치마크 성능</a></li>
+  <li><a href="#forward-vs-reverse-mode" id="toc-forward-vs-reverse-mode" class="nav-link" data-scroll-target="#forward-vs-reverse-mode"><span class="header-section-number">5.2</span> Forward vs Reverse Mode</a></li>
+  </ul></li>
+  <li><a href="#opro-벤치마크-성능" id="toc-opro-벤치마크-성능" class="nav-link" data-scroll-target="#opro-벤치마크-성능"><span class="header-section-number">6</span> OPRO 벤치마크 성능</a>
+  <ul class="collapse">
+  <li><a href="#gsm8k-수학-문제" id="toc-gsm8k-수학-문제" class="nav-link" data-scroll-target="#gsm8k-수학-문제"><span class="header-section-number">6.1</span> GSM8K (수학 문제)</a></li>
+  <li><a href="#take-a-deep-breath-상세-분석" id="toc-take-a-deep-breath-상세-분석" class="nav-link" data-scroll-target="#take-a-deep-breath-상세-분석"><span class="header-section-number">6.2</span> “Take a deep breath” 상세 분석</a></li>
+  <li><a href="#bigbench-hard" id="toc-bigbench-hard" class="nav-link" data-scroll-target="#bigbench-hard"><span class="header-section-number">6.3</span> BigBench-Hard</a></li>
+  </ul></li>
+  <li><a href="#반복-횟수와-성능의-관계" id="toc-반복-횟수와-성능의-관계" class="nav-link" data-scroll-target="#반복-횟수와-성능의-관계"><span class="header-section-number">7</span> 반복 횟수와 성능의 관계</a></li>
+  <li><a href="#apeopro의-한계점" id="toc-apeopro의-한계점" class="nav-link" data-scroll-target="#apeopro의-한계점"><span class="header-section-number">8</span> APE/OPRO의 한계점</a>
+  <ul class="collapse">
+  <li><a href="#한계-1-높은-연산-비용" id="toc-한계-1-높은-연산-비용" class="nav-link" data-scroll-target="#한계-1-높은-연산-비용"><span class="header-section-number">8.1</span> 한계 1: 높은 연산 비용</a></li>
+  <li><a href="#한계-2-태스크-의존성" id="toc-한계-2-태스크-의존성" class="nav-link" data-scroll-target="#한계-2-태스크-의존성"><span class="header-section-number">8.2</span> 한계 2: 태스크 의존성</a></li>
+  <li><a href="#한계-3-프롬프트-해석-어려움" id="toc-한계-3-프롬프트-해석-어려움" class="nav-link" data-scroll-target="#한계-3-프롬프트-해석-어려움"><span class="header-section-number">8.3</span> 한계 3: 프롬프트 해석 어려움</a></li>
+  <li><a href="#한계-4-과적합-위험" id="toc-한계-4-과적합-위험" class="nav-link" data-scroll-target="#한계-4-과적합-위험"><span class="header-section-number">8.4</span> 한계 4: 과적합 위험</a></li>
+  </ul></li>
+  <li><a href="#수동-vs-자동-프롬프트-엔지니어링" id="toc-수동-vs-자동-프롬프트-엔지니어링" class="nav-link" data-scroll-target="#수동-vs-자동-프롬프트-엔지니어링"><span class="header-section-number">9</span> 수동 vs 자동 프롬프트 엔지니어링</a>
+  <ul class="collapse">
+  <li><a href="#비교표" id="toc-비교표" class="nav-link" data-scroll-target="#비교표"><span class="header-section-number">9.1</span> 비교표</a></li>
+  <li><a href="#언제-수동을-사용할-것인가" id="toc-언제-수동을-사용할-것인가" class="nav-link" data-scroll-target="#언제-수동을-사용할-것인가"><span class="header-section-number">9.2</span> 언제 수동을 사용할 것인가?</a></li>
+  <li><a href="#언제-자동을-사용할-것인가" id="toc-언제-자동을-사용할-것인가" class="nav-link" data-scroll-target="#언제-자동을-사용할-것인가"><span class="header-section-number">9.3</span> 언제 자동을 사용할 것인가?</a></li>
+  <li><a href="#하이브리드-접근법-권장" id="toc-하이브리드-접근법-권장" class="nav-link" data-scroll-target="#하이브리드-접근법-권장"><span class="header-section-number">9.4</span> 하이브리드 접근법 (권장)</a></li>
+  </ul></li>
+  <li><a href="#실무-적용-시나리오" id="toc-실무-적용-시나리오" class="nav-link" data-scroll-target="#실무-적용-시나리오"><span class="header-section-number">10</span> 실무 적용 시나리오</a>
+  <ul class="collapse">
+  <li><a href="#시나리오-1-대규모-분류-시스템" id="toc-시나리오-1-대규모-분류-시스템" class="nav-link" data-scroll-target="#시나리오-1-대규모-분류-시스템"><span class="header-section-number">10.1</span> 시나리오 1: 대규모 분류 시스템</a></li>
+  <li><a href="#시나리오-2-지속적-개선" id="toc-시나리오-2-지속적-개선" class="nav-link" data-scroll-target="#시나리오-2-지속적-개선"><span class="header-section-number">10.2</span> 시나리오 2: 지속적 개선</a></li>
+  <li><a href="#시나리오-3-다국어-프롬프트" id="toc-시나리오-3-다국어-프롬프트" class="nav-link" data-scroll-target="#시나리오-3-다국어-프롬프트"><span class="header-section-number">10.3</span> 시나리오 3: 다국어 프롬프트</a></li>
+  </ul></li>
+  <li><a href="#비용-분석-및-roi" id="toc-비용-분석-및-roi" class="nav-link" data-scroll-target="#비용-분석-및-roi"><span class="header-section-number">11</span> 비용 분석 및 ROI</a>
+  <ul class="collapse">
+  <li><a href="#비용-구조" id="toc-비용-구조" class="nav-link" data-scroll-target="#비용-구조"><span class="header-section-number">11.1</span> 비용 구조</a></li>
+  <li><a href="#roi-계산" id="toc-roi-계산" class="nav-link" data-scroll-target="#roi-계산"><span class="header-section-number">11.2</span> ROI 계산</a></li>
+  <li><a href="#비용-최적화-전략" id="toc-비용-최적화-전략" class="nav-link" data-scroll-target="#비용-최적화-전략"><span class="header-section-number">11.3</span> 비용 최적화 전략</a></li>
+  </ul></li>
+  <li><a href="#핵심-요약" id="toc-핵심-요약" class="nav-link" data-scroll-target="#핵심-요약"><span class="header-section-number">12</span> 핵심 요약</a></li>
+  <li><a href="#참고문헌" id="toc-참고문헌" class="nav-link" data-scroll-target="#참고문헌"><span class="header-section-number">13</span> 참고문헌</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block column-page-left" id="quarto-document-content">
+
+
+
+
+
+<section id="들어가며" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="들어가며"><span class="header-section-number">1</span> 들어가며</h2>
+<p>지금까지 다룬 모든 프롬프트 엔지니어링 기법들에는 공통점이 있다: <strong>사람이 프롬프트를 설계한다는 것이다.</strong> 하지만 최적의 프롬프트를 찾는 것은 시간이 많이 걸리고, 주관적이며, 도메인 전문가가 필요하다.</p>
+<p>만약 LLM이 스스로 최적의 프롬프트를 찾을 수 있다면 어떨까?</p>
+<p><strong>Automatic Prompt Engineer (APE)</strong>는 바로 이 아이디어를 구현한다. LLM을 사용하여 프롬프트를 자동으로 생성하고, 평가하고, 선택한다. 이는 “LLM으로 LLM을 위한 프롬프트 만들기”라는 메타 레벨의 접근법이다.</p>
+<p>이번 포스트에서는 APE의 원리부터 최신 발전 방향인 OPRO까지, 프롬프트 자동 최적화의 전반을 다룬다.</p>
+</section>
+<section id="automatic-prompt-engineer-ape란" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="automatic-prompt-engineer-ape란"><span class="header-section-number">2</span> Automatic Prompt Engineer (APE)란?</h2>
+<section id="핵심-개념" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="핵심-개념"><span class="header-section-number">2.1</span> 핵심 개념</h3>
+<blockquote class="blockquote">
+<p>“주어진 입력-출력 예시들로부터, 가장 효과적인 프롬프트를 자동으로 찾을 수 있는가?”</p>
+</blockquote>
+<p><strong>기본 아이디어</strong>:</p>
+<pre><code>Input-Output Examples → [APE] → Best Prompt</code></pre>
+<p><strong>예시</strong>:</p>
+<pre><code>입력-출력 예시:
+- Input: "dog" → Output: "animal"
+- Input: "rose" → Output: "plant"  
+- Input: "iron" → Output: "metal"
+
+APE가 찾아낸 프롬프트:
+"Classify the following into its category:"</code></pre>
+</section>
+<section id="왜-필요한가" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="왜-필요한가"><span class="header-section-number">2.2</span> 왜 필요한가?</h3>
+<p><strong>문제 1: 시간 절약</strong></p>
+<pre><code>사람이 프롬프트 설계:
+- 시도 1: "What is this?" → 성능 60%
+- 시도 2: "Identify the category" → 성능 70%
+- 시도 3: "Classify into type" → 성능 75%
+- ...
+- 시도 20: "Classify the following into its category" → 성능 85%
+
+→ 20번 시도, 2시간 소요</code></pre>
+<p><strong>APE 사용</strong>:</p>
+<pre><code>- 자동으로 100개 후보 생성
+- 자동으로 평가 및 선택
+- 최적 프롬프트 발견
+
+→ 5분 소요, 성능 85%</code></pre>
+<p><strong>문제 2: 인간의 편향</strong></p>
+<p>사람은 자연스러운 표현을 선호하지만, LLM에게는 부자연스러운 표현이 더 효과적일 수 있다.</p>
+<p><strong>사람이 선호하는 프롬프트</strong>:</p>
+<pre><code>"Let's think step by step and solve this problem carefully."
+→ 성능 78%</code></pre>
+<p><strong>APE가 찾은 프롬프트</strong> (OPRO 연구):</p>
+<pre><code>"Take a deep breath and work on this problem step-by-step."
+→ 성능 80.2%</code></pre>
+<p>“Take a deep breath”이 왜 효과적인지는 명확하지 않지만, 실제로 더 좋은 성능을 보인다.</p>
+</section>
+</section>
+<section id="ape의-6단계-워크플로우" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="ape의-6단계-워크플로우"><span class="header-section-number">3</span> APE의 6단계 워크플로우</h2>
+<p>Zhou et al.&nbsp;(2022)의 원 논문에 따르면, APE는 다음 6단계로 작동한다.</p>
+<section id="후보-프롬프트-생성-instruction-generation" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="후보-프롬프트-생성-instruction-generation"><span class="header-section-number">3.1</span> 후보 프롬프트 생성 (Instruction Generation)</h3>
+<p><strong>입력</strong>: 입력-출력 예시들 <strong>출력</strong>: N개의 후보 프롬프트</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1"></a><span class="im">import</span> anthropic</span>
+<span id="cb7-2"><a href="#cb7-2"></a><span class="im">from</span> typing <span class="im">import</span> List, Dict</span>
+<span id="cb7-3"><a href="#cb7-3"></a></span>
+<span id="cb7-4"><a href="#cb7-4"></a><span class="kw">class</span> APE:</span>
+<span id="cb7-5"><a href="#cb7-5"></a>    <span class="co">"""</span></span>
+<span id="cb7-6"><a href="#cb7-6"></a><span class="co">    Automatic Prompt Engineer 구현</span></span>
+<span id="cb7-7"><a href="#cb7-7"></a><span class="co">    """</span></span>
+<span id="cb7-8"><a href="#cb7-8"></a>    </span>
+<span id="cb7-9"><a href="#cb7-9"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, api_key: <span class="bu">str</span>):</span>
+<span id="cb7-10"><a href="#cb7-10"></a>        <span class="va">self</span>.client <span class="op">=</span> anthropic.Anthropic(api_key<span class="op">=</span>api_key)</span>
+<span id="cb7-11"><a href="#cb7-11"></a>        <span class="va">self</span>.model <span class="op">=</span> <span class="st">"claude-sonnet-4-20250514"</span></span>
+<span id="cb7-12"><a href="#cb7-12"></a>    </span>
+<span id="cb7-13"><a href="#cb7-13"></a>    <span class="kw">def</span> generate_candidate_prompts(</span>
+<span id="cb7-14"><a href="#cb7-14"></a>        <span class="va">self</span>, </span>
+<span id="cb7-15"><a href="#cb7-15"></a>        examples: List[Dict[<span class="bu">str</span>, <span class="bu">str</span>]],</span>
+<span id="cb7-16"><a href="#cb7-16"></a>        num_candidates: <span class="bu">int</span> <span class="op">=</span> <span class="dv">10</span></span>
+<span id="cb7-17"><a href="#cb7-17"></a>    ) <span class="op">-&gt;</span> List[<span class="bu">str</span>]:</span>
+<span id="cb7-18"><a href="#cb7-18"></a>        <span class="co">"""</span></span>
+<span id="cb7-19"><a href="#cb7-19"></a><span class="co">        Step 1: 후보 프롬프트 생성</span></span>
+<span id="cb7-20"><a href="#cb7-20"></a><span class="co">        </span></span>
+<span id="cb7-21"><a href="#cb7-21"></a><span class="co">        Args:</span></span>
+<span id="cb7-22"><a href="#cb7-22"></a><span class="co">            examples: [{"input": "...", "output": "..."}, ...]</span></span>
+<span id="cb7-23"><a href="#cb7-23"></a><span class="co">            num_candidates: 생성할 후보 프롬프트 수</span></span>
+<span id="cb7-24"><a href="#cb7-24"></a><span class="co">        """</span></span>
+<span id="cb7-25"><a href="#cb7-25"></a>        <span class="co"># 예시들을 포맷팅</span></span>
+<span id="cb7-26"><a href="#cb7-26"></a>        examples_str <span class="op">=</span> <span class="st">"</span><span class="ch">\n</span><span class="st">"</span>.join([</span>
+<span id="cb7-27"><a href="#cb7-27"></a>            <span class="ss">f"Input: </span><span class="sc">{</span>ex[<span class="st">'input'</span>]<span class="sc">}</span><span class="ch">\n</span><span class="ss">Output: </span><span class="sc">{</span>ex[<span class="st">'output'</span>]<span class="sc">}</span><span class="ss">"</span></span>
+<span id="cb7-28"><a href="#cb7-28"></a>            <span class="cf">for</span> ex <span class="kw">in</span> examples</span>
+<span id="cb7-29"><a href="#cb7-29"></a>        ])</span>
+<span id="cb7-30"><a href="#cb7-30"></a>        </span>
+<span id="cb7-31"><a href="#cb7-31"></a>        <span class="co"># 프롬프트 생성을 위한 메타 프롬프트</span></span>
+<span id="cb7-32"><a href="#cb7-32"></a>        generation_prompt <span class="op">=</span> <span class="ss">f"""I gave a language model the following examples:</span></span>
+<span id="cb7-33"><a href="#cb7-33"></a></span>
+<span id="cb7-34"><a href="#cb7-34"></a><span class="ss">        </span><span class="sc">{</span>examples_str<span class="sc">}</span></span>
+<span id="cb7-35"><a href="#cb7-35"></a></span>
+<span id="cb7-36"><a href="#cb7-36"></a><span class="ss">        I want you to generate </span><span class="sc">{</span>num_candidates<span class="sc">}</span><span class="ss"> different instruction prompts that would lead the model to produce these outputs from these inputs.</span></span>
+<span id="cb7-37"><a href="#cb7-37"></a></span>
+<span id="cb7-38"><a href="#cb7-38"></a><span class="ss">        Each instruction should be clear, concise, and effective.</span></span>
+<span id="cb7-39"><a href="#cb7-39"></a></span>
+<span id="cb7-40"><a href="#cb7-40"></a><span class="ss">        Generate </span><span class="sc">{</span>num_candidates<span class="sc">}</span><span class="ss"> instruction prompts (one per line):</span></span>
+<span id="cb7-41"><a href="#cb7-41"></a><span class="ss">        1."""</span></span>
+<span id="cb7-42"><a href="#cb7-42"></a>        </span>
+<span id="cb7-43"><a href="#cb7-43"></a>        message <span class="op">=</span> <span class="va">self</span>.client.messages.create(</span>
+<span id="cb7-44"><a href="#cb7-44"></a>            model<span class="op">=</span><span class="va">self</span>.model,</span>
+<span id="cb7-45"><a href="#cb7-45"></a>            max_tokens<span class="op">=</span><span class="dv">1000</span>,</span>
+<span id="cb7-46"><a href="#cb7-46"></a>            temperature<span class="op">=</span><span class="fl">0.8</span>,  <span class="co"># 다양성을 위해 높은 temperature</span></span>
+<span id="cb7-47"><a href="#cb7-47"></a>            messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: generation_prompt}]</span>
+<span id="cb7-48"><a href="#cb7-48"></a>        )</span>
+<span id="cb7-49"><a href="#cb7-49"></a>        </span>
+<span id="cb7-50"><a href="#cb7-50"></a>        response <span class="op">=</span> message.content[<span class="dv">0</span>].text</span>
+<span id="cb7-51"><a href="#cb7-51"></a>        </span>
+<span id="cb7-52"><a href="#cb7-52"></a>        <span class="co"># 후보 파싱</span></span>
+<span id="cb7-53"><a href="#cb7-53"></a>        candidates <span class="op">=</span> []</span>
+<span id="cb7-54"><a href="#cb7-54"></a>        <span class="cf">for</span> line <span class="kw">in</span> response.split(<span class="st">'</span><span class="ch">\n</span><span class="st">'</span>):</span>
+<span id="cb7-55"><a href="#cb7-55"></a>            <span class="im">import</span> re</span>
+<span id="cb7-56"><a href="#cb7-56"></a>            <span class="co"># 번호 제거 (1., 2., etc.)</span></span>
+<span id="cb7-57"><a href="#cb7-57"></a>            line <span class="op">=</span> re.sub(<span class="vs">r'^\d+\.\s*'</span>, <span class="st">''</span>, line.strip())</span>
+<span id="cb7-58"><a href="#cb7-58"></a>            </span>
+<span id="cb7-59"><a href="#cb7-59"></a>            <span class="cf">if</span> line <span class="kw">and</span> <span class="bu">len</span>(line) <span class="op">&gt;</span> <span class="dv">10</span>:  <span class="co"># 너무 짧은 것 제외</span></span>
+<span id="cb7-60"><a href="#cb7-60"></a>                candidates.append(line)</span>
+<span id="cb7-61"><a href="#cb7-61"></a>        </span>
+<span id="cb7-62"><a href="#cb7-62"></a>        <span class="cf">return</span> candidates[:num_candidates]</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>생성 예시</strong>:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1"></a>examples <span class="op">=</span> [</span>
+<span id="cb8-2"><a href="#cb8-2"></a>    {<span class="st">"input"</span>: <span class="st">"happy"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb8-3"><a href="#cb8-3"></a>    {<span class="st">"input"</span>: <span class="st">"sad"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>},</span>
+<span id="cb8-4"><a href="#cb8-4"></a>    {<span class="st">"input"</span>: <span class="st">"angry"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>},</span>
+<span id="cb8-5"><a href="#cb8-5"></a>    {<span class="st">"input"</span>: <span class="st">"joyful"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>}</span>
+<span id="cb8-6"><a href="#cb8-6"></a>]</span>
+<span id="cb8-7"><a href="#cb8-7"></a></span>
+<span id="cb8-8"><a href="#cb8-8"></a>ape <span class="op">=</span> APE(api_key<span class="op">=</span><span class="st">"your-api-key"</span>)</span>
+<span id="cb8-9"><a href="#cb8-9"></a>candidates <span class="op">=</span> ape.generate_candidate_prompts(examples, num_candidates<span class="op">=</span><span class="dv">5</span>)</span>
+<span id="cb8-10"><a href="#cb8-10"></a></span>
+<span id="cb8-11"><a href="#cb8-11"></a><span class="co"># 출력:</span></span>
+<span id="cb8-12"><a href="#cb8-12"></a><span class="co"># 1. "Classify the sentiment of the following word as positive or negative."</span></span>
+<span id="cb8-13"><a href="#cb8-13"></a><span class="co"># 2. "Determine whether the emotion expressed is positive or negative."</span></span>
+<span id="cb8-14"><a href="#cb8-14"></a><span class="co"># 3. "Analyze the sentiment: positive or negative?"</span></span>
+<span id="cb8-15"><a href="#cb8-15"></a><span class="co"># 4. "Is this word expressing a positive or negative feeling?"</span></span>
+<span id="cb8-16"><a href="#cb8-16"></a><span class="co"># 5. "Categorize the emotional tone as either positive or negative."</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="후보-프롬프트-실행-execution" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="후보-프롬프트-실행-execution"><span class="header-section-number">3.2</span> 후보 프롬프트 실행 (Execution)</h3>
+<p>각 후보 프롬프트를 실제로 실행하여 결과를 얻는다.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1"></a>    <span class="kw">def</span> execute_prompt(</span>
+<span id="cb9-2"><a href="#cb9-2"></a>        <span class="va">self</span>, </span>
+<span id="cb9-3"><a href="#cb9-3"></a>        prompt: <span class="bu">str</span>, </span>
+<span id="cb9-4"><a href="#cb9-4"></a>        test_input: <span class="bu">str</span></span>
+<span id="cb9-5"><a href="#cb9-5"></a>    ) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb9-6"><a href="#cb9-6"></a>        <span class="co">"""</span></span>
+<span id="cb9-7"><a href="#cb9-7"></a><span class="co">        Step 2: 프롬프트 실행</span></span>
+<span id="cb9-8"><a href="#cb9-8"></a><span class="co">        </span></span>
+<span id="cb9-9"><a href="#cb9-9"></a><span class="co">        Args:</span></span>
+<span id="cb9-10"><a href="#cb9-10"></a><span class="co">            prompt: 후보 프롬프트</span></span>
+<span id="cb9-11"><a href="#cb9-11"></a><span class="co">            test_input: 테스트 입력</span></span>
+<span id="cb9-12"><a href="#cb9-12"></a><span class="co">        </span></span>
+<span id="cb9-13"><a href="#cb9-13"></a><span class="co">        Returns:</span></span>
+<span id="cb9-14"><a href="#cb9-14"></a><span class="co">            모델의 출력</span></span>
+<span id="cb9-15"><a href="#cb9-15"></a><span class="co">        """</span></span>
+<span id="cb9-16"><a href="#cb9-16"></a>        full_prompt <span class="op">=</span> <span class="ss">f"</span><span class="sc">{</span>prompt<span class="sc">}</span><span class="ch">\n\n</span><span class="ss">Input: </span><span class="sc">{</span>test_input<span class="sc">}</span><span class="ch">\n</span><span class="ss">Output:"</span></span>
+<span id="cb9-17"><a href="#cb9-17"></a>        </span>
+<span id="cb9-18"><a href="#cb9-18"></a>        message <span class="op">=</span> <span class="va">self</span>.client.messages.create(</span>
+<span id="cb9-19"><a href="#cb9-19"></a>            model<span class="op">=</span><span class="va">self</span>.model,</span>
+<span id="cb9-20"><a href="#cb9-20"></a>            max_tokens<span class="op">=</span><span class="dv">100</span>,</span>
+<span id="cb9-21"><a href="#cb9-21"></a>            temperature<span class="op">=</span><span class="dv">0</span>,  <span class="co"># 평가를 위해 deterministic</span></span>
+<span id="cb9-22"><a href="#cb9-22"></a>            messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: full_prompt}]</span>
+<span id="cb9-23"><a href="#cb9-23"></a>        )</span>
+<span id="cb9-24"><a href="#cb9-24"></a>        </span>
+<span id="cb9-25"><a href="#cb9-25"></a>        <span class="cf">return</span> message.content[<span class="dv">0</span>].text.strip()</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="프롬프트-평가-scoring" class="level3" data-number="3.3">
+<h3 data-number="3.3" class="anchored" data-anchor-id="프롬프트-평가-scoring"><span class="header-section-number">3.3</span> 프롬프트 평가 (Scoring)</h3>
+<p>각 후보가 얼마나 잘 작동하는지 점수를 매긴다.</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1"></a>    <span class="kw">def</span> score_prompt(</span>
+<span id="cb10-2"><a href="#cb10-2"></a>        <span class="va">self</span>,</span>
+<span id="cb10-3"><a href="#cb10-3"></a>        prompt: <span class="bu">str</span>,</span>
+<span id="cb10-4"><a href="#cb10-4"></a>        test_examples: List[Dict[<span class="bu">str</span>, <span class="bu">str</span>]]</span>
+<span id="cb10-5"><a href="#cb10-5"></a>    ) <span class="op">-&gt;</span> <span class="bu">float</span>:</span>
+<span id="cb10-6"><a href="#cb10-6"></a>        <span class="co">"""</span></span>
+<span id="cb10-7"><a href="#cb10-7"></a><span class="co">        Step 3: 프롬프트 점수 계산</span></span>
+<span id="cb10-8"><a href="#cb10-8"></a><span class="co">        </span></span>
+<span id="cb10-9"><a href="#cb10-9"></a><span class="co">        Args:</span></span>
+<span id="cb10-10"><a href="#cb10-10"></a><span class="co">            prompt: 평가할 프롬프트</span></span>
+<span id="cb10-11"><a href="#cb10-11"></a><span class="co">            test_examples: 테스트 예시들</span></span>
+<span id="cb10-12"><a href="#cb10-12"></a><span class="co">        </span></span>
+<span id="cb10-13"><a href="#cb10-13"></a><span class="co">        Returns:</span></span>
+<span id="cb10-14"><a href="#cb10-14"></a><span class="co">            정확도 (0~1)</span></span>
+<span id="cb10-15"><a href="#cb10-15"></a><span class="co">        """</span></span>
+<span id="cb10-16"><a href="#cb10-16"></a>        correct <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb10-17"><a href="#cb10-17"></a>        total <span class="op">=</span> <span class="bu">len</span>(test_examples)</span>
+<span id="cb10-18"><a href="#cb10-18"></a>        </span>
+<span id="cb10-19"><a href="#cb10-19"></a>        <span class="cf">for</span> example <span class="kw">in</span> test_examples:</span>
+<span id="cb10-20"><a href="#cb10-20"></a>            test_input <span class="op">=</span> example[<span class="st">'input'</span>]</span>
+<span id="cb10-21"><a href="#cb10-21"></a>            expected_output <span class="op">=</span> example[<span class="st">'output'</span>]</span>
+<span id="cb10-22"><a href="#cb10-22"></a>            </span>
+<span id="cb10-23"><a href="#cb10-23"></a>            <span class="co"># 프롬프트 실행</span></span>
+<span id="cb10-24"><a href="#cb10-24"></a>            actual_output <span class="op">=</span> <span class="va">self</span>.execute_prompt(prompt, test_input)</span>
+<span id="cb10-25"><a href="#cb10-25"></a>            </span>
+<span id="cb10-26"><a href="#cb10-26"></a>            <span class="co"># 정확도 체크 (단순 매칭 - 코사인 유사도 등 적절한 메트릭 결정)</span></span>
+<span id="cb10-27"><a href="#cb10-27"></a>            <span class="cf">if</span> actual_output.lower().strip() <span class="op">==</span> expected_output.lower().strip():</span>
+<span id="cb10-28"><a href="#cb10-28"></a>                correct <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb10-29"><a href="#cb10-29"></a>        </span>
+<span id="cb10-30"><a href="#cb10-30"></a>        accuracy <span class="op">=</span> correct <span class="op">/</span> total</span>
+<span id="cb10-31"><a href="#cb10-31"></a>        <span class="cf">return</span> accuracy</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="하위-후보-제거-pruning" class="level3" data-number="3.4">
+<h3 data-number="3.4" class="anchored" data-anchor-id="하위-후보-제거-pruning"><span class="header-section-number">3.4</span> 하위 후보 제거 (Pruning)</h3>
+<p>성능이 낮은 후보들을 제거한다.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1"></a>    <span class="kw">def</span> prune_candidates(</span>
+<span id="cb11-2"><a href="#cb11-2"></a>        <span class="va">self</span>,</span>
+<span id="cb11-3"><a href="#cb11-3"></a>        candidates: List[<span class="bu">str</span>],</span>
+<span id="cb11-4"><a href="#cb11-4"></a>        scores: List[<span class="bu">float</span>],</span>
+<span id="cb11-5"><a href="#cb11-5"></a>        keep_ratio: <span class="bu">float</span> <span class="op">=</span> <span class="fl">0.5</span></span>
+<span id="cb11-6"><a href="#cb11-6"></a>    ) <span class="op">-&gt;</span> List[<span class="bu">str</span>]:</span>
+<span id="cb11-7"><a href="#cb11-7"></a>        <span class="co">"""</span></span>
+<span id="cb11-8"><a href="#cb11-8"></a><span class="co">        Step 4: 하위 후보 제거</span></span>
+<span id="cb11-9"><a href="#cb11-9"></a><span class="co">        </span></span>
+<span id="cb11-10"><a href="#cb11-10"></a><span class="co">        Args:</span></span>
+<span id="cb11-11"><a href="#cb11-11"></a><span class="co">            candidates: 후보 프롬프트들</span></span>
+<span id="cb11-12"><a href="#cb11-12"></a><span class="co">            scores: 각 후보의 점수</span></span>
+<span id="cb11-13"><a href="#cb11-13"></a><span class="co">            keep_ratio: 유지할 비율 (0~1)</span></span>
+<span id="cb11-14"><a href="#cb11-14"></a><span class="co">        </span></span>
+<span id="cb11-15"><a href="#cb11-15"></a><span class="co">        Returns:</span></span>
+<span id="cb11-16"><a href="#cb11-16"></a><span class="co">            상위 후보들</span></span>
+<span id="cb11-17"><a href="#cb11-17"></a><span class="co">        """</span></span>
+<span id="cb11-18"><a href="#cb11-18"></a>        <span class="co"># 점수 기준으로 정렬</span></span>
+<span id="cb11-19"><a href="#cb11-19"></a>        scored_candidates <span class="op">=</span> <span class="bu">list</span>(<span class="bu">zip</span>(candidates, scores))</span>
+<span id="cb11-20"><a href="#cb11-20"></a>        scored_candidates.sort(key<span class="op">=</span><span class="kw">lambda</span> x: x[<span class="dv">1</span>], reverse<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb11-21"><a href="#cb11-21"></a>        </span>
+<span id="cb11-22"><a href="#cb11-22"></a>        <span class="co"># 상위 keep_ratio만큼 유지</span></span>
+<span id="cb11-23"><a href="#cb11-23"></a>        keep_count <span class="op">=</span> <span class="bu">max</span>(<span class="dv">1</span>, <span class="bu">int</span>(<span class="bu">len</span>(candidates) <span class="op">*</span> keep_ratio))</span>
+<span id="cb11-24"><a href="#cb11-24"></a>        top_candidates <span class="op">=</span> [c <span class="cf">for</span> c, s <span class="kw">in</span> scored_candidates[:keep_count]]</span>
+<span id="cb11-25"><a href="#cb11-25"></a>        </span>
+<span id="cb11-26"><a href="#cb11-26"></a>        <span class="cf">return</span> top_candidates</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="후보-샘플링-및-개선-resampling-improving" class="level3" data-number="3.5">
+<h3 data-number="3.5" class="anchored" data-anchor-id="후보-샘플링-및-개선-resampling-improving"><span class="header-section-number">3.5</span> 후보 샘플링 및 개선 (Resampling &amp; Improving)</h3>
+<p>상위 후보들을 바탕으로 새로운 후보를 생성한다.</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1"></a>    <span class="kw">def</span> resample_from_top(</span>
+<span id="cb12-2"><a href="#cb12-2"></a>        <span class="va">self</span>,</span>
+<span id="cb12-3"><a href="#cb12-3"></a>        top_candidates: List[<span class="bu">str</span>],</span>
+<span id="cb12-4"><a href="#cb12-4"></a>        num_new: <span class="bu">int</span> <span class="op">=</span> <span class="dv">10</span></span>
+<span id="cb12-5"><a href="#cb12-5"></a>    ) <span class="op">-&gt;</span> List[<span class="bu">str</span>]:</span>
+<span id="cb12-6"><a href="#cb12-6"></a>        <span class="co">"""</span></span>
+<span id="cb12-7"><a href="#cb12-7"></a><span class="co">        Step 5: 상위 후보 기반 새 후보 생성</span></span>
+<span id="cb12-8"><a href="#cb12-8"></a><span class="co">        </span></span>
+<span id="cb12-9"><a href="#cb12-9"></a><span class="co">        Args:</span></span>
+<span id="cb12-10"><a href="#cb12-10"></a><span class="co">            top_candidates: 상위 프롬프트들</span></span>
+<span id="cb12-11"><a href="#cb12-11"></a><span class="co">            num_new: 생성할 새 후보 수</span></span>
+<span id="cb12-12"><a href="#cb12-12"></a><span class="co">        </span></span>
+<span id="cb12-13"><a href="#cb12-13"></a><span class="co">        Returns:</span></span>
+<span id="cb12-14"><a href="#cb12-14"></a><span class="co">            개선된 후보들</span></span>
+<span id="cb12-15"><a href="#cb12-15"></a><span class="co">        """</span></span>
+<span id="cb12-16"><a href="#cb12-16"></a>        top_str <span class="op">=</span> <span class="st">"</span><span class="ch">\n</span><span class="st">"</span>.join([<span class="ss">f"- </span><span class="sc">{</span>c<span class="sc">}</span><span class="ss">"</span> <span class="cf">for</span> c <span class="kw">in</span> top_candidates])</span>
+<span id="cb12-17"><a href="#cb12-17"></a>        </span>
+<span id="cb12-18"><a href="#cb12-18"></a>        resample_prompt <span class="op">=</span> <span class="ss">f"""These are the best-performing instruction prompts so far:</span></span>
+<span id="cb12-19"><a href="#cb12-19"></a></span>
+<span id="cb12-20"><a href="#cb12-20"></a><span class="sc">{</span>top_str<span class="sc">}</span></span>
+<span id="cb12-21"><a href="#cb12-21"></a></span>
+<span id="cb12-22"><a href="#cb12-22"></a><span class="ss">Generate </span><span class="sc">{</span>num_new<span class="sc">}</span><span class="ss"> new instruction prompts that are:</span></span>
+<span id="cb12-23"><a href="#cb12-23"></a><span class="ss">1. Similar to these successful prompts</span></span>
+<span id="cb12-24"><a href="#cb12-24"></a><span class="ss">2. But with variations that might improve performance</span></span>
+<span id="cb12-25"><a href="#cb12-25"></a><span class="ss">3. Clear and concise</span></span>
+<span id="cb12-26"><a href="#cb12-26"></a></span>
+<span id="cb12-27"><a href="#cb12-27"></a><span class="ss">New prompts (one per line):</span></span>
+<span id="cb12-28"><a href="#cb12-28"></a><span class="ss">1."""</span></span>
+<span id="cb12-29"><a href="#cb12-29"></a>        </span>
+<span id="cb12-30"><a href="#cb12-30"></a>        message <span class="op">=</span> <span class="va">self</span>.client.messages.create(</span>
+<span id="cb12-31"><a href="#cb12-31"></a>            model<span class="op">=</span><span class="va">self</span>.model,</span>
+<span id="cb12-32"><a href="#cb12-32"></a>            max_tokens<span class="op">=</span><span class="dv">1000</span>,</span>
+<span id="cb12-33"><a href="#cb12-33"></a>            temperature<span class="op">=</span><span class="fl">0.8</span>,</span>
+<span id="cb12-34"><a href="#cb12-34"></a>            messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: resample_prompt}]</span>
+<span id="cb12-35"><a href="#cb12-35"></a>        )</span>
+<span id="cb12-36"><a href="#cb12-36"></a>        </span>
+<span id="cb12-37"><a href="#cb12-37"></a>        response <span class="op">=</span> message.content[<span class="dv">0</span>].text</span>
+<span id="cb12-38"><a href="#cb12-38"></a>        </span>
+<span id="cb12-39"><a href="#cb12-39"></a>        <span class="co"># 새 후보 파싱</span></span>
+<span id="cb12-40"><a href="#cb12-40"></a>        new_candidates <span class="op">=</span> []</span>
+<span id="cb12-41"><a href="#cb12-41"></a>        <span class="cf">for</span> line <span class="kw">in</span> response.split(<span class="st">'</span><span class="ch">\n</span><span class="st">'</span>):</span>
+<span id="cb12-42"><a href="#cb12-42"></a>            <span class="im">import</span> re</span>
+<span id="cb12-43"><a href="#cb12-43"></a>            line <span class="op">=</span> re.sub(<span class="vs">r'^\d+\.\s*'</span>, <span class="st">''</span>, line.strip())</span>
+<span id="cb12-44"><a href="#cb12-44"></a>            </span>
+<span id="cb12-45"><a href="#cb12-45"></a>            <span class="cf">if</span> line <span class="kw">and</span> <span class="bu">len</span>(line) <span class="op">&gt;</span> <span class="dv">10</span>:</span>
+<span id="cb12-46"><a href="#cb12-46"></a>                new_candidates.append(line)</span>
+<span id="cb12-47"><a href="#cb12-47"></a>        </span>
+<span id="cb12-48"><a href="#cb12-48"></a>        <span class="cf">return</span> new_candidates[:num_new]</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="최종-선정-selection" class="level3" data-number="3.6">
+<h3 data-number="3.6" class="anchored" data-anchor-id="최종-선정-selection"><span class="header-section-number">3.6</span> 최종 선정 (Selection)</h3>
+<p>최고 성능의 프롬프트를 선택한다.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1"></a>    <span class="kw">def</span> select_best(</span>
+<span id="cb13-2"><a href="#cb13-2"></a>        <span class="va">self</span>,</span>
+<span id="cb13-3"><a href="#cb13-3"></a>        candidates: List[<span class="bu">str</span>],</span>
+<span id="cb13-4"><a href="#cb13-4"></a>        scores: List[<span class="bu">float</span>]</span>
+<span id="cb13-5"><a href="#cb13-5"></a>    ) <span class="op">-&gt;</span> Dict[<span class="bu">str</span>, <span class="bu">any</span>]:</span>
+<span id="cb13-6"><a href="#cb13-6"></a>        <span class="co">"""</span></span>
+<span id="cb13-7"><a href="#cb13-7"></a><span class="co">        Step 6: 최고 프롬프트 선정</span></span>
+<span id="cb13-8"><a href="#cb13-8"></a><span class="co">        </span></span>
+<span id="cb13-9"><a href="#cb13-9"></a><span class="co">        Returns:</span></span>
+<span id="cb13-10"><a href="#cb13-10"></a><span class="co">            최고 프롬프트와 점수</span></span>
+<span id="cb13-11"><a href="#cb13-11"></a><span class="co">        """</span></span>
+<span id="cb13-12"><a href="#cb13-12"></a>        best_idx <span class="op">=</span> scores.index(<span class="bu">max</span>(scores))</span>
+<span id="cb13-13"><a href="#cb13-13"></a>        </span>
+<span id="cb13-14"><a href="#cb13-14"></a>        <span class="cf">return</span> {</span>
+<span id="cb13-15"><a href="#cb13-15"></a>            <span class="st">'prompt'</span>: candidates[best_idx],</span>
+<span id="cb13-16"><a href="#cb13-16"></a>            <span class="st">'score'</span>: scores[best_idx],</span>
+<span id="cb13-17"><a href="#cb13-17"></a>            <span class="st">'rank'</span>: <span class="dv">1</span></span>
+<span id="cb13-18"><a href="#cb13-18"></a>        }</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="전체-파이프라인-통합" class="level3" data-number="3.7">
+<h3 data-number="3.7" class="anchored" data-anchor-id="전체-파이프라인-통합"><span class="header-section-number">3.7</span> 전체 파이프라인 통합</h3>
+<div class="sourceCode" id="cb14"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1"></a>    <span class="kw">def</span> optimize_prompt(</span>
+<span id="cb14-2"><a href="#cb14-2"></a>        <span class="va">self</span>,</span>
+<span id="cb14-3"><a href="#cb14-3"></a>        train_examples: List[Dict[<span class="bu">str</span>, <span class="bu">str</span>]],</span>
+<span id="cb14-4"><a href="#cb14-4"></a>        test_examples: List[Dict[<span class="bu">str</span>, <span class="bu">str</span>]],</span>
+<span id="cb14-5"><a href="#cb14-5"></a>        num_candidates: <span class="bu">int</span> <span class="op">=</span> <span class="dv">20</span>,</span>
+<span id="cb14-6"><a href="#cb14-6"></a>        num_iterations: <span class="bu">int</span> <span class="op">=</span> <span class="dv">3</span></span>
+<span id="cb14-7"><a href="#cb14-7"></a>    ) <span class="op">-&gt;</span> Dict:</span>
+<span id="cb14-8"><a href="#cb14-8"></a>        <span class="co">"""</span></span>
+<span id="cb14-9"><a href="#cb14-9"></a><span class="co">        APE 전체 파이프라인</span></span>
+<span id="cb14-10"><a href="#cb14-10"></a><span class="co">        </span></span>
+<span id="cb14-11"><a href="#cb14-11"></a><span class="co">        Args:</span></span>
+<span id="cb14-12"><a href="#cb14-12"></a><span class="co">            train_examples: 프롬프트 생성에 사용할 예시</span></span>
+<span id="cb14-13"><a href="#cb14-13"></a><span class="co">            test_examples: 평가에 사용할 예시</span></span>
+<span id="cb14-14"><a href="#cb14-14"></a><span class="co">            num_candidates: 초기 후보 수</span></span>
+<span id="cb14-15"><a href="#cb14-15"></a><span class="co">            num_iterations: 반복 횟수</span></span>
+<span id="cb14-16"><a href="#cb14-16"></a><span class="co">        </span></span>
+<span id="cb14-17"><a href="#cb14-17"></a><span class="co">        Returns:</span></span>
+<span id="cb14-18"><a href="#cb14-18"></a><span class="co">            최적 프롬프트 및 메트릭</span></span>
+<span id="cb14-19"><a href="#cb14-19"></a><span class="co">        """</span></span>
+<span id="cb14-20"><a href="#cb14-20"></a>        <span class="bu">print</span>(<span class="ss">f" APE 시작"</span>)</span>
+<span id="cb14-21"><a href="#cb14-21"></a>        <span class="bu">print</span>(<span class="ss">f"  훈련 예시: </span><span class="sc">{</span><span class="bu">len</span>(train_examples)<span class="sc">}</span><span class="ss">개"</span>)</span>
+<span id="cb14-22"><a href="#cb14-22"></a>        <span class="bu">print</span>(<span class="ss">f"  테스트 예시: </span><span class="sc">{</span><span class="bu">len</span>(test_examples)<span class="sc">}</span><span class="ss">개"</span>)</span>
+<span id="cb14-23"><a href="#cb14-23"></a>        <span class="bu">print</span>(<span class="ss">f"  초기 후보: </span><span class="sc">{</span>num_candidates<span class="sc">}</span><span class="ss">개"</span>)</span>
+<span id="cb14-24"><a href="#cb14-24"></a>        <span class="bu">print</span>(<span class="ss">f"  반복 횟수: </span><span class="sc">{</span>num_iterations<span class="sc">}</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb14-25"><a href="#cb14-25"></a>        </span>
+<span id="cb14-26"><a href="#cb14-26"></a>        <span class="co"># Step 1: 초기 후보 생성</span></span>
+<span id="cb14-27"><a href="#cb14-27"></a>        <span class="bu">print</span>(<span class="st">"="</span> <span class="op">*</span> <span class="dv">80</span>)</span>
+<span id="cb14-28"><a href="#cb14-28"></a>        <span class="bu">print</span>(<span class="st">"Step 1: 초기 후보 생성"</span>)</span>
+<span id="cb14-29"><a href="#cb14-29"></a>        <span class="bu">print</span>(<span class="st">"="</span> <span class="op">*</span> <span class="dv">80</span>)</span>
+<span id="cb14-30"><a href="#cb14-30"></a>        </span>
+<span id="cb14-31"><a href="#cb14-31"></a>        candidates <span class="op">=</span> <span class="va">self</span>.generate_candidate_prompts(</span>
+<span id="cb14-32"><a href="#cb14-32"></a>            train_examples, </span>
+<span id="cb14-33"><a href="#cb14-33"></a>            num_candidates<span class="op">=</span>num_candidates</span>
+<span id="cb14-34"><a href="#cb14-34"></a>        )</span>
+<span id="cb14-35"><a href="#cb14-35"></a>        </span>
+<span id="cb14-36"><a href="#cb14-36"></a>        <span class="bu">print</span>(<span class="ss">f"✅ </span><span class="sc">{</span><span class="bu">len</span>(candidates)<span class="sc">}</span><span class="ss">개 후보 생성 완료</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb14-37"><a href="#cb14-37"></a>        </span>
+<span id="cb14-38"><a href="#cb14-38"></a>        <span class="co"># 반복적 개선</span></span>
+<span id="cb14-39"><a href="#cb14-39"></a>        <span class="cf">for</span> iteration <span class="kw">in</span> <span class="bu">range</span>(num_iterations):</span>
+<span id="cb14-40"><a href="#cb14-40"></a>            <span class="bu">print</span>(<span class="st">"="</span> <span class="op">*</span> <span class="dv">80</span>)</span>
+<span id="cb14-41"><a href="#cb14-41"></a>            <span class="bu">print</span>(<span class="ss">f"Iteration </span><span class="sc">{</span>iteration <span class="op">+</span> <span class="dv">1</span><span class="sc">}</span><span class="ss">/</span><span class="sc">{</span>num_iterations<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb14-42"><a href="#cb14-42"></a>            <span class="bu">print</span>(<span class="st">"="</span> <span class="op">*</span> <span class="dv">80</span>)</span>
+<span id="cb14-43"><a href="#cb14-43"></a>            </span>
+<span id="cb14-44"><a href="#cb14-44"></a>            <span class="co"># Step 2 &amp; 3: 평가</span></span>
+<span id="cb14-45"><a href="#cb14-45"></a>            <span class="bu">print</span>(<span class="ss">f"📊 후보 평가 중... (</span><span class="sc">{</span><span class="bu">len</span>(candidates)<span class="sc">}</span><span class="ss">개)"</span>)</span>
+<span id="cb14-46"><a href="#cb14-46"></a>            </span>
+<span id="cb14-47"><a href="#cb14-47"></a>            scores <span class="op">=</span> []</span>
+<span id="cb14-48"><a href="#cb14-48"></a>            <span class="cf">for</span> i, candidate <span class="kw">in</span> <span class="bu">enumerate</span>(candidates):</span>
+<span id="cb14-49"><a href="#cb14-49"></a>                score <span class="op">=</span> <span class="va">self</span>.score_prompt(candidate, test_examples)</span>
+<span id="cb14-50"><a href="#cb14-50"></a>                scores.append(score)</span>
+<span id="cb14-51"><a href="#cb14-51"></a>                </span>
+<span id="cb14-52"><a href="#cb14-52"></a>                <span class="cf">if</span> (i <span class="op">+</span> <span class="dv">1</span>) <span class="op">%</span> <span class="dv">5</span> <span class="op">==</span> <span class="dv">0</span>:</span>
+<span id="cb14-53"><a href="#cb14-53"></a>                    <span class="bu">print</span>(<span class="ss">f"  </span><span class="sc">{</span>i<span class="op">+</span><span class="dv">1</span><span class="sc">}</span><span class="ss">/</span><span class="sc">{</span><span class="bu">len</span>(candidates)<span class="sc">}</span><span class="ss"> 완료"</span>)</span>
+<span id="cb14-54"><a href="#cb14-54"></a>            </span>
+<span id="cb14-55"><a href="#cb14-55"></a>            <span class="bu">print</span>(<span class="ss">f"✅ 평가 완료</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb14-56"><a href="#cb14-56"></a>            </span>
+<span id="cb14-57"><a href="#cb14-57"></a>            <span class="co"># 상위 후보 출력</span></span>
+<span id="cb14-58"><a href="#cb14-58"></a>            scored <span class="op">=</span> <span class="bu">list</span>(<span class="bu">zip</span>(candidates, scores))</span>
+<span id="cb14-59"><a href="#cb14-59"></a>            scored.sort(key<span class="op">=</span><span class="kw">lambda</span> x: x[<span class="dv">1</span>], reverse<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb14-60"><a href="#cb14-60"></a>            </span>
+<span id="cb14-61"><a href="#cb14-61"></a>            <span class="bu">print</span>(<span class="ss">f"🏆 상위 3개 후보:"</span>)</span>
+<span id="cb14-62"><a href="#cb14-62"></a>            <span class="cf">for</span> i, (cand, score) <span class="kw">in</span> <span class="bu">enumerate</span>(scored[:<span class="dv">3</span>], <span class="dv">1</span>):</span>
+<span id="cb14-63"><a href="#cb14-63"></a>                <span class="bu">print</span>(<span class="ss">f"  [</span><span class="sc">{</span>i<span class="sc">}</span><span class="ss">] 점수: </span><span class="sc">{</span>score<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
+<span id="cb14-64"><a href="#cb14-64"></a>                <span class="bu">print</span>(<span class="ss">f"      프롬프트: </span><span class="sc">{</span>cand<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb14-65"><a href="#cb14-65"></a>            <span class="bu">print</span>()</span>
+<span id="cb14-66"><a href="#cb14-66"></a>            </span>
+<span id="cb14-67"><a href="#cb14-67"></a>            <span class="co"># Step 4: 하위 제거</span></span>
+<span id="cb14-68"><a href="#cb14-68"></a>            <span class="cf">if</span> iteration <span class="op">&lt;</span> num_iterations <span class="op">-</span> <span class="dv">1</span>:  <span class="co"># 마지막 반복이 아니면</span></span>
+<span id="cb14-69"><a href="#cb14-69"></a>                top_candidates <span class="op">=</span> <span class="va">self</span>.prune_candidates(</span>
+<span id="cb14-70"><a href="#cb14-70"></a>                    candidates, </span>
+<span id="cb14-71"><a href="#cb14-71"></a>                    scores, </span>
+<span id="cb14-72"><a href="#cb14-72"></a>                    keep_ratio<span class="op">=</span><span class="fl">0.3</span></span>
+<span id="cb14-73"><a href="#cb14-73"></a>                )</span>
+<span id="cb14-74"><a href="#cb14-74"></a>                </span>
+<span id="cb14-75"><a href="#cb14-75"></a>                <span class="bu">print</span>(<span class="ss">f"✂️  하위 제거: </span><span class="sc">{</span><span class="bu">len</span>(candidates)<span class="sc">}</span><span class="ss"> → </span><span class="sc">{</span><span class="bu">len</span>(top_candidates)<span class="sc">}</span><span class="ss">개</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb14-76"><a href="#cb14-76"></a>                </span>
+<span id="cb14-77"><a href="#cb14-77"></a>                <span class="co"># Step 5: 재샘플링</span></span>
+<span id="cb14-78"><a href="#cb14-78"></a>                <span class="bu">print</span>(<span class="ss">f"🔄 새 후보 생성 중..."</span>)</span>
+<span id="cb14-79"><a href="#cb14-79"></a>                new_candidates <span class="op">=</span> <span class="va">self</span>.resample_from_top(</span>
+<span id="cb14-80"><a href="#cb14-80"></a>                    top_candidates,</span>
+<span id="cb14-81"><a href="#cb14-81"></a>                    num_new<span class="op">=</span>num_candidates</span>
+<span id="cb14-82"><a href="#cb14-82"></a>                )</span>
+<span id="cb14-83"><a href="#cb14-83"></a>                </span>
+<span id="cb14-84"><a href="#cb14-84"></a>                <span class="bu">print</span>(<span class="ss">f"✅ </span><span class="sc">{</span><span class="bu">len</span>(new_candidates)<span class="sc">}</span><span class="ss">개 새 후보 생성</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb14-85"><a href="#cb14-85"></a>                </span>
+<span id="cb14-86"><a href="#cb14-86"></a>                candidates <span class="op">=</span> new_candidates</span>
+<span id="cb14-87"><a href="#cb14-87"></a>        </span>
+<span id="cb14-88"><a href="#cb14-88"></a>        <span class="co"># Step 6: 최종 선정</span></span>
+<span id="cb14-89"><a href="#cb14-89"></a>        <span class="bu">print</span>(<span class="st">"="</span> <span class="op">*</span> <span class="dv">80</span>)</span>
+<span id="cb14-90"><a href="#cb14-90"></a>        <span class="bu">print</span>(<span class="st">"최종 결과"</span>)</span>
+<span id="cb14-91"><a href="#cb14-91"></a>        <span class="bu">print</span>(<span class="st">"="</span> <span class="op">*</span> <span class="dv">80</span>)</span>
+<span id="cb14-92"><a href="#cb14-92"></a>        </span>
+<span id="cb14-93"><a href="#cb14-93"></a>        best <span class="op">=</span> <span class="va">self</span>.select_best(candidates, scores)</span>
+<span id="cb14-94"><a href="#cb14-94"></a>        </span>
+<span id="cb14-95"><a href="#cb14-95"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">🎯 최적 프롬프트:"</span>)</span>
+<span id="cb14-96"><a href="#cb14-96"></a>        <span class="bu">print</span>(<span class="ss">f"   </span><span class="sc">{</span>best[<span class="st">'prompt'</span>]<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb14-97"><a href="#cb14-97"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">📈 성능: </span><span class="sc">{</span>best[<span class="st">'score'</span>]<span class="sc">:.3f}</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb14-98"><a href="#cb14-98"></a>        </span>
+<span id="cb14-99"><a href="#cb14-99"></a>        <span class="cf">return</span> {</span>
+<span id="cb14-100"><a href="#cb14-100"></a>            <span class="st">'best_prompt'</span>: best[<span class="st">'prompt'</span>],</span>
+<span id="cb14-101"><a href="#cb14-101"></a>            <span class="st">'best_score'</span>: best[<span class="st">'score'</span>],</span>
+<span id="cb14-102"><a href="#cb14-102"></a>            <span class="st">'all_candidates'</span>: candidates,</span>
+<span id="cb14-103"><a href="#cb14-103"></a>            <span class="st">'all_scores'</span>: scores</span>
+<span id="cb14-104"><a href="#cb14-104"></a>        }</span>
+<span id="cb14-105"><a href="#cb14-105"></a></span>
+<span id="cb14-106"><a href="#cb14-106"></a></span>
+<span id="cb14-107"><a href="#cb14-107"></a><span class="co"># 사용 예시</span></span>
+<span id="cb14-108"><a href="#cb14-108"></a><span class="kw">def</span> main():</span>
+<span id="cb14-109"><a href="#cb14-109"></a>    <span class="co"># 훈련 예시 (프롬프트 생성용)</span></span>
+<span id="cb14-110"><a href="#cb14-110"></a>    train_examples <span class="op">=</span> [</span>
+<span id="cb14-111"><a href="#cb14-111"></a>        {<span class="st">"input"</span>: <span class="st">"happy"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb14-112"><a href="#cb14-112"></a>        {<span class="st">"input"</span>: <span class="st">"sad"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>},</span>
+<span id="cb14-113"><a href="#cb14-113"></a>        {<span class="st">"input"</span>: <span class="st">"joyful"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb14-114"><a href="#cb14-114"></a>        {<span class="st">"input"</span>: <span class="st">"angry"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>}</span>
+<span id="cb14-115"><a href="#cb14-115"></a>    ]</span>
+<span id="cb14-116"><a href="#cb14-116"></a>    </span>
+<span id="cb14-117"><a href="#cb14-117"></a>    <span class="co"># 테스트 예시 (평가용)</span></span>
+<span id="cb14-118"><a href="#cb14-118"></a>    test_examples <span class="op">=</span> [</span>
+<span id="cb14-119"><a href="#cb14-119"></a>        {<span class="st">"input"</span>: <span class="st">"excited"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb14-120"><a href="#cb14-120"></a>        {<span class="st">"input"</span>: <span class="st">"depressed"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>},</span>
+<span id="cb14-121"><a href="#cb14-121"></a>        {<span class="st">"input"</span>: <span class="st">"content"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb14-122"><a href="#cb14-122"></a>        {<span class="st">"input"</span>: <span class="st">"frustrated"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>},</span>
+<span id="cb14-123"><a href="#cb14-123"></a>        {<span class="st">"input"</span>: <span class="st">"delighted"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb14-124"><a href="#cb14-124"></a>        {<span class="st">"input"</span>: <span class="st">"miserable"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>}</span>
+<span id="cb14-125"><a href="#cb14-125"></a>    ]</span>
+<span id="cb14-126"><a href="#cb14-126"></a>    </span>
+<span id="cb14-127"><a href="#cb14-127"></a>    <span class="co"># APE 실행</span></span>
+<span id="cb14-128"><a href="#cb14-128"></a>    ape <span class="op">=</span> APE(api_key<span class="op">=</span><span class="st">"your-api-key"</span>)</span>
+<span id="cb14-129"><a href="#cb14-129"></a>    </span>
+<span id="cb14-130"><a href="#cb14-130"></a>    result <span class="op">=</span> ape.optimize_prompt(</span>
+<span id="cb14-131"><a href="#cb14-131"></a>        train_examples<span class="op">=</span>train_examples,</span>
+<span id="cb14-132"><a href="#cb14-132"></a>        test_examples<span class="op">=</span>test_examples,</span>
+<span id="cb14-133"><a href="#cb14-133"></a>        num_candidates<span class="op">=</span><span class="dv">10</span>,</span>
+<span id="cb14-134"><a href="#cb14-134"></a>        num_iterations<span class="op">=</span><span class="dv">3</span></span>
+<span id="cb14-135"><a href="#cb14-135"></a>    )</span>
+<span id="cb14-136"><a href="#cb14-136"></a>    </span>
+<span id="cb14-137"><a href="#cb14-137"></a>    <span class="co"># 최적 프롬프트 사용</span></span>
+<span id="cb14-138"><a href="#cb14-138"></a>    best_prompt <span class="op">=</span> result[<span class="st">'best_prompt'</span>]</span>
+<span id="cb14-139"><a href="#cb14-139"></a>    test_input <span class="op">=</span> <span class="st">"thrilled"</span></span>
+<span id="cb14-140"><a href="#cb14-140"></a>    </span>
+<span id="cb14-141"><a href="#cb14-141"></a>    <span class="bu">print</span>(<span class="ss">f"테스트:"</span>)</span>
+<span id="cb14-142"><a href="#cb14-142"></a>    <span class="bu">print</span>(<span class="ss">f"  프롬프트: </span><span class="sc">{</span>best_prompt<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb14-143"><a href="#cb14-143"></a>    <span class="bu">print</span>(<span class="ss">f"  입력: </span><span class="sc">{</span>test_input<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb14-144"><a href="#cb14-144"></a>    </span>
+<span id="cb14-145"><a href="#cb14-145"></a>    output <span class="op">=</span> ape.execute_prompt(best_prompt, test_input)</span>
+<span id="cb14-146"><a href="#cb14-146"></a>    <span class="bu">print</span>(<span class="ss">f"  출력: </span><span class="sc">{</span>output<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb14-147"><a href="#cb14-147"></a></span>
+<span id="cb14-148"><a href="#cb14-148"></a></span>
+<span id="cb14-149"><a href="#cb14-149"></a><span class="cf">if</span> <span class="va">__name__</span> <span class="op">==</span> <span class="st">"__main__"</span>:</span>
+<span id="cb14-150"><a href="#cb14-150"></a>    main()</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="실행-결과-예시" class="level3" data-number="3.8">
+<h3 data-number="3.8" class="anchored" data-anchor-id="실행-결과-예시"><span class="header-section-number">3.8</span> 실행 결과 예시</h3>
+<pre><code>🚀 APE 시작
+  훈련 예시: 4개
+  테스트 예시: 6개
+  초기 후보: 10개
+  반복 횟수: 3
+
+================================================================================
+Step 1: 초기 후보 생성
+================================================================================
+✅ 10개 후보 생성 완료
+
+================================================================================
+Iteration 1/3
+================================================================================
+📊 후보 평가 중... (10개)
+  5/10 완료
+  10/10 완료
+✅ 평가 완료
+
+🏆 상위 3개 후보:
+  [1] 점수: 0.833
+      프롬프트: Classify the sentiment of the following word as positive or negative.
+  [2] 점수: 0.833
+      프롬프트: Determine whether this emotion is positive or negative.
+  [3] 점수: 0.667
+      프롬프트: Is this word expressing a positive or negative feeling?
+
+✂️  하위 제거: 10 → 3개
+
+🔄 새 후보 생성 중...
+✅ 10개 새 후보 생성
+
+================================================================================
+Iteration 2/3
+================================================================================
+📊 후보 평가 중... (10개)
+  5/10 완료
+  10/10 완료
+✅ 평가 완료
+
+🏆 상위 3개 후보:
+  [1] 점수: 1.000
+      프롬프트: Categorize the emotional tone as either positive or negative.
+  [2] 점수: 0.833
+      프롬프트: Classify the sentiment expressed as positive or negative.
+  [3] 점수: 0.833
+      프롬프트: Analyze whether the word conveys a positive or negative emotion.
+
+✂️  하위 제거: 10 → 3개
+
+🔄 새 후보 생성 중...
+✅ 10개 새 후보 생성
+
+================================================================================
+Iteration 3/3
+================================================================================
+📊 후보 평가 중... (10개)
+  5/10 완료
+  10/10 완료
+✅ 평가 완료
+
+🏆 상위 3개 후보:
+  [1] 점수: 1.000
+      프롬프트: Categorize the emotional tone as either positive or negative.
+  [2] 점수: 1.000
+      프롬프트: Determine if the word expresses a positive or negative sentiment.
+  [3] 점수: 0.833
+      프롬프트: Classify this emotional word as positive or negative.
+
+================================================================================
+최종 결과
+================================================================================
+
+🎯 최적 프롬프트:
+   Categorize the emotional tone as either positive or negative.
+
+📈 성능: 1.000
+
+테스트:
+  프롬프트: Categorize the emotional tone as either positive or negative.
+  입력: thrilled
+  출력: positive</code></pre>
+</section>
+</section>
+<section id="opro-optimization-by-prompting" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="opro-optimization-by-prompting"><span class="header-section-number">4</span> OPRO: Optimization by PROmpting</h2>
+<p>APE의 후속 연구인 <strong>OPRO (Optimization by PROmpting)</strong>는 Google DeepMind의 Yang et al.&nbsp;(2023)이 제안했다.</p>
+<section id="핵심-아이디어" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="핵심-아이디어"><span class="header-section-number">4.1</span> 핵심 아이디어</h3>
+<p>OPRO는 프롬프트 최적화를 <strong>최적화 문제</strong>로 본다:</p>
+<p><span class="math display">\[
+\text{maximize}_{p \in \mathcal{P}} \quad f(p)
+\]</span></p>
+<p>여기서: - <span class="math inline">\(p\)</span>: 프롬프트 - <span class="math inline">\(\mathcal{P}\)</span>: 가능한 프롬프트 공간 - <span class="math inline">\(f(p)\)</span>: 프롬프트의 성능 (예: 정확도)</p>
+<p><strong>OPRO의 접근법</strong>: LLM을 “optimizer”로 사용</p>
+<pre><code>Optimization History → [LLM Optimizer] → Improved Prompt</code></pre>
+</section>
+<section id="opro의-작동-방식" class="level3" data-number="4.2">
+<h3 data-number="4.2" class="anchored" data-anchor-id="opro의-작동-방식"><span class="header-section-number">4.2</span> OPRO의 작동 방식</h3>
+<div class="sourceCode" id="cb17"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1"></a><span class="kw">class</span> OPRO:</span>
+<span id="cb17-2"><a href="#cb17-2"></a>    <span class="co">"""</span></span>
+<span id="cb17-3"><a href="#cb17-3"></a><span class="co">    Optimization by PROmpting</span></span>
+<span id="cb17-4"><a href="#cb17-4"></a><span class="co">    """</span></span>
+<span id="cb17-5"><a href="#cb17-5"></a>    </span>
+<span id="cb17-6"><a href="#cb17-6"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, api_key: <span class="bu">str</span>):</span>
+<span id="cb17-7"><a href="#cb17-7"></a>        <span class="va">self</span>.client <span class="op">=</span> anthropic.Anthropic(api_key<span class="op">=</span>api_key)</span>
+<span id="cb17-8"><a href="#cb17-8"></a>        <span class="va">self</span>.model <span class="op">=</span> <span class="st">"claude-sonnet-4-20250514"</span></span>
+<span id="cb17-9"><a href="#cb17-9"></a>        <span class="va">self</span>.optimization_history <span class="op">=</span> []</span>
+<span id="cb17-10"><a href="#cb17-10"></a>    </span>
+<span id="cb17-11"><a href="#cb17-11"></a>    <span class="kw">def</span> optimize_prompt(</span>
+<span id="cb17-12"><a href="#cb17-12"></a>        <span class="va">self</span>,</span>
+<span id="cb17-13"><a href="#cb17-13"></a>        initial_prompt: <span class="bu">str</span>,</span>
+<span id="cb17-14"><a href="#cb17-14"></a>        test_examples: List[Dict[<span class="bu">str</span>, <span class="bu">str</span>]],</span>
+<span id="cb17-15"><a href="#cb17-15"></a>        num_iterations: <span class="bu">int</span> <span class="op">=</span> <span class="dv">10</span></span>
+<span id="cb17-16"><a href="#cb17-16"></a>    ) <span class="op">-&gt;</span> Dict:</span>
+<span id="cb17-17"><a href="#cb17-17"></a>        <span class="co">"""</span></span>
+<span id="cb17-18"><a href="#cb17-18"></a><span class="co">        OPRO 최적화 루프</span></span>
+<span id="cb17-19"><a href="#cb17-19"></a><span class="co">        </span></span>
+<span id="cb17-20"><a href="#cb17-20"></a><span class="co">        Args:</span></span>
+<span id="cb17-21"><a href="#cb17-21"></a><span class="co">            initial_prompt: 초기 프롬프트</span></span>
+<span id="cb17-22"><a href="#cb17-22"></a><span class="co">            test_examples: 평가 예시들</span></span>
+<span id="cb17-23"><a href="#cb17-23"></a><span class="co">            num_iterations: 최적화 반복 횟수</span></span>
+<span id="cb17-24"><a href="#cb17-24"></a><span class="co">        </span></span>
+<span id="cb17-25"><a href="#cb17-25"></a><span class="co">        Returns:</span></span>
+<span id="cb17-26"><a href="#cb17-26"></a><span class="co">            최적 프롬프트 및 히스토리</span></span>
+<span id="cb17-27"><a href="#cb17-27"></a><span class="co">        """</span></span>
+<span id="cb17-28"><a href="#cb17-28"></a>        <span class="bu">print</span>(<span class="ss">f"🎯 OPRO 시작"</span>)</span>
+<span id="cb17-29"><a href="#cb17-29"></a>        <span class="bu">print</span>(<span class="ss">f"  초기 프롬프트: </span><span class="sc">{</span>initial_prompt<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-30"><a href="#cb17-30"></a>        <span class="bu">print</span>(<span class="ss">f"  반복 횟수: </span><span class="sc">{</span>num_iterations<span class="sc">}</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb17-31"><a href="#cb17-31"></a>        </span>
+<span id="cb17-32"><a href="#cb17-32"></a>        current_prompt <span class="op">=</span> initial_prompt</span>
+<span id="cb17-33"><a href="#cb17-33"></a>        </span>
+<span id="cb17-34"><a href="#cb17-34"></a>        <span class="cf">for</span> iteration <span class="kw">in</span> <span class="bu">range</span>(num_iterations):</span>
+<span id="cb17-35"><a href="#cb17-35"></a>            <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">'='</span><span class="op">*</span><span class="dv">80</span><span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-36"><a href="#cb17-36"></a>            <span class="bu">print</span>(<span class="ss">f"Iteration </span><span class="sc">{</span>iteration <span class="op">+</span> <span class="dv">1</span><span class="sc">}</span><span class="ss">/</span><span class="sc">{</span>num_iterations<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-37"><a href="#cb17-37"></a>            <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">'='</span><span class="op">*</span><span class="dv">80</span><span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-38"><a href="#cb17-38"></a>            </span>
+<span id="cb17-39"><a href="#cb17-39"></a>            <span class="co"># Step 1: 현재 프롬프트 평가</span></span>
+<span id="cb17-40"><a href="#cb17-40"></a>            score <span class="op">=</span> <span class="va">self</span>._evaluate_prompt(current_prompt, test_examples)</span>
+<span id="cb17-41"><a href="#cb17-41"></a>            </span>
+<span id="cb17-42"><a href="#cb17-42"></a>            <span class="co"># 히스토리에 추가</span></span>
+<span id="cb17-43"><a href="#cb17-43"></a>            <span class="va">self</span>.optimization_history.append({</span>
+<span id="cb17-44"><a href="#cb17-44"></a>                <span class="st">'prompt'</span>: current_prompt,</span>
+<span id="cb17-45"><a href="#cb17-45"></a>                <span class="st">'score'</span>: score,</span>
+<span id="cb17-46"><a href="#cb17-46"></a>                <span class="st">'iteration'</span>: iteration <span class="op">+</span> <span class="dv">1</span></span>
+<span id="cb17-47"><a href="#cb17-47"></a>            })</span>
+<span id="cb17-48"><a href="#cb17-48"></a>            </span>
+<span id="cb17-49"><a href="#cb17-49"></a>            <span class="bu">print</span>(<span class="ss">f"📊 현재 프롬프트 성능: </span><span class="sc">{</span>score<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
+<span id="cb17-50"><a href="#cb17-50"></a>            <span class="bu">print</span>(<span class="ss">f"   프롬프트: </span><span class="sc">{</span>current_prompt<span class="sc">}</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb17-51"><a href="#cb17-51"></a>            </span>
+<span id="cb17-52"><a href="#cb17-52"></a>            <span class="co"># Step 2: 최적화 메타 프롬프트 생성</span></span>
+<span id="cb17-53"><a href="#cb17-53"></a>            meta_prompt <span class="op">=</span> <span class="va">self</span>._create_meta_prompt()</span>
+<span id="cb17-54"><a href="#cb17-54"></a>            </span>
+<span id="cb17-55"><a href="#cb17-55"></a>            <span class="co"># Step 3: LLM이 개선된 프롬프트 생성</span></span>
+<span id="cb17-56"><a href="#cb17-56"></a>            improved_prompt <span class="op">=</span> <span class="va">self</span>._generate_improved_prompt(meta_prompt)</span>
+<span id="cb17-57"><a href="#cb17-57"></a>            </span>
+<span id="cb17-58"><a href="#cb17-58"></a>            <span class="bu">print</span>(<span class="ss">f"🔄 개선된 프롬프트 제안:"</span>)</span>
+<span id="cb17-59"><a href="#cb17-59"></a>            <span class="bu">print</span>(<span class="ss">f"   </span><span class="sc">{</span>improved_prompt<span class="sc">}</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb17-60"><a href="#cb17-60"></a>            </span>
+<span id="cb17-61"><a href="#cb17-61"></a>            <span class="co"># Step 4: 개선된 프롬프트로 업데이트</span></span>
+<span id="cb17-62"><a href="#cb17-62"></a>            current_prompt <span class="op">=</span> improved_prompt</span>
+<span id="cb17-63"><a href="#cb17-63"></a>        </span>
+<span id="cb17-64"><a href="#cb17-64"></a>        <span class="co"># 최고 성능 프롬프트 선택</span></span>
+<span id="cb17-65"><a href="#cb17-65"></a>        best <span class="op">=</span> <span class="bu">max</span>(<span class="va">self</span>.optimization_history, key<span class="op">=</span><span class="kw">lambda</span> x: x[<span class="st">'score'</span>])</span>
+<span id="cb17-66"><a href="#cb17-66"></a>        </span>
+<span id="cb17-67"><a href="#cb17-67"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">'='</span><span class="op">*</span><span class="dv">80</span><span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-68"><a href="#cb17-68"></a>        <span class="bu">print</span>(<span class="st">"최종 결과"</span>)</span>
+<span id="cb17-69"><a href="#cb17-69"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">'='</span><span class="op">*</span><span class="dv">80</span><span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-70"><a href="#cb17-70"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">🏆 최적 프롬프트 (Iteration </span><span class="sc">{</span>best[<span class="st">'iteration'</span>]<span class="sc">}</span><span class="ss">):"</span>)</span>
+<span id="cb17-71"><a href="#cb17-71"></a>        <span class="bu">print</span>(<span class="ss">f"   </span><span class="sc">{</span>best[<span class="st">'prompt'</span>]<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb17-72"><a href="#cb17-72"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">📈 최고 성능: </span><span class="sc">{</span>best[<span class="st">'score'</span>]<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
+<span id="cb17-73"><a href="#cb17-73"></a>        </span>
+<span id="cb17-74"><a href="#cb17-74"></a>        <span class="cf">return</span> {</span>
+<span id="cb17-75"><a href="#cb17-75"></a>            <span class="st">'best_prompt'</span>: best[<span class="st">'prompt'</span>],</span>
+<span id="cb17-76"><a href="#cb17-76"></a>            <span class="st">'best_score'</span>: best[<span class="st">'score'</span>],</span>
+<span id="cb17-77"><a href="#cb17-77"></a>            <span class="st">'history'</span>: <span class="va">self</span>.optimization_history</span>
+<span id="cb17-78"><a href="#cb17-78"></a>        }</span>
+<span id="cb17-79"><a href="#cb17-79"></a>    </span>
+<span id="cb17-80"><a href="#cb17-80"></a>    <span class="kw">def</span> _create_meta_prompt(<span class="va">self</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb17-81"><a href="#cb17-81"></a>        <span class="co">"""</span></span>
+<span id="cb17-82"><a href="#cb17-82"></a><span class="co">        최적화를 위한 메타 프롬프트 생성</span></span>
+<span id="cb17-83"><a href="#cb17-83"></a><span class="co">        </span></span>
+<span id="cb17-84"><a href="#cb17-84"></a><span class="co">        히스토리를 바탕으로 LLM에게 개선 방향 제시</span></span>
+<span id="cb17-85"><a href="#cb17-85"></a><span class="co">        """</span></span>
+<span id="cb17-86"><a href="#cb17-86"></a>        <span class="co"># 히스토리 포맷팅</span></span>
+<span id="cb17-87"><a href="#cb17-87"></a>        history_str <span class="op">=</span> <span class="st">""</span></span>
+<span id="cb17-88"><a href="#cb17-88"></a>        <span class="cf">for</span> entry <span class="kw">in</span> <span class="va">self</span>.optimization_history[<span class="op">-</span><span class="dv">5</span>:]:  <span class="co"># 최근 5개만</span></span>
+<span id="cb17-89"><a href="#cb17-89"></a>            history_str <span class="op">+=</span> <span class="ss">f"Prompt: </span><span class="sc">{</span>entry[<span class="st">'prompt'</span>]<span class="sc">}</span><span class="ch">\n</span><span class="ss">"</span></span>
+<span id="cb17-90"><a href="#cb17-90"></a>            history_str <span class="op">+=</span> <span class="ss">f"Score: </span><span class="sc">{</span>entry[<span class="st">'score'</span>]<span class="sc">:.3f}</span><span class="ch">\n\n</span><span class="ss">"</span></span>
+<span id="cb17-91"><a href="#cb17-91"></a>        </span>
+<span id="cb17-92"><a href="#cb17-92"></a>        meta_prompt <span class="op">=</span> <span class="ss">f"""You are a prompt optimizer. Your goal is to improve instruction prompts to maximize their performance.</span></span>
+<span id="cb17-93"><a href="#cb17-93"></a></span>
+<span id="cb17-94"><a href="#cb17-94"></a><span class="ss">        Previous prompts and their scores:</span></span>
+<span id="cb17-95"><a href="#cb17-95"></a><span class="ss">        </span><span class="sc">{</span>history_str<span class="sc">}</span></span>
+<span id="cb17-96"><a href="#cb17-96"></a></span>
+<span id="cb17-97"><a href="#cb17-97"></a><span class="ss">        Based on the history above, generate an improved prompt that:</span></span>
+<span id="cb17-98"><a href="#cb17-98"></a><span class="ss">        1. Keeps what works well from high-scoring prompts</span></span>
+<span id="cb17-99"><a href="#cb17-99"></a><span class="ss">        2. Fixes issues from low-scoring prompts</span></span>
+<span id="cb17-100"><a href="#cb17-100"></a><span class="ss">        3. Is clear, concise, and specific</span></span>
+<span id="cb17-101"><a href="#cb17-101"></a><span class="ss">        4. Aims to achieve a higher score</span></span>
+<span id="cb17-102"><a href="#cb17-102"></a></span>
+<span id="cb17-103"><a href="#cb17-103"></a><span class="ss">        Generate ONE improved prompt (do not explain, just output the prompt):"""</span></span>
+<span id="cb17-104"><a href="#cb17-104"></a>        </span>
+<span id="cb17-105"><a href="#cb17-105"></a>        <span class="cf">return</span> meta_prompt</span>
+<span id="cb17-106"><a href="#cb17-106"></a>    </span>
+<span id="cb17-107"><a href="#cb17-107"></a>    <span class="kw">def</span> _generate_improved_prompt(<span class="va">self</span>, meta_prompt: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb17-108"><a href="#cb17-108"></a>        <span class="co">"""</span></span>
+<span id="cb17-109"><a href="#cb17-109"></a><span class="co">        LLM으로 개선된 프롬프트 생성</span></span>
+<span id="cb17-110"><a href="#cb17-110"></a><span class="co">        """</span></span>
+<span id="cb17-111"><a href="#cb17-111"></a>        message <span class="op">=</span> <span class="va">self</span>.client.messages.create(</span>
+<span id="cb17-112"><a href="#cb17-112"></a>            model<span class="op">=</span><span class="va">self</span>.model,</span>
+<span id="cb17-113"><a href="#cb17-113"></a>            max_tokens<span class="op">=</span><span class="dv">200</span>,</span>
+<span id="cb17-114"><a href="#cb17-114"></a>            temperature<span class="op">=</span><span class="fl">0.7</span>,</span>
+<span id="cb17-115"><a href="#cb17-115"></a>            messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: meta_prompt}]</span>
+<span id="cb17-116"><a href="#cb17-116"></a>        )</span>
+<span id="cb17-117"><a href="#cb17-117"></a>        </span>
+<span id="cb17-118"><a href="#cb17-118"></a>        improved_prompt <span class="op">=</span> message.content[<span class="dv">0</span>].text.strip()</span>
+<span id="cb17-119"><a href="#cb17-119"></a>        </span>
+<span id="cb17-120"><a href="#cb17-120"></a>        <span class="co"># 불필요한 설명 제거 (있다면)</span></span>
+<span id="cb17-121"><a href="#cb17-121"></a>        <span class="cf">if</span> <span class="st">'</span><span class="ch">\n</span><span class="st">'</span> <span class="kw">in</span> improved_prompt:</span>
+<span id="cb17-122"><a href="#cb17-122"></a>            improved_prompt <span class="op">=</span> improved_prompt.split(<span class="st">'</span><span class="ch">\n</span><span class="st">'</span>)[<span class="dv">0</span>]</span>
+<span id="cb17-123"><a href="#cb17-123"></a>        </span>
+<span id="cb17-124"><a href="#cb17-124"></a>        <span class="cf">return</span> improved_prompt</span>
+<span id="cb17-125"><a href="#cb17-125"></a>    </span>
+<span id="cb17-126"><a href="#cb17-126"></a>    <span class="kw">def</span> _evaluate_prompt(</span>
+<span id="cb17-127"><a href="#cb17-127"></a>        <span class="va">self</span>, </span>
+<span id="cb17-128"><a href="#cb17-128"></a>        prompt: <span class="bu">str</span>, </span>
+<span id="cb17-129"><a href="#cb17-129"></a>        test_examples: List[Dict[<span class="bu">str</span>, <span class="bu">str</span>]]</span>
+<span id="cb17-130"><a href="#cb17-130"></a>    ) <span class="op">-&gt;</span> <span class="bu">float</span>:</span>
+<span id="cb17-131"><a href="#cb17-131"></a>        <span class="co">"""</span></span>
+<span id="cb17-132"><a href="#cb17-132"></a><span class="co">        프롬프트 평가</span></span>
+<span id="cb17-133"><a href="#cb17-133"></a><span class="co">        """</span></span>
+<span id="cb17-134"><a href="#cb17-134"></a>        correct <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb17-135"><a href="#cb17-135"></a>        </span>
+<span id="cb17-136"><a href="#cb17-136"></a>        <span class="cf">for</span> example <span class="kw">in</span> test_examples:</span>
+<span id="cb17-137"><a href="#cb17-137"></a>            full_prompt <span class="op">=</span> <span class="ss">f"</span><span class="sc">{</span>prompt<span class="sc">}</span><span class="ch">\n\n</span><span class="ss">Input: </span><span class="sc">{</span>example[<span class="st">'input'</span>]<span class="sc">}</span><span class="ch">\n</span><span class="ss">Output:"</span></span>
+<span id="cb17-138"><a href="#cb17-138"></a>            </span>
+<span id="cb17-139"><a href="#cb17-139"></a>            message <span class="op">=</span> <span class="va">self</span>.client.messages.create(</span>
+<span id="cb17-140"><a href="#cb17-140"></a>                model<span class="op">=</span><span class="va">self</span>.model,</span>
+<span id="cb17-141"><a href="#cb17-141"></a>                max_tokens<span class="op">=</span><span class="dv">50</span>,</span>
+<span id="cb17-142"><a href="#cb17-142"></a>                temperature<span class="op">=</span><span class="dv">0</span>,</span>
+<span id="cb17-143"><a href="#cb17-143"></a>                messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: full_prompt}]</span>
+<span id="cb17-144"><a href="#cb17-144"></a>            )</span>
+<span id="cb17-145"><a href="#cb17-145"></a>            </span>
+<span id="cb17-146"><a href="#cb17-146"></a>            output <span class="op">=</span> message.content[<span class="dv">0</span>].text.strip().lower()</span>
+<span id="cb17-147"><a href="#cb17-147"></a>            expected <span class="op">=</span> example[<span class="st">'output'</span>].lower()</span>
+<span id="cb17-148"><a href="#cb17-148"></a>            </span>
+<span id="cb17-149"><a href="#cb17-149"></a>            <span class="cf">if</span> output <span class="op">==</span> expected:</span>
+<span id="cb17-150"><a href="#cb17-150"></a>                correct <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb17-151"><a href="#cb17-151"></a>        </span>
+<span id="cb17-152"><a href="#cb17-152"></a>        <span class="cf">return</span> correct <span class="op">/</span> <span class="bu">len</span>(test_examples)</span>
+<span id="cb17-153"><a href="#cb17-153"></a></span>
+<span id="cb17-154"><a href="#cb17-154"></a></span>
+<span id="cb17-155"><a href="#cb17-155"></a><span class="co"># 사용 예시</span></span>
+<span id="cb17-156"><a href="#cb17-156"></a><span class="kw">def</span> test_opro():</span>
+<span id="cb17-157"><a href="#cb17-157"></a>    test_examples <span class="op">=</span> [</span>
+<span id="cb17-158"><a href="#cb17-158"></a>        {<span class="st">"input"</span>: <span class="st">"excited"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb17-159"><a href="#cb17-159"></a>        {<span class="st">"input"</span>: <span class="st">"depressed"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>},</span>
+<span id="cb17-160"><a href="#cb17-160"></a>        {<span class="st">"input"</span>: <span class="st">"content"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb17-161"><a href="#cb17-161"></a>        {<span class="st">"input"</span>: <span class="st">"frustrated"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>},</span>
+<span id="cb17-162"><a href="#cb17-162"></a>        {<span class="st">"input"</span>: <span class="st">"delighted"</span>, <span class="st">"output"</span>: <span class="st">"positive"</span>},</span>
+<span id="cb17-163"><a href="#cb17-163"></a>        {<span class="st">"input"</span>: <span class="st">"miserable"</span>, <span class="st">"output"</span>: <span class="st">"negative"</span>}</span>
+<span id="cb17-164"><a href="#cb17-164"></a>    ]</span>
+<span id="cb17-165"><a href="#cb17-165"></a>    </span>
+<span id="cb17-166"><a href="#cb17-166"></a>    opro <span class="op">=</span> OPRO(api_key<span class="op">=</span><span class="st">"your-api-key"</span>)</span>
+<span id="cb17-167"><a href="#cb17-167"></a>    </span>
+<span id="cb17-168"><a href="#cb17-168"></a>    result <span class="op">=</span> opro.optimize_prompt(</span>
+<span id="cb17-169"><a href="#cb17-169"></a>        initial_prompt<span class="op">=</span><span class="st">"Classify the sentiment"</span>,</span>
+<span id="cb17-170"><a href="#cb17-170"></a>        test_examples<span class="op">=</span>test_examples,</span>
+<span id="cb17-171"><a href="#cb17-171"></a>        num_iterations<span class="op">=</span><span class="dv">10</span></span>
+<span id="cb17-172"><a href="#cb17-172"></a>    )</span>
+<span id="cb17-173"><a href="#cb17-173"></a>    </span>
+<span id="cb17-174"><a href="#cb17-174"></a>    <span class="co"># 성능 추이 시각화</span></span>
+<span id="cb17-175"><a href="#cb17-175"></a>    <span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb17-176"><a href="#cb17-176"></a>    </span>
+<span id="cb17-177"><a href="#cb17-177"></a>    iterations <span class="op">=</span> [h[<span class="st">'iteration'</span>] <span class="cf">for</span> h <span class="kw">in</span> result[<span class="st">'history'</span>]]</span>
+<span id="cb17-178"><a href="#cb17-178"></a>    scores <span class="op">=</span> [h[<span class="st">'score'</span>] <span class="cf">for</span> h <span class="kw">in</span> result[<span class="st">'history'</span>]]</span>
+<span id="cb17-179"><a href="#cb17-179"></a>    </span>
+<span id="cb17-180"><a href="#cb17-180"></a>    plt.figure(figsize<span class="op">=</span>(<span class="dv">10</span>, <span class="dv">6</span>))</span>
+<span id="cb17-181"><a href="#cb17-181"></a>    plt.plot(iterations, scores, marker<span class="op">=</span><span class="st">'o'</span>)</span>
+<span id="cb17-182"><a href="#cb17-182"></a>    plt.xlabel(<span class="st">'Iteration'</span>)</span>
+<span id="cb17-183"><a href="#cb17-183"></a>    plt.ylabel(<span class="st">'Score'</span>)</span>
+<span id="cb17-184"><a href="#cb17-184"></a>    plt.title(<span class="st">'OPRO Optimization Progress'</span>)</span>
+<span id="cb17-185"><a href="#cb17-185"></a>    plt.grid(<span class="va">True</span>)</span>
+<span id="cb17-186"><a href="#cb17-186"></a>    plt.savefig(<span class="st">'opro_progress.png'</span>)</span>
+<span id="cb17-187"><a href="#cb17-187"></a>    </span>
+<span id="cb17-188"><a href="#cb17-188"></a>    <span class="bu">print</span>(<span class="st">"</span><span class="ch">\n</span><span class="st">📊 성능 추이 그래프 저장: opro_progress.png"</span>)</span>
+<span id="cb17-189"><a href="#cb17-189"></a></span>
+<span id="cb17-190"><a href="#cb17-190"></a></span>
+<span id="cb17-191"><a href="#cb17-191"></a><span class="cf">if</span> <span class="va">__name__</span> <span class="op">==</span> <span class="st">"__main__"</span>:</span>
+<span id="cb17-192"><a href="#cb17-192"></a>    test_opro()</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="take-a-deep-breath-발견" class="level3" data-number="4.3">
+<h3 data-number="4.3" class="anchored" data-anchor-id="take-a-deep-breath-발견"><span class="header-section-number">4.3</span> “Take a deep breath” 발견</h3>
+<p>OPRO 연구에서 가장 흥미로운 발견은 다음 프롬프트다:</p>
+<pre><code>"Take a deep breath and work on this problem step-by-step."</code></pre>
+<p>이 프롬프트는 GSM8K (수학 문제) 벤치마크에서 <strong>80.2%</strong>의 정확도를 달성했다.</p>
+<p><strong>비교</strong>: - “Let’s think step by step.”: 78.2% - “Take a deep breath and work on this problem step-by-step.”: 80.2%</p>
+<p><strong>왜 효과적인가?</strong></p>
+<p>이론적 설명은 아직 불분명하지만, 가설들:</p>
+<ol type="1">
+<li><strong>토큰 분포 변화</strong>: “Take a deep breath”가 모델의 다음 토큰 예측 분포를 변경</li>
+<li><strong>주의 집중</strong>: 모델이 문제에 더 집중하도록 유도</li>
+<li><strong>우연</strong>: 특정 학습 데이터와의 상호작용</li>
+</ol>
+<p><strong>중요한 교훈</strong>: 인간의 직관으로는 찾기 어려운 프롬프트를 자동 최적화로 발견할 수 있다.</p>
+</section>
+</section>
+<section id="ape-실험-결과-분석" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="ape-실험-결과-분석"><span class="header-section-number">5</span> APE 실험 결과 분석</h2>
+<p>Zhou et al.&nbsp;(2022)의 원 논문에서는 APE를 다양한 벤치마크에서 테스트했다.</p>
+<section id="벤치마크-성능" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="벤치마크-성능"><span class="header-section-number">5.1</span> 벤치마크 성능</h3>
+<section id="instruction-induction" class="level4" data-number="5.1.1">
+<h4 data-number="5.1.1" class="anchored" data-anchor-id="instruction-induction"><span class="header-section-number">5.1.1</span> Instruction Induction</h4>
+<p>24개의 다양한 태스크에 대한 프롬프트 생성 평가.</p>
+<p><strong>태스크 예시</strong>: - Antonyms (반의어): “good” → “bad” - Larger Animal (큰 동물): “cat, elephant” → “elephant” - Cause Selection (원인 선택): “premise: …, choice1: …, choice2: …” → “choice1”</p>
+<p><strong>결과</strong>:</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>방법</th>
+<th>평균 정확도</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Human-written prompts</td>
+<td>74.0%</td>
+</tr>
+<tr class="even">
+<td>APE (forward mode)</td>
+<td>76.0%</td>
+</tr>
+<tr class="odd">
+<td>APE (reverse mode)</td>
+<td>77.0%</td>
+</tr>
+<tr class="even">
+<td>APE (best)</td>
+<td>78.5%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>핵심 발견</strong>: - ✅ APE가 사람이 작성한 프롬프트보다 <strong>최대 4.5% 높은 성능</strong> - ✅ 일부 태스크에서는 10%+ 차이 - ✅ 인간이 놓친 효과적인 표현 발견</p>
+<p><strong>구체적 예시</strong>:</p>
+<pre><code>태스크: Antonyms (반의어 찾기)
+
+Human prompt:
+"Write the opposite of the following word:"
+→ 정확도: 82%
+
+APE-generated prompt:
+"Provide an antonym for the given word:"
+→ 정확도: 89%
+
+차이: 7% 향상</code></pre>
+</section>
+<section id="big-bench" class="level4" data-number="5.1.2">
+<h4 data-number="5.1.2" class="anchored" data-anchor-id="big-bench"><span class="header-section-number">5.1.2</span> BIG-Bench</h4>
+<p>구글의 BIG-Bench에서 21개 태스크 평가.</p>
+<p><strong>결과 요약</strong>:</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>태스크 카테고리</th>
+<th>APE 승률</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Reasoning</td>
+<td>65%</td>
+</tr>
+<tr class="even">
+<td>Language Understanding</td>
+<td>71%</td>
+</tr>
+<tr class="odd">
+<td>Common Sense</td>
+<td>58%</td>
+</tr>
+<tr class="even">
+<td>Mathematics</td>
+<td>52%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>전체적으로</strong>: APE가 사람이 작성한 프롬프트보다 <strong>62%의 태스크에서 우수</strong></p>
+</section>
+</section>
+<section id="forward-vs-reverse-mode" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="forward-vs-reverse-mode"><span class="header-section-number">5.2</span> Forward vs Reverse Mode</h3>
+<p>APE는 두 가지 모드로 작동한다:</p>
+<section id="forward-mode-순방향" class="level4" data-number="5.2.1">
+<h4 data-number="5.2.1" class="anchored" data-anchor-id="forward-mode-순방향"><span class="header-section-number">5.2.1</span> Forward Mode (순방향)</h4>
+<pre><code>Input-Output Examples → Generate Instruction</code></pre>
+<p><strong>프롬프트</strong>:</p>
+<pre><code>I gave a friend an instruction and some inputs. 
+The friend read the instruction and produced these outputs:
+
+Input: dog
+Output: animal
+
+Input: rose  
+Output: plant
+
+What was the instruction?</code></pre>
+</section>
+<section id="reverse-mode-역방향" class="level4" data-number="5.2.2">
+<h4 data-number="5.2.2" class="anchored" data-anchor-id="reverse-mode-역방향"><span class="header-section-number">5.2.2</span> Reverse Mode (역방향)</h4>
+<pre><code>Generate Instruction → Verify with Examples</code></pre>
+<p><strong>프롬프트</strong>:</p>
+<pre><code>I instructed a friend to classify objects into categories.
+
+I gave the instruction "{{INSTRUCTION}}"
+
+Would the friend produce these outputs?
+Input: dog → Output: animal
+Input: rose → Output: plant
+
+(yes/no evaluation)</code></pre>
+<p><strong>성능 비교</strong>: - Forward mode: 76.0% - Reverse mode: 77.0% - <strong>Reverse mode가 약간 더 우수</strong></p>
+<p>이유: Reverse mode는 생성된 프롬프트를 예시로 검증하는 단계가 추가되어 더 정확하다.</p>
+</section>
+</section>
+</section>
+<section id="opro-벤치마크-성능" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="opro-벤치마크-성능"><span class="header-section-number">6</span> OPRO 벤치마크 성능</h2>
+<p>Yang et al.&nbsp;(2023)의 OPRO 연구는 더 체계적인 실험을 수행했다.</p>
+<section id="gsm8k-수학-문제" class="level3" data-number="6.1">
+<h3 data-number="6.1" class="anchored" data-anchor-id="gsm8k-수학-문제"><span class="header-section-number">6.1</span> GSM8K (수학 문제)</h3>
+<p><strong>데이터셋</strong>: 초등학교 수학 문제 8,500개</p>
+<p><strong>결과</strong>:</p>
+<table class="table">
+<colgroup>
+<col style="width: 44%">
+<col style="width: 55%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Prompt</th>
+<th>Accuracy</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Zero-shot</td>
+<td>71.8%</td>
+</tr>
+<tr class="even">
+<td>“Let’s think step by step.”</td>
+<td>78.2%</td>
+</tr>
+<tr class="odd">
+<td>“Let’s work this out in a step by step way to be sure we have the right answer.”</td>
+<td>79.5%</td>
+</tr>
+<tr class="even">
+<td><strong>“Take a deep breath and work on this problem step-by-step.”</strong></td>
+<td><strong>80.2%</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>개선폭</strong>: Baseline 대비 +8.4%</p>
+<p><strong>발견된 효과적 프롬프트들</strong>:</p>
+<pre><code>1. "Take a deep breath and work on this problem step-by-step."
+   → 80.2%
+
+2. "Let's solve this problem by splitting it into steps."
+   → 79.9%
+
+3. "First, let's think about what we know and what we need to find."
+   → 79.7%
+
+4. "Break this problem down into smaller, manageable steps."
+   → 79.5%</code></pre>
+</section>
+<section id="take-a-deep-breath-상세-분석" class="level3" data-number="6.2">
+<h3 data-number="6.2" class="anchored" data-anchor-id="take-a-deep-breath-상세-분석"><span class="header-section-number">6.2</span> “Take a deep breath” 상세 분석</h3>
+<p>이 프롬프트가 왜 효과적인지 더 깊이 분석해보자.</p>
+<section id="가설-1-토큰-길이-증가" class="level4" data-number="6.2.1">
+<h4 data-number="6.2.1" class="anchored" data-anchor-id="가설-1-토큰-길이-증가"><span class="header-section-number">6.2.1</span> 가설 1: 토큰 길이 증가</h4>
+<p><strong>이론</strong>: 더 긴 프롬프트가 모델에게 더 많은 “생각할 시간”을 준다.</p>
+<p><strong>검증</strong>:</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1"></a>prompts <span class="op">=</span> [</span>
+<span id="cb25-2"><a href="#cb25-2"></a>    <span class="st">"Solve this problem."</span>,  <span class="co"># 4 tokens → 71.8%</span></span>
+<span id="cb25-3"><a href="#cb25-3"></a>    <span class="st">"Let's think step by step."</span>,  <span class="co"># 6 tokens → 78.2%</span></span>
+<span id="cb25-4"><a href="#cb25-4"></a>    <span class="st">"Take a deep breath and work on this problem step-by-step."</span>,  <span class="co"># 13 tokens → 80.2%</span></span>
+<span id="cb25-5"><a href="#cb25-5"></a>    <span class="st">"Take a very very very deep breath and work on this problem step-by-step carefully."</span>,  <span class="co"># 18 tokens → 79.1%</span></span>
+<span id="cb25-6"><a href="#cb25-6"></a>]</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>결과</strong>: 단순히 길다고 좋은 것은 아님. 13 토큰이 최적.</p>
+</section>
+<section id="가설-2-심호흡-효과" class="level4" data-number="6.2.2">
+<h4 data-number="6.2.2" class="anchored" data-anchor-id="가설-2-심호흡-효과"><span class="header-section-number">6.2.2</span> 가설 2: “심호흡” 효과</h4>
+<p><strong>이론</strong>: “Take a deep breath”가 모델의 주의를 집중시킨다.</p>
+<p><strong>Ablation Study</strong>:</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1"></a>prompts <span class="op">=</span> [</span>
+<span id="cb26-2"><a href="#cb26-2"></a>    <span class="st">"Work on this problem step-by-step."</span>,  </span>
+<span id="cb26-3"><a href="#cb26-3"></a>    <span class="co"># → 78.9%</span></span>
+<span id="cb26-4"><a href="#cb26-4"></a>    </span>
+<span id="cb26-5"><a href="#cb26-5"></a>    <span class="st">"Take a deep breath."</span>,  </span>
+<span id="cb26-6"><a href="#cb26-6"></a>    <span class="co"># → 72.1% (단독으로는 효과 없음)</span></span>
+<span id="cb26-7"><a href="#cb26-7"></a>    </span>
+<span id="cb26-8"><a href="#cb26-8"></a>    <span class="st">"Take a deep breath and work on this problem step-by-step."</span>,  </span>
+<span id="cb26-9"><a href="#cb26-9"></a>    <span class="co"># → 80.2% (조합이 중요)</span></span>
+<span id="cb26-10"><a href="#cb26-10"></a>]</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>결론</strong>: “Take a deep breath” 자체보다는 “and work on this problem step-by-step”과의 <strong>조합</strong>이 중요.</p>
+</section>
+<section id="가설-3-학습-데이터-상관관계" class="level4" data-number="6.2.3">
+<h4 data-number="6.2.3" class="anchored" data-anchor-id="가설-3-학습-데이터-상관관계"><span class="header-section-number">6.2.3</span> 가설 3: 학습 데이터 상관관계</h4>
+<p><strong>이론</strong>: 학습 데이터에 유사한 패턴이 있었을 가능성.</p>
+<p><strong>분석</strong>: - 인터넷 데이터에서 “Take a deep breath”는 주로 <strong>스트레스 상황</strong>에서 사용 - 어려운 문제 풀이 가이드에서 자주 등장 - 모델이 이를 “복잡한 문제 → 신중한 접근” 패턴으로 학습했을 가능성</p>
+<p><strong>결론</strong>: 우연이 아니라 학습 데이터의 패턴과 연관.</p>
+</section>
+</section>
+<section id="bigbench-hard" class="level3" data-number="6.3">
+<h3 data-number="6.3" class="anchored" data-anchor-id="bigbench-hard"><span class="header-section-number">6.3</span> BigBench-Hard</h3>
+<p><strong>데이터셋</strong>: 23개의 어려운 추론 태스크</p>
+<p><strong>결과</strong>:</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>방법</th>
+<th>평균 정확도</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Few-shot (baseline)</td>
+<td>43.2%</td>
+</tr>
+<tr class="even">
+<td>CoT (manual)</td>
+<td>51.7%</td>
+</tr>
+<tr class="odd">
+<td><strong>OPRO-optimized</strong></td>
+<td><strong>55.3%</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>개선폭</strong>: +12.1% (baseline 대비)</p>
+<p><strong>태스크별 최적 프롬프트 예시</strong>:</p>
+<pre><code>Logical Deduction:
+"Analyze the given information systematically and eliminate impossible options."
+→ 62.1% (vs 54.3% baseline)
+
+Causal Judgment:
+"Consider both direct and indirect relationships between events."
+→ 58.7% (vs 49.2% baseline)
+
+Formal Fallacies:
+"Identify the logical structure of the argument, then check for validity."
+→ 71.2% (vs 63.8% baseline)</code></pre>
+</section>
+</section>
+<section id="반복-횟수와-성능의-관계" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="반복-횟수와-성능의-관계"><span class="header-section-number">7</span> 반복 횟수와 성능의 관계</h2>
+<p>OPRO의 최적화 과정에서 반복 횟수가 성능에 미치는 영향:</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1"></a><span class="co"># 실험 데이터 (GSM8K)</span></span>
+<span id="cb28-2"><a href="#cb28-2"></a>iterations <span class="op">=</span> [<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>, <span class="dv">6</span>, <span class="dv">7</span>, <span class="dv">8</span>, <span class="dv">9</span>, <span class="dv">10</span>]</span>
+<span id="cb28-3"><a href="#cb28-3"></a>scores <span class="op">=</span> [<span class="fl">72.1</span>, <span class="fl">74.3</span>, <span class="fl">76.2</span>, <span class="fl">77.8</span>, <span class="fl">78.9</span>, <span class="fl">79.5</span>, <span class="fl">79.9</span>, <span class="fl">80.1</span>, <span class="fl">80.2</span>, <span class="fl">80.2</span>]</span>
+<span id="cb28-4"><a href="#cb28-4"></a></span>
+<span id="cb28-5"><a href="#cb28-5"></a><span class="co"># 시각화</span></span>
+<span id="cb28-6"><a href="#cb28-6"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb28-7"><a href="#cb28-7"></a></span>
+<span id="cb28-8"><a href="#cb28-8"></a>plt.figure(figsize<span class="op">=</span>(<span class="dv">10</span>, <span class="dv">6</span>))</span>
+<span id="cb28-9"><a href="#cb28-9"></a>plt.plot(iterations, scores, marker<span class="op">=</span><span class="st">'o'</span>, linewidth<span class="op">=</span><span class="dv">2</span>, markersize<span class="op">=</span><span class="dv">8</span>)</span>
+<span id="cb28-10"><a href="#cb28-10"></a>plt.xlabel(<span class="st">'Optimization Iteration'</span>, fontsize<span class="op">=</span><span class="dv">12</span>)</span>
+<span id="cb28-11"><a href="#cb28-11"></a>plt.ylabel(<span class="st">'Accuracy (%)'</span>, fontsize<span class="op">=</span><span class="dv">12</span>)</span>
+<span id="cb28-12"><a href="#cb28-12"></a>plt.title(<span class="st">'OPRO Performance vs Iterations (GSM8K)'</span>, fontsize<span class="op">=</span><span class="dv">14</span>)</span>
+<span id="cb28-13"><a href="#cb28-13"></a>plt.grid(<span class="va">True</span>, alpha<span class="op">=</span><span class="fl">0.3</span>)</span>
+<span id="cb28-14"><a href="#cb28-14"></a>plt.axhline(y<span class="op">=</span><span class="fl">78.2</span>, color<span class="op">=</span><span class="st">'r'</span>, linestyle<span class="op">=</span><span class="st">'--'</span>, label<span class="op">=</span><span class="st">'CoT baseline'</span>)</span>
+<span id="cb28-15"><a href="#cb28-15"></a>plt.legend()</span>
+<span id="cb28-16"><a href="#cb28-16"></a>plt.tight_layout()</span>
+<span id="cb28-17"><a href="#cb28-17"></a>plt.savefig(<span class="st">'opro_iterations.png'</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>관찰</strong>: - 처음 5번 반복에서 급격한 개선 (72.1% → 78.9%) - 6-8번: 점진적 개선 (78.9% → 80.1%) - 9번 이상: 수렴 (80.2%)</p>
+<p><strong>권장사항</strong>: <strong>8-10번 반복</strong>이 비용 대비 효과적.</p>
+</section>
+<section id="apeopro의-한계점" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="apeopro의-한계점"><span class="header-section-number">8</span> APE/OPRO의 한계점</h2>
+<section id="한계-1-높은-연산-비용" class="level3" data-number="8.1">
+<h3 data-number="8.1" class="anchored" data-anchor-id="한계-1-높은-연산-비용"><span class="header-section-number">8.1</span> 한계 1: 높은 연산 비용</h3>
+<p><strong>문제</strong>: 많은 API 호출이 필요하다.</p>
+<p><strong>비용 계산 (OPRO 예시)</strong>:</p>
+<pre><code>설정:
+- 10번 반복
+- 각 반복마다 5개 테스트 예시로 평가
+- 총 50번 LLM 호출 (10 iterations × 5 examples)
+
+Claude Sonnet 4 기준:
+- Input: 200 tokens/call × 50 = 10,000 tokens
+- Output: 100 tokens/call × 50 = 5,000 tokens
+- 비용: (10,000 × $3 + 5,000 × $15) / 1,000,000 = $0.105
+
+프롬프트 1개 최적화에 $0.10</code></pre>
+<p><strong>비교</strong>: - 수동 프롬프트 설계: 무료 (사람 시간은 별도) - APE/OPRO: $0.05 - $0.50 per prompt</p>
+<p><strong>완화 전략</strong>:</p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb30-1"><a href="#cb30-1"></a><span class="co"># 1. 캐싱 활용</span></span>
+<span id="cb30-2"><a href="#cb30-2"></a>cache <span class="op">=</span> {}</span>
+<span id="cb30-3"><a href="#cb30-3"></a></span>
+<span id="cb30-4"><a href="#cb30-4"></a><span class="kw">def</span> evaluate_with_cache(prompt, examples):</span>
+<span id="cb30-5"><a href="#cb30-5"></a>    cache_key <span class="op">=</span> (prompt, <span class="bu">tuple</span>(examples))</span>
+<span id="cb30-6"><a href="#cb30-6"></a>    <span class="cf">if</span> cache_key <span class="kw">in</span> cache:</span>
+<span id="cb30-7"><a href="#cb30-7"></a>        <span class="cf">return</span> cache[cache_key]</span>
+<span id="cb30-8"><a href="#cb30-8"></a>    </span>
+<span id="cb30-9"><a href="#cb30-9"></a>    score <span class="op">=</span> evaluate(prompt, examples)</span>
+<span id="cb30-10"><a href="#cb30-10"></a>    cache[cache_key] <span class="op">=</span> score</span>
+<span id="cb30-11"><a href="#cb30-11"></a>    <span class="cf">return</span> score</span>
+<span id="cb30-12"><a href="#cb30-12"></a></span>
+<span id="cb30-13"><a href="#cb30-13"></a><span class="co"># 2. Early stopping</span></span>
+<span id="cb30-14"><a href="#cb30-14"></a><span class="kw">def</span> optimize_with_early_stopping(patience<span class="op">=</span><span class="dv">3</span>):</span>
+<span id="cb30-15"><a href="#cb30-15"></a>    best_score <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb30-16"><a href="#cb30-16"></a>    no_improvement_count <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb30-17"><a href="#cb30-17"></a>    </span>
+<span id="cb30-18"><a href="#cb30-18"></a>    <span class="cf">for</span> iteration <span class="kw">in</span> <span class="bu">range</span>(max_iterations):</span>
+<span id="cb30-19"><a href="#cb30-19"></a>        score <span class="op">=</span> evaluate_current_prompt()</span>
+<span id="cb30-20"><a href="#cb30-20"></a>        </span>
+<span id="cb30-21"><a href="#cb30-21"></a>        <span class="cf">if</span> score <span class="op">&gt;</span> best_score:</span>
+<span id="cb30-22"><a href="#cb30-22"></a>            best_score <span class="op">=</span> score</span>
+<span id="cb30-23"><a href="#cb30-23"></a>            no_improvement_count <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb30-24"><a href="#cb30-24"></a>        <span class="cf">else</span>:</span>
+<span id="cb30-25"><a href="#cb30-25"></a>            no_improvement_count <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb30-26"><a href="#cb30-26"></a>        </span>
+<span id="cb30-27"><a href="#cb30-27"></a>        <span class="cf">if</span> no_improvement_count <span class="op">&gt;=</span> patience:</span>
+<span id="cb30-28"><a href="#cb30-28"></a>            <span class="bu">print</span>(<span class="ss">f"Early stopping at iteration </span><span class="sc">{</span>iteration<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb30-29"><a href="#cb30-29"></a>            <span class="cf">break</span></span>
+<span id="cb30-30"><a href="#cb30-30"></a></span>
+<span id="cb30-31"><a href="#cb30-31"></a><span class="co"># 3. 더 작은 평가 세트</span></span>
+<span id="cb30-32"><a href="#cb30-32"></a><span class="co"># 전체 데이터셋 대신 대표 샘플만 사용</span></span>
+<span id="cb30-33"><a href="#cb30-33"></a>eval_samples <span class="op">=</span> random.sample(all_examples, k<span class="op">=</span><span class="dv">20</span>)  <span class="co"># 100 → 20</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="한계-2-태스크-의존성" class="level3" data-number="8.2">
+<h3 data-number="8.2" class="anchored" data-anchor-id="한계-2-태스크-의존성"><span class="header-section-number">8.2</span> 한계 2: 태스크 의존성</h3>
+<p><strong>문제</strong>: 모든 태스크에서 효과적이지 않다.</p>
+<p><strong>효과적인 태스크</strong>: - ✅ 명확한 입력-출력 구조 - ✅ 객관적 평가 가능 - ✅ 많은 예시 확보 가능</p>
+<p><strong>비효과적인 태스크</strong>: - ❌ 창의적 글쓰기 - ❌ 주관적 평가 필요 - ❌ 예시가 극히 적음</p>
+<p><strong>실험 결과</strong>:</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>태스크 유형</th>
+<th>APE 성공률</th>
+<th>수동 대비 개선</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Classification</td>
+<td>85%</td>
+<td>+4.5%</td>
+</tr>
+<tr class="even">
+<td>Extraction</td>
+<td>78%</td>
+<td>+3.2%</td>
+</tr>
+<tr class="odd">
+<td>Reasoning</td>
+<td>71%</td>
+<td>+5.8%</td>
+</tr>
+<tr class="even">
+<td>Creative Writing</td>
+<td>42%</td>
+<td>-2.1%</td>
+</tr>
+<tr class="odd">
+<td>Subjective Q&amp;A</td>
+<td>51%</td>
+<td>+0.3%</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="한계-3-프롬프트-해석-어려움" class="level3" data-number="8.3">
+<h3 data-number="8.3" class="anchored" data-anchor-id="한계-3-프롬프트-해석-어려움"><span class="header-section-number">8.3</span> 한계 3: 프롬프트 해석 어려움</h3>
+<p><strong>문제</strong>: APE/OPRO가 찾은 프롬프트가 왜 좋은지 설명하기 어렵다.</p>
+<p><strong>예시</strong>:</p>
+<pre><code>APE가 찾은 프롬프트:
+"Considering all relevant factors, determine the most appropriate response."
+
+왜 효과적인가? 
+→ "all relevant factors"가 무엇을 의미하는지 불명확
+→ 하지만 실제로 5% 성능 향상</code></pre>
+<p><strong>문제점</strong>: - 디버깅 어려움 - 개선 방향 불명확 - 도메인 전문가의 검증 필요</p>
+<p><strong>완화 전략</strong>:</p>
+<div class="sourceCode" id="cb32"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb32-1"><a href="#cb32-1"></a><span class="kw">def</span> explain_prompt_effectiveness(prompt: <span class="bu">str</span>, examples: List) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb32-2"><a href="#cb32-2"></a>    <span class="co">"""</span></span>
+<span id="cb32-3"><a href="#cb32-3"></a><span class="co">    프롬프트가 왜 효과적인지 분석</span></span>
+<span id="cb32-4"><a href="#cb32-4"></a><span class="co">    """</span></span>
+<span id="cb32-5"><a href="#cb32-5"></a>    explanation_prompt <span class="op">=</span> <span class="ss">f"""다음 프롬프트가 왜 효과적인지 분석하세요:</span></span>
+<span id="cb32-6"><a href="#cb32-6"></a></span>
+<span id="cb32-7"><a href="#cb32-7"></a><span class="ss">프롬프트: </span><span class="sc">{</span>prompt<span class="sc">}</span></span>
+<span id="cb32-8"><a href="#cb32-8"></a></span>
+<span id="cb32-9"><a href="#cb32-9"></a><span class="ss">예시들:</span></span>
+<span id="cb32-10"><a href="#cb32-10"></a><span class="sc">{</span>format_examples(examples)<span class="sc">}</span></span>
+<span id="cb32-11"><a href="#cb32-11"></a></span>
+<span id="cb32-12"><a href="#cb32-12"></a><span class="ss">이 프롬프트의 효과적인 요소들을 설명하세요:</span></span>
+<span id="cb32-13"><a href="#cb32-13"></a><span class="ss">1. 핵심 키워드</span></span>
+<span id="cb32-14"><a href="#cb32-14"></a><span class="ss">2. 구조적 특징</span></span>
+<span id="cb32-15"><a href="#cb32-15"></a><span class="ss">3. 모델에게 전달하는 신호</span></span>
+<span id="cb32-16"><a href="#cb32-16"></a></span>
+<span id="cb32-17"><a href="#cb32-17"></a><span class="ss">분석:"""</span></span>
+<span id="cb32-18"><a href="#cb32-18"></a>    </span>
+<span id="cb32-19"><a href="#cb32-19"></a>    <span class="co"># LLM으로 설명 생성</span></span>
+<span id="cb32-20"><a href="#cb32-20"></a>    explanation <span class="op">=</span> generate_explanation(explanation_prompt)</span>
+<span id="cb32-21"><a href="#cb32-21"></a>    <span class="cf">return</span> explanation</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="한계-4-과적합-위험" class="level3" data-number="8.4">
+<h3 data-number="8.4" class="anchored" data-anchor-id="한계-4-과적합-위험"><span class="header-section-number">8.4</span> 한계 4: 과적합 위험</h3>
+<p><strong>문제</strong>: 평가 세트에 과적합될 수 있다.</p>
+<p><strong>예시</strong>:</p>
+<pre><code>훈련/평가 세트: 긍정/부정 감성 분류 (간단한 단어들)
+- happy → positive
+- sad → negative
+
+최적화된 프롬프트:
+"Is this word happy or sad? Answer positive or negative."
+→ 평가 세트: 100%
+→ 실제 테스트: 72%
+
+과적합!</code></pre>
+<p><strong>완화 전략</strong>:</p>
+<div class="sourceCode" id="cb34"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb34-1"><a href="#cb34-1"></a><span class="co"># Train/Validation/Test split</span></span>
+<span id="cb34-2"><a href="#cb34-2"></a><span class="kw">def</span> split_examples(examples, train_ratio<span class="op">=</span><span class="fl">0.6</span>, val_ratio<span class="op">=</span><span class="fl">0.2</span>):</span>
+<span id="cb34-3"><a href="#cb34-3"></a>    random.shuffle(examples)</span>
+<span id="cb34-4"><a href="#cb34-4"></a>    </span>
+<span id="cb34-5"><a href="#cb34-5"></a>    n <span class="op">=</span> <span class="bu">len</span>(examples)</span>
+<span id="cb34-6"><a href="#cb34-6"></a>    train_end <span class="op">=</span> <span class="bu">int</span>(n <span class="op">*</span> train_ratio)</span>
+<span id="cb34-7"><a href="#cb34-7"></a>    val_end <span class="op">=</span> <span class="bu">int</span>(n <span class="op">*</span> (train_ratio <span class="op">+</span> val_ratio))</span>
+<span id="cb34-8"><a href="#cb34-8"></a>    </span>
+<span id="cb34-9"><a href="#cb34-9"></a>    train <span class="op">=</span> examples[:train_end]</span>
+<span id="cb34-10"><a href="#cb34-10"></a>    val <span class="op">=</span> examples[train_end:val_end]</span>
+<span id="cb34-11"><a href="#cb34-11"></a>    test <span class="op">=</span> examples[val_end:]</span>
+<span id="cb34-12"><a href="#cb34-12"></a>    </span>
+<span id="cb34-13"><a href="#cb34-13"></a>    <span class="cf">return</span> train, val, test</span>
+<span id="cb34-14"><a href="#cb34-14"></a></span>
+<span id="cb34-15"><a href="#cb34-15"></a><span class="co"># 최적화는 train으로, 선택은 val으로</span></span>
+<span id="cb34-16"><a href="#cb34-16"></a>train_examples, val_examples, test_examples <span class="op">=</span> split_examples(all_examples)</span>
+<span id="cb34-17"><a href="#cb34-17"></a></span>
+<span id="cb34-18"><a href="#cb34-18"></a><span class="co"># Train으로 후보 생성</span></span>
+<span id="cb34-19"><a href="#cb34-19"></a>candidates <span class="op">=</span> ape.generate_candidate_prompts(train_examples)</span>
+<span id="cb34-20"><a href="#cb34-20"></a></span>
+<span id="cb34-21"><a href="#cb34-21"></a><span class="co"># Val으로 평가 및 선택</span></span>
+<span id="cb34-22"><a href="#cb34-22"></a>best_prompt <span class="op">=</span> ape.select_best(candidates, val_examples)</span>
+<span id="cb34-23"><a href="#cb34-23"></a></span>
+<span id="cb34-24"><a href="#cb34-24"></a><span class="co"># Test로 최종 성능 측정</span></span>
+<span id="cb34-25"><a href="#cb34-25"></a>final_score <span class="op">=</span> evaluate(best_prompt, test_examples)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="수동-vs-자동-프롬프트-엔지니어링" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="수동-vs-자동-프롬프트-엔지니어링"><span class="header-section-number">9</span> 수동 vs 자동 프롬프트 엔지니어링</h2>
+<section id="비교표" class="level3" data-number="9.1">
+<h3 data-number="9.1" class="anchored" data-anchor-id="비교표"><span class="header-section-number">9.1</span> 비교표</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th>특성</th>
+<th>수동 (사람)</th>
+<th>자동 (APE/OPRO)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>시간</strong></td>
+<td>느림 (수 시간)</td>
+<td>빠름 (수 분)</td>
+</tr>
+<tr class="even">
+<td><strong>비용</strong></td>
+<td>사람 시간</td>
+<td>API 비용 ($0.05-0.50)</td>
+</tr>
+<tr class="odd">
+<td><strong>성능</strong></td>
+<td>가변적</td>
+<td>일관적</td>
+</tr>
+<tr class="even">
+<td><strong>해석 가능성</strong></td>
+<td>높음</td>
+<td>낮음</td>
+</tr>
+<tr class="odd">
+<td><strong>창의성</strong></td>
+<td>높음</td>
+<td>제한적</td>
+</tr>
+<tr class="even">
+<td><strong>확장성</strong></td>
+<td>낮음</td>
+<td>높음</td>
+</tr>
+<tr class="odd">
+<td><strong>도메인 지식</strong></td>
+<td>필수</td>
+<td>선택적</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="언제-수동을-사용할-것인가" class="level3" data-number="9.2">
+<h3 data-number="9.2" class="anchored" data-anchor-id="언제-수동을-사용할-것인가"><span class="header-section-number">9.2</span> 언제 수동을 사용할 것인가?</h3>
+<p><strong>수동 프롬프트 엔지니어링이 나은 경우</strong>:</p>
+<ol type="1">
+<li><strong>예시가 매우 적을 때</strong></li>
+</ol>
+<pre><code>예시: 3개 미만
+→ APE는 패턴을 학습하기 어려움
+→ 사람의 도메인 지식이 더 중요</code></pre>
+<ol start="2" type="1">
+<li><strong>창의적 작업</strong></li>
+</ol>
+<pre><code>태스크: "SF 소설 작성"
+→ 사람이 더 나은 스타일 지시 작성
+→ APE는 "write creatively" 같은 일반적 프롬프트만 생성</code></pre>
+<ol start="3" type="1">
+<li><strong>설명 가능성이 중요</strong></li>
+</ol>
+<pre><code>환경: 의료, 법률, 금융
+→ "왜 이 프롬프트를 사용하는가?" 설명 필요
+→ 사람이 설계한 프롬프트가 더 투명</code></pre>
+<ol start="4" type="1">
+<li><strong>빠른 프로토타이핑</strong></li>
+</ol>
+<pre><code>상황: 아이디어 검증 단계
+→ APE 설정 시간 &gt; 수동 작성 시간</code></pre>
+</section>
+<section id="언제-자동을-사용할-것인가" class="level3" data-number="9.3">
+<h3 data-number="9.3" class="anchored" data-anchor-id="언제-자동을-사용할-것인가"><span class="header-section-number">9.3</span> 언제 자동을 사용할 것인가?</h3>
+<p><strong>APE/OPRO가 나은 경우</strong>:</p>
+<ol type="1">
+<li><strong>명확한 평가 메트릭</strong></li>
+</ol>
+<pre><code>태스크: 감성 분류, 엔티티 추출
+평가: 정확도로 명확히 측정 가능
+→ APE가 체계적으로 최적화 가능</code></pre>
+<ol start="2" type="1">
+<li><strong>대량의 예시</strong></li>
+</ol>
+<pre><code>예시: 100개 이상
+→ APE가 패턴 학습에 충분한 데이터
+→ 수동으로는 모든 예시 고려 어려움</code></pre>
+<ol start="3" type="1">
+<li><strong>여러 태스크 동시 최적화</strong></li>
+</ol>
+<pre><code>상황: 10개의 유사한 분류 태스크
+→ APE로 일괄 최적화 (병렬 처리)
+→ 수동: 각각 수 시간 소요</code></pre>
+<ol start="4" type="1">
+<li><strong>지속적 개선</strong></li>
+</ol>
+<pre><code>환경: 프로덕션에서 데이터 누적
+→ 주기적으로 APE 재실행하여 프롬프트 갱신
+→ 수동: 재작업 부담</code></pre>
+</section>
+<section id="하이브리드-접근법-권장" class="level3" data-number="9.4">
+<h3 data-number="9.4" class="anchored" data-anchor-id="하이브리드-접근법-권장"><span class="header-section-number">9.4</span> 하이브리드 접근법 (권장)</h3>
+<p><strong>최선의 전략</strong>: 수동 + 자동 조합</p>
+<div class="sourceCode" id="cb43"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb43-1"><a href="#cb43-1"></a><span class="kw">class</span> HybridPromptEngineering:</span>
+<span id="cb43-2"><a href="#cb43-2"></a>    <span class="co">"""</span></span>
+<span id="cb43-3"><a href="#cb43-3"></a><span class="co">    수동 + 자동 결합</span></span>
+<span id="cb43-4"><a href="#cb43-4"></a><span class="co">    """</span></span>
+<span id="cb43-5"><a href="#cb43-5"></a>    </span>
+<span id="cb43-6"><a href="#cb43-6"></a>    <span class="kw">def</span> optimize(<span class="va">self</span>, task_description: <span class="bu">str</span>, examples: List[Dict]) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb43-7"><a href="#cb43-7"></a>        <span class="co">"""</span></span>
+<span id="cb43-8"><a href="#cb43-8"></a><span class="co">        1. 사람이 초기 프롬프트 작성</span></span>
+<span id="cb43-9"><a href="#cb43-9"></a><span class="co">        2. APE/OPRO로 자동 개선</span></span>
+<span id="cb43-10"><a href="#cb43-10"></a><span class="co">        3. 사람이 최종 검토 및 조정</span></span>
+<span id="cb43-11"><a href="#cb43-11"></a><span class="co">        """</span></span>
+<span id="cb43-12"><a href="#cb43-12"></a>        <span class="co"># Step 1: 사람이 초기 프롬프트 작성</span></span>
+<span id="cb43-13"><a href="#cb43-13"></a>        <span class="bu">print</span>(<span class="st">"Step 1: 초기 프롬프트 작성 (사람)"</span>)</span>
+<span id="cb43-14"><a href="#cb43-14"></a>        initial_prompt <span class="op">=</span> <span class="bu">input</span>(<span class="st">"초기 프롬프트를 입력하세요: "</span>)</span>
+<span id="cb43-15"><a href="#cb43-15"></a>        </span>
+<span id="cb43-16"><a href="#cb43-16"></a>        <span class="co"># Step 2: APE로 변형 생성</span></span>
+<span id="cb43-17"><a href="#cb43-17"></a>        <span class="bu">print</span>(<span class="st">"</span><span class="ch">\n</span><span class="st">Step 2: APE로 변형 생성"</span>)</span>
+<span id="cb43-18"><a href="#cb43-18"></a>        ape <span class="op">=</span> APE(api_key<span class="op">=</span><span class="st">"your-api-key"</span>)</span>
+<span id="cb43-19"><a href="#cb43-19"></a>        </span>
+<span id="cb43-20"><a href="#cb43-20"></a>        <span class="co"># 초기 프롬프트를 시드로 사용</span></span>
+<span id="cb43-21"><a href="#cb43-21"></a>        variations <span class="op">=</span> ape.generate_variations(initial_prompt, num_variations<span class="op">=</span><span class="dv">10</span>)</span>
+<span id="cb43-22"><a href="#cb43-22"></a>        </span>
+<span id="cb43-23"><a href="#cb43-23"></a>        <span class="co"># Step 3: 자동 평가</span></span>
+<span id="cb43-24"><a href="#cb43-24"></a>        <span class="bu">print</span>(<span class="st">"</span><span class="ch">\n</span><span class="st">Step 3: 자동 평가"</span>)</span>
+<span id="cb43-25"><a href="#cb43-25"></a>        scores <span class="op">=</span> [ape.evaluate(v, examples) <span class="cf">for</span> v <span class="kw">in</span> variations]</span>
+<span id="cb43-26"><a href="#cb43-26"></a>        </span>
+<span id="cb43-27"><a href="#cb43-27"></a>        <span class="co"># Step 4: 상위 후보 제시</span></span>
+<span id="cb43-28"><a href="#cb43-28"></a>        <span class="bu">print</span>(<span class="st">"</span><span class="ch">\n</span><span class="st">Step 4: 상위 3개 후보:"</span>)</span>
+<span id="cb43-29"><a href="#cb43-29"></a>        top_3 <span class="op">=</span> <span class="bu">sorted</span>(<span class="bu">zip</span>(variations, scores), key<span class="op">=</span><span class="kw">lambda</span> x: x[<span class="dv">1</span>], reverse<span class="op">=</span><span class="va">True</span>)[:<span class="dv">3</span>]</span>
+<span id="cb43-30"><a href="#cb43-30"></a>        </span>
+<span id="cb43-31"><a href="#cb43-31"></a>        <span class="cf">for</span> i, (prompt, score) <span class="kw">in</span> <span class="bu">enumerate</span>(top_3, <span class="dv">1</span>):</span>
+<span id="cb43-32"><a href="#cb43-32"></a>            <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">[</span><span class="sc">{</span>i<span class="sc">}</span><span class="ss">] 점수: </span><span class="sc">{</span>score<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
+<span id="cb43-33"><a href="#cb43-33"></a>            <span class="bu">print</span>(<span class="ss">f"    프롬프트: </span><span class="sc">{</span>prompt<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb43-34"><a href="#cb43-34"></a>        </span>
+<span id="cb43-35"><a href="#cb43-35"></a>        <span class="co"># Step 5: 사람이 최종 선택 및 수정</span></span>
+<span id="cb43-36"><a href="#cb43-36"></a>        <span class="bu">print</span>(<span class="st">"</span><span class="ch">\n</span><span class="st">Step 5: 최종 선택"</span>)</span>
+<span id="cb43-37"><a href="#cb43-37"></a>        choice <span class="op">=</span> <span class="bu">int</span>(<span class="bu">input</span>(<span class="st">"선택할 번호 (1-3): "</span>)) <span class="op">-</span> <span class="dv">1</span></span>
+<span id="cb43-38"><a href="#cb43-38"></a>        selected_prompt <span class="op">=</span> top_3[choice][<span class="dv">0</span>]</span>
+<span id="cb43-39"><a href="#cb43-39"></a>        </span>
+<span id="cb43-40"><a href="#cb43-40"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">선택된 프롬프트:</span><span class="ch">\n</span><span class="sc">{</span>selected_prompt<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb43-41"><a href="#cb43-41"></a>        </span>
+<span id="cb43-42"><a href="#cb43-42"></a>        modify <span class="op">=</span> <span class="bu">input</span>(<span class="st">"</span><span class="ch">\n</span><span class="st">수정하시겠습니까? (y/n): "</span>)</span>
+<span id="cb43-43"><a href="#cb43-43"></a>        <span class="cf">if</span> modify.lower() <span class="op">==</span> <span class="st">'y'</span>:</span>
+<span id="cb43-44"><a href="#cb43-44"></a>            final_prompt <span class="op">=</span> <span class="bu">input</span>(<span class="st">"수정된 프롬프트: "</span>)</span>
+<span id="cb43-45"><a href="#cb43-45"></a>        <span class="cf">else</span>:</span>
+<span id="cb43-46"><a href="#cb43-46"></a>            final_prompt <span class="op">=</span> selected_prompt</span>
+<span id="cb43-47"><a href="#cb43-47"></a>        </span>
+<span id="cb43-48"><a href="#cb43-48"></a>        <span class="cf">return</span> final_prompt</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>하이브리드 워크플로우 예시</strong>:</p>
+<pre><code>프로젝트: 고객 리뷰 감성 분류
+
+Day 1: 사람이 초기 프롬프트 작성
+"Classify the sentiment of this review as positive, negative, or neutral."
+→ 테스트: 82%
+
+Day 2: APE로 10개 변형 생성 및 평가
+최고 성능: "Analyze the overall sentiment expressed in this review and categorize it as positive, negative, or neutral."
+→ 테스트: 87%
+
+Day 3: 도메인 전문가 검토
+수정: "Analyze the customer's overall sentiment in this product review and categorize it as positive, negative, or neutral."
+→ 최종 테스트: 89%
+
+결과: 초기 대비 +7% 개선</code></pre>
+</section>
+</section>
+<section id="실무-적용-시나리오" class="level2" data-number="10">
+<h2 data-number="10" class="anchored" data-anchor-id="실무-적용-시나리오"><span class="header-section-number">10</span> 실무 적용 시나리오</h2>
+<section id="시나리오-1-대규모-분류-시스템" class="level3" data-number="10.1">
+<h3 data-number="10.1" class="anchored" data-anchor-id="시나리오-1-대규모-분류-시스템"><span class="header-section-number">10.1</span> 시나리오 1: 대규모 분류 시스템</h3>
+<p><strong>상황</strong>: - 10개의 다른 카테고리 분류 필요 - 각 카테고리마다 최적 프롬프트 필요 - 1주일 데드라인</p>
+<p><strong>접근법</strong>:</p>
+<div class="sourceCode" id="cb45"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb45-1"><a href="#cb45-1"></a>categories <span class="op">=</span> [</span>
+<span id="cb45-2"><a href="#cb45-2"></a>    <span class="st">"Product Category"</span>,</span>
+<span id="cb45-3"><a href="#cb45-3"></a>    <span class="st">"Support Ticket Priority"</span>, </span>
+<span id="cb45-4"><a href="#cb45-4"></a>    <span class="st">"Email Sentiment"</span>,</span>
+<span id="cb45-5"><a href="#cb45-5"></a>    <span class="st">"Content Moderation"</span>,</span>
+<span id="cb45-6"><a href="#cb45-6"></a>    <span class="co"># ... 10개</span></span>
+<span id="cb45-7"><a href="#cb45-7"></a>]</span>
+<span id="cb45-8"><a href="#cb45-8"></a></span>
+<span id="cb45-9"><a href="#cb45-9"></a><span class="co"># 병렬 최적화</span></span>
+<span id="cb45-10"><a href="#cb45-10"></a><span class="im">from</span> concurrent.futures <span class="im">import</span> ThreadPoolExecutor</span>
+<span id="cb45-11"><a href="#cb45-11"></a></span>
+<span id="cb45-12"><a href="#cb45-12"></a><span class="kw">def</span> optimize_category(category_name, examples):</span>
+<span id="cb45-13"><a href="#cb45-13"></a>    ape <span class="op">=</span> APE(api_key<span class="op">=</span><span class="st">"your-api-key"</span>)</span>
+<span id="cb45-14"><a href="#cb45-14"></a>    result <span class="op">=</span> ape.optimize_prompt(</span>
+<span id="cb45-15"><a href="#cb45-15"></a>        train_examples<span class="op">=</span>examples,</span>
+<span id="cb45-16"><a href="#cb45-16"></a>        test_examples<span class="op">=</span>test_sets[category_name],</span>
+<span id="cb45-17"><a href="#cb45-17"></a>        num_candidates<span class="op">=</span><span class="dv">20</span>,</span>
+<span id="cb45-18"><a href="#cb45-18"></a>        num_iterations<span class="op">=</span><span class="dv">5</span></span>
+<span id="cb45-19"><a href="#cb45-19"></a>    )</span>
+<span id="cb45-20"><a href="#cb45-20"></a>    <span class="cf">return</span> category_name, result</span>
+<span id="cb45-21"><a href="#cb45-21"></a></span>
+<span id="cb45-22"><a href="#cb45-22"></a><span class="cf">with</span> ThreadPoolExecutor(max_workers<span class="op">=</span><span class="dv">5</span>) <span class="im">as</span> executor:</span>
+<span id="cb45-23"><a href="#cb45-23"></a>    futures <span class="op">=</span> [</span>
+<span id="cb45-24"><a href="#cb45-24"></a>        executor.submit(optimize_category, cat, train_sets[cat])</span>
+<span id="cb45-25"><a href="#cb45-25"></a>        <span class="cf">for</span> cat <span class="kw">in</span> categories</span>
+<span id="cb45-26"><a href="#cb45-26"></a>    ]</span>
+<span id="cb45-27"><a href="#cb45-27"></a>    </span>
+<span id="cb45-28"><a href="#cb45-28"></a>    results <span class="op">=</span> [f.result() <span class="cf">for</span> f <span class="kw">in</span> futures]</span>
+<span id="cb45-29"><a href="#cb45-29"></a></span>
+<span id="cb45-30"><a href="#cb45-30"></a><span class="co"># 10개 카테고리를 하루 만에 최적화</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>결과</strong>: - 소요 시간: 1일 (수동: 1주일+) - 평균 성능: 수동 대비 +3.5% - 비용: $5 (API 비용)</p>
+</section>
+<section id="시나리오-2-지속적-개선" class="level3" data-number="10.2">
+<h3 data-number="10.2" class="anchored" data-anchor-id="시나리오-2-지속적-개선"><span class="header-section-number">10.2</span> 시나리오 2: 지속적 개선</h3>
+<p><strong>상황</strong>: - 프로덕션 환경에서 매일 새 데이터 유입 - 프롬프트를 주기적으로 개선하고 싶음</p>
+<p><strong>접근법</strong>:</p>
+<div class="sourceCode" id="cb46"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb46-1"><a href="#cb46-1"></a><span class="im">import</span> schedule</span>
+<span id="cb46-2"><a href="#cb46-2"></a><span class="im">import</span> time</span>
+<span id="cb46-3"><a href="#cb46-3"></a></span>
+<span id="cb46-4"><a href="#cb46-4"></a><span class="kw">def</span> weekly_optimization():</span>
+<span id="cb46-5"><a href="#cb46-5"></a>    <span class="co">"""</span></span>
+<span id="cb46-6"><a href="#cb46-6"></a><span class="co">    매주 일요일에 자동 최적화</span></span>
+<span id="cb46-7"><a href="#cb46-7"></a><span class="co">    """</span></span>
+<span id="cb46-8"><a href="#cb46-8"></a>    <span class="bu">print</span>(<span class="ss">f"[</span><span class="sc">{</span>datetime<span class="sc">.</span>now()<span class="sc">}</span><span class="ss">] 주간 최적화 시작"</span>)</span>
+<span id="cb46-9"><a href="#cb46-9"></a>    </span>
+<span id="cb46-10"><a href="#cb46-10"></a>    <span class="co"># 1. 지난 주 데이터 수집</span></span>
+<span id="cb46-11"><a href="#cb46-11"></a>    last_week_data <span class="op">=</span> db.query(<span class="st">"""</span></span>
+<span id="cb46-12"><a href="#cb46-12"></a><span class="st">        SELECT input, output, feedback</span></span>
+<span id="cb46-13"><a href="#cb46-13"></a><span class="st">        FROM predictions</span></span>
+<span id="cb46-14"><a href="#cb46-14"></a><span class="st">        WHERE created_at &gt;= NOW() - INTERVAL '7 days'</span></span>
+<span id="cb46-15"><a href="#cb46-15"></a><span class="st">        AND feedback = 'correct'</span></span>
+<span id="cb46-16"><a href="#cb46-16"></a><span class="st">    """</span>)</span>
+<span id="cb46-17"><a href="#cb46-17"></a>    </span>
+<span id="cb46-18"><a href="#cb46-18"></a>    <span class="co"># 2. 예시 준비</span></span>
+<span id="cb46-19"><a href="#cb46-19"></a>    examples <span class="op">=</span> [</span>
+<span id="cb46-20"><a href="#cb46-20"></a>        {<span class="st">"input"</span>: row.<span class="bu">input</span>, <span class="st">"output"</span>: row.output}</span>
+<span id="cb46-21"><a href="#cb46-21"></a>        <span class="cf">for</span> row <span class="kw">in</span> last_week_data</span>
+<span id="cb46-22"><a href="#cb46-22"></a>    ]</span>
+<span id="cb46-23"><a href="#cb46-23"></a>    </span>
+<span id="cb46-24"><a href="#cb46-24"></a>    <span class="co"># 3. OPRO로 최적화</span></span>
+<span id="cb46-25"><a href="#cb46-25"></a>    opro <span class="op">=</span> OPRO(api_key<span class="op">=</span><span class="st">"your-api-key"</span>)</span>
+<span id="cb46-26"><a href="#cb46-26"></a>    result <span class="op">=</span> opro.optimize_prompt(</span>
+<span id="cb46-27"><a href="#cb46-27"></a>        initial_prompt<span class="op">=</span>current_prompt,</span>
+<span id="cb46-28"><a href="#cb46-28"></a>        test_examples<span class="op">=</span>examples[:<span class="dv">100</span>],  <span class="co"># 샘플링</span></span>
+<span id="cb46-29"><a href="#cb46-29"></a>        num_iterations<span class="op">=</span><span class="dv">10</span></span>
+<span id="cb46-30"><a href="#cb46-30"></a>    )</span>
+<span id="cb46-31"><a href="#cb46-31"></a>    </span>
+<span id="cb46-32"><a href="#cb46-32"></a>    <span class="co"># 4. A/B 테스트</span></span>
+<span id="cb46-33"><a href="#cb46-33"></a>    new_prompt <span class="op">=</span> result[<span class="st">'best_prompt'</span>]</span>
+<span id="cb46-34"><a href="#cb46-34"></a>    </span>
+<span id="cb46-35"><a href="#cb46-35"></a>    <span class="cf">if</span> result[<span class="st">'best_score'</span>] <span class="op">&gt;</span> current_score <span class="op">+</span> <span class="fl">0.02</span>:  <span class="co"># 2% 이상 개선</span></span>
+<span id="cb46-36"><a href="#cb46-36"></a>        <span class="bu">print</span>(<span class="ss">f"새 프롬프트 배포: </span><span class="sc">{</span>new_prompt<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb46-37"><a href="#cb46-37"></a>        deploy_new_prompt(new_prompt, rollout_percentage<span class="op">=</span><span class="dv">10</span>)</span>
+<span id="cb46-38"><a href="#cb46-38"></a>    <span class="cf">else</span>:</span>
+<span id="cb46-39"><a href="#cb46-39"></a>        <span class="bu">print</span>(<span class="st">"현재 프롬프트 유지"</span>)</span>
+<span id="cb46-40"><a href="#cb46-40"></a></span>
+<span id="cb46-41"><a href="#cb46-41"></a><span class="co"># 스케줄링</span></span>
+<span id="cb46-42"><a href="#cb46-42"></a>schedule.every().sunday.at(<span class="st">"02:00"</span>).do(weekly_optimization)</span>
+<span id="cb46-43"><a href="#cb46-43"></a></span>
+<span id="cb46-44"><a href="#cb46-44"></a><span class="cf">while</span> <span class="va">True</span>:</span>
+<span id="cb46-45"><a href="#cb46-45"></a>    schedule.run_pending()</span>
+<span id="cb46-46"><a href="#cb46-46"></a>    time.sleep(<span class="dv">3600</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="시나리오-3-다국어-프롬프트" class="level3" data-number="10.3">
+<h3 data-number="10.3" class="anchored" data-anchor-id="시나리오-3-다국어-프롬프트"><span class="header-section-number">10.3</span> 시나리오 3: 다국어 프롬프트</h3>
+<p><strong>상황</strong>: - 영어 프롬프트는 최적화됨 - 한국어, 일본어, 중국어 버전 필요</p>
+<p><strong>접근법</strong>:</p>
+<div class="sourceCode" id="cb47"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb47-1"><a href="#cb47-1"></a><span class="kw">def</span> multilingual_optimization(</span>
+<span id="cb47-2"><a href="#cb47-2"></a>    english_prompt: <span class="bu">str</span>,</span>
+<span id="cb47-3"><a href="#cb47-3"></a>    target_languages: List[<span class="bu">str</span>],</span>
+<span id="cb47-4"><a href="#cb47-4"></a>    examples_per_language: Dict[<span class="bu">str</span>, List[Dict]]</span>
+<span id="cb47-5"><a href="#cb47-5"></a>) <span class="op">-&gt;</span> Dict[<span class="bu">str</span>, <span class="bu">str</span>]:</span>
+<span id="cb47-6"><a href="#cb47-6"></a>    <span class="co">"""</span></span>
+<span id="cb47-7"><a href="#cb47-7"></a><span class="co">    영어 프롬프트를 기반으로 다국어 최적화</span></span>
+<span id="cb47-8"><a href="#cb47-8"></a><span class="co">    """</span></span>
+<span id="cb47-9"><a href="#cb47-9"></a>    results <span class="op">=</span> {}</span>
+<span id="cb47-10"><a href="#cb47-10"></a>    </span>
+<span id="cb47-11"><a href="#cb47-11"></a>    <span class="cf">for</span> lang <span class="kw">in</span> target_languages:</span>
+<span id="cb47-12"><a href="#cb47-12"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">=== </span><span class="sc">{</span>lang<span class="sc">}</span><span class="ss"> 최적화 ==="</span>)</span>
+<span id="cb47-13"><a href="#cb47-13"></a>        </span>
+<span id="cb47-14"><a href="#cb47-14"></a>        <span class="co"># 1. 영어 프롬프트 번역</span></span>
+<span id="cb47-15"><a href="#cb47-15"></a>        translated <span class="op">=</span> translate(english_prompt, target_language<span class="op">=</span>lang)</span>
+<span id="cb47-16"><a href="#cb47-16"></a>        <span class="bu">print</span>(<span class="ss">f"번역된 초기 프롬프트: </span><span class="sc">{</span>translated<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb47-17"><a href="#cb47-17"></a>        </span>
+<span id="cb47-18"><a href="#cb47-18"></a>        <span class="co"># 2. 해당 언어로 OPRO 실행</span></span>
+<span id="cb47-19"><a href="#cb47-19"></a>        opro <span class="op">=</span> OPRO(api_key<span class="op">=</span><span class="st">"your-api-key"</span>)</span>
+<span id="cb47-20"><a href="#cb47-20"></a>        result <span class="op">=</span> opro.optimize_prompt(</span>
+<span id="cb47-21"><a href="#cb47-21"></a>            initial_prompt<span class="op">=</span>translated,</span>
+<span id="cb47-22"><a href="#cb47-22"></a>            test_examples<span class="op">=</span>examples_per_language[lang],</span>
+<span id="cb47-23"><a href="#cb47-23"></a>            num_iterations<span class="op">=</span><span class="dv">8</span></span>
+<span id="cb47-24"><a href="#cb47-24"></a>        )</span>
+<span id="cb47-25"><a href="#cb47-25"></a>        </span>
+<span id="cb47-26"><a href="#cb47-26"></a>        results[lang] <span class="op">=</span> result[<span class="st">'best_prompt'</span>]</span>
+<span id="cb47-27"><a href="#cb47-27"></a>        <span class="bu">print</span>(<span class="ss">f"최적화된 프롬프트: </span><span class="sc">{</span>results[lang]<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb47-28"><a href="#cb47-28"></a>    </span>
+<span id="cb47-29"><a href="#cb47-29"></a>    <span class="cf">return</span> results</span>
+<span id="cb47-30"><a href="#cb47-30"></a></span>
+<span id="cb47-31"><a href="#cb47-31"></a><span class="co"># 실행</span></span>
+<span id="cb47-32"><a href="#cb47-32"></a>languages <span class="op">=</span> [<span class="st">'ko'</span>, <span class="st">'ja'</span>, <span class="st">'zh'</span>]</span>
+<span id="cb47-33"><a href="#cb47-33"></a>examples <span class="op">=</span> {</span>
+<span id="cb47-34"><a href="#cb47-34"></a>    <span class="st">'ko'</span>: korean_examples,</span>
+<span id="cb47-35"><a href="#cb47-35"></a>    <span class="st">'ja'</span>: japanese_examples,</span>
+<span id="cb47-36"><a href="#cb47-36"></a>    <span class="st">'zh'</span>: chinese_examples</span>
+<span id="cb47-37"><a href="#cb47-37"></a>}</span>
+<span id="cb47-38"><a href="#cb47-38"></a></span>
+<span id="cb47-39"><a href="#cb47-39"></a>optimized_prompts <span class="op">=</span> multilingual_optimization(</span>
+<span id="cb47-40"><a href="#cb47-40"></a>    english_prompt<span class="op">=</span><span class="st">"Classify the sentiment as positive or negative."</span>,</span>
+<span id="cb47-41"><a href="#cb47-41"></a>    target_languages<span class="op">=</span>languages,</span>
+<span id="cb47-42"><a href="#cb47-42"></a>    examples_per_language<span class="op">=</span>examples</span>
+<span id="cb47-43"><a href="#cb47-43"></a>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="비용-분석-및-roi" class="level2" data-number="11">
+<h2 data-number="11" class="anchored" data-anchor-id="비용-분석-및-roi"><span class="header-section-number">11</span> 비용 분석 및 ROI</h2>
+<section id="비용-구조" class="level3" data-number="11.1">
+<h3 data-number="11.1" class="anchored" data-anchor-id="비용-구조"><span class="header-section-number">11.1</span> 비용 구조</h3>
+<p><strong>APE/OPRO 비용 요소</strong>:</p>
+<ol type="1">
+<li><strong>프롬프트 생성 비용</strong></li>
+</ol>
+<pre><code>- 후보 생성: 10-50회 LLM 호출
+- 예상 비용: $0.02 - $0.10</code></pre>
+<ol start="2" type="1">
+<li><strong>평가 비용</strong></li>
+</ol>
+<pre><code>- 각 후보마다 테스트 예시들로 평가
+- 후보 20개 × 예시 10개 = 200회 LLM 호출
+- 예상 비용: $0.20 - $1.00</code></pre>
+<ol start="3" type="1">
+<li><strong>반복 개선 비용</strong></li>
+</ol>
+<pre><code>- 3-10 반복
+- 예상 비용: $0.50 - $5.00</code></pre>
+<p><strong>총 비용</strong>: $0.72 - $6.10 per prompt</p>
+</section>
+<section id="roi-계산" class="level3" data-number="11.2">
+<h3 data-number="11.2" class="anchored" data-anchor-id="roi-계산"><span class="header-section-number">11.2</span> ROI 계산</h3>
+<p><strong>예시: 고객 지원 챗봇</strong></p>
+<p><strong>시나리오</strong>: - 월 100,000건의 문의 처리 - 프롬프트 개선으로 정확도 5% 향상 (80% → 85%) - 잘못된 답변 비용: $2 (재처리 비용)</p>
+<p><strong>계산</strong>:</p>
+<pre><code>개선 전:
+- 오답: 100,000 × 0.20 = 20,000건
+- 비용: 20,000 × $2 = $40,000/월
+
+개선 후:
+- 오답: 100,000 × 0.15 = 15,000건  
+- 비용: 15,000 × $2 = $30,000/월
+
+절감액: $10,000/월
+
+APE/OPRO 비용: $5 (일회성)
+
+ROI = ($10,000 - $5) / $5 × 100% = 199,900%</code></pre>
+<p><strong>결론</strong>: 압도적으로 높은 ROI</p>
+</section>
+<section id="비용-최적화-전략" class="level3" data-number="11.3">
+<h3 data-number="11.3" class="anchored" data-anchor-id="비용-최적화-전략"><span class="header-section-number">11.3</span> 비용 최적화 전략</h3>
+<div class="sourceCode" id="cb52"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb52-1"><a href="#cb52-1"></a><span class="kw">class</span> CostOptimizedAPE:</span>
+<span id="cb52-2"><a href="#cb52-2"></a>    <span class="co">"""</span></span>
+<span id="cb52-3"><a href="#cb52-3"></a><span class="co">    비용을 최적화한 APE</span></span>
+<span id="cb52-4"><a href="#cb52-4"></a><span class="co">    """</span></span>
+<span id="cb52-5"><a href="#cb52-5"></a>    </span>
+<span id="cb52-6"><a href="#cb52-6"></a>    <span class="kw">def</span> optimize_with_budget(</span>
+<span id="cb52-7"><a href="#cb52-7"></a>        <span class="va">self</span>,</span>
+<span id="cb52-8"><a href="#cb52-8"></a>        examples: List[Dict],</span>
+<span id="cb52-9"><a href="#cb52-9"></a>        max_budget_usd: <span class="bu">float</span> <span class="op">=</span> <span class="fl">1.0</span></span>
+<span id="cb52-10"><a href="#cb52-10"></a>    ) <span class="op">-&gt;</span> Dict:</span>
+<span id="cb52-11"><a href="#cb52-11"></a>        <span class="co">"""</span></span>
+<span id="cb52-12"><a href="#cb52-12"></a><span class="co">        예산 제약 하에서 최적화</span></span>
+<span id="cb52-13"><a href="#cb52-13"></a><span class="co">        """</span></span>
+<span id="cb52-14"><a href="#cb52-14"></a>        cost_per_call <span class="op">=</span> <span class="fl">0.01</span>  <span class="co"># 예상 비용</span></span>
+<span id="cb52-15"><a href="#cb52-15"></a>        max_calls <span class="op">=</span> <span class="bu">int</span>(max_budget_usd <span class="op">/</span> cost_per_call)</span>
+<span id="cb52-16"><a href="#cb52-16"></a>        </span>
+<span id="cb52-17"><a href="#cb52-17"></a>        <span class="bu">print</span>(<span class="ss">f"예산: $</span><span class="sc">{</span>max_budget_usd<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb52-18"><a href="#cb52-18"></a>        <span class="bu">print</span>(<span class="ss">f"최대 호출 횟수: </span><span class="sc">{</span>max_calls<span class="sc">}</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb52-19"><a href="#cb52-19"></a>        </span>
+<span id="cb52-20"><a href="#cb52-20"></a>        <span class="co"># 전략 1: 후보 수 조정</span></span>
+<span id="cb52-21"><a href="#cb52-21"></a>        <span class="cf">if</span> max_calls <span class="op">&lt;</span> <span class="dv">50</span>:</span>
+<span id="cb52-22"><a href="#cb52-22"></a>            num_candidates <span class="op">=</span> <span class="dv">5</span></span>
+<span id="cb52-23"><a href="#cb52-23"></a>            num_iterations <span class="op">=</span> <span class="dv">2</span></span>
+<span id="cb52-24"><a href="#cb52-24"></a>        <span class="cf">elif</span> max_calls <span class="op">&lt;</span> <span class="dv">200</span>:</span>
+<span id="cb52-25"><a href="#cb52-25"></a>            num_candidates <span class="op">=</span> <span class="dv">10</span></span>
+<span id="cb52-26"><a href="#cb52-26"></a>            num_iterations <span class="op">=</span> <span class="dv">3</span></span>
+<span id="cb52-27"><a href="#cb52-27"></a>        <span class="cf">else</span>:</span>
+<span id="cb52-28"><a href="#cb52-28"></a>            num_candidates <span class="op">=</span> <span class="dv">20</span></span>
+<span id="cb52-29"><a href="#cb52-29"></a>            num_iterations <span class="op">=</span> <span class="dv">5</span></span>
+<span id="cb52-30"><a href="#cb52-30"></a>        </span>
+<span id="cb52-31"><a href="#cb52-31"></a>        <span class="bu">print</span>(<span class="ss">f"후보 수: </span><span class="sc">{</span>num_candidates<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb52-32"><a href="#cb52-32"></a>        <span class="bu">print</span>(<span class="ss">f"반복 횟수: </span><span class="sc">{</span>num_iterations<span class="sc">}</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb52-33"><a href="#cb52-33"></a>        </span>
+<span id="cb52-34"><a href="#cb52-34"></a>        <span class="co"># 전략 2: 평가 샘플 제한</span></span>
+<span id="cb52-35"><a href="#cb52-35"></a>        eval_samples <span class="op">=</span> <span class="bu">min</span>(<span class="bu">len</span>(examples), <span class="dv">20</span>)</span>
+<span id="cb52-36"><a href="#cb52-36"></a>        eval_examples <span class="op">=</span> random.sample(examples, eval_samples)</span>
+<span id="cb52-37"><a href="#cb52-37"></a>        </span>
+<span id="cb52-38"><a href="#cb52-38"></a>        <span class="bu">print</span>(<span class="ss">f"평가 예시: </span><span class="sc">{</span>eval_samples<span class="sc">}</span><span class="ss">개</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb52-39"><a href="#cb52-39"></a>        </span>
+<span id="cb52-40"><a href="#cb52-40"></a>        <span class="co"># 최적화 실행</span></span>
+<span id="cb52-41"><a href="#cb52-41"></a>        result <span class="op">=</span> <span class="va">self</span>.optimize_prompt(</span>
+<span id="cb52-42"><a href="#cb52-42"></a>            train_examples<span class="op">=</span>examples,</span>
+<span id="cb52-43"><a href="#cb52-43"></a>            test_examples<span class="op">=</span>eval_examples,</span>
+<span id="cb52-44"><a href="#cb52-44"></a>            num_candidates<span class="op">=</span>num_candidates,</span>
+<span id="cb52-45"><a href="#cb52-45"></a>            num_iterations<span class="op">=</span>num_iterations</span>
+<span id="cb52-46"><a href="#cb52-46"></a>        )</span>
+<span id="cb52-47"><a href="#cb52-47"></a>        </span>
+<span id="cb52-48"><a href="#cb52-48"></a>        <span class="co"># 실제 비용 추정</span></span>
+<span id="cb52-49"><a href="#cb52-49"></a>        actual_calls <span class="op">=</span> (</span>
+<span id="cb52-50"><a href="#cb52-50"></a>            num_candidates <span class="op">+</span>  <span class="co"># 생성</span></span>
+<span id="cb52-51"><a href="#cb52-51"></a>            num_candidates <span class="op">*</span> eval_samples <span class="op">*</span> num_iterations  <span class="co"># 평가</span></span>
+<span id="cb52-52"><a href="#cb52-52"></a>        )</span>
+<span id="cb52-53"><a href="#cb52-53"></a>        estimated_cost <span class="op">=</span> actual_calls <span class="op">*</span> cost_per_call</span>
+<span id="cb52-54"><a href="#cb52-54"></a>        </span>
+<span id="cb52-55"><a href="#cb52-55"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">실제 API 호출: </span><span class="sc">{</span>actual_calls<span class="sc">}</span><span class="ss">회"</span>)</span>
+<span id="cb52-56"><a href="#cb52-56"></a>        <span class="bu">print</span>(<span class="ss">f"예상 비용: $</span><span class="sc">{</span>estimated_cost<span class="sc">:.2f}</span><span class="ss">"</span>)</span>
+<span id="cb52-57"><a href="#cb52-57"></a>        </span>
+<span id="cb52-58"><a href="#cb52-58"></a>        <span class="cf">return</span> result</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="핵심-요약" class="level2" data-number="12">
+<h2 data-number="12" class="anchored" data-anchor-id="핵심-요약"><span class="header-section-number">12</span> 핵심 요약</h2>
+<p><strong>APE (Automatic Prompt Engineer)</strong>: - LLM으로 프롬프트를 자동 생성 및 최적화 - 6단계 워크플로우 - 사람이 작성한 프롬프트 대비 평균 +4.5% 성능 - 비용: $0.72 - $6.10 per prompt</p>
+<p><strong>OPRO (Optimization by PROmpting)</strong>: - 프롬프트 최적화를 최적화 문제로 접근 - LLM을 optimizer로 사용 - “Take a deep breath” 같은 의외의 프롬프트 발견 - GSM8K에서 baseline 대비 +8.4% 개선</p>
+<p><strong>언제 사용할 것인가?</strong>: - ✅ 명확한 평가 메트릭 - ✅ 충분한 예시 (20+) - ✅ 여러 태스크 동시 최적화 - ✅ 지속적 개선 필요</p>
+<p><strong>언제 사용하지 말 것인가?</strong>: - ❌ 창의적 작업 - ❌ 주관적 평가 - ❌ 예시 극히 적음 - ❌ 빠른 프로토타이핑</p>
+<p><strong>권장 접근법</strong>: 수동 + 자동 하이브리드</p>
+</section>
+<section id="참고문헌" class="level2" data-number="13">
+<h2 data-number="13" class="anchored" data-anchor-id="참고문헌"><span class="header-section-number">13</span> 참고문헌</h2>
+<ol type="1">
+<li><p>Zhou, Y., Muresanu, A. I., Han, Z., Paster, K., Pitis, S., Chan, H., &amp; Ba, J. (2022). <strong>Large language models are human-level prompt engineers.</strong> <em>arXiv preprint arXiv:2211.01910</em>.</p></li>
+<li><p>Yang, C., Wang, X., Lu, Y., Liu, H., Le, Q. V., Zhou, D., &amp; Chen, X. (2023). <strong>Large language models as optimizers.</strong> <em>arXiv preprint arXiv:2309.03409</em>.</p></li>
+<li><p>Pryzant, R., et al.&nbsp;(2023). <strong>Automatic prompt optimization with “gradient descent” and beam search.</strong> <em>arXiv preprint arXiv:2305.03495</em>.</p></li>
+<li><p>Zhang, Y., et al.&nbsp;(2023). <strong>Prompting is programming: A query language for large language models.</strong> <em>PLDI 2023</em>.</p></li>
+</ol>
+
+
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

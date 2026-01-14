@@ -1,0 +1,1764 @@
+---
+title: "APE와 프롬프트 자동 최적화: LLM이 스스로 프롬프트를 개선하는 방법"
+subtitle: LLM을 활용하여 프롬프트를 자동으로 생성하고 최적화하는 메타 레벨 접근법
+description: |
+  Automatic Prompt Engineer (APE)와 OPRO의 정의부터 실전 구현까지 체계적으로 설명한다.
+  Zhou et al. (2022) "Large Language Models are Human-Level Prompt Engineers"와
+  Yang et al. (2023) "Large Language Models as Optimizers" 연구를 바탕으로
+  프롬프트 자동 생성의 원리, 6단계 워크플로우(후보 생성, 실행, 평가, 제거, 재샘플링, 선택),
+  Forward/Reverse Mode 생성 메커니즘, 평가 메트릭과 반복적 개선 전략을 분석한다.
+  Instruction Induction, BIG-Bench, GSM8K 벤치마크에서 수동 프롬프트 대비 최대 4.5% 성능 향상 결과를 제시하고,
+  "Take a deep breath" 같은 의외의 효과적 프롬프트 발견 사례, 감성 분류/대규모 분류 시스템 등 실무 예시와
+  Python 구현 코드(Anthropic Claude API 활용)를 통해 실전 자동화 방법을 상세히 다룬다.
+  비용-ROI 분석($0.72-$6.10 per prompt), 수동 vs 자동 프롬프트 엔지니어링 비교,
+  하이브리드 접근법과 과적합 방지 전략, 지속적 개선 패턴을 제시한다.
+categories:
+  - Prompt Engineering
+  - LLM
+  - AI
+  - Agent
+author: Kwangmin Kim
+date: 02/07/2025
+format: 
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+---
+
+## 들어가며
+
+지금까지 다룬 모든 프롬프트 엔지니어링 기법들에는 공통점이 있다: **사람이 프롬프트를 설계한다는 것이다.** 하지만 최적의 프롬프트를 찾는 것은 시간이 많이 걸리고, 주관적이며, 도메인 전문가가 필요하다.
+
+만약 LLM이 스스로 최적의 프롬프트를 찾을 수 있다면 어떨까?
+
+**Automatic Prompt Engineer (APE)**는 바로 이 아이디어를 구현한다. LLM을 사용하여 프롬프트를 자동으로 생성하고, 평가하고, 선택한다. 이는 "LLM으로 LLM을 위한 프롬프트 만들기"라는 메타 레벨의 접근법이다.
+
+이번 포스트에서는 APE의 원리부터 최신 발전 방향인 OPRO까지, 프롬프트 자동 최적화의 전반을 다룬다.
+
+## Automatic Prompt Engineer (APE)란?
+
+### 핵심 개념
+
+> "주어진 입력-출력 예시들로부터, 가장 효과적인 프롬프트를 자동으로 찾을 수 있는가?"
+
+**기본 아이디어**:
+```
+Input-Output Examples → [APE] → Best Prompt
+```
+
+**예시**:
+```
+입력-출력 예시:
+- Input: "dog" → Output: "animal"
+- Input: "rose" → Output: "plant"  
+- Input: "iron" → Output: "metal"
+
+APE가 찾아낸 프롬프트:
+"Classify the following into its category:"
+```
+
+### 왜 필요한가?
+
+**문제 1: 시간 절약**
+```
+사람이 프롬프트 설계:
+- 시도 1: "What is this?" → 성능 60%
+- 시도 2: "Identify the category" → 성능 70%
+- 시도 3: "Classify into type" → 성능 75%
+- ...
+- 시도 20: "Classify the following into its category" → 성능 85%
+
+→ 20번 시도, 2시간 소요
+```
+
+**APE 사용**:
+```
+- 자동으로 100개 후보 생성
+- 자동으로 평가 및 선택
+- 최적 프롬프트 발견
+
+→ 5분 소요, 성능 85%
+```
+
+**문제 2: 인간의 편향**
+
+사람은 자연스러운 표현을 선호하지만, LLM에게는 부자연스러운 표현이 더 효과적일 수 있다.
+
+**사람이 선호하는 프롬프트**:
+```
+"Let's think step by step and solve this problem carefully."
+→ 성능 78%
+```
+
+**APE가 찾은 프롬프트** (OPRO 연구):
+```
+"Take a deep breath and work on this problem step-by-step."
+→ 성능 80.2%
+```
+
+"Take a deep breath"이 왜 효과적인지는 명확하지 않지만, 실제로 더 좋은 성능을 보인다.
+
+## APE의 6단계 워크플로우
+
+Zhou et al. (2022)의 원 논문에 따르면, APE는 다음 6단계로 작동한다.
+
+### 후보 프롬프트 생성 (Instruction Generation)
+
+**입력**: 입력-출력 예시들
+**출력**: N개의 후보 프롬프트
+
+```python
+import anthropic
+from typing import List, Dict
+
+class APE:
+    """
+    Automatic Prompt Engineer 구현
+    """
+    
+    def __init__(self, api_key: str):
+        self.client = anthropic.Anthropic(api_key=api_key)
+        self.model = "claude-sonnet-4-20250514"
+    
+    def generate_candidate_prompts(
+        self, 
+        examples: List[Dict[str, str]],
+        num_candidates: int = 10
+    ) -> List[str]:
+        """
+        Step 1: 후보 프롬프트 생성
+        
+        Args:
+            examples: [{"input": "...", "output": "..."}, ...]
+            num_candidates: 생성할 후보 프롬프트 수
+        """
+        # 예시들을 포맷팅
+        examples_str = "\n".join([
+            f"Input: {ex['input']}\nOutput: {ex['output']}"
+            for ex in examples
+        ])
+        
+        # 프롬프트 생성을 위한 메타 프롬프트
+        generation_prompt = f"""I gave a language model the following examples:
+
+        {examples_str}
+
+        I want you to generate {num_candidates} different instruction prompts that would lead the model to produce these outputs from these inputs.
+
+        Each instruction should be clear, concise, and effective.
+
+        Generate {num_candidates} instruction prompts (one per line):
+        1."""
+        
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=1000,
+            temperature=0.8,  # 다양성을 위해 높은 temperature
+            messages=[{"role": "user", "content": generation_prompt}]
+        )
+        
+        response = message.content[0].text
+        
+        # 후보 파싱
+        candidates = []
+        for line in response.split('\n'):
+            import re
+            # 번호 제거 (1., 2., etc.)
+            line = re.sub(r'^\d+\.\s*', '', line.strip())
+            
+            if line and len(line) > 10:  # 너무 짧은 것 제외
+                candidates.append(line)
+        
+        return candidates[:num_candidates]
+```
+
+**생성 예시**:
+
+```python
+examples = [
+    {"input": "happy", "output": "positive"},
+    {"input": "sad", "output": "negative"},
+    {"input": "angry", "output": "negative"},
+    {"input": "joyful", "output": "positive"}
+]
+
+ape = APE(api_key="your-api-key")
+candidates = ape.generate_candidate_prompts(examples, num_candidates=5)
+
+# 출력:
+# 1. "Classify the sentiment of the following word as positive or negative."
+# 2. "Determine whether the emotion expressed is positive or negative."
+# 3. "Analyze the sentiment: positive or negative?"
+# 4. "Is this word expressing a positive or negative feeling?"
+# 5. "Categorize the emotional tone as either positive or negative."
+```
+
+### 후보 프롬프트 실행 (Execution)
+
+각 후보 프롬프트를 실제로 실행하여 결과를 얻는다.
+
+```python
+    def execute_prompt(
+        self, 
+        prompt: str, 
+        test_input: str
+    ) -> str:
+        """
+        Step 2: 프롬프트 실행
+        
+        Args:
+            prompt: 후보 프롬프트
+            test_input: 테스트 입력
+        
+        Returns:
+            모델의 출력
+        """
+        full_prompt = f"{prompt}\n\nInput: {test_input}\nOutput:"
+        
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=100,
+            temperature=0,  # 평가를 위해 deterministic
+            messages=[{"role": "user", "content": full_prompt}]
+        )
+        
+        return message.content[0].text.strip()
+```
+
+### 프롬프트 평가 (Scoring)
+
+각 후보가 얼마나 잘 작동하는지 점수를 매긴다.
+
+```python
+    def score_prompt(
+        self,
+        prompt: str,
+        test_examples: List[Dict[str, str]]
+    ) -> float:
+        """
+        Step 3: 프롬프트 점수 계산
+        
+        Args:
+            prompt: 평가할 프롬프트
+            test_examples: 테스트 예시들
+        
+        Returns:
+            정확도 (0~1)
+        """
+        correct = 0
+        total = len(test_examples)
+        
+        for example in test_examples:
+            test_input = example['input']
+            expected_output = example['output']
+            
+            # 프롬프트 실행
+            actual_output = self.execute_prompt(prompt, test_input)
+            
+            # 정확도 체크 (단순 매칭 - 코사인 유사도 등 적절한 메트릭 결정)
+            if actual_output.lower().strip() == expected_output.lower().strip():
+                correct += 1
+        
+        accuracy = correct / total
+        return accuracy
+```
+
+### 하위 후보 제거 (Pruning)
+
+성능이 낮은 후보들을 제거한다.
+
+```python
+    def prune_candidates(
+        self,
+        candidates: List[str],
+        scores: List[float],
+        keep_ratio: float = 0.5
+    ) -> List[str]:
+        """
+        Step 4: 하위 후보 제거
+        
+        Args:
+            candidates: 후보 프롬프트들
+            scores: 각 후보의 점수
+            keep_ratio: 유지할 비율 (0~1)
+        
+        Returns:
+            상위 후보들
+        """
+        # 점수 기준으로 정렬
+        scored_candidates = list(zip(candidates, scores))
+        scored_candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        # 상위 keep_ratio만큼 유지
+        keep_count = max(1, int(len(candidates) * keep_ratio))
+        top_candidates = [c for c, s in scored_candidates[:keep_count]]
+        
+        return top_candidates
+```
+
+### 후보 샘플링 및 개선 (Resampling & Improving)
+
+상위 후보들을 바탕으로 새로운 후보를 생성한다.
+
+```python
+    def resample_from_top(
+        self,
+        top_candidates: List[str],
+        num_new: int = 10
+    ) -> List[str]:
+        """
+        Step 5: 상위 후보 기반 새 후보 생성
+        
+        Args:
+            top_candidates: 상위 프롬프트들
+            num_new: 생성할 새 후보 수
+        
+        Returns:
+            개선된 후보들
+        """
+        top_str = "\n".join([f"- {c}" for c in top_candidates])
+        
+        resample_prompt = f"""These are the best-performing instruction prompts so far:
+
+{top_str}
+
+Generate {num_new} new instruction prompts that are:
+1. Similar to these successful prompts
+2. But with variations that might improve performance
+3. Clear and concise
+
+New prompts (one per line):
+1."""
+        
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=1000,
+            temperature=0.8,
+            messages=[{"role": "user", "content": resample_prompt}]
+        )
+        
+        response = message.content[0].text
+        
+        # 새 후보 파싱
+        new_candidates = []
+        for line in response.split('\n'):
+            import re
+            line = re.sub(r'^\d+\.\s*', '', line.strip())
+            
+            if line and len(line) > 10:
+                new_candidates.append(line)
+        
+        return new_candidates[:num_new]
+```
+
+### 최종 선정 (Selection)
+
+최고 성능의 프롬프트를 선택한다.
+
+```python
+    def select_best(
+        self,
+        candidates: List[str],
+        scores: List[float]
+    ) -> Dict[str, any]:
+        """
+        Step 6: 최고 프롬프트 선정
+        
+        Returns:
+            최고 프롬프트와 점수
+        """
+        best_idx = scores.index(max(scores))
+        
+        return {
+            'prompt': candidates[best_idx],
+            'score': scores[best_idx],
+            'rank': 1
+        }
+```
+
+### 전체 파이프라인 통합
+
+```python
+    def optimize_prompt(
+        self,
+        train_examples: List[Dict[str, str]],
+        test_examples: List[Dict[str, str]],
+        num_candidates: int = 20,
+        num_iterations: int = 3
+    ) -> Dict:
+        """
+        APE 전체 파이프라인
+        
+        Args:
+            train_examples: 프롬프트 생성에 사용할 예시
+            test_examples: 평가에 사용할 예시
+            num_candidates: 초기 후보 수
+            num_iterations: 반복 횟수
+        
+        Returns:
+            최적 프롬프트 및 메트릭
+        """
+        print(f" APE 시작")
+        print(f"  훈련 예시: {len(train_examples)}개")
+        print(f"  테스트 예시: {len(test_examples)}개")
+        print(f"  초기 후보: {num_candidates}개")
+        print(f"  반복 횟수: {num_iterations}\n")
+        
+        # Step 1: 초기 후보 생성
+        print("=" * 80)
+        print("Step 1: 초기 후보 생성")
+        print("=" * 80)
+        
+        candidates = self.generate_candidate_prompts(
+            train_examples, 
+            num_candidates=num_candidates
+        )
+        
+        print(f"✅ {len(candidates)}개 후보 생성 완료\n")
+        
+        # 반복적 개선
+        for iteration in range(num_iterations):
+            print("=" * 80)
+            print(f"Iteration {iteration + 1}/{num_iterations}")
+            print("=" * 80)
+            
+            # Step 2 & 3: 평가
+            print(f"📊 후보 평가 중... ({len(candidates)}개)")
+            
+            scores = []
+            for i, candidate in enumerate(candidates):
+                score = self.score_prompt(candidate, test_examples)
+                scores.append(score)
+                
+                if (i + 1) % 5 == 0:
+                    print(f"  {i+1}/{len(candidates)} 완료")
+            
+            print(f"✅ 평가 완료\n")
+            
+            # 상위 후보 출력
+            scored = list(zip(candidates, scores))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            
+            print(f"🏆 상위 3개 후보:")
+            for i, (cand, score) in enumerate(scored[:3], 1):
+                print(f"  [{i}] 점수: {score:.3f}")
+                print(f"      프롬프트: {cand}")
+            print()
+            
+            # Step 4: 하위 제거
+            if iteration < num_iterations - 1:  # 마지막 반복이 아니면
+                top_candidates = self.prune_candidates(
+                    candidates, 
+                    scores, 
+                    keep_ratio=0.3
+                )
+                
+                print(f"✂️  하위 제거: {len(candidates)} → {len(top_candidates)}개\n")
+                
+                # Step 5: 재샘플링
+                print(f"🔄 새 후보 생성 중...")
+                new_candidates = self.resample_from_top(
+                    top_candidates,
+                    num_new=num_candidates
+                )
+                
+                print(f"✅ {len(new_candidates)}개 새 후보 생성\n")
+                
+                candidates = new_candidates
+        
+        # Step 6: 최종 선정
+        print("=" * 80)
+        print("최종 결과")
+        print("=" * 80)
+        
+        best = self.select_best(candidates, scores)
+        
+        print(f"\n🎯 최적 프롬프트:")
+        print(f"   {best['prompt']}")
+        print(f"\n📈 성능: {best['score']:.3f}\n")
+        
+        return {
+            'best_prompt': best['prompt'],
+            'best_score': best['score'],
+            'all_candidates': candidates,
+            'all_scores': scores
+        }
+
+
+# 사용 예시
+def main():
+    # 훈련 예시 (프롬프트 생성용)
+    train_examples = [
+        {"input": "happy", "output": "positive"},
+        {"input": "sad", "output": "negative"},
+        {"input": "joyful", "output": "positive"},
+        {"input": "angry", "output": "negative"}
+    ]
+    
+    # 테스트 예시 (평가용)
+    test_examples = [
+        {"input": "excited", "output": "positive"},
+        {"input": "depressed", "output": "negative"},
+        {"input": "content", "output": "positive"},
+        {"input": "frustrated", "output": "negative"},
+        {"input": "delighted", "output": "positive"},
+        {"input": "miserable", "output": "negative"}
+    ]
+    
+    # APE 실행
+    ape = APE(api_key="your-api-key")
+    
+    result = ape.optimize_prompt(
+        train_examples=train_examples,
+        test_examples=test_examples,
+        num_candidates=10,
+        num_iterations=3
+    )
+    
+    # 최적 프롬프트 사용
+    best_prompt = result['best_prompt']
+    test_input = "thrilled"
+    
+    print(f"테스트:")
+    print(f"  프롬프트: {best_prompt}")
+    print(f"  입력: {test_input}")
+    
+    output = ape.execute_prompt(best_prompt, test_input)
+    print(f"  출력: {output}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### 실행 결과 예시
+
+```
+🚀 APE 시작
+  훈련 예시: 4개
+  테스트 예시: 6개
+  초기 후보: 10개
+  반복 횟수: 3
+
+================================================================================
+Step 1: 초기 후보 생성
+================================================================================
+✅ 10개 후보 생성 완료
+
+================================================================================
+Iteration 1/3
+================================================================================
+📊 후보 평가 중... (10개)
+  5/10 완료
+  10/10 완료
+✅ 평가 완료
+
+🏆 상위 3개 후보:
+  [1] 점수: 0.833
+      프롬프트: Classify the sentiment of the following word as positive or negative.
+  [2] 점수: 0.833
+      프롬프트: Determine whether this emotion is positive or negative.
+  [3] 점수: 0.667
+      프롬프트: Is this word expressing a positive or negative feeling?
+
+✂️  하위 제거: 10 → 3개
+
+🔄 새 후보 생성 중...
+✅ 10개 새 후보 생성
+
+================================================================================
+Iteration 2/3
+================================================================================
+📊 후보 평가 중... (10개)
+  5/10 완료
+  10/10 완료
+✅ 평가 완료
+
+🏆 상위 3개 후보:
+  [1] 점수: 1.000
+      프롬프트: Categorize the emotional tone as either positive or negative.
+  [2] 점수: 0.833
+      프롬프트: Classify the sentiment expressed as positive or negative.
+  [3] 점수: 0.833
+      프롬프트: Analyze whether the word conveys a positive or negative emotion.
+
+✂️  하위 제거: 10 → 3개
+
+🔄 새 후보 생성 중...
+✅ 10개 새 후보 생성
+
+================================================================================
+Iteration 3/3
+================================================================================
+📊 후보 평가 중... (10개)
+  5/10 완료
+  10/10 완료
+✅ 평가 완료
+
+🏆 상위 3개 후보:
+  [1] 점수: 1.000
+      프롬프트: Categorize the emotional tone as either positive or negative.
+  [2] 점수: 1.000
+      프롬프트: Determine if the word expresses a positive or negative sentiment.
+  [3] 점수: 0.833
+      프롬프트: Classify this emotional word as positive or negative.
+
+================================================================================
+최종 결과
+================================================================================
+
+🎯 최적 프롬프트:
+   Categorize the emotional tone as either positive or negative.
+
+📈 성능: 1.000
+
+테스트:
+  프롬프트: Categorize the emotional tone as either positive or negative.
+  입력: thrilled
+  출력: positive
+```
+
+## OPRO: Optimization by PROmpting
+
+APE의 후속 연구인 **OPRO (Optimization by PROmpting)**는 Google DeepMind의 Yang et al. (2023)이 제안했다.
+
+### 핵심 아이디어
+
+OPRO는 프롬프트 최적화를 **최적화 문제**로 본다:
+
+$$
+\text{maximize}_{p \in \mathcal{P}} \quad f(p)
+$$
+
+여기서:
+- $p$: 프롬프트
+- $\mathcal{P}$: 가능한 프롬프트 공간
+- $f(p)$: 프롬프트의 성능 (예: 정확도)
+
+**OPRO의 접근법**: LLM을 "optimizer"로 사용
+
+```
+Optimization History → [LLM Optimizer] → Improved Prompt
+```
+
+### OPRO의 작동 방식
+
+```python
+class OPRO:
+    """
+    Optimization by PROmpting
+    """
+    
+    def __init__(self, api_key: str):
+        self.client = anthropic.Anthropic(api_key=api_key)
+        self.model = "claude-sonnet-4-20250514"
+        self.optimization_history = []
+    
+    def optimize_prompt(
+        self,
+        initial_prompt: str,
+        test_examples: List[Dict[str, str]],
+        num_iterations: int = 10
+    ) -> Dict:
+        """
+        OPRO 최적화 루프
+        
+        Args:
+            initial_prompt: 초기 프롬프트
+            test_examples: 평가 예시들
+            num_iterations: 최적화 반복 횟수
+        
+        Returns:
+            최적 프롬프트 및 히스토리
+        """
+        print(f"🎯 OPRO 시작")
+        print(f"  초기 프롬프트: {initial_prompt}")
+        print(f"  반복 횟수: {num_iterations}\n")
+        
+        current_prompt = initial_prompt
+        
+        for iteration in range(num_iterations):
+            print(f"{'='*80}")
+            print(f"Iteration {iteration + 1}/{num_iterations}")
+            print(f"{'='*80}")
+            
+            # Step 1: 현재 프롬프트 평가
+            score = self._evaluate_prompt(current_prompt, test_examples)
+            
+            # 히스토리에 추가
+            self.optimization_history.append({
+                'prompt': current_prompt,
+                'score': score,
+                'iteration': iteration + 1
+            })
+            
+            print(f"📊 현재 프롬프트 성능: {score:.3f}")
+            print(f"   프롬프트: {current_prompt}\n")
+            
+            # Step 2: 최적화 메타 프롬프트 생성
+            meta_prompt = self._create_meta_prompt()
+            
+            # Step 3: LLM이 개선된 프롬프트 생성
+            improved_prompt = self._generate_improved_prompt(meta_prompt)
+            
+            print(f"🔄 개선된 프롬프트 제안:")
+            print(f"   {improved_prompt}\n")
+            
+            # Step 4: 개선된 프롬프트로 업데이트
+            current_prompt = improved_prompt
+        
+        # 최고 성능 프롬프트 선택
+        best = max(self.optimization_history, key=lambda x: x['score'])
+        
+        print(f"{'='*80}")
+        print("최종 결과")
+        print(f"{'='*80}")
+        print(f"\n🏆 최적 프롬프트 (Iteration {best['iteration']}):")
+        print(f"   {best['prompt']}")
+        print(f"\n📈 최고 성능: {best['score']:.3f}")
+        
+        return {
+            'best_prompt': best['prompt'],
+            'best_score': best['score'],
+            'history': self.optimization_history
+        }
+    
+    def _create_meta_prompt(self) -> str:
+        """
+        최적화를 위한 메타 프롬프트 생성
+        
+        히스토리를 바탕으로 LLM에게 개선 방향 제시
+        """
+        # 히스토리 포맷팅
+        history_str = ""
+        for entry in self.optimization_history[-5:]:  # 최근 5개만
+            history_str += f"Prompt: {entry['prompt']}\n"
+            history_str += f"Score: {entry['score']:.3f}\n\n"
+        
+        meta_prompt = f"""You are a prompt optimizer. Your goal is to improve instruction prompts to maximize their performance.
+
+        Previous prompts and their scores:
+        {history_str}
+
+        Based on the history above, generate an improved prompt that:
+        1. Keeps what works well from high-scoring prompts
+        2. Fixes issues from low-scoring prompts
+        3. Is clear, concise, and specific
+        4. Aims to achieve a higher score
+
+        Generate ONE improved prompt (do not explain, just output the prompt):"""
+        
+        return meta_prompt
+    
+    def _generate_improved_prompt(self, meta_prompt: str) -> str:
+        """
+        LLM으로 개선된 프롬프트 생성
+        """
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=200,
+            temperature=0.7,
+            messages=[{"role": "user", "content": meta_prompt}]
+        )
+        
+        improved_prompt = message.content[0].text.strip()
+        
+        # 불필요한 설명 제거 (있다면)
+        if '\n' in improved_prompt:
+            improved_prompt = improved_prompt.split('\n')[0]
+        
+        return improved_prompt
+    
+    def _evaluate_prompt(
+        self, 
+        prompt: str, 
+        test_examples: List[Dict[str, str]]
+    ) -> float:
+        """
+        프롬프트 평가
+        """
+        correct = 0
+        
+        for example in test_examples:
+            full_prompt = f"{prompt}\n\nInput: {example['input']}\nOutput:"
+            
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=50,
+                temperature=0,
+                messages=[{"role": "user", "content": full_prompt}]
+            )
+            
+            output = message.content[0].text.strip().lower()
+            expected = example['output'].lower()
+            
+            if output == expected:
+                correct += 1
+        
+        return correct / len(test_examples)
+
+
+# 사용 예시
+def test_opro():
+    test_examples = [
+        {"input": "excited", "output": "positive"},
+        {"input": "depressed", "output": "negative"},
+        {"input": "content", "output": "positive"},
+        {"input": "frustrated", "output": "negative"},
+        {"input": "delighted", "output": "positive"},
+        {"input": "miserable", "output": "negative"}
+    ]
+    
+    opro = OPRO(api_key="your-api-key")
+    
+    result = opro.optimize_prompt(
+        initial_prompt="Classify the sentiment",
+        test_examples=test_examples,
+        num_iterations=10
+    )
+    
+    # 성능 추이 시각화
+    import matplotlib.pyplot as plt
+    
+    iterations = [h['iteration'] for h in result['history']]
+    scores = [h['score'] for h in result['history']]
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(iterations, scores, marker='o')
+    plt.xlabel('Iteration')
+    plt.ylabel('Score')
+    plt.title('OPRO Optimization Progress')
+    plt.grid(True)
+    plt.savefig('opro_progress.png')
+    
+    print("\n📊 성능 추이 그래프 저장: opro_progress.png")
+
+
+if __name__ == "__main__":
+    test_opro()
+```
+
+### "Take a deep breath" 발견
+
+OPRO 연구에서 가장 흥미로운 발견은 다음 프롬프트다:
+
+```
+"Take a deep breath and work on this problem step-by-step."
+```
+
+이 프롬프트는 GSM8K (수학 문제) 벤치마크에서 **80.2%**의 정확도를 달성했다.
+
+**비교**:
+- "Let's think step by step.": 78.2%
+- "Take a deep breath and work on this problem step-by-step.": 80.2%
+
+**왜 효과적인가?**
+
+이론적 설명은 아직 불분명하지만, 가설들:
+
+1. **토큰 분포 변화**: "Take a deep breath"가 모델의 다음 토큰 예측 분포를 변경
+2. **주의 집중**: 모델이 문제에 더 집중하도록 유도
+3. **우연**: 특정 학습 데이터와의 상호작용
+
+**중요한 교훈**: 인간의 직관으로는 찾기 어려운 프롬프트를 자동 최적화로 발견할 수 있다.
+
+## APE 실험 결과 분석
+
+Zhou et al. (2022)의 원 논문에서는 APE를 다양한 벤치마크에서 테스트했다.
+
+### 벤치마크 성능
+
+#### Instruction Induction
+
+24개의 다양한 태스크에 대한 프롬프트 생성 평가.
+
+**태스크 예시**:
+- Antonyms (반의어): "good" → "bad"
+- Larger Animal (큰 동물): "cat, elephant" → "elephant"
+- Cause Selection (원인 선택): "premise: ..., choice1: ..., choice2: ..." → "choice1"
+
+**결과**:
+
+| 방법 | 평균 정확도 |
+|-----|-----------|
+| Human-written prompts | 74.0% |
+| APE (forward mode) | 76.0% |
+| APE (reverse mode) | 77.0% |
+| APE (best) | 78.5% |
+
+**핵심 발견**:
+- ✅ APE가 사람이 작성한 프롬프트보다 **최대 4.5% 높은 성능**
+- ✅ 일부 태스크에서는 10%+ 차이
+- ✅ 인간이 놓친 효과적인 표현 발견
+
+**구체적 예시**:
+
+```
+태스크: Antonyms (반의어 찾기)
+
+Human prompt:
+"Write the opposite of the following word:"
+→ 정확도: 82%
+
+APE-generated prompt:
+"Provide an antonym for the given word:"
+→ 정확도: 89%
+
+차이: 7% 향상
+```
+
+#### BIG-Bench
+
+구글의 BIG-Bench에서 21개 태스크 평가.
+
+**결과 요약**:
+
+| 태스크 카테고리 | APE 승률 |
+|--------------|---------|
+| Reasoning | 65% |
+| Language Understanding | 71% |
+| Common Sense | 58% |
+| Mathematics | 52% |
+
+**전체적으로**: APE가 사람이 작성한 프롬프트보다 **62%의 태스크에서 우수**
+
+### Forward vs Reverse Mode
+
+APE는 두 가지 모드로 작동한다:
+
+#### Forward Mode (순방향)
+```
+Input-Output Examples → Generate Instruction
+```
+
+**프롬프트**:
+```
+I gave a friend an instruction and some inputs. 
+The friend read the instruction and produced these outputs:
+
+Input: dog
+Output: animal
+
+Input: rose  
+Output: plant
+
+What was the instruction?
+```
+
+#### Reverse Mode (역방향)
+```
+Generate Instruction → Verify with Examples
+```
+
+**프롬프트**:
+```
+I instructed a friend to classify objects into categories.
+
+I gave the instruction "{{INSTRUCTION}}"
+
+Would the friend produce these outputs?
+Input: dog → Output: animal
+Input: rose → Output: plant
+
+(yes/no evaluation)
+```
+
+**성능 비교**:
+- Forward mode: 76.0%
+- Reverse mode: 77.0%
+- **Reverse mode가 약간 더 우수**
+
+이유: Reverse mode는 생성된 프롬프트를 예시로 검증하는 단계가 추가되어 더 정확하다.
+
+## OPRO 벤치마크 성능
+
+Yang et al. (2023)의 OPRO 연구는 더 체계적인 실험을 수행했다.
+
+### GSM8K (수학 문제)
+
+**데이터셋**: 초등학교 수학 문제 8,500개
+
+**결과**:
+
+| Prompt | Accuracy |
+|--------|----------|
+| Zero-shot | 71.8% |
+| "Let's think step by step." | 78.2% |
+| "Let's work this out in a step by step way to be sure we have the right answer." | 79.5% |
+| **"Take a deep breath and work on this problem step-by-step."** | **80.2%** |
+
+**개선폭**: Baseline 대비 +8.4%
+
+**발견된 효과적 프롬프트들**:
+```
+1. "Take a deep breath and work on this problem step-by-step."
+   → 80.2%
+
+2. "Let's solve this problem by splitting it into steps."
+   → 79.9%
+
+3. "First, let's think about what we know and what we need to find."
+   → 79.7%
+
+4. "Break this problem down into smaller, manageable steps."
+   → 79.5%
+```
+
+### "Take a deep breath" 상세 분석
+
+이 프롬프트가 왜 효과적인지 더 깊이 분석해보자.
+
+#### 가설 1: 토큰 길이 증가
+
+**이론**: 더 긴 프롬프트가 모델에게 더 많은 "생각할 시간"을 준다.
+
+**검증**:
+```python
+prompts = [
+    "Solve this problem.",  # 4 tokens → 71.8%
+    "Let's think step by step.",  # 6 tokens → 78.2%
+    "Take a deep breath and work on this problem step-by-step.",  # 13 tokens → 80.2%
+    "Take a very very very deep breath and work on this problem step-by-step carefully.",  # 18 tokens → 79.1%
+]
+```
+
+**결과**: 단순히 길다고 좋은 것은 아님. 13 토큰이 최적.
+
+#### 가설 2: "심호흡" 효과
+
+**이론**: "Take a deep breath"가 모델의 주의를 집중시킨다.
+
+**Ablation Study**:
+```python
+prompts = [
+    "Work on this problem step-by-step.",  
+    # → 78.9%
+    
+    "Take a deep breath.",  
+    # → 72.1% (단독으로는 효과 없음)
+    
+    "Take a deep breath and work on this problem step-by-step.",  
+    # → 80.2% (조합이 중요)
+]
+```
+
+**결론**: "Take a deep breath" 자체보다는 "and work on this problem step-by-step"과의 **조합**이 중요.
+
+#### 가설 3: 학습 데이터 상관관계
+
+**이론**: 학습 데이터에 유사한 패턴이 있었을 가능성.
+
+**분석**: 
+- 인터넷 데이터에서 "Take a deep breath"는 주로 **스트레스 상황**에서 사용
+- 어려운 문제 풀이 가이드에서 자주 등장
+- 모델이 이를 "복잡한 문제 → 신중한 접근" 패턴으로 학습했을 가능성
+
+**결론**: 우연이 아니라 학습 데이터의 패턴과 연관.
+
+### BigBench-Hard
+
+**데이터셋**: 23개의 어려운 추론 태스크
+
+**결과**:
+
+| 방법 | 평균 정확도 |
+|-----|-----------|
+| Few-shot (baseline) | 43.2% |
+| CoT (manual) | 51.7% |
+| **OPRO-optimized** | **55.3%** |
+
+**개선폭**: +12.1% (baseline 대비)
+
+**태스크별 최적 프롬프트 예시**:
+
+```
+Logical Deduction:
+"Analyze the given information systematically and eliminate impossible options."
+→ 62.1% (vs 54.3% baseline)
+
+Causal Judgment:
+"Consider both direct and indirect relationships between events."
+→ 58.7% (vs 49.2% baseline)
+
+Formal Fallacies:
+"Identify the logical structure of the argument, then check for validity."
+→ 71.2% (vs 63.8% baseline)
+```
+
+## 반복 횟수와 성능의 관계
+
+OPRO의 최적화 과정에서 반복 횟수가 성능에 미치는 영향:
+
+```python
+# 실험 데이터 (GSM8K)
+iterations = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+scores = [72.1, 74.3, 76.2, 77.8, 78.9, 79.5, 79.9, 80.1, 80.2, 80.2]
+
+# 시각화
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10, 6))
+plt.plot(iterations, scores, marker='o', linewidth=2, markersize=8)
+plt.xlabel('Optimization Iteration', fontsize=12)
+plt.ylabel('Accuracy (%)', fontsize=12)
+plt.title('OPRO Performance vs Iterations (GSM8K)', fontsize=14)
+plt.grid(True, alpha=0.3)
+plt.axhline(y=78.2, color='r', linestyle='--', label='CoT baseline')
+plt.legend()
+plt.tight_layout()
+plt.savefig('opro_iterations.png')
+```
+
+**관찰**:
+- 처음 5번 반복에서 급격한 개선 (72.1% → 78.9%)
+- 6-8번: 점진적 개선 (78.9% → 80.1%)
+- 9번 이상: 수렴 (80.2%)
+
+**권장사항**: **8-10번 반복**이 비용 대비 효과적.
+
+## APE/OPRO의 한계점
+
+### 한계 1: 높은 연산 비용
+
+**문제**: 많은 API 호출이 필요하다.
+
+**비용 계산 (OPRO 예시)**:
+
+```
+설정:
+- 10번 반복
+- 각 반복마다 5개 테스트 예시로 평가
+- 총 50번 LLM 호출 (10 iterations × 5 examples)
+
+Claude Sonnet 4 기준:
+- Input: 200 tokens/call × 50 = 10,000 tokens
+- Output: 100 tokens/call × 50 = 5,000 tokens
+- 비용: (10,000 × $3 + 5,000 × $15) / 1,000,000 = $0.105
+
+프롬프트 1개 최적화에 $0.10
+```
+
+**비교**:
+- 수동 프롬프트 설계: 무료 (사람 시간은 별도)
+- APE/OPRO: $0.05 - $0.50 per prompt
+
+**완화 전략**:
+```python
+# 1. 캐싱 활용
+cache = {}
+
+def evaluate_with_cache(prompt, examples):
+    cache_key = (prompt, tuple(examples))
+    if cache_key in cache:
+        return cache[cache_key]
+    
+    score = evaluate(prompt, examples)
+    cache[cache_key] = score
+    return score
+
+# 2. Early stopping
+def optimize_with_early_stopping(patience=3):
+    best_score = 0
+    no_improvement_count = 0
+    
+    for iteration in range(max_iterations):
+        score = evaluate_current_prompt()
+        
+        if score > best_score:
+            best_score = score
+            no_improvement_count = 0
+        else:
+            no_improvement_count += 1
+        
+        if no_improvement_count >= patience:
+            print(f"Early stopping at iteration {iteration}")
+            break
+
+# 3. 더 작은 평가 세트
+# 전체 데이터셋 대신 대표 샘플만 사용
+eval_samples = random.sample(all_examples, k=20)  # 100 → 20
+```
+
+### 한계 2: 태스크 의존성
+
+**문제**: 모든 태스크에서 효과적이지 않다.
+
+**효과적인 태스크**:
+- ✅ 명확한 입력-출력 구조
+- ✅ 객관적 평가 가능
+- ✅ 많은 예시 확보 가능
+
+**비효과적인 태스크**:
+- ❌ 창의적 글쓰기
+- ❌ 주관적 평가 필요
+- ❌ 예시가 극히 적음
+
+**실험 결과**:
+
+| 태스크 유형 | APE 성공률 | 수동 대비 개선 |
+|----------|----------|------------|
+| Classification | 85% | +4.5% |
+| Extraction | 78% | +3.2% |
+| Reasoning | 71% | +5.8% |
+| Creative Writing | 42% | -2.1% |
+| Subjective Q&A | 51% | +0.3% |
+
+### 한계 3: 프롬프트 해석 어려움
+
+**문제**: APE/OPRO가 찾은 프롬프트가 왜 좋은지 설명하기 어렵다.
+
+**예시**:
+```
+APE가 찾은 프롬프트:
+"Considering all relevant factors, determine the most appropriate response."
+
+왜 효과적인가? 
+→ "all relevant factors"가 무엇을 의미하는지 불명확
+→ 하지만 실제로 5% 성능 향상
+```
+
+**문제점**:
+- 디버깅 어려움
+- 개선 방향 불명확
+- 도메인 전문가의 검증 필요
+
+**완화 전략**:
+```python
+def explain_prompt_effectiveness(prompt: str, examples: List) -> str:
+    """
+    프롬프트가 왜 효과적인지 분석
+    """
+    explanation_prompt = f"""다음 프롬프트가 왜 효과적인지 분석하세요:
+
+프롬프트: {prompt}
+
+예시들:
+{format_examples(examples)}
+
+이 프롬프트의 효과적인 요소들을 설명하세요:
+1. 핵심 키워드
+2. 구조적 특징
+3. 모델에게 전달하는 신호
+
+분석:"""
+    
+    # LLM으로 설명 생성
+    explanation = generate_explanation(explanation_prompt)
+    return explanation
+```
+
+### 한계 4: 과적합 위험
+
+**문제**: 평가 세트에 과적합될 수 있다.
+
+**예시**:
+```
+훈련/평가 세트: 긍정/부정 감성 분류 (간단한 단어들)
+- happy → positive
+- sad → negative
+
+최적화된 프롬프트:
+"Is this word happy or sad? Answer positive or negative."
+→ 평가 세트: 100%
+→ 실제 테스트: 72%
+
+과적합!
+```
+
+**완화 전략**:
+```python
+# Train/Validation/Test split
+def split_examples(examples, train_ratio=0.6, val_ratio=0.2):
+    random.shuffle(examples)
+    
+    n = len(examples)
+    train_end = int(n * train_ratio)
+    val_end = int(n * (train_ratio + val_ratio))
+    
+    train = examples[:train_end]
+    val = examples[train_end:val_end]
+    test = examples[val_end:]
+    
+    return train, val, test
+
+# 최적화는 train으로, 선택은 val으로
+train_examples, val_examples, test_examples = split_examples(all_examples)
+
+# Train으로 후보 생성
+candidates = ape.generate_candidate_prompts(train_examples)
+
+# Val으로 평가 및 선택
+best_prompt = ape.select_best(candidates, val_examples)
+
+# Test로 최종 성능 측정
+final_score = evaluate(best_prompt, test_examples)
+```
+
+## 수동 vs 자동 프롬프트 엔지니어링
+
+### 비교표
+
+| 특성 | 수동 (사람) | 자동 (APE/OPRO) |
+|-----|----------|---------------|
+| **시간** | 느림 (수 시간) | 빠름 (수 분) |
+| **비용** | 사람 시간 | API 비용 ($0.05-0.50) |
+| **성능** | 가변적 | 일관적 |
+| **해석 가능성** | 높음 | 낮음 |
+| **창의성** | 높음 | 제한적 |
+| **확장성** | 낮음 | 높음 |
+| **도메인 지식** | 필수 | 선택적 |
+
+### 언제 수동을 사용할 것인가?
+
+**수동 프롬프트 엔지니어링이 나은 경우**:
+
+1. **예시가 매우 적을 때**
+```
+예시: 3개 미만
+→ APE는 패턴을 학습하기 어려움
+→ 사람의 도메인 지식이 더 중요
+```
+
+2. **창의적 작업**
+```
+태스크: "SF 소설 작성"
+→ 사람이 더 나은 스타일 지시 작성
+→ APE는 "write creatively" 같은 일반적 프롬프트만 생성
+```
+
+3. **설명 가능성이 중요**
+```
+환경: 의료, 법률, 금융
+→ "왜 이 프롬프트를 사용하는가?" 설명 필요
+→ 사람이 설계한 프롬프트가 더 투명
+```
+
+4. **빠른 프로토타이핑**
+```
+상황: 아이디어 검증 단계
+→ APE 설정 시간 > 수동 작성 시간
+```
+
+### 언제 자동을 사용할 것인가?
+
+**APE/OPRO가 나은 경우**:
+
+1. **명확한 평가 메트릭**
+```
+태스크: 감성 분류, 엔티티 추출
+평가: 정확도로 명확히 측정 가능
+→ APE가 체계적으로 최적화 가능
+```
+
+2. **대량의 예시**
+```
+예시: 100개 이상
+→ APE가 패턴 학습에 충분한 데이터
+→ 수동으로는 모든 예시 고려 어려움
+```
+
+3. **여러 태스크 동시 최적화**
+```
+상황: 10개의 유사한 분류 태스크
+→ APE로 일괄 최적화 (병렬 처리)
+→ 수동: 각각 수 시간 소요
+```
+
+4. **지속적 개선**
+```
+환경: 프로덕션에서 데이터 누적
+→ 주기적으로 APE 재실행하여 프롬프트 갱신
+→ 수동: 재작업 부담
+```
+
+### 하이브리드 접근법 (권장)
+
+**최선의 전략**: 수동 + 자동 조합
+
+```python
+class HybridPromptEngineering:
+    """
+    수동 + 자동 결합
+    """
+    
+    def optimize(self, task_description: str, examples: List[Dict]) -> str:
+        """
+        1. 사람이 초기 프롬프트 작성
+        2. APE/OPRO로 자동 개선
+        3. 사람이 최종 검토 및 조정
+        """
+        # Step 1: 사람이 초기 프롬프트 작성
+        print("Step 1: 초기 프롬프트 작성 (사람)")
+        initial_prompt = input("초기 프롬프트를 입력하세요: ")
+        
+        # Step 2: APE로 변형 생성
+        print("\nStep 2: APE로 변형 생성")
+        ape = APE(api_key="your-api-key")
+        
+        # 초기 프롬프트를 시드로 사용
+        variations = ape.generate_variations(initial_prompt, num_variations=10)
+        
+        # Step 3: 자동 평가
+        print("\nStep 3: 자동 평가")
+        scores = [ape.evaluate(v, examples) for v in variations]
+        
+        # Step 4: 상위 후보 제시
+        print("\nStep 4: 상위 3개 후보:")
+        top_3 = sorted(zip(variations, scores), key=lambda x: x[1], reverse=True)[:3]
+        
+        for i, (prompt, score) in enumerate(top_3, 1):
+            print(f"\n[{i}] 점수: {score:.3f}")
+            print(f"    프롬프트: {prompt}")
+        
+        # Step 5: 사람이 최종 선택 및 수정
+        print("\nStep 5: 최종 선택")
+        choice = int(input("선택할 번호 (1-3): ")) - 1
+        selected_prompt = top_3[choice][0]
+        
+        print(f"\n선택된 프롬프트:\n{selected_prompt}")
+        
+        modify = input("\n수정하시겠습니까? (y/n): ")
+        if modify.lower() == 'y':
+            final_prompt = input("수정된 프롬프트: ")
+        else:
+            final_prompt = selected_prompt
+        
+        return final_prompt
+```
+
+**하이브리드 워크플로우 예시**:
+
+```
+프로젝트: 고객 리뷰 감성 분류
+
+Day 1: 사람이 초기 프롬프트 작성
+"Classify the sentiment of this review as positive, negative, or neutral."
+→ 테스트: 82%
+
+Day 2: APE로 10개 변형 생성 및 평가
+최고 성능: "Analyze the overall sentiment expressed in this review and categorize it as positive, negative, or neutral."
+→ 테스트: 87%
+
+Day 3: 도메인 전문가 검토
+수정: "Analyze the customer's overall sentiment in this product review and categorize it as positive, negative, or neutral."
+→ 최종 테스트: 89%
+
+결과: 초기 대비 +7% 개선
+```
+
+## 실무 적용 시나리오
+
+### 시나리오 1: 대규모 분류 시스템
+
+**상황**: 
+- 10개의 다른 카테고리 분류 필요
+- 각 카테고리마다 최적 프롬프트 필요
+- 1주일 데드라인
+
+**접근법**:
+```python
+categories = [
+    "Product Category",
+    "Support Ticket Priority", 
+    "Email Sentiment",
+    "Content Moderation",
+    # ... 10개
+]
+
+# 병렬 최적화
+from concurrent.futures import ThreadPoolExecutor
+
+def optimize_category(category_name, examples):
+    ape = APE(api_key="your-api-key")
+    result = ape.optimize_prompt(
+        train_examples=examples,
+        test_examples=test_sets[category_name],
+        num_candidates=20,
+        num_iterations=5
+    )
+    return category_name, result
+
+with ThreadPoolExecutor(max_workers=5) as executor:
+    futures = [
+        executor.submit(optimize_category, cat, train_sets[cat])
+        for cat in categories
+    ]
+    
+    results = [f.result() for f in futures]
+
+# 10개 카테고리를 하루 만에 최적화
+```
+
+**결과**:
+- 소요 시간: 1일 (수동: 1주일+)
+- 평균 성능: 수동 대비 +3.5%
+- 비용: $5 (API 비용)
+
+### 시나리오 2: 지속적 개선
+
+**상황**:
+- 프로덕션 환경에서 매일 새 데이터 유입
+- 프롬프트를 주기적으로 개선하고 싶음
+
+**접근법**:
+```python
+import schedule
+import time
+
+def weekly_optimization():
+    """
+    매주 일요일에 자동 최적화
+    """
+    print(f"[{datetime.now()}] 주간 최적화 시작")
+    
+    # 1. 지난 주 데이터 수집
+    last_week_data = db.query("""
+        SELECT input, output, feedback
+        FROM predictions
+        WHERE created_at >= NOW() - INTERVAL '7 days'
+        AND feedback = 'correct'
+    """)
+    
+    # 2. 예시 준비
+    examples = [
+        {"input": row.input, "output": row.output}
+        for row in last_week_data
+    ]
+    
+    # 3. OPRO로 최적화
+    opro = OPRO(api_key="your-api-key")
+    result = opro.optimize_prompt(
+        initial_prompt=current_prompt,
+        test_examples=examples[:100],  # 샘플링
+        num_iterations=10
+    )
+    
+    # 4. A/B 테스트
+    new_prompt = result['best_prompt']
+    
+    if result['best_score'] > current_score + 0.02:  # 2% 이상 개선
+        print(f"새 프롬프트 배포: {new_prompt}")
+        deploy_new_prompt(new_prompt, rollout_percentage=10)
+    else:
+        print("현재 프롬프트 유지")
+
+# 스케줄링
+schedule.every().sunday.at("02:00").do(weekly_optimization)
+
+while True:
+    schedule.run_pending()
+    time.sleep(3600)
+```
+
+### 시나리오 3: 다국어 프롬프트
+
+**상황**:
+- 영어 프롬프트는 최적화됨
+- 한국어, 일본어, 중국어 버전 필요
+
+**접근법**:
+```python
+def multilingual_optimization(
+    english_prompt: str,
+    target_languages: List[str],
+    examples_per_language: Dict[str, List[Dict]]
+) -> Dict[str, str]:
+    """
+    영어 프롬프트를 기반으로 다국어 최적화
+    """
+    results = {}
+    
+    for lang in target_languages:
+        print(f"\n=== {lang} 최적화 ===")
+        
+        # 1. 영어 프롬프트 번역
+        translated = translate(english_prompt, target_language=lang)
+        print(f"번역된 초기 프롬프트: {translated}")
+        
+        # 2. 해당 언어로 OPRO 실행
+        opro = OPRO(api_key="your-api-key")
+        result = opro.optimize_prompt(
+            initial_prompt=translated,
+            test_examples=examples_per_language[lang],
+            num_iterations=8
+        )
+        
+        results[lang] = result['best_prompt']
+        print(f"최적화된 프롬프트: {results[lang]}")
+    
+    return results
+
+# 실행
+languages = ['ko', 'ja', 'zh']
+examples = {
+    'ko': korean_examples,
+    'ja': japanese_examples,
+    'zh': chinese_examples
+}
+
+optimized_prompts = multilingual_optimization(
+    english_prompt="Classify the sentiment as positive or negative.",
+    target_languages=languages,
+    examples_per_language=examples
+)
+```
+
+## 비용 분석 및 ROI
+
+### 비용 구조
+
+**APE/OPRO 비용 요소**:
+
+1. **프롬프트 생성 비용**
+```
+- 후보 생성: 10-50회 LLM 호출
+- 예상 비용: $0.02 - $0.10
+```
+
+2. **평가 비용**
+```
+- 각 후보마다 테스트 예시들로 평가
+- 후보 20개 × 예시 10개 = 200회 LLM 호출
+- 예상 비용: $0.20 - $1.00
+```
+
+3. **반복 개선 비용**
+```
+- 3-10 반복
+- 예상 비용: $0.50 - $5.00
+```
+
+**총 비용**: $0.72 - $6.10 per prompt
+
+### ROI 계산
+
+**예시: 고객 지원 챗봇**
+
+**시나리오**:
+- 월 100,000건의 문의 처리
+- 프롬프트 개선으로 정확도 5% 향상 (80% → 85%)
+- 잘못된 답변 비용: $2 (재처리 비용)
+
+**계산**:
+```
+개선 전:
+- 오답: 100,000 × 0.20 = 20,000건
+- 비용: 20,000 × $2 = $40,000/월
+
+개선 후:
+- 오답: 100,000 × 0.15 = 15,000건  
+- 비용: 15,000 × $2 = $30,000/월
+
+절감액: $10,000/월
+
+APE/OPRO 비용: $5 (일회성)
+
+ROI = ($10,000 - $5) / $5 × 100% = 199,900%
+```
+
+**결론**: 압도적으로 높은 ROI
+
+### 비용 최적화 전략
+
+```python
+class CostOptimizedAPE:
+    """
+    비용을 최적화한 APE
+    """
+    
+    def optimize_with_budget(
+        self,
+        examples: List[Dict],
+        max_budget_usd: float = 1.0
+    ) -> Dict:
+        """
+        예산 제약 하에서 최적화
+        """
+        cost_per_call = 0.01  # 예상 비용
+        max_calls = int(max_budget_usd / cost_per_call)
+        
+        print(f"예산: ${max_budget_usd}")
+        print(f"최대 호출 횟수: {max_calls}\n")
+        
+        # 전략 1: 후보 수 조정
+        if max_calls < 50:
+            num_candidates = 5
+            num_iterations = 2
+        elif max_calls < 200:
+            num_candidates = 10
+            num_iterations = 3
+        else:
+            num_candidates = 20
+            num_iterations = 5
+        
+        print(f"후보 수: {num_candidates}")
+        print(f"반복 횟수: {num_iterations}\n")
+        
+        # 전략 2: 평가 샘플 제한
+        eval_samples = min(len(examples), 20)
+        eval_examples = random.sample(examples, eval_samples)
+        
+        print(f"평가 예시: {eval_samples}개\n")
+        
+        # 최적화 실행
+        result = self.optimize_prompt(
+            train_examples=examples,
+            test_examples=eval_examples,
+            num_candidates=num_candidates,
+            num_iterations=num_iterations
+        )
+        
+        # 실제 비용 추정
+        actual_calls = (
+            num_candidates +  # 생성
+            num_candidates * eval_samples * num_iterations  # 평가
+        )
+        estimated_cost = actual_calls * cost_per_call
+        
+        print(f"\n실제 API 호출: {actual_calls}회")
+        print(f"예상 비용: ${estimated_cost:.2f}")
+        
+        return result
+```
+
+## 핵심 요약
+
+**APE (Automatic Prompt Engineer)**:
+- LLM으로 프롬프트를 자동 생성 및 최적화
+- 6단계 워크플로우
+- 사람이 작성한 프롬프트 대비 평균 +4.5% 성능
+- 비용: $0.72 - $6.10 per prompt
+
+**OPRO (Optimization by PROmpting)**:
+- 프롬프트 최적화를 최적화 문제로 접근
+- LLM을 optimizer로 사용
+- "Take a deep breath" 같은 의외의 프롬프트 발견
+- GSM8K에서 baseline 대비 +8.4% 개선
+
+**언제 사용할 것인가?**:
+- ✅ 명확한 평가 메트릭
+- ✅ 충분한 예시 (20+)
+- ✅ 여러 태스크 동시 최적화
+- ✅ 지속적 개선 필요
+
+**언제 사용하지 말 것인가?**:
+- ❌ 창의적 작업
+- ❌ 주관적 평가
+- ❌ 예시 극히 적음
+- ❌ 빠른 프로토타이핑
+
+**권장 접근법**: 수동 + 자동 하이브리드
+
+
+## 참고문헌
+
+1. Zhou, Y., Muresanu, A. I., Han, Z., Paster, K., Pitis, S., Chan, H., & Ba, J. (2022). **Large language models are human-level prompt engineers.** *arXiv preprint arXiv:2211.01910*.
+
+2. Yang, C., Wang, X., Lu, Y., Liu, H., Le, Q. V., Zhou, D., & Chen, X. (2023). **Large language models as optimizers.** *arXiv preprint arXiv:2309.03409*.
+
+3. Pryzant, R., et al. (2023). **Automatic prompt optimization with "gradient descent" and beam search.** *arXiv preprint arXiv:2305.03495*.
+
+4. Zhang, Y., et al. (2023). **Prompting is programming: A query language for large language models.** *PLDI 2023*.

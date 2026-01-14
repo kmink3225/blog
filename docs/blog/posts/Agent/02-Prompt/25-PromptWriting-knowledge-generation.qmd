@@ -1,0 +1,836 @@
+---
+title: "Generate Knowledge Prompting"
+subtitle: 모델이 스스로 지식을 생성하여 추론 정확도를 높이는 프롬프팅 기법
+description: |
+  Generate Knowledge Prompting의 정의부터 실전 구현까지 체계적으로 설명한다.
+  Liu et al. (2021) "Generated Knowledge Prompting for Commonsense Reasoning" 연구를 바탕으로
+  지식 생성, 통합, 선택의 3단계 프로세스와 작동 원리를 분석한다.
+  QASC, CommonsenseQA, NumerSense 등 벤치마크에서 검증된 성능 개선 결과를 제시하고,
+  Few-shot prompting을 활용한 지식 생성 메커니즘, 답변 선택 알고리즘,
+  지식 개수 최적화 전략(M=5~20)을 다룬다.
+  Python 구현 코드(Anthropic/OpenAI API 활용), 고객 지원 챗봇·의료 정보 제공·교육 콘텐츠 등
+  실무 적용 시나리오, RAG·CoT·Self-Consistency와의 결합 패턴,
+  생성된 지식의 품질 평가와 한계점 개선 방향을 상세히 제시한다.
+categories:
+  - Prompt Engineering
+  - LLM
+  - AI
+  - Agent
+author: Kwangmin Kim
+date: 02/01/2025
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: False
+---
+
+## 들어가며
+
+대형 언어 모델(LLM)이 아무리 방대한 지식을 학습했더라도, 복잡한 추론 문제를 해결할 때는 종종 **할루시네이션(hallucination)**을 일으키거나 불완전한 답변을 제공한다. 특히 상식 추론(commonsense reasoning)이나 다단계 논리가 필요한 문제에서 이런 현상이 두드러진다.
+
+**Generate Knowledge Prompting**은 이러한 문제를 해결하기 위해 고안된 기법으로, 모델이 먼저 문제 해결에 필요한 배경 지식을 스스로 생성하도록 한 후, 그 지식을 활용해 답변을 생성하도록 한다. 이는 사람이 문제를 풀 때 먼저 관련 정보를 떠올리고 정리한 후 답을 찾는 과정과 유사하다.
+
+이번 포스트에서는 Liu et al. (2021)의 연구를 중심으로 Generate Knowledge Prompting의 원리, 실험 결과, 그리고 실무 적용 방법을 상세히 알아본다.
+
+## Generate Knowledge Prompting이란?
+
+### 핵심 아이디어
+
+> "답변을 바로 생성하지 말고, 먼저 문제와 관련된 지식을 생성한 후, 그 지식을 활용하여 답변한다"
+
+### 기존 접근법의 한계
+
+전통적인 방식에서는 외부 지식을 활용하기 위해 다음과 같은 방법을 사용했다:
+
+1. **수동 지식 주입**: 사람이 직접 관련 정보를 프롬프트에 포함  
+   - 문제점: 시간 소모적, 확장성 부족  
+2. **자동 검색 시스템 (Information Retrieval)**: Wikipedia나 웹에서 관련 문서를 자동으로 검색하는 시스템 (현대의 RAG와 유사)  
+   - 문제점: 별도의 검색 모델/시스템 구축 필요, 검색 API 의존, 인프라 비용  
+   - 예: BM25 기반 검색 → LLM에 컨텍스트로 제공  
+3. **지식 베이스 참조**: 사전 구축된 구조화된 지식 그래프 활용  
+   - 문제점: 항상 적절한 정보가 존재하는 것은 아니며, 구축 비용 높음 
+
+### Generate Knowledge Prompting의 장점
+
+Generate Knowledge Prompting은 다음의 한계를 극복:
+
+* **자동화**: 사람의 개입 없이 모델이 스스로 지식 생성  
+* **내재 지식 활용**: 모델이 학습한 방대한 지식 활용  
+* **확장성**: 추가 시스템 없이 프롬프트만으로 구현 가능  
+* **할루시네이션 감소**: 명시적 지식 생성 단계를 통한 추론 강화
+
+## 작동 원리: 3단계 프로세스
+
+Generate Knowledge Prompting은 다음의 3단계로 작동:
+
+### 지식 생성 (Knowledge Generation)
+
+**목표**: Few-shot prompting을 사용하여 문제와 관련된 여러 지식 후보를 생성
+
+**프롬프트 구조**:
+```
+Instruction: 입력에 대한 지식을 생성하십시오.
+
+예시:
+입력: 구름에 의해 형성되는 물의 종류는 무엇인가요?
+지식: 구름은 수증기로 만들어집니다.
+
+입력: 음식을 상하지 않게 하는 방법은 무엇인가요?
+지식: 탈수 처리는 음식을 보존하는 데 사용됩니다.
+
+입력: 유전자가 전달되는 과정은 무엇인가요?
+지식: 유전자는 부모로부터 자손에게 전달됩니다.
+
+입력: 위장은 몸에서 어떤 역할을 하나요?
+지식: 위장은 소화 시스템의 일부입니다.
+
+입력: 암석을 부수는 원인은 무엇인가요?
+지식: 기계적 풍화는 암석이 기계적 수단으로 부서질 때 발생합니다.
+
+입력: {질문}
+지식:
+```
+
+**실제 예시**:
+```
+질문: 판다의 다리는 몇 개입니까?
+
+생성된 지식 후보:
+k₁: 판다는 네 개의 다리를 가지고 있다.
+k₂: 판다는 포유류이다.
+k₃: 판다는 중국에서 서식한다.
+```
+
+이 단계에서는 모델이 **M개의 지식 후보**를 생성한다. 일반적으로 M=5~20 정도가 적절하다.
+
+### Step 2: 지식 통합 (Knowledge Integration)
+
+**목표**: 생성된 각 지식을 원래 질문과 결합하여 여러 버전의 프롬프트를 만든다.
+
+**수학적 표현**:
+
+질문을 $q$ 라고 하고, 생성된 지식을 $k_1, k_2, ..., k_M$ 이라고 할 때:
+
+$$
+q_0 = q \\
+q_1 = [k_1 || q] \\
+q_2 = [k_2 || q] \\
+\vdots \\
+q_M = [k_M || q]
+$$
+
+여기서 $||$ 는 텍스트 연결(concatenation)을 의미한다.
+
+**실제 예시**:
+```
+q₀ = "판다의 다리는 몇 개입니까?"
+
+q₁ = "판다는 네 개의 다리를 가지고 있다. 판다의 다리는 몇 개입니까?"
+
+q₂ = "판다는 포유류이다. 판다의 다리는 몇 개입니까?"
+
+q₃ = "판다는 중국에서 서식한다. 판다의 다리는 몇 개입니까?"
+```
+
+이제 각 결합된 질문 $q_0, q_1, ..., q_M$ 에 대해 모델이 답변을 예측합니다.
+
+### 답변 선택 (Answer Selection)
+
+**목표**: 가장 높은 확신도(confidence)를 가진 답변을 최종 답으로 선택한다.
+
+**선택 메커니즘**:
+
+각 질문 $q_m$ 에 대해 모델은 답변 $a$ 를 생성하고, 그 답변에 대한 확률 $p(a|q_m)$ 을 계산.
+
+최종 답변은 다음과 같이 선택된다:
+
+$$
+\hat{a} = \arg\max_{a \in \mathcal{A}_q} \max_{0 \leq m \leq M} p_f(a|q_m)
+$$
+
+여기서:
+- $\mathcal{A}_q$: 가능한 모든 답변의 집합
+- $p_f(a|q_m)$: 모델이 질문 $q_m$ 에 대해 답변 $a$ 를 생성할 확률
+
+**확신도 측정 방법**:
+
+LLM은 각 토큰을 생성할 때 **log probability (로그 확률)**를 자동으로 계산한다. 답변의 확신도는 다음과 같이 계산:
+
+$$
+\text{confidence} = \frac{1}{N} \sum_{i=1}^{N} \log P(\text{token}_i | \text{context})
+$$
+
+여기서 $N$ 은 생성된 토큰의 총 개수이다.
+
+**확률 계산 원리** (LLM 내부 작동):
+
+LLM은 다음 토큰을 생성할 때마다 내부적으로 다음 과정을 거친다:
+
+1. **Logits 계산**: 모델의 마지막 레이어에서 vocabulary의 모든 토큰에 대한 점수(logits) 계산
+2. **Softmax 적용**: 이 점수들을 확률 분포로 변환
+   $$P(\text{token}_i) = \frac{e^{\text{logit}_i}}{\sum_j e^{\text{logit}_j}}$$
+3. **확률 추출**: 실제 선택된 토큰의 확률이 $P(\text{token}_i | \text{context})$
+4. **Log 변환**: 수치 안정성을 위해 log를 취함: $\log P(\text{token}_i | \text{context})$
+
+이는 모든 Transformer 기반 LLM의 **표준 구조**다. 
+
+**실제 구현**:
+- **OpenAI API**: `logprobs=True` 파라미터로 각 토큰의 log probability 반환
+- **Anthropic API**: 현재는 직접 지원 안 함 (간접적 방법 사용)
+- **표준 방법**: 평균 log probability가 높을수록 모델이 그 답변에 확신을 가짐
+
+**예시**:
+```
+입력: "판다는 포유류이다. 판다의 다리는"
+→ 토큰 "4": P = 0.85, log P = -0.16
+→ 토큰 "개": P = 0.90, log P = -0.11
+→ 평균 log probability = (-0.16 + -0.11) / 2 = -0.135 (높은 확신도)
+```
+
+**직관적 설명**:
+- 모든 지식-질문 조합에 대해 답변을 생성
+- 각 답변의 **평균 log probability**를 확신도로 사용 (LLM이 자동 계산)
+- 가장 확신도가 높은 답변을 선택
+
+**실제 예시**:
+```
+q₁: "판다는 네 개의 다리를 가지고 있다. 판다의 다리는 몇 개입니까?"
+→ 답변: "4개" (확률: 0.95) ✓ 선택됨
+
+q₂: "판다는 포유류이다. 판다의 다리는 몇 개입니까?"
+→ 답변: "4개" (확률: 0.72)
+
+q₃: "판다는 중국에서 서식한다. 판다의 다리는 몇 개입니까?"
+→ 답변: "4개" (확률: 0.68)
+```
+
+가장 관련성 높은 지식(k₁)을 포함한 질문이 가장 높은 확신도를 보이므로, 이 답변이 선택된다.
+
+## 연구 사례 분석: Liu et al. (2021)
+Liu et al. (2021)의 논문 "Generated Knowledge Prompting for Commonsense Reasoning"을 바탕으로, 요청한 내용을 설명체로 수정 및 보완한 결과는 다음과 같다.
+
+---
+
+## 연구 사례 분석: Liu et al. (2021)
+
+### 연구 설계
+
+Liu et al.은 Generate Knowledge Prompting(생성된 지식 프롬프팅)의 효과를 검증하기 위해 네 가지 벤치마크 데이터셋을 사용했다.
+
+**주요 데이터셋**:
+
+1. **QASC (Question Answering via Sentence Composition)**: 초등학교 과학 지식 관련 9,980개의 **10지선다형** 질문. 두 개 이상의 사실을 결합해야 해결 가능한 구조다.
+2. **CommonsenseQA (CSQA)**: 일상적 상황에 대한 추론을 요구하는 5지선다형 상식 질문 데이터셋이다.
+3. **NumerSense**: 숫자 상식을 평가하며, 0~10 사이의 숫자나 **'no'**가 마스킹된 문장을 완성하는 방식이다. (예: "A bird usually has ___ legs" → 정답: 2)
+4. **CSQA2**: Yes/No로 답하는 이진 분류 형태의 상식 질문 데이터셋이다.
+
+**모델**:
+
+* 지식 생성 및 답변 모델로 **T5-11B**를 주로 사용했으며, 다양한 크기의 모델 및 파인튜닝된 모델들과 성능을 비교했다.
+
+### 실험 결과 및 핵심 인사이트
+
+실험 결과, 제안된 방법론은 외부 지식 베이스 없이도 강력한 성능을 보였다.
+
+| 방법 (Method) | NumerSense | QASC (dev) | CSQA (dev) | CSQA2 (test) |
+| --- | --- | --- | --- | --- |
+| Vanilla baseline (Ø) | 68.5 | 48.16 | 39.89 | 70.2 |
+| Context sentences (C) | 70.4 | 55.83 | 42.51 | 70.9 |
+| **Retrieval-based (IR)** | 70.4 | **76.89** | - | **74.0** |
+| **Ours (Gen. Knowledge)** | **79.2** | **58.32** | **47.26** | **72.4** |
+
+**핵심 인사이트**:
+
+1. **검색 기반 방법과 비교**: QASC처럼 'Gold Knowledge'가 제공되는 경우 검색 기반(IR) 성능이 월등히 높지만, **NumerSense**와 같은 수치 상식 영역에서는 모델 내부 지식을 생성해 사용하는 방식(Ours)이 검색 기반 방식을 앞질렀다.
+2. **일관된 성능 향상**: 모든 데이터셋에서 아무런 지식을 제공하지 않은 Baseline 대비 유의미한 성능 향상을 증명했다. 이는 언어 모델이 이미 방대한 지식을 내재하고 있으며, 이를 명시적으로 '추출'하여 프롬프트에 넣어주는 것이 효과적임을 시사한다.
+
+### 지식 개수(M)에 따른 성능 변화
+
+연구팀은 생성하는 지식의 개수()를 변화시키며 QASC 데이터셋에서 성능을 측정했다.
+
+**결과 (QASC dev 기준)**:
+
+* M = 1: 56.1%
+* M = 5:57.7%
+* M = 10:58.3%
+* M = 20:**58.3%**
+* **분석**: 지식의 개수가 늘어날수록 성능이 향상되나,  부근에서 성능이 수렴하는 양상을 보인다. 따라서 연산 비용과 성능의 균형을 고려할 때 **M=20**이 최적의 지점으로 권장된다.
+
+### Knowledge Integration 방법 비교
+
+여러 개의 생성된 지식을 답변 도출에 활용하는 세 가지 전략을 비교했다.
+
+| Integration Method | QASC-dev 성능 | 설명 |
+| --- | --- | --- |
+| **Knowledge Integration (Ours)** | **58.32%** | 각 지식별 답변 확률을 **합산(Summation)**. 다양한 지식이 각자 기여 |
+| Mixture-of-Experts (MoE) | 56.26% | 지식의 유용성을 학습된 가중치로 가중 평균. 중요한 지식에 더 큰 비중 |
+| Product-of-Experts (PoE) | 55.94% | 각 지식 기반 답변 확률을 **곱셈**. 모든 지식이 동의해야 높은 확률 |
+
+**각 방식의 작동 원리 (구체적 예시)**:
+
+질문: "판다의 다리는 몇 개?"  
+답변 후보: A="4개", B="2개"
+
+```
+지식1: "판다는 포유류다"       → P(A)=0.9, P(B)=0.1
+지식2: "판다는 곰이다"          → P(A)=0.8, P(B)=0.2
+지식3: "판다는 대나무를 먹는다" → P(A)=0.3, P(B)=0.7 (관련 없는 지식)
+```
+
+**1. Summation (Ours - 합산 방식)**:
+```
+P(A) = 0.9 + 0.8 + 0.3 = 2.0
+P(B) = 0.1 + 0.2 + 0.7 = 1.0
+→ A 선택 ✓
+```
+- **철학**: "투표" - 각 지식이 독립적으로 기여
+- **장점**: 관련 없는 지식(지식3)의 부정적 영향이 제한적
+- **특징**: 다양한 지식이 상호 보완
+
+**2. Mixture-of-Experts (가중 평균)**:
+```
+학습된 가중치: w1=0.5, w2=0.4, w3=0.1
+P(A) = 0.5×0.9 + 0.4×0.8 + 0.1×0.3 = 0.8
+P(B) = 0.5×0.1 + 0.4×0.2 + 0.1×0.7 = 0.2
+→ A 선택 ✓
+```
+- **장점**: 중요한 지식에 높은 가중치 부여
+- **단점**: 가중치 학습 필요 (추가 학습 데이터 요구)
+
+**3. Product-of-Experts (곱셈 방식)**:  
+```
+P(A) = 0.9 × 0.8 × 0.3 = 0.216
+P(B) = 0.1 × 0.2 × 0.7 = 0.014
+→ A 선택 ✓ (하지만 확률이 매우 낮아짐)
+```
+- **철학**: **"엄격한 합의(Strict Consensus)"** - 모든 전문가가 동의해야 높은 확률  
+  1. **확률론적 정당성**: 독립적인 전문가들이 모두 동의하는 확률은 수학적으로 곱셈  
+  2. **신중한 결정**: 어떤 지식이라도 "이건 아니다"라고 강하게 반대하면 (낮은 확률) 그 답은 자동 배제  
+  3. **노이즈 필터링**: 잘못된 지식이 있으면 자동으로 확률이 낮아져 제거됨 (이론상)  
+- **확률론적 기반**: 독립 사건의 결합 확률 = 각 확률의 곱
+  - P(모든 전문가가 A 선택) = P₁(A) × P₂(A) × P₃(A)
+- **"비토 효과"**: 하나의 지식이라도 낮은 확률을 주면 전체가 극도로 낮아짐
+
+**Generate Knowledge에서 PoE가 낮은 성능을 보인 이유**:
+
+1. **너무 엄격함**: 관련 없는 지식(지식3 같은 경우)이 생성되면 전체 확률이 극도로 낮아짐
+2. **지식 품질 불안정**: Generate Knowledge는 때때로 관련 없거나 부정확한 지식을 생성
+3. **과도한 페널티**: 하나의 나쁜 지식이 10개의 좋은 지식을 무력화시킬 수 있음
+
+**결론**:
+Generate Knowledge Prompting에서는 **Summation (Ours)**이 가장 효과적이다:
+- 다양한 지식이 상호 보완적으로 작용
+- 노이즈에 강건 (하나의 잘못된 지식이 전체를 망치지 않음)
+- 구현 간단 (추가 학습 불필요)
+- 복잡한 가중치나 곱셈 없이도 최고 성능
+
+## 생성된 지식의 품질 분석
+
+### Human Evaluation
+
+연구팀은 생성된 지식의 품질을 사람이 직접 평가했다:
+
+**평가 기준**:
+
+1. **Grammatical/Relevant**: 문법적으로 올바르고 관련성 있는가?
+   - Selected: ~85%
+   - Non-selected: ~85%
+   - ✓ 대부분의 생성된 지식이 문법적으로 올바름
+
+2. **Factual**: 사실에 기반한 진술인가?
+   - Selected: ~80%
+   - Non-selected: ~80%
+   - ✓ 높은 사실성 유지
+
+3. **Helpful**: 모델의 예측에 도움이 되는가?
+   - Selected: ~75%
+   - Non-selected: ~70%
+   - ✓ 선택된 지식이 더 유용함
+
+### 선택된 지식의 효과
+
+- 선택된 지식이 모델 예측을 개선하는 데 매우 효과적임
+- 하지만 여전히 39%의 유해한 지식이 생성될 수 있음
+- **개선 방향**: 유해한 지식의 비율을 줄이는 것이 중요
+
+## 실전 활용 가이드
+
+### 기본 구현
+
+다음은 Generate Knowledge Prompting을 실제로 구현하는 Python 예제:
+```python
+import anthropic
+from typing import List, Tuple
+
+client = anthropic.Anthropic(api_key="your-api-key")
+
+def generate_knowledge(question: str, num_knowledge: int = 5) -> List[str]:
+    """
+    Step 1: 지식 생성
+    Few-shot prompting을 사용하여 관련 지식 생성
+    """
+    
+    prompt = f"""입력에 대한 지식을 생성하십시오.
+
+예시:
+입력: 구름에 의해 형성되는 물의 종류는 무엇인가요?
+지식: 구름은 수증기로 만들어집니다.
+
+입력: 음식을 상하지 않게 하는 방법은 무엇인가요?
+지식: 탈수 처리는 음식을 보존하는 데 사용됩니다.
+
+입력: 유전자가 전달되는 과정은 무엇인가요?
+지식: 유전자는 부모로부터 자손에게 전달됩니다.
+
+입력: 위장은 몸에서 어떤 역할을 하나요?
+지식: 위장은 소화 시스템의 일부입니다.
+
+입력: 암석을 부수는 원인은 무엇인가요?
+지식: 기계적 풍화는 암석이 기계적 수단으로 부서질 때 발생합니다.
+
+입력: {question}
+지식:"""
+
+    knowledge_list = []
+    
+    # num_knowledge 개수만큼 지식 생성
+    for _ in range(num_knowledge):
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            temperature=0.7,  # 다양성을 위해 온도 설정
+            messages=[{"role": "user", "content": prompt}]
+        )
+        knowledge = message.content[0].text.strip()
+        knowledge_list.append(knowledge)
+    
+    return knowledge_list
+
+
+def integrate_and_answer(question: str, knowledge_list: List[str]) -> List[Tuple[str, float]]:
+    """
+    Step 2 & 3: 지식 통합 및 답변 선택
+    각 지식을 질문과 결합하고 답변 생성
+    """
+    
+    results = []
+    
+    # 지식 없이 답변 (baseline)
+    prompt_baseline = f"{question}"
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=200,
+        temperature=0,
+        messages=[{"role": "user", "content": prompt_baseline}]
+    )
+    answer_baseline = message.content[0].text.strip()
+    results.append((answer_baseline, 0.0, "baseline"))
+    
+    # 각 지식과 결합하여 답변 생성
+    for i, knowledge in enumerate(knowledge_list):
+        prompt = f"{knowledge}\n\n{question}"
+        
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=200,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        answer = message.content[0].text.strip()
+        
+        # 실제로는 log probability를 사용해야 하지만,
+        # 여기서는 간단히 답변의 길이와 명확성으로 대체
+        # (실무에서는 API의 logprobs 기능 활용)
+        confidence = len(answer.split())  # 간단한 휴리스틱
+        
+        results.append((answer, confidence, f"knowledge_{i+1}"))
+    
+    # 가장 높은 확신도를 가진 답변 선택
+    best_answer = max(results, key=lambda x: x[1])
+    
+    return results, best_answer
+
+
+def generate_knowledge_prompting(question: str, num_knowledge: int = 5):
+    """
+    Generate Knowledge Prompting 전체 파이프라인
+    """
+    print(f"질문: {question}\n")
+    
+    # Step 1: 지식 생성
+    print("=" * 60)
+    print("Step 1: 지식 생성")
+    print("=" * 60)
+    knowledge_list = generate_knowledge(question, num_knowledge)
+    
+    for i, k in enumerate(knowledge_list, 1):
+        print(f"지식 {i}: {k}")
+    
+    # Step 2 & 3: 지식 통합 및 답변 선택
+    print("\n" + "=" * 60)
+    print("Step 2 & 3: 지식 통합 및 답변 선택")
+    print("=" * 60)
+    
+    results, best_answer = integrate_and_answer(question, knowledge_list)
+    
+    for answer, conf, source in results:
+        print(f"\n[{source}] (확신도: {conf:.2f})")
+        print(f"답변: {answer}")
+    
+    print("\n" + "=" * 60)
+    print("최종 선택된 답변")
+    print("=" * 60)
+    print(f"출처: {best_answer[2]}")
+    print(f"확신도: {best_answer[1]:.2f}")
+    print(f"답변: {best_answer[0]}")
+    
+    return best_answer
+
+
+# 실행 예시
+if __name__ == "__main__":
+    question = "판다의 다리는 몇 개입니까?"
+    result = generate_knowledge_prompting(question, num_knowledge=5)
+```
+
+### 실행 결과 예시
+```
+질문: 판다의 다리는 몇 개입니까?
+
+============================================================
+Step 1: 지식 생성
+============================================================
+지식 1: 판다는 네 개의 다리를 가지고 있는 포유류입니다.
+지식 2: 판다는 곰과에 속하는 동물입니다.
+지식 3: 판다는 중국의 산림 지대에 서식합니다.
+지식 4: 판다는 주로 대나무를 먹습니다.
+지식 5: 판다는 멸종 위기에 처한 동물입니다.
+
+============================================================
+Step 2 & 3: 지식 통합 및 답변 선택
+============================================================
+
+[baseline] (확신도: 0.00)
+답변: 판다는 4개의 다리를 가지고 있습니다.
+
+[knowledge_1] (확신도: 12.00)
+답변: 판다는 네 개의 다리를 가지고 있습니다. 앞서 언급한 것처럼, 판다는 포유류이며 네 발로 걷는 동물입니다.
+
+[knowledge_2] (확신도: 11.00)
+답변: 판다는 곰과에 속하는 포유류로, 다른 곰들과 마찬가지로 4개의 다리를 가지고 있습니다.
+
+[knowledge_3] (확신도: 8.00)
+답변: 판다는 4개의 다리를 가지고 있습니다.
+
+[knowledge_4] (확신도: 8.00)
+답변: 판다는 4개의 다리를 가지고 있습니다.
+
+[knowledge_5] (확신도: 9.00)
+답변: 판다는 4개의 다리를 가지고 있는 포유류입니다.
+
+============================================================
+최종 선택된 답변
+============================================================
+출처: knowledge_1
+확신도: 12.00
+답변: 판다는 네 개의 다리를 가지고 있습니다. 앞서 언급한 것처럼, 판다는 포유류이며 네 발로 걷는 동물입니다.
+```
+
+### 고급 구현: Logprobs 활용
+
+실제 논문에서는 모델의 **log probability**를 사용하여 확신도를 측정. OpenAI API의 경우 `logprobs` 파라미터를 활용할 수 있다:
+```python
+import openai
+
+def get_answer_with_confidence(prompt: str) -> Tuple[str, float]:
+    """
+    답변과 함께 확신도(log probability)를 반환
+    """
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        logprobs=True,  # log probability 반환
+        top_logprobs=1,
+        max_tokens=100,
+        temperature=0
+    )
+    
+    answer = response.choices[0].message.content
+    
+    # 평균 log probability 계산
+    logprobs = response.choices[0].logprobs.content
+    avg_logprob = sum([token.logprob for token in logprobs]) / len(logprobs)
+    confidence = avg_logprob
+    
+    return answer, confidence
+```
+
+### 프롬프트 최적화 팁
+
+**1. Few-shot 예시의 질이 중요**
+
+좋은 예시:
+```
+입력: 새는 어떻게 날 수 있나요?
+지식: 새는 날개와 속이 빈 뼈를 가지고 있어 비행에 적합한 구조를 가지고 있습니다.
+```
+
+나쁜 예시:
+```
+입력: 새는 어떻게 날 수 있나요?
+지식: 새는 날 수 있습니다.  # 너무 단순하고 정보가 없음
+```
+
+**2. 도메인에 맞는 예시 선택**
+
+과학 문제라면 과학 관련 예시를, 수학 문제라면 수학 관련 예시를 사용하세요.
+
+**3. 지식 개수 조정**
+
+- 간단한 문제: M=5
+- 복잡한 문제: M=10~20
+- 매우 복잡한 문제: M=20 (이상은 비효율적)
+
+## 실무 적용 시나리오
+
+### 고객 지원 챗봇
+
+**시나리오**: 제품 문의에 대한 정확한 답변 제공
+```python
+question = "이 노트북의 배터리 수명은 얼마나 되나요?"
+
+# 생성된 지식 예시:
+# k1: "이 노트북은 65Wh 배터리를 탑재하고 있습니다."
+# k2: "일반적인 사무 작업 시 배터리는 8-10시간 지속됩니다."
+# k3: "고성능 작업 시 배터리 수명은 4-5시간으로 줄어듭니다."
+
+# 결합된 프롬프트:
+combined_prompt = """
+이 노트북은 65Wh 배터리를 탑재하고 있습니다.
+일반적인 사무 작업 시 배터리는 8-10시간 지속됩니다.
+고성능 작업 시 배터리 수명은 4-5시간으로 줄어듭니다.
+
+이 노트북의 배터리 수명은 얼마나 되나요?
+"""
+
+# → 더 구체적이고 정확한 답변 생성
+```
+
+### 의료 정보 제공
+
+**시나리오**: 증상에 대한 일반적인 정보 제공
+```python
+question = "두통과 어지러움이 있는데 어떻게 해야 하나요?"
+
+# 생성된 지식:
+# k1: "두통은 탈수로 인해 발생할 수 있습니다."
+# k2: "어지러움은 혈압 변화와 관련이 있을 수 있습니다."
+# k3: "충분한 수분 섭취와 휴식이 도움이 될 수 있습니다."
+
+# → 더 신뢰할 수 있고 맥락에 맞는 조언 제공
+```
+
+### 교육 콘텐츠 생성
+
+**시나리오**: 학습자에게 개념 설명
+```python
+question = "광합성은 어떻게 일어나나요?"
+
+# 생성된 지식:
+# k1: "광합성은 식물이 빛 에너지를 화학 에너지로 변환하는 과정입니다."
+# k2: "엽록소는 빛을 흡수하는 녹색 색소입니다."
+# k3: "광합성의 최종 생성물은 포도당과 산소입니다."
+
+# → 더 포괄적이고 교육적인 설명 제공
+```
+
+## 한계점 및 개선 방향
+
+### 현재의 한계
+
+1. **유해한 지식 생성**
+   - 약 39%의 경우 오답을 유도하는 지식이 생성될 수 있음
+   - **개선 방향**: 지식 검증 단계 추가, 사실성 평가 모델 활용
+
+2. **연산 비용**
+   - M개의 지식을 생성하고 각각에 대해 답변을 생성해야 함
+   - M=20인 경우 21번의 API 호출 필요 (1번 baseline + 20번 knowledge)
+   - **개선 방향**: 지식 필터링 단계 추가, 캐싱 활용
+
+3. **창의성 제한**
+   - 생성된 지식이 모델의 학습 데이터에 한정됨
+   - **개선 방향**: RAG와 결합하여 외부 최신 정보 활용
+
+4. **지식 중복**
+   - 유사한 지식이 여러 번 생성될 수 있음
+   - **개선 방향**: 다양성 보장 메커니즘 (temperature 조정, diversity penalty)
+
+### 개선 방향
+
+**1. RAG와의 결합**
+```python
+# Hybrid 접근법
+def hybrid_knowledge_generation(question: str):
+    # Step 1: 외부 검색 (RAG)
+    retrieved_docs = search_knowledge_base(question)
+    
+    # Step 2: 내부 지식 생성 (Generate Knowledge)
+    generated_knowledge = generate_knowledge(question)
+    
+    # Step 3: 결합
+    all_knowledge = retrieved_docs + generated_knowledge
+    
+    # Step 4: 답변 생성
+    best_answer = integrate_and_answer(question, all_knowledge)
+    
+    return best_answer
+```
+
+**2. 지식 검증 단계 추가**
+```python
+def verify_knowledge(knowledge: str, question: str) -> float:
+    """
+    생성된 지식의 신뢰도를 평가
+    """
+    verification_prompt = f"""
+다음 지식이 질문에 답하는 데 유용하고 사실적인지 평가하세요.
+
+지식: {knowledge}
+질문: {question}
+
+평가 (0-10 점수로):
+- 관련성 (0-5점):
+- 사실성 (0-5점):
+총점:
+"""
+    
+    # 평가 수행
+    score = evaluate_with_llm(verification_prompt)
+    return score
+
+# 높은 점수의 지식만 사용
+filtered_knowledge = [k for k in knowledge_list 
+                      if verify_knowledge(k, question) > 7.0]
+```
+
+**3. Self-Consistency와 결합**
+```python
+def generate_knowledge_with_self_consistency(
+    question: str, 
+    num_knowledge: int = 5,
+    num_samples: int = 5
+):
+    """
+    Generate Knowledge + Self-Consistency
+    """
+    knowledge_list = generate_knowledge(question, num_knowledge)
+    
+    all_answers = []
+    for knowledge in knowledge_list:
+        # 각 지식에 대해 여러 샘플 생성
+        for _ in range(num_samples):
+            answer = generate_answer_with_knowledge(question, knowledge)
+            all_answers.append(answer)
+    
+    # 다수결로 최종 답변 선택
+    from collections import Counter
+    final_answer = Counter(all_answers).most_common(1)[0][0]
+    
+    return final_answer
+```
+
+## 다른 기법과의 비교
+
+| 특성 | Generate Knowledge | RAG | Chain-of-Thought |
+|-----|-------------------|-----|------------------|
+| **지식 출처** | 모델 내재 | 외부 DB | 모델 내재 |
+| **추가 시스템** | 불필요 | 검색 시스템 필요 | 불필요 |
+| **최신 정보** | ❌ | ✅ | ❌ |
+| **도메인 특화** | △ | ✅ | △ |
+| **연산 비용** | 중간 | 높음 | 낮음 |
+| **구현 난이도** | 낮음 | 높음 | 낮음 |
+| **할루시네이션 감소** | ✅ | ✅✅ | ✅ |
+
+**추천 조합**:
+- **Generate Knowledge + CoT**: 복잡한 추론 문제
+- **RAG + Generate Knowledge**: 최신 정보 + 배경 지식 활용
+- **Generate Knowledge + Self-Consistency**: 높은 정확도 필요 시
+
+## 베스트 프랙티스
+
+### Do
+
+1. **적절한 도메인 예시 사용**
+   - Few-shot 예시는 질문과 같은 도메인에서 선택
+
+2. **지식 개수 최적화**
+   - 시작은 M=5, 성능 필요 시 M=20까지
+
+3. **지식 품질 모니터링**
+   - 주기적으로 생성된 지식의 품질 검사
+
+4. **다른 기법과 결합**
+   - CoT, Self-Consistency, RAG와 조합 시도
+
+### Don't
+
+1. **과도한 지식 생성 금지**
+   - M > 20은 비효율적, 성능 개선 미미
+
+2. **검증 없이 사용 금지**
+   - 중요한 도메인(의료, 법률 등)에서는 반드시 검증
+
+3. **모든 문제에 적용 금지**
+   - 간단한 문제는 Basic 기법으로 충분
+
+## 정리 및 다음 단계
+
+### 핵심 요약
+
+Generate Knowledge Prompting은 다음과 같은 상황에서 효과적:
+
+✅ **상식 추론이 필요한 문제**  
+✅ **외부 검색 시스템 구축이 어려운 경우**  
+✅ **모델의 내재 지식을 최대한 활용하고 싶을 때**  
+✅ **할루시네이션을 줄이고 싶을 때**
+
+하지만 다음의 경우에는 다른 기법을 고려:
+
+❌ 최신 정보가 필수인 경우 → **RAG 사용**  
+❌ 매우 간단한 문제 → **Few-shot 또는 CoT로 충분**  
+❌ 연산 비용이 제한적인 경우 → **Basic 기법 우선**
+
+### 다음 포스트 예고
+
+다음 포스트에서는 **Prompt Chaining**을 다룬다:
+
+- 복잡한 작업을 하위 작업으로 분해하는 방법
+- 각 단계의 출력을 다음 단계의 입력으로 연결
+- 문서 기반 Q&A 시스템 구현 사례
+- Anthropic의 공식 가이드라인 분석
+- 실무에서의 활용 전략
+
+
+## 참고문헌
+
+1. Liu, J., Liu, A., Lu, X., Welleck, S., West, P., Bras, R. L., ... & Hajishirzi, H. (2021). **Generated knowledge prompting for commonsense reasoning.** *arXiv preprint arXiv:2110.08387*.
+
+2. Kojima, T., Gu, S. S., Reid, M., Matsuo, Y., & Iwasawa, Y. (2022). **Large language models are zero-shot reasoners.** *arXiv preprint arXiv:2205.11916*.
+
+3. Wei, J., Wang, X., Schuurmans, D., Bosma, M., Xia, F., Chi, E., ... & Zhou, D. (2022). **Chain-of-thought prompting elicits reasoning in large language models.** *Advances in Neural Information Processing Systems, 35*, 24824-24837.
+
+4. Wang, X., Wei, J., Schuurmans, D., Le, Q., Chi, E., Narang, S., ... & Zhou, D. (2022). **Self-consistency improves chain of thought reasoning in language models.** *arXiv preprint arXiv:2203.11171*.
+
+## 실습 자료
+
+본 포스트의 전체 코드는 다음 저장소에서 확인할 수 있다:
+
+- GitHub: [prompt-engineering-examples/generate-knowledge](https://github.com/your-repo/prompt-engineering-examples)
+- Colab Notebook: [Generate Knowledge Prompting Tutorial](https://colab.research.google.com/...)
+
+---
+
+*이 포스트는 FastCampus의 "프롬프트 엔지니어링 A to Z" 강의 자료와 연구 논문을 기반으로 작성되었습니다.*
