@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.543">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="실제 서비스 운영 데이터에서 발견된 문제(짧은 이용시간, 낮은 멀티턴 비율)를 해결하기 위한 프롬프트 질문 생성기 구현 방법을 체계적으로 설명한다. Richard Thaler와 Cass Sunstein의 Nudge Theory(2008), Premack &amp; Woodruff의 Theory of Mind(1978) 등 행동경제학과 심리학 이론을 프롬프트 엔지니어링에 적용하는 실전 기법을 다룬다. 사용자의 선택 설계(Choice Architecture)를 조정하는 3단계 질문 구조(High/Moderate/Low certainty), 모바일 환경 최적화(5단어 제한, 반말체), Theory of Mind 명시적 부여(“You have a mind”) 등 실무에서 즉시 활용 가능한 프롬프트 설계 원칙과 GPT-4o, Claude, Gemini 모델별 테스트 결과를 제시한다. 귀납적 접근 방법, 사용자 행동 데이터 기반 설계, UI/UX 제약 반영 등 프로덕션 환경의 프롬프트 엔지니어링 실전 노하우를 상세히 설명한다.">
+
+<title>Kwangmin Kim - 프롬프트 질문 생성기: 행동경제학과 심리학을 활용한 멀티턴 대화 유도</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete-preset-algolia.umd.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "algolia": {
+    "application-id": "DUOR1DRC9D",
+    "search-only-api-key": "f264da5dea684ffb9e9b4a574af3ed61",
+    "index-name": "prod_QUARTO",
+    "analytics-events": true,
+    "show-logo": true,
+    "libDir": "site_libs"
+  },
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script src="https://cdn.jsdelivr.net/npm/algoliasearch@4.5.1/dist/algoliasearch-lite.umd.js"></script>
+
+
+<script type="text/javascript">
+var ALGOLIA_INSIGHTS_SRC = "https://cdn.jsdelivr.net/npm/search-insights/dist/search-insights.iife.min.js";
+!function(e,a,t,n,s,i,c){e.AlgoliaAnalyticsObject=s,e[s]=e[s]||function(){
+(e[s].queue=e[s].queue||[]).push(arguments)},i=a.createElement(t),c=a.getElementsByTagName(t)[0],
+i.async=1,i.src=n,c.parentNode.insertBefore(i,c)
+}(window,document,"script",ALGOLIA_INSIGHTS_SRC,"aa");
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@algolia/autocomplete-plugin-algolia-insights">
+
+</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Kwangmin Kim - 프롬프트 질문 생성기: 행동경제학과 심리학을 활용한 멀티턴 대화 유도">
+<meta property="og:description" content="실제 서비스 운영 데이터에서 발견된 문제(짧은 이용시간, 낮은 멀티턴 비율)를 해결하기 위한 프롬프트 질문 생성기 구현 방법을 체계적으로 설명한다. Richard Thaler와 Cass Sunstein의 Nudge Theory(2008), Premack &amp; Woodruff의 Theory of Mind(1978) 등 행동경제학과 심리학 이론을 프롬프트 엔지니어링에 적용하는 실전 기법을 다룬다. 사용자의 선택 설계(Choice Architecture)를 조정하는 3단계 질문 구조(High/Moderate/Low certainty), 모바일 환경 최적화(5단어 제한, 반말체), Theory of Mind 명시적 부여(“You have a mind”) 등 실무에서 즉시 활용 가능한 프롬프트 설계 원칙과 GPT-4o, Claude, Gemini 모델별 테스트 결과를 제시한다. 귀납적 접근 방법, 사용자 행동 데이터 기반 설계, UI/UX 제약 반영 등 프로덕션 환경의 프롬프트 엔지니어링 실전 노하우를 상세히 설명한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+<meta name="twitter:title" content="Kwangmin Kim - 프롬프트 질문 생성기: 행동경제학과 심리학을 활용한 멀티턴 대화 유도">
+<meta name="twitter:description" content="실제 서비스 운영 데이터에서 발견된 문제(짧은 이용시간, 낮은 멀티턴 비율)를 해결하기 위한 프롬프트 질문 생성기 구현 방법을 체계적으로 설명한다. Richard Thaler와 Cass Sunstein의 Nudge Theory(2008), Premack &amp; Woodruff의 Theory of Mind(1978) 등 행동경제학과 심리학 이론을 프롬프트 엔지니어링에 적용하는 실전 기법을 다룬다. 사용자의 선택 설계(Choice Architecture)를 조정하는 3단계 질문 구조(High/Moderate/Low certainty), 모바일 환경 최적화(5단어 제한, 반말체), Theory of Mind 명시적 부여(“You have a mind”) 등 실무에서 즉시 활용 가능한 프롬프트 설계 원칙과 GPT-4o, Claude, Gemini 모델별 테스트 결과를 제시한다. 귀납적 접근 방법, 사용자 행동 데이터 기반 설계, UI/UX 제약 반영 등 프로덕션 환경의 프롬프트 엔지니어링 실전 노하우를 상세히 설명한다.">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+          <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-page-left">
+      <h1 class="title">프롬프트 질문 생성기: 행동경제학과 심리학을 활용한 멀티턴 대화 유도</h1>
+            <p class="subtitle lead">Nudge Theory와 Theory of Mind를 결합한 사용자 참여 증대 프롬프트 설계</p>
+                  <div>
+        <div class="description">
+          <p>실제 서비스 운영 데이터에서 발견된 문제(짧은 이용시간, 낮은 멀티턴 비율)를 해결하기 위한 프롬프트 질문 생성기 구현 방법을 체계적으로 설명한다. Richard Thaler와 Cass Sunstein의 Nudge Theory(2008), Premack &amp; Woodruff의 Theory of Mind(1978) 등 행동경제학과 심리학 이론을 프롬프트 엔지니어링에 적용하는 실전 기법을 다룬다. 사용자의 선택 설계(Choice Architecture)를 조정하는 3단계 질문 구조(High/Moderate/Low certainty), 모바일 환경 최적화(5단어 제한, 반말체), Theory of Mind 명시적 부여(“You have a mind”) 등 실무에서 즉시 활용 가능한 프롬프트 설계 원칙과 GPT-4o, Claude, Gemini 모델별 테스트 결과를 제시한다. 귀납적 접근 방법, 사용자 행동 데이터 기반 설계, UI/UX 제약 반영 등 프로덕션 환경의 프롬프트 엔지니어링 실전 노하우를 상세히 설명한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Prompt Engineering</div>
+                <div class="quarto-category">LLM</div>
+                <div class="quarto-category">AI</div>
+                <div class="quarto-category">Agent</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta column-page-left">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2025년 02월 10일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-full page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#프롬프트-질문-생성기-faqs-generator" id="toc-프롬프트-질문-생성기-faqs-generator" class="nav-link active" data-scroll-target="#프롬프트-질문-생성기-faqs-generator"><span class="header-section-number">1</span> 프롬프트 질문 생성기 (FAQs Generator)</a>
+  <ul class="collapse">
+  <li><a href="#사용자-문제-분석" id="toc-사용자-문제-분석" class="nav-link" data-scroll-target="#사용자-문제-분석"><span class="header-section-number">1.1</span> 사용자 문제 분석</a></li>
+  <li><a href="#nudge-theory-넛지-이론" id="toc-nudge-theory-넛지-이론" class="nav-link" data-scroll-target="#nudge-theory-넛지-이론"><span class="header-section-number">1.2</span> Nudge Theory (넛지 이론)</a></li>
+  <li><a href="#theory-of-mind-마음-이론" id="toc-theory-of-mind-마음-이론" class="nav-link" data-scroll-target="#theory-of-mind-마음-이론"><span class="header-section-number">1.3</span> Theory of Mind (마음 이론)</a></li>
+  <li><a href="#실습-프롬프트-질문-생성기-faqs" id="toc-실습-프롬프트-질문-생성기-faqs" class="nav-link" data-scroll-target="#실습-프롬프트-질문-생성기-faqs"><span class="header-section-number">1.4</span> 실습: 프롬프트 질문 생성기 FAQs</a></li>
+  <li><a href="#프롬프트-제작-전체-구조" id="toc-프롬프트-제작-전체-구조" class="nav-link" data-scroll-target="#프롬프트-제작-전체-구조"><span class="header-section-number">1.5</span> 프롬프트 제작: 전체 구조</a></li>
+  <li><a href="#프롬프트-구조-분석" id="toc-프롬프트-구조-분석" class="nav-link" data-scroll-target="#프롬프트-구조-분석"><span class="header-section-number">1.6</span> 프롬프트 구조 분석</a>
+  <ul class="collapse">
+  <li><a href="#introduction-역할-설정" id="toc-introduction-역할-설정" class="nav-link" data-scroll-target="#introduction-역할-설정"><span class="header-section-number">1.6.1</span> Introduction (역할 설정)</a></li>
+  <li><a href="#response-template-출력-형식" id="toc-response-template-출력-형식" class="nav-link" data-scroll-target="#response-template-출력-형식"><span class="header-section-number">1.6.2</span> Response Template (출력 형식)</a></li>
+  <li><a href="#ending-제약-조건" id="toc-ending-제약-조건" class="nav-link" data-scroll-target="#ending-제약-조건"><span class="header-section-number">1.6.3</span> Ending (제약 조건)</a></li>
+  </ul></li>
+  <li><a href="#모델별-테스트-결과" id="toc-모델별-테스트-결과" class="nav-link" data-scroll-target="#모델별-테스트-결과"><span class="header-section-number">1.7</span> 모델별 테스트 결과</a>
+  <ul class="collapse">
+  <li><a href="#gpt-4o-mini-결과" id="toc-gpt-4o-mini-결과" class="nav-link" data-scroll-target="#gpt-4o-mini-결과"><span class="header-section-number">1.7.1</span> GPT-4o mini 결과</a></li>
+  <li><a href="#claude-sonnet-3.5-결과" id="toc-claude-sonnet-3.5-결과" class="nav-link" data-scroll-target="#claude-sonnet-3.5-결과"><span class="header-section-number">1.7.2</span> Claude Sonnet 3.5 결과</a></li>
+  <li><a href="#gemini-1.5-pro-결과" id="toc-gemini-1.5-pro-결과" class="nav-link" data-scroll-target="#gemini-1.5-pro-결과"><span class="header-section-number">1.7.3</span> Gemini 1.5 Pro 결과</a></li>
+  </ul></li>
+  <li><a href="#프롬프트-개선-포인트" id="toc-프롬프트-개선-포인트" class="nav-link" data-scroll-target="#프롬프트-개선-포인트"><span class="header-section-number">1.8</span> 프롬프트 개선 포인트</a></li>
+  <li><a href="#실전-적용-시-고려사항" id="toc-실전-적용-시-고려사항" class="nav-link" data-scroll-target="#실전-적용-시-고려사항"><span class="header-section-number">1.9</span> 실전 적용 시 고려사항</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block column-page-left" id="quarto-document-content">
+
+
+
+
+
+<section id="프롬프트-질문-생성기-faqs-generator" class="level1" data-number="1">
+<h1 data-number="1"><span class="header-section-number">1</span> 프롬프트 질문 생성기 (FAQs Generator)</h1>
+<section id="사용자-문제-분석" class="level2" data-number="1.1">
+<h2 data-number="1.1" class="anchored" data-anchor-id="사용자-문제-분석"><span class="header-section-number">1.1</span> 사용자 문제 분석</h2>
+<p>프롬프트 질문 생성기는 실제 서비스 운영 중 발견된 사용자 행동 패턴 문제를 해결하기 위한 프롬프트다.</p>
+<p><strong>발견된 문제점</strong></p>
+<ul>
+<li>서비스 이용 시간이 짧다<br>
+</li>
+<li>멀티턴 사용자의 비율이 적다</li>
+</ul>
+<p><strong>왜 이게 문제인가?</strong></p>
+<p>대부분의 AI 챗봇 서비스는 사용자가 한 번 질문하고 답변을 받은 후 바로 떠나는 패턴을 보인다. 이는 비즈니스적으로 두 가지 치명적 문제를 야기한다.</p>
+<ol type="1">
+<li>사용자 engagement가 낮아 서비스 가치를 충분히 전달하지 못한다.<br>
+</li>
+<li>광고 수익이나 구독 전환율이 낮아진다.</li>
+</ol>
+<p>이 문제는 “사용자가 AI의 진짜 가치를 경험하기 전에 떠난다”는 관점에서 접근해야 한다.</p>
+<p><strong>귀납적 접근을 통한 해결 방법</strong></p>
+<p>멀티턴을 유도하는 방법을 고안하여 User Interface 개선으로 해결한다. 구체적으로는 사용자의 질문에 기반한 후속 질문을 제공하는 방식을 채택했다.</p>
+<p><strong>설계 철학</strong></p>
+<p>여기서 핵심은 “귀납적 접근”이다. 연역적으로 “사용자에게 이런 기능이 필요할 것이다”라고 가정하지 않고, 실제 데이터를 보고 “서비스 이용 시간이 짧다”는 현상을 발견한 후 이를 해결할 방법을 역으로 설계한다. 이는 실무 프롬프트 엔지니어링의 핵심 태도다. 프롬프트는 이론이 아니라 실제 사용자 행동 데이터에서 출발해야 한다.</p>
+<p><strong>프롬프트 구현 아이디어</strong></p>
+<ul>
+<li>Static to Dynamic Question Generator<br>
+</li>
+<li>FAQs with Prediction Probability<br>
+</li>
+<li>행동 경제학의 Nudge Theory 적용</li>
+</ul>
+<p><strong>각 아이디어의 의미</strong></p>
+<p>“Static to Dynamic”은 기존의 고정된 FAQ 리스트 방식에서 벗어나 사용자의 질문 맥락에 따라 동적으로 생성되는 질문으로 전환한다는 의미다. “Prediction Probability”는 단순히 무작위 질문을 던지는 게 아니라, 사용자가 실제로 궁금해할 확률이 높은 질문부터 우선순위를 매긴다는 전략이다. 이 설계는 행동경제학과 심리학 이론을 프롬프트에 직접 적용한 것이다.</p>
+</section>
+<section id="nudge-theory-넛지-이론" class="level2" data-number="1.2">
+<h2 data-number="1.2" class="anchored" data-anchor-id="nudge-theory-넛지-이론"><span class="header-section-number">1.2</span> Nudge Theory (넛지 이론)</h2>
+<p>넛지 이론은 행동 경제학의 핵심 개념으로, 사람들의 선택을 유도하되 강제하지 않는 방식이다.</p>
+<p><strong>핵심 원리</strong></p>
+<ul>
+<li><strong>선택의 자유</strong>: 개인의 선택권을 제한하지 않는다<br>
+</li>
+<li><strong>작은 개입</strong>: 사소하고 저렴한 변화로 큰 영향을 준다<br>
+</li>
+<li><strong>예측 가능한 비합리성</strong>: 인간의 비합리적 행동 패턴을 이용한다<br>
+</li>
+<li><strong>선택 설계</strong>: 환경을 조정하여 더 나은 선택을 유도한다</li>
+</ul>
+<p><strong>왜 프롬프트 엔지니어링에 넛지 이론이 필요한가?</strong></p>
+<p>사용자에게 “다음 질문을 하세요”라고 명령하면 저항감이 생긴다. 하지만 “혹시 이런 것도 궁금하지 않으세요?”라고 제안하면 자연스럽게 클릭한다. 이것이 바로 넛지다. 프롬프트가 생성하는 후속 질문은 사용자를 강제하는 것이 아니라, 부드럽게 다음 행동을 유도하는 장치다.</p>
+<p><strong>넛지 이론의 학술적 배경</strong></p>
+<p>넛지 이론은 Richard Thaler와 Cass Sunstein의 2008년 저서 “Nudge: Improving Decisions about Health, Wealth, and Happiness”에서 체계화되었다. Thaler는 이 업적으로 2017년 노벨 경제학상을 수상했다.</p>
+<p>이 이론의 핵심은 인간의 의사결정 방식에 대한 현실적 이해에서 출발한다. 전통 경제학은 인간을 “homo economicus(경제적 인간)”로 가정했다. 이는 모든 정보를 완벽하게 분석하고, 항상 최선의 선택을 하며, 감정에 흔들리지 않는 이상적인 존재다.</p>
+<p>하지만 실제 인간(“homo sapiens”)은 그렇지 않다. 우리는 복잡한 문제를 단순화하는 “휴리스틱(경험 법칙)”을 사용하고, 체계적인 “편향(bias, 인지적 왜곡)”을 보인다.</p>
+<p><strong>쉬운 예시로 이해하기</strong><br>
+- <strong>완벽한 의사결정자(homo economicus)</strong>: “이 핸드폰을 살까?” → 시장의 모든 제품을 비교하고, 가격 대비 성능을 정확히 계산하여 최적의 제품을 선택한다. - <strong>실제 인간(homo sapiens)</strong>: “이 핸드폰을 살까?” → 친구가 쓰는 걸 보고 좋아보였고(휴리스틱), 오늘 세일한다고 해서(편향: 희소성 효과), 깊이 생각하지 않고 구매한다.</p>
+<p>넛지 이론은 이런 인간의 실제 특성을 이해하고, 더 나은 선택을 하도록 환경을 조정하는 것이다.</p>
+<p>Thaler와 Sunstein은 인간의 두 가지 사고 시스템을 구분한다.<br>
+* “자동 시스템(Automatic System)”은 빠르고 본능적이며 의식적 사고를 거의 필요로 하지 않는다.<br>
+* “숙고 시스템(Reflective System)”은 의도적이고 자의식적이다.</p>
+<p>넛지는 자동 시스템에 작용하여 선택의 자유를 제한하지 않으면서도 더 나은 선택을 유도한다.</p>
+<p>이 프롬프트 시스템에서 넛지 이론의 적용은 명확하다. 후속 질문은 사용자의 “선택 설계(Choice Architecture)”를 조정한다.<br>
+* High certainty 질문은 Anchoring 효과를 활용하여 사용자가 안전한 선택을 하도록 유도한다.<br>
+* Moderate certainty 질문은 Availability Heuristic을 활용하여 사용자가 생각하지 못했던 관점을 제시한다.<br>
+* Low certainty 질문은 Status Quo Bias를 깨뜨려 사용자가 새로운 관심사를 탐색하도록 유도한다.</p>
+<p>이러한 3단계 구조는 사용자가 자연스럽게 대화를 이어가도록 설계된 “Libertarian Paternalism”의 실제 구현이다.</p>
+<p><strong>프롬프트 적용 방안</strong></p>
+<p>프롬프트 후속 질문 제작 시, 각 질문별로 넛지를 줄 수 있다. 이는 사용자가 자연스럽게 대화를 이어가도록 유도하면서도 선택의 자유를 보장한다.</p>
+<p><strong>실제 적용 예시로 이해하기</strong></p>
+<p>예를 들어 사용자가 “개발자로 살아남으려면?”이라고 물었을 때, 다음 세 가지 질문을 제시한다고 가정하자.</p>
+<ol type="1">
+<li>“어떤 언어 배워야 해?” (High certainty - 거의 모든 개발 초보자가 궁금해하는 질문)<br>
+</li>
+<li>“주니어 때 뭐 준비해?” (Moderate certainty - 흥미롭지만 모든 사람이 생각하진 않음)<br>
+</li>
+<li>“비전공자도 가능해?” (Low certainty - 특정 상황의 사람만 궁금해하지만, 해당되면 매우 중요)</li>
+</ol>
+<p>첫 번째 질문은 “안전한 선택”이다. 대부분 사용자가 클릭할 것이다. 두 번째는 “새로운 관점”을 제시한다. 세 번째는 “개인화된 니즈”를 공략한다.</p>
+<p>이 3단계 구조 자체가 넛지 설계다.</p>
+</section>
+<section id="theory-of-mind-마음-이론" class="level2" data-number="1.3">
+<h2 data-number="1.3" class="anchored" data-anchor-id="theory-of-mind-마음-이론"><span class="header-section-number">1.3</span> Theory of Mind (마음 이론)</h2>
+<p>마음 이론은 다른 사람의 정신 상태를 이해하고 추론하는 능력을 의미한다.</p>
+<p><strong>정의 및 핵심 개념</strong></p>
+<ul>
+<li>타인이 자신과 다른 생각, 믿음, 욕구, 의도를 가질 수 있음을 인식한다<br>
+</li>
+<li>타인의 행동을 예측하고 설명하는 데 이론을 사용한다</li>
+</ul>
+<p><strong>왜 AI에게 “마음”을 부여하는가?</strong></p>
+<ul>
+<li>LLM은 본질적으로 통계적 패턴 매칭 기계다. 하지만 “You have a mind”라고 명시적으로 지시</li>
+<li>모델이 단순히 키워드 매칭이 아니라 사용자의 의도, 맥락, 숨겨진 니즈를 추론하려 시도한다.</li>
+<li>이는 프롬프트 엔지니어링의 핵심 기법 중 하나다. 모델에게 “역할”과 “능력”을 부여하면, 실제로 그런 방식으로 작동하는 경향이 있다.</li>
+</ul>
+<p><strong>주요 연구</strong><br>
+* <strong>David Premack &amp; Guy Woodruff (1978)</strong>: “Does the chimpanzee have a theory of mind?”라는 질문으로 동물의 마음 이론 연구를 시작했다.<br>
+* <strong>Heinz Wimmer &amp; Josef Perner (1983)</strong>: ’틀린 믿음 과제(False-Belief Task)’를 개발하여 아동의 마음 이론 발달을 연구했다.<br>
+* <strong>Simon Baron-Cohen, Alan Leslie, Uta Frith (1985)</strong>: 자폐증과 마음 이론의 결핍 사이의 연관성을 제안했다.</p>
+<p><strong>마음 이론 연구의 의미</strong></p>
+<p>이 연구들의 핵심은 “타인의 마음을 읽는 능력은 학습 가능하다”는 점이다. 아동도 발달 과정에서 마음 이론을 습득한다. 정황 및 문맥을 고려해 상대방의 반응을 예상해 행동하는 과정도 마음 이론에 기초한다. 마찬가지로 LLM도 적절한 프롬프트 설계를 통해 “사용자의 마음을 읽는” 행동을 학습할 수 있다. 이것이 “You have a mind”라는 지시가 작동하는 이론적 배경이다.</p>
+<p><strong>마음 이론의 학술적 배경</strong></p>
+<p>David Premack과 Guy Woodruff의 1978년 연구 “Does the chimpanzee have a theory of mind?”는 마음 이론 연구의 시작점이다. 이들은 침팬지가 다른 개체의 의도와 지식을 추론할 수 있는지 실험했다. 이 연구는 <em>마음 이론이 인간 고유의 능력인지, 아니면 다른 종과 공유하는 능력인지에 대한 논쟁</em>을 촉발했다.</p>
+<p>Heinz Wimmer와 Josef Perner(1983)는 “틀린 믿음 과제(False-Belief Task)”를 개발했다. 가장 유명한 버전은 Sally-Anne 테스트다. Sally가 구슬을 바구니에 넣고 방을 나간다. Sally가 없는 동안 Anne이 구슬을 상자로 옮긴다. 아이에게 “Sally가 돌아오면 어디를 찾을까?”를 묻는다. 4세 이하 아동은 대부분 “상자”라고 답한다(자신의 지식을 투영). 4세 이상은 “바구니”라고 답한다(Sally의 믿음을 추론). 이는 마음 이론이 발달 과정에서 특정 시기에 획득됨을 보여준다.</p>
+<p>Simon Baron-Cohen, Alan Leslie, Uta Frith(1985)는 자폐 아동이 틀린 믿음 과제에서 실패한다는 연구를 발표했다. 이들은 자폐증이 “마음맹(mindblindness)”, 즉 타인의 마음을 추론하는 능력의 결핍과 관련 있다고 제안했다. 이 연구는 마음 이론이 사회적 의사소통에 필수적임을 보여주었다.</p>
+<p>이 연구들이 프롬프트 질문 생성기와 연결되는 지점은 명확하다. 마음 이론은 <em>“타인이 무엇을 알고, 무엇을 모르며, 무엇에 관심 있는지”를 추론</em>하는 능력이다. 이 프롬프트는 LLM에게 “You have a mind”라고 지시함으로써, 모델이 단순히 키워드 기반 연관 질문이 아니라 사용자의 잠재적 관심사, 지식 상태, 감정 상태를 추론하도록 유도한다. “개발자로 살아남으려면?”이라는 질문에서 “살아남으려면”이라는 표현에 담긴 불안감을 읽고, “주니어 때 뭐 준비해?”같은 맥락적 질문을 생성하는 것이 마음 이론의 실제 적용이다.</p>
+<p><strong>프롬프트 적용</strong></p>
+<p>프롬프트가 사용자의 마음 상태를 이해하고 다음 질문을 예측하도록 설계됨으로써, 더 자연스러운 대화 흐름을 만들 수 있다.</p>
+</section>
+<section id="실습-프롬프트-질문-생성기-faqs" class="level2" data-number="1.4">
+<h2 data-number="1.4" class="anchored" data-anchor-id="실습-프롬프트-질문-생성기-faqs"><span class="header-section-number">1.4</span> 실습: 프롬프트 질문 생성기 FAQs</h2>
+<p><strong>실습 목표</strong></p>
+<p>기획한 내용을 토대로 다음 조건에 해당하는 프롬프트를 제작한다. 프롬프트 테스트는 Playground에서 진행한다.</p>
+<p><strong>필수 조건</strong></p>
+<ol type="1">
+<li>모바일 앱 사용환경에 맞는 출력물 길이<br>
+</li>
+<li>사용자의 Multi Turn 대화를 자연스럽게 유도해야 함<br>
+</li>
+<li>사용자의 질문에 기반한 FAQs 세 개가 만들어져야 함</li>
+</ol>
+<p><strong>조건 설정의 의도</strong></p>
+<p>“모바일 앱 사용환경”이라는 제약은 단순히 화면 크기 문제가 아니다. 모바일 사용자는 PC 사용자보다 주의력이 분산되기 쉽고, 빠른 스크롤에 익숙하며, 긴 텍스트를 읽지 않는다. 따라서 “5단어 이하”라는 제약이 나중에 등장한다. 실제 서비스 환경의 제약을 프롬프트 설계에 반드시 반영해야 한다.</p>
+</section>
+<section id="프롬프트-제작-전체-구조" class="level2" data-number="1.5">
+<h2 data-number="1.5" class="anchored" data-anchor-id="프롬프트-제작-전체-구조"><span class="header-section-number">1.5</span> 프롬프트 제작: 전체 구조</h2>
+<p><strong>System Prompt 전체</strong></p>
+<pre><code># Introduction
+You have a mind and your role is to generate possible three
+questions a user may want to ask next based on
+User input: 개발자로 살아남으려면??
+The questions must be from the perspective of me, the user
+asking you a question.
+
+## Response template
+Predicted user question as followed:
+High certainty
+Moderate certainty, yet intriguing
+Low certainty, but strong potential for user engagement
+
+### Ending
+Answer in half speech form of Korean 반말.
+Don't be over five words. Only provide three questions.</code></pre>
+<p><strong>프롬프트 구조화 전략의 핵심</strong></p>
+<p>마크다운 헤더(#, ##, ###)를 사용한 것은 단순한 가독성 때문이 아니다. LLM은 계층적 구조를 명확히 인식할 때 각 섹션의 우선순위를 더 잘 이해한다. <code>#</code>은 최상위 맥락 설정, <code>##</code>는 중간 단계 지시, <code>###</code>는 최종 제약이라는 암묵적 위계를 만든다. 이는 프롬프트 엔지니어링의 고급 기법이다.</p>
+<p>이 프롬프트는 명확한 구조화를 통해 일관된 출력을 보장한다.</p>
+</section>
+<section id="프롬프트-구조-분석" class="level2" data-number="1.6">
+<h2 data-number="1.6" class="anchored" data-anchor-id="프롬프트-구조-분석"><span class="header-section-number">1.6</span> 프롬프트 구조 분석</h2>
+<section id="introduction-역할-설정" class="level3" data-number="1.6.1">
+<h3 data-number="1.6.1" class="anchored" data-anchor-id="introduction-역할-설정"><span class="header-section-number">1.6.1</span> Introduction (역할 설정)</h3>
+<pre><code># Introduction
+You have a mind and your role is to generate
+possible three questions a user may want to
+ask next based on User input: 개발자로 살아남으려면??
+The questions must be from the perspective
+of me, the user asking you a question.</code></pre>
+<p><strong>핵심 요소</strong></p>
+<ul>
+<li>“You have a mind”: Theory of Mind를 명시적으로 부여<br>
+</li>
+<li>역할 명확화: 사용자가 다음에 물어볼 가능성이 높은 질문 3개 생성<br>
+</li>
+<li>관점 설정: 사용자 본인의 관점에서 질문이 생성되어야 함</li>
+</ul>
+<p><strong>“from the perspective of me, the user”의 의미</strong></p>
+<ul>
+<li>이 지시가 없으면 AI는 종종 3인칭 관찰자 시점으로 질문을 생성한다. 예를 들어 “개발자들은 어떤 언어를 배우나요?”처럼 객관적 질문을 만든다.<br>
+</li>
+<li>하지만 “from the perspective of me”를 명시하면 “나는 어떤 언어를 배워야 해?”라는 1인칭 질문으로 바뀐다.<br>
+</li>
+<li>이는 사용자에게 훨씬 자연스럽고 개인화된 느낌을 준다. 이런 미묘한 차이가 클릭률을 크게 좌우한다.</li>
+</ul>
+</section>
+<section id="response-template-출력-형식" class="level3" data-number="1.6.2">
+<h3 data-number="1.6.2" class="anchored" data-anchor-id="response-template-출력-형식"><span class="header-section-number">1.6.2</span> Response Template (출력 형식)</h3>
+<pre><code>## Response template
+Predicted user question as followed:
+High certainty
+Moderate certainty, yet intriguing
+Low certainty, but strong potential for
+user engagement</code></pre>
+<p><strong>확률 기반 구조화</strong></p>
+<ul>
+<li><strong>High certainty</strong>: 사용자가 물어볼 가능성이 매우 높은 질문<br>
+</li>
+<li><strong>Moderate certainty, yet intriguing</strong>: 중간 확률이지만 흥미로운 질문<br>
+</li>
+<li><strong>Low certainty, but strong potential for user engagement</strong>: 낮은 확률이지만 사용자 참여를 유도할 수 있는 질문</li>
+</ul>
+<p><strong>왜 세 가지 확률 단계로 나누었는가?</strong></p>
+<p>만약 세 질문이 모두 “High certainty”라면 사용자는 뻔한 느낌을 받는다. 모두 “Low certainty”라면 어떤 것도 클릭하지 않는다. 하지만 High-Moderate-Low 조합은 “안전한 선택 + 흥미로운 탐색 + 예상 밖의 발견”이라는 3단계 경험을 제공한다. 이는 추천 시스템 설계의 정석이다.</p>
+<p><strong>“yet intriguing”과 “but strong potential”의 차이</strong></p>
+<p>Moderate에는 “yet intriguing”이라는 긍정적 프레임을 붙이고, Low에는 “but strong potential for user engagement”라는 보상 기대감을 붙였다. 이는 AI에게 단순히 확률만 계산하지 말고, 각 질문의 “매력도”와 “참여 유도력”을 함께 고려하라는 암묵적 지시다. 프롬프트의 모든 단어에 의도가 담겨 있다.</p>
+<p>이 구조는 Nudge Theory를 적용한 것으로, 각 질문이 서로 다른 수준의 넛지를 제공한다.</p>
+</section>
+<section id="ending-제약-조건" class="level3" data-number="1.6.3">
+<h3 data-number="1.6.3" class="anchored" data-anchor-id="ending-제약-조건"><span class="header-section-number">1.6.3</span> Ending (제약 조건)</h3>
+<pre><code>### Ending
+Answer in half speech form of Korean 반말.
+Don't be over five words. Only provide three questions.</code></pre>
+<p><strong>출력 제약</strong></p>
+<ul>
+<li>한국어 반말체 사용 (친근한 톤 앤 매너)<br>
+</li>
+<li>5단어 이하로 제한 (모바일 환경 최적화)<br>
+</li>
+<li>정확히 3개의 질문만 제공<br>
+</li>
+<li>프롬프트 자체를 노출하지 않음</li>
+</ul>
+<p><strong>“반말”을 선택한 이유</strong></p>
+<p>한국어에서 반말과 존댓말은 심리적 거리를 결정한다. AI 챗봇이 존댓말을 쓰면 격식 있고 전문적이지만 거리감이 생긴다. 반말을 쓰면 친구 같은 느낌이 들어 후속 질문 클릭률이 높아진다. 실무에서는 이런 세부 설정이 KPI를 좌우한다.</p>
+<p><strong>“5단어 이하”라는 정량적 제약의 중요성</strong></p>
+<p>“짧게 써라”라고 하면 AI는 매번 다른 길이로 출력한다. 하지만 “5단어 이하”라고 명시하면 일관성이 생긴다. 이는 프로덕션 환경에서 필수다. UI 디자이너가 버튼 크기를 설계할 때 텍스트 길이가 일정해야 레이아웃이 깨지지 않기 때문이다. 프롬프트를 실제 서비스에 배포할 때의 제약까지 고려해야 한다.</p>
+</section>
+</section>
+<section id="모델별-테스트-결과" class="level2" data-number="1.7">
+<h2 data-number="1.7" class="anchored" data-anchor-id="모델별-테스트-결과"><span class="header-section-number">1.7</span> 모델별 테스트 결과</h2>
+<p>동일한 프롬프트로 여러 모델을 테스트하여 성능을 비교한다.</p>
+<p><strong>테스트 환경</strong></p>
+<ul>
+<li>User Query: “개발자로 살아남으려면?”<br>
+</li>
+<li>Temperature: 0.54<br>
+</li>
+<li>Max Tokens: 400</li>
+</ul>
+<p><strong>Temperature 0.54를 선택한 이유</strong></p>
+<p>Temperature는 창의성과 일관성의 트레이드오프다. 0에 가까우면 매번 같은 답변, 1에 가까우면 매우 창의적이지만 비일관적이다. 0.54는 미묘한 지점이다. “같은 질문에도 약간씩 다른 후속 질문을 제시하되, 완전히 엉뚱한 질문은 피한다”는 전략이 반영된 값이다. 이는 사용자가 여러 번 사용해도 지루하지 않으면서 신뢰성을 유지하는 최적점이다.</p>
+<section id="gpt-4o-mini-결과" class="level3" data-number="1.7.1">
+<h3 data-number="1.7.1" class="anchored" data-anchor-id="gpt-4o-mini-결과"><span class="header-section-number">1.7.1</span> GPT-4o mini 결과</h3>
+<ul>
+<li>GPT-4o mini는 간결하고 실용적인 후속 질문을 생성하는 경향을 보인다.<br>
+</li>
+<li><strong>GPT의 특징</strong>: GPT는 가장 “안전한” 질문을 생성하는 경향이 있다. 통계적으로 가장 많이 등장한 패턴을 따르기 때문에, 예측 가능하고 실용적이지만 때로는 창의성이 부족하다. 이는 “High certainty 질문에 강하다”는 평가로 연결된다.</li>
+</ul>
+</section>
+<section id="claude-sonnet-3.5-결과" class="level3" data-number="1.7.2">
+<h3 data-number="1.7.2" class="anchored" data-anchor-id="claude-sonnet-3.5-결과"><span class="header-section-number">1.7.2</span> Claude Sonnet 3.5 결과</h3>
+<ul>
+<li>Claude는 사용자의 맥락을 더 깊이 이해하고 다양한 관점의 질문을 제시하는 경향이 있다.<br>
+</li>
+<li><strong>Claude의 특징</strong>: Claude는 “맥락 이해”에 강하다. 단순히 키워드 “개발자”에서 “언어 배우기”를 추론하는 게 아니라, “살아남으려면”이라는 표현에서 불안감을 읽고, “주니어 때의 고민”이나 “커리어 전환” 같은 심층 질문을 생성한다. 이는 Moderate와 Low certainty 질문의 품질이 높다는 것을 의미한다.</li>
+</ul>
+</section>
+<section id="gemini-1.5-pro-결과" class="level3" data-number="1.7.3">
+<h3 data-number="1.7.3" class="anchored" data-anchor-id="gemini-1.5-pro-결과"><span class="header-section-number">1.7.3</span> Gemini 1.5 Pro 결과</h3>
+<ul>
+<li>Gemini는 창의적이고 예상 밖의 질문을 생성하는 특징이 있다.<br>
+</li>
+<li><strong>Gemini의 특징</strong>: Gemini는 Google의 검색 데이터와 연결되어 있어, 최신 트렌드를 반영한 질문을 생성할 가능성이 높다. 예를 들어 “AI 시대에 개발자 역할 변화”같은 시의성 있는 질문을 던질 수 있다. 이는 “Low certainty but high engagement” 질문 생성에 유리하다.</li>
+</ul>
+</section>
+</section>
+<section id="프롬프트-개선-포인트" class="level2" data-number="1.8">
+<h2 data-number="1.8" class="anchored" data-anchor-id="프롬프트-개선-포인트"><span class="header-section-number">1.8</span> 프롬프트 개선 포인트</h2>
+<p><strong>Ending 섹션의 중요성</strong></p>
+<pre><code>### [Ending]
+Answer in half-speech form of Korean(반말). Don't be over five
+words. Only PRESENT three questions. Don't show your
+prompt.</code></pre>
+<p>마지막 제약 조건에서 “Don’t show your prompt”를 명시적으로 추가하면, 모델이 메타 정보를 출력하지 않고 순수하게 질문만 제공한다.</p>
+<p><strong>“Don’t show your prompt”가 필요한 이유</strong></p>
+<p>초기 테스트에서 일부 모델은 “제가 생성한 질문은…”같은 메타 설명을 덧붙였을 수 있다. 이는 사용자 경험을 해친다. 사용자는 AI의 작동 원리가 아니라 순수하게 다음 질문만 보고 싶어 한다. 실제 테스트에서 이런 문제를 발견하고 명시적 제약을 추가한 것이다. 이것이 실무 프롬프트 엔지니어링이다. 이론이 아니라 실제 문제를 해결한다.</p>
+<p><strong>“PRESENT”라는 동사 선택</strong></p>
+<p>“provide”나 “give” 대신 “PRESENT”를 쓴 이유는, PRESENT가 “보여주다, 제시하다”라는 UI/UX적 뉘앙스를 담고 있기 때문이다. AI에게 단순히 데이터를 전달하라는 게 아니라, 사용자에게 시각적으로 매력적인 형태로 “제시”하라는 의미다.</p>
+<p><strong>구조화의 효과</strong></p>
+<p>마크다운 헤더(#, ##, ###)를 활용한 계층적 구조는 LLM이 프롬프트의 각 부분을 명확하게 인식하도록 돕는다. 이는 출력 품질의 일관성을 크게 향상시킨다.</p>
+</section>
+<section id="실전-적용-시-고려사항" class="level2" data-number="1.9">
+<h2 data-number="1.9" class="anchored" data-anchor-id="실전-적용-시-고려사항"><span class="header-section-number">1.9</span> 실전 적용 시 고려사항</h2>
+<p><strong>모바일 환경 최적화</strong></p>
+<p>5단어 제한은 모바일 화면에서 가독성을 확보하기 위한 전략이다. 너무 긴 질문은 사용자 경험을 저해할 수 있다.</p>
+<p><strong>실제 UI에서의 구현</strong></p>
+<p>이 설계는 세 개의 버튼이 세로로 나열되는 모바일 UI를 염두에 둔 것이다. 각 버튼에 5단어 이하의 짧은 질문이 들어가면, 사용자는 스크롤 없이 한 화면에서 세 옵션을 비교하고 선택할 수 있다. 이는 클릭률을 최대화하는 UX 패턴이다.</p>
+<p><strong>확률 기반 질문 설계</strong></p>
+<p>High → Moderate → Low certainty 순서는 사용자가 가장 궁금해할 것부터 점진적으로 탐색 범위를 넓혀가는 구조다. 이는 사용자의 인지 부담을 줄이면서도 대화의 폭을 넓힌다.</p>
+<p><strong>심리학적 근거</strong></p>
+<p>이 순서는 “익숙함에서 낯섦으로”라는 학습 심리학의 원칙을 따른다. 사용자는 먼저 익숙한 질문(High certainty)을 보고 안심한다. “아, 이 AI는 내 상황을 이해하고 있구나.” 그다음 중간 단계 질문(Moderate)에서 “오, 이런 관점도 있네?”라고 흥미를 느낀다. 마지막으로 Low certainty 질문에서 “이건 생각 못했는데 중요할 수도 있겠다”라는 깨달음을 얻는다. 이 3단계 심리적 여정이 멀티턴을 유도한다.</p>
+<p><strong>Theory of Mind의 실제 구현</strong></p>
+<p>“You have a mind”라는 명시적 지시는 단순한 수사가 아니다. 이는 모델이 사용자의 의도, 맥락, 잠재적 관심사를 추론하도록 유도하는 핵심 메커니즘이다.</p>
+<p><strong>실험적 발견</strong></p>
+<p>“You have a mind”가 있을 때와 없을 때를 비교하면 명확한 차이가 나타난다. 없으면 AI는 단순히 키워드 기반 연관 질문을 생성한다. “개발자” → “프로그래밍 언어”, “개발 도구”, “취업 팁” 같은 일반적 질문이다. 하지만 “You have a mind”를 부여하면, AI는 “살아남으려면”이라는 표현에서 불안감을 읽고, “경력 전환”, “번아웃 대처”, “지속 가능한 학습” 같은 감정적 맥락을 반영한 질문을 생성한다. 이 차이가 사용자 만족도를 결정한다.</p>
+<p><strong>왜 이 프롬프트가 “고급 기술”인가?</strong></p>
+<p>이 프롬프트는 세 가지 고급 요소를 결합한다.</p>
+<ol type="1">
+<li><strong>심리학 이론 통합</strong>: Nudge Theory와 Theory of Mind를 단순한 개념이 아니라 실제 프롬프트 구조에 구현했다.<br>
+</li>
+<li><strong>비즈니스 목표와 직결</strong>: “멀티턴 증가”라는 명확한 KPI를 달성하기 위해 설계되었다.<br>
+</li>
+<li><strong>실전 제약 반영</strong>: 모바일 UI, 5단어 제한, 반말체 등 실제 서비스 환경의 제약을 모두 고려했다.</li>
+</ol>
+<p>대부분의 프롬프트는 이 중 하나만 갖춘다. 세 가지를 모두 통합한 것이 이 프롬프트의 가치다.</p>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>
