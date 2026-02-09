@@ -1,0 +1,1648 @@
+---
+title: "AI Agent 플랫폼 운영 자동화와 DevOps"
+subtitle: "CI/CD, 모니터링, 배포 전략, 보안"
+description: |
+  AI Agent 플랫폼의 운영 자동화와 DevOps 전략을 다룬다.
+  CI/CD 파이프라인 구축, 변경 감지 기반 테스트 자동화,
+  Blue-Green/Canary 배포 전략, Agent별 모니터링 대시보드,
+  구조화된 로깅, 알림 시스템, API 키 관리 등
+  실제 운영에 필요한 모든 자동화 전략을 구체적으로 제시한다.
+categories:
+  - Engineering
+  - System
+  - Architecture Design
+  - AI
+  - Platform
+  - DevOps
+author: Kwangmin Kim
+date: 01/31/2026
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: false
+---
+
+# 들어가며
+
+## 왜 운영 자동화가 중요한가?
+
+Phase 4 플랫폼을 구축한 후 이제 실제 운영 시 발생하는 문제들:
+
+**질문들**:
+- "Agent 코드를 수정했는데, 어느 것을 테스트해야 하나요?"
+- "새 Agent를 배포하는데 기존 서비스가 다운되면 어떡하죠?"
+- "Agent가 느려졌는데 어디서 병목이 생기는지 모르겠어요"
+- "LLM API 키가 노출되지 않게 하려면?"
+
+**이 글의 목표**:
+- CI/CD 파이프라인 구축 (변경 감지 + 자동 테스트)
+- 무중단 배포 전략 (Blue-Green, Canary)
+- 모니터링 시스템 (메트릭, 대시보드, 알림)
+- 로깅 전략 (구조화, 분석, 추적)
+- 보안 관리 (인증, API 키, 권한)
+
+## 앞선 글 요약
+
+**5번 글** ([데이터 표준화 계층](5.agent_platform_data_standardization.qmd)):
+- 프롬프트 버전 관리 (PromptRegistry)
+- 벡터 데이터 자동 업데이트
+- 표준 메타데이터 스키마
+- 환경별 설정 관리
+
+**핵심 질문**: "구축한 플랫폼을 어떻게 안정적으로 운영하고 자동화할 것인가?"
+
+# CI/CD 파이프라인
+
+## 문제: 수동 배포의 한계
+
+### 초기 방식 (Phase 1-2)
+
+```bash
+# ❌ 나쁜 예: 수동 배포
+# 1. 로컬에서 테스트
+pytest tests/
+
+# 2. 수동으로 서버 SSH
+ssh production-server
+
+# 3. 코드 pull
+git pull origin main
+
+# 4. 서비스 재시작
+systemctl restart agent-platform
+
+# 5. 에러 발생 시 수동 롤백
+git reset --hard HEAD~1
+systemctl restart agent-platform
+```
+
+**문제점**:
+1. **테스트 누락**: 개발자가 깜빡하면 미테스트 코드 배포
+2. **다운타임**: 재시작 중 서비스 중단
+3. **롤백 지연**: 문제 발견 → 수동 롤백 → 10분 이상 소요
+4. **불일치**: 로컬 환경과 프로덕션 환경 차이
+
+## GitHub Actions 기반 CI/CD
+
+### 파일 구조
+
+```bash
+.github/
+└── workflows/
+    ├── test.yml           # PR 시 테스트
+    ├── deploy-dev.yml     # 개발 환경 자동 배포
+    └── deploy-prod.yml    # 프로덕션 수동 승인 배포
+```
+
+### test.yml: 변경 감지 + 선택적 테스트
+
+```yaml
+# .github/workflows/test.yml
+name: Test Affected Components
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      core_changed: ${{ steps.changes.outputs.core }}
+      shared_changed: ${{ steps.changes.outputs.shared }}
+      affected_agents: ${{ steps.changes.outputs.agents }}
+    
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 2  # 이전 커밋과 비교
+      
+      - name: Detect changes
+        id: changes
+        run: |
+          # 변경된 파일 목록
+          CHANGED=$(git diff --name-only HEAD~1)
+          
+          # core/ 또는 shared/ 변경 시 전체 테스트
+          if echo "$CHANGED" | grep -qE '^(core|shared)/'; then
+            echo "core=true" >> $GITHUB_OUTPUT
+            echo "shared=true" >> $GITHUB_OUTPUT
+            echo "agents=all" >> $GITHUB_OUTPUT
+          else
+            # agents/ 변경 시 해당 Agent만
+            AGENTS=$(echo "$CHANGED" | grep '^agents/' | cut -d'/' -f2 | sort -u | tr '\n' ',')
+            echo "core=false" >> $GITHUB_OUTPUT
+            echo "shared=false" >> $GITHUB_OUTPUT
+            echo "agents=$AGENTS" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Changed files:"
+          echo "$CHANGED"
+          echo "Affected agents: $AGENTS"
+
+  test-core:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.core_changed == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+      
+      - name: Test core module
+        run: |
+          poetry run pytest core/tests/ -v --cov=core --cov-report=xml
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: core
+
+  test-shared:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.shared_changed == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+      
+      - name: Test shared module
+        run: |
+          poetry run pytest shared/tests/ -v --cov=shared
+
+  test-agents:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.affected_agents != ''
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        agent: ${{ fromJson(needs.detect-changes.outputs.affected_agents == 'all' && '["data_standardization", "code_analysis", "knowledge_qna"]' || format('["{0}"]', needs.detect-changes.outputs.affected_agents)) }}
+    
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+      
+      - name: Test agent - ${{ matrix.agent }}
+        run: |
+          poetry run pytest agents/${{ matrix.agent }}/tests/ -v
+      
+      - name: Evaluate agent performance
+        run: |
+          poetry run python scripts/evaluate_agent.py ${{ matrix.agent }}
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+      
+      - name: Lint with ruff
+        run: poetry run ruff check .
+      
+      - name: Check import rules
+        run: poetry run lint-imports
+      
+      - name: Type check with mypy
+        run: poetry run mypy core/ shared/ agents/
+
+  integration-test:
+    needs: [test-core, test-shared, test-agents]
+    if: always() && (needs.test-core.result == 'success' || needs.test-core.result == 'skipped') && (needs.test-shared.result == 'success' || needs.test-shared.result == 'skipped') && (needs.test-agents.result == 'success' || needs.test-agents.result == 'skipped')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+      
+      - name: Run integration tests
+        run: |
+          poetry run pytest tests/integration/ -v
+      
+      - name: Test agent chaining
+        run: |
+          poetry run python scripts/test_chaining.py
+```
+
+### deploy-prod.yml: 프로덕션 배포
+
+```yaml
+# .github/workflows/deploy-prod.yml
+name: Deploy to Production
+
+on:
+  workflow_dispatch:  # 수동 트리거
+    inputs:
+      deployment_type:
+        description: 'Deployment strategy'
+        required: true
+        type: choice
+        options:
+          - blue-green
+          - canary
+      
+      canary_percentage:
+        description: 'Canary traffic percentage (if canary selected)'
+        required: false
+        default: '10'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Login to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/agent-platform:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/agent-platform:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production  # 승인 필요
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+      
+      - name: Deploy with Blue-Green
+        if: inputs.deployment_type == 'blue-green'
+        run: |
+          # 새 버전 배포 (green)
+          kubectl apply -f k8s/deployment-green.yaml
+          
+          # Health check
+          kubectl wait --for=condition=ready pod -l version=green --timeout=300s
+          
+          # 트래픽 전환
+          kubectl patch service agent-platform -p '{"spec":{"selector":{"version":"green"}}}'
+          
+          # 기존 버전 제거 (blue)
+          kubectl delete deployment agent-platform-blue
+      
+      - name: Deploy with Canary
+        if: inputs.deployment_type == 'canary'
+        run: |
+          # Canary 배포
+          kubectl apply -f k8s/deployment-canary.yaml
+          
+          # 트래픽 비율 조정
+          kubectl patch virtualservice agent-platform -p '{
+            "spec": {
+              "http": [{
+                "match": [{"uri": {"prefix": "/"}}],
+                "route": [
+                  {"destination": {"host": "agent-platform-stable"}, "weight": '$((100 - ${{ inputs.canary_percentage }}))'},
+                  {"destination": {"host": "agent-platform-canary"}, "weight": ${{ inputs.canary_percentage }}}
+                ]
+              }]
+            }
+          }'
+          
+          echo "Canary deployed with ${{ inputs.canary_percentage }}% traffic"
+      
+      - name: Notify Slack
+        uses: slackapi/slack-github-action@v1
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK }}
+          payload: |
+            {
+              "text": "✅ Production deployment successful",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Deployment*: ${{ inputs.deployment_type }}\n*Commit*: ${{ github.sha }}\n*Actor*: ${{ github.actor }}"
+                  }
+                }
+              ]
+            }
+```
+
+## Docker 컨테이너화
+
+### Dockerfile
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim as base
+
+WORKDIR /app
+
+# 의존성 설치
+COPY pyproject.toml poetry.lock ./
+RUN pip install poetry && \
+    poetry config virtualenvs.create false && \
+    poetry install --no-dev
+
+# 애플리케이션 코드
+COPY core/ ./core/
+COPY shared/ ./shared/
+COPY agents/ ./agents/
+COPY platform-api/ ./platform-api/
+COPY config/ ./config/
+
+# 환경 변수
+ENV ENV=production
+ENV PYTHONPATH=/app
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+
+# 실행
+CMD ["uvicorn", "platform-api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### docker-compose.yml (로컬 개발)
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  platform-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=development
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./core:/app/core
+      - ./shared:/app/shared
+      - ./agents:/app/agents
+    depends_on:
+      - vector-db
+      - monitoring
+  
+  vector-db:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+  
+  monitoring:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+  
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards
+
+volumes:
+  chroma-data:
+  prometheus-data:
+  grafana-data:
+```
+
+# 배포 전략
+
+## Blue-Green 배포
+
+### 개념
+
+```
+[Before]
+Blue (현재 버전)  ← 트래픽 100%
+Green (새 버전)   ← 대기
+
+[After]
+Blue (이전 버전)  ← 대기 (롤백용)
+Green (새 버전)   ← 트래픽 100%
+```
+
+### Kubernetes 매니페스트
+
+```yaml
+# k8s/deployment-blue.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-platform-blue
+  labels:
+    app: agent-platform
+    version: blue
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agent-platform
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: agent-platform
+        version: blue
+    spec:
+      containers:
+      - name: platform
+        image: ghcr.io/org/agent-platform:stable
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ENV
+          value: "production"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# k8s/deployment-green.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-platform-green
+  labels:
+    app: agent-platform
+    version: green
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agent-platform
+      version: green
+  template:
+    metadata:
+      labels:
+        app: agent-platform
+        version: green
+    spec:
+      containers:
+      - name: platform
+        image: ghcr.io/org/agent-platform:${{ github.sha }}  # 새 버전
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ENV
+          value: "production"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# k8s/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-platform
+spec:
+  selector:
+    app: agent-platform
+    version: blue  # 트래픽 라우팅 대상 (blue → green 전환)
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
+  type: LoadBalancer
+```
+
+### 배포 스크립트
+
+```bash
+#!/bin/bash
+# scripts/deploy-blue-green.sh
+
+set -e
+
+NAMESPACE="production"
+IMAGE_TAG=$1
+
+echo "🚀 Starting Blue-Green deployment..."
+
+# 1. Green 배포
+echo "📦 Deploying Green version: $IMAGE_TAG"
+kubectl set image deployment/agent-platform-green \
+  platform=ghcr.io/org/agent-platform:$IMAGE_TAG \
+  -n $NAMESPACE
+
+# 2. Green 준비 대기
+echo "⏳ Waiting for Green to be ready..."
+kubectl rollout status deployment/agent-platform-green -n $NAMESPACE
+
+# 3. Green Health Check
+echo "🏥 Running health checks on Green..."
+GREEN_POD=$(kubectl get pod -n $NAMESPACE -l version=green -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n $NAMESPACE $GREEN_POD -- curl -f http://localhost:8000/health
+
+# 4. Smoke Test
+echo "🧪 Running smoke tests..."
+python scripts/smoke_test.py --target green
+
+# 5. 트래픽 전환 (Blue → Green)
+echo "🔄 Switching traffic from Blue to Green..."
+kubectl patch service agent-platform -n $NAMESPACE \
+  -p '{"spec":{"selector":{"version":"green"}}}'
+
+echo "✅ Traffic switched to Green"
+
+# 6. 모니터링 대기 (5분)
+echo "📊 Monitoring Green for 5 minutes..."
+sleep 300
+
+# 7. 에러율 확인
+ERROR_RATE=$(curl -s "http://prometheus:9090/api/v1/query?query=rate(http_requests_total{status=~'5..'}[5m])" | jq -r '.data.result[0].value[1]')
+
+if (( $(echo "$ERROR_RATE > 0.01" | bc -l) )); then
+  echo "❌ High error rate detected: $ERROR_RATE"
+  echo "🔙 Rolling back to Blue..."
+  kubectl patch service agent-platform -n $NAMESPACE \
+    -p '{"spec":{"selector":{"version":"blue"}}}'
+  exit 1
+fi
+
+# 8. Blue 제거
+echo "🗑️ Removing old Blue deployment..."
+kubectl delete deployment agent-platform-blue -n $NAMESPACE
+
+echo "✅ Blue-Green deployment completed successfully!"
+```
+
+## Canary 배포
+
+### 개념
+
+```
+[Phase 1: 10% Canary]
+Stable (v1.0) ← 90% 트래픽
+Canary (v1.1) ← 10% 트래픽
+
+[Phase 2: 50% Canary]
+Stable (v1.0) ← 50% 트래픽
+Canary (v1.1) ← 50% 트래픽
+
+[Phase 3: 100% Canary]
+Stable (v1.0) ← 제거
+Canary (v1.1) ← 100% 트래픽 → Stable로 승격
+```
+
+### Istio VirtualService
+
+```yaml
+# k8s/virtualservice-canary.yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: agent-platform
+spec:
+  hosts:
+  - agent-platform.example.com
+  http:
+  - match:
+    - uri:
+        prefix: /api/agents
+    route:
+    - destination:
+        host: agent-platform-stable
+        subset: v1
+      weight: 90  # Stable 버전
+    - destination:
+        host: agent-platform-canary
+        subset: v2
+      weight: 10  # Canary 버전
+    timeout: 30s
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: agent-platform
+spec:
+  host: agent-platform
+  subsets:
+  - name: v1
+    labels:
+      version: stable
+  - name: v2
+    labels:
+      version: canary
+```
+
+### 자동 Canary 진행 스크립트
+
+```python
+# scripts/canary_rollout.py
+import time
+import requests
+from typing import Dict, Any
+
+class CanaryRollout:
+    """자동 Canary 배포
+    
+    단계:
+    1. 10% → 5분 모니터링
+    2. 25% → 10분 모니터링
+    3. 50% → 15분 모니터링
+    4. 100% → Stable로 승격
+    """
+    
+    STAGES = [
+        {'percentage': 10, 'duration': 300},   # 5분
+        {'percentage': 25, 'duration': 600},   # 10분
+        {'percentage': 50, 'duration': 900},   # 15분
+        {'percentage': 100, 'duration': 0}
+    ]
+    
+    def __init__(
+        self,
+        prometheus_url: str,
+        k8s_api: str,
+        error_threshold: float = 0.01
+    ):
+        self.prometheus_url = prometheus_url
+        self.k8s_api = k8s_api
+        self.error_threshold = error_threshold
+    
+    def update_traffic_weight(self, canary_percentage: int):
+        """트래픽 비율 업데이트"""
+        stable_weight = 100 - canary_percentage
+        
+        # Istio VirtualService 업데이트
+        patch = {
+            'spec': {
+                'http': [{
+                    'route': [
+                        {'destination': {'subset': 'v1'}, 'weight': stable_weight},
+                        {'destination': {'subset': 'v2'}, 'weight': canary_percentage}
+                    ]
+                }]
+            }
+        }
+        
+        response = requests.patch(
+            f"{self.k8s_api}/virtualservices/agent-platform",
+            json=patch
+        )
+        response.raise_for_status()
+        
+        print(f"✅ Traffic updated: Stable {stable_weight}%, Canary {canary_percentage}%")
+    
+    def get_error_rate(self, version: str) -> float:
+        """에러율 조회"""
+        query = f'rate(http_requests_total{{version="{version}",status=~"5.."}}[5m])'
+        
+        response = requests.get(
+            f"{self.prometheus_url}/api/v1/query",
+            params={'query': query}
+        )
+        
+        data = response.json()
+        if data['data']['result']:
+            return float(data['data']['result'][0]['value'][1])
+        return 0.0
+    
+    def get_latency_p95(self, version: str) -> float:
+        """P95 레이턴시 조회"""
+        query = f'histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{{version="{version}"}}[5m]))'
+        
+        response = requests.get(
+            f"{self.prometheus_url}/api/v1/query",
+            params={'query': query}
+        )
+        
+        data = response.json()
+        if data['data']['result']:
+            return float(data['data']['result'][0]['value'][1])
+        return 0.0
+    
+    def check_health(self, version: str) -> Dict[str, Any]:
+        """Canary 상태 확인"""
+        error_rate = self.get_error_rate(version)
+        latency_p95 = self.get_latency_p95(version)
+        
+        stable_error_rate = self.get_error_rate('stable')
+        stable_latency = self.get_latency_p95('stable')
+        
+        health = {
+            'error_rate': error_rate,
+            'latency_p95': latency_p95,
+            'error_rate_delta': error_rate - stable_error_rate,
+            'latency_delta': latency_p95 - stable_latency,
+            'healthy': True
+        }
+        
+        # Health check 조건
+        if error_rate > self.error_threshold:
+            health['healthy'] = False
+            health['reason'] = f"High error rate: {error_rate:.4f}"
+        
+        if latency_p95 > stable_latency * 1.5:
+            health['healthy'] = False
+            health['reason'] = f"High latency: {latency_p95:.2f}s"
+        
+        return health
+    
+    def rollout(self):
+        """Canary 배포 실행"""
+        print("🚀 Starting Canary rollout...")
+        
+        for stage in self.STAGES:
+            percentage = stage['percentage']
+            duration = stage['duration']
+            
+            print(f"\n📊 Stage: {percentage}% traffic to Canary")
+            
+            # 트래픽 비율 업데이트
+            self.update_traffic_weight(percentage)
+            
+            if duration > 0:
+                print(f"⏳ Monitoring for {duration}s...")
+                
+                # 1분마다 Health check
+                for i in range(duration // 60):
+                    time.sleep(60)
+                    
+                    health = self.check_health('canary')
+                    print(f"   [{i+1}/{duration//60}] Error: {health['error_rate']:.4f}, "
+                          f"Latency: {health['latency_p95']:.2f}s")
+                    
+                    if not health['healthy']:
+                        print(f"❌ Canary unhealthy: {health['reason']}")
+                        print("🔙 Rolling back...")
+                        self.rollback()
+                        return False
+        
+        print("\n✅ Canary rollout completed successfully!")
+        return True
+    
+    def rollback(self):
+        """롤백 (Stable 100%)"""
+        self.update_traffic_weight(0)
+        print("✅ Rolled back to Stable version")
+
+if __name__ == "__main__":
+    rollout = CanaryRollout(
+        prometheus_url="http://prometheus:9090",
+        k8s_api="http://kubernetes/api/v1",
+        error_threshold=0.01
+    )
+    
+    success = rollout.rollout()
+    exit(0 if success else 1)
+```
+
+# 모니터링 시스템
+
+## Prometheus 메트릭
+
+### 메트릭 수집기
+
+```python
+# shared/monitoring/metrics.py
+from prometheus_client import Counter, Histogram, Gauge, start_http_server
+from functools import wraps
+import time
+
+# 메트릭 정의
+agent_requests_total = Counter(
+    'agent_requests_total',
+    'Total number of agent requests',
+    ['agent_name', 'status']
+)
+
+agent_duration_seconds = Histogram(
+    'agent_duration_seconds',
+    'Agent execution duration in seconds',
+    ['agent_name'],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]
+)
+
+agent_confidence = Histogram(
+    'agent_confidence',
+    'Agent confidence score',
+    ['agent_name'],
+    buckets=[0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0]
+)
+
+llm_tokens_total = Counter(
+    'llm_tokens_total',
+    'Total LLM tokens used',
+    ['agent_name', 'provider', 'model']
+)
+
+llm_cost_total = Counter(
+    'llm_cost_total',
+    'Total LLM cost in USD',
+    ['agent_name', 'provider']
+)
+
+active_agents = Gauge(
+    'active_agents',
+    'Number of currently active agents',
+    ['agent_name']
+)
+
+class MetricsCollector:
+    """메트릭 수집"""
+    
+    @staticmethod
+    def track_agent_execution(agent_name: str):
+        """Agent 실행 추적 데코레이터"""
+        def decorator(func):
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                # 활성 Agent 증가
+                active_agents.labels(agent_name=agent_name).inc()
+                
+                start = time.time()
+                status = 'success'
+                
+                try:
+                    result = func(*args, **kwargs)
+                    
+                    # 신뢰도 기록
+                    confidence = result.get('confidence', 0.0)
+                    agent_confidence.labels(agent_name=agent_name).observe(confidence)
+                    
+                    return result
+                    
+                except Exception as e:
+                    status = 'failure'
+                    raise
+                
+                finally:
+                    # 실행 시간 기록
+                    duration = time.time() - start
+                    agent_duration_seconds.labels(agent_name=agent_name).observe(duration)
+                    
+                    # 요청 수 기록
+                    agent_requests_total.labels(
+                        agent_name=agent_name,
+                        status=status
+                    ).inc()
+                    
+                    # 활성 Agent 감소
+                    active_agents.labels(agent_name=agent_name).dec()
+            
+            return wrapper
+        return decorator
+    
+    @staticmethod
+    def track_llm_usage(agent_name: str, provider: str, model: str, tokens: int, cost: float):
+        """LLM 사용량 기록"""
+        llm_tokens_total.labels(
+            agent_name=agent_name,
+            provider=provider,
+            model=model
+        ).inc(tokens)
+        
+        llm_cost_total.labels(
+            agent_name=agent_name,
+            provider=provider
+        ).inc(cost)
+
+# BaseAgent에 통합
+class BaseAgent(ABC):
+    def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """메트릭 자동 수집"""
+        
+        @MetricsCollector.track_agent_execution(self.metadata.name)
+        def _execute_with_metrics():
+            # 기존 로직
+            result = self.process(input)
+            
+            # LLM 사용량 기록
+            if hasattr(self, 'llm'):
+                stats = self.llm.get_stats()
+                MetricsCollector.track_llm_usage(
+                    agent_name=self.metadata.name,
+                    provider=self.llm.provider,
+                    model=self.llm.model,
+                    tokens=stats['total_tokens'],
+                    cost=stats['total_cost']
+                )
+            
+            return result
+        
+        return _execute_with_metrics()
+
+# 메트릭 서버 시작
+def start_metrics_server(port: int = 9090):
+    """Prometheus 메트릭 서버 시작"""
+    start_http_server(port)
+    print(f"📊 Metrics server started on port {port}")
+```
+
+### Prometheus 설정
+
+```yaml
+# config/prometheus.yml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'agent-platform'
+    static_configs:
+      - targets: ['platform-api:9090']
+    
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        target_label: __address__
+        regex: (.+):(?:\d+);(\d+)
+        replacement: ${1}:${2}
+
+# 알림 규칙
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+```
+
+### 알림 규칙
+
+```yaml
+# config/prometheus/rules/agent-alerts.yml
+groups:
+  - name: agent-alerts
+    interval: 30s
+    rules:
+      # 에러율 높음
+      - alert: HighAgentErrorRate
+        expr: |
+          rate(agent_requests_total{status="failure"}[5m])
+          / rate(agent_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate for agent {{ $labels.agent_name }}"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+      
+      # 레이턴시 높음
+      - alert: HighAgentLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(agent_duration_seconds_bucket[5m])
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency for agent {{ $labels.agent_name }}"
+          description: "P95 latency is {{ $value }}s"
+      
+      # LLM 비용 초과
+      - alert: HighLLMCost
+        expr: |
+          increase(llm_cost_total[1h]) > 100
+        labels:
+          severity: critical
+        annotations:
+          summary: "High LLM cost"
+          description: "Cost in last hour: ${{ $value }}"
+      
+      # Agent 다운
+      - alert: AgentDown
+        expr: |
+          up{job="agent-platform"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent platform is down"
+          description: "Instance {{ $labels.instance }} is down"
+```
+
+## Grafana 대시보드
+
+### 대시보드 JSON
+
+```json
+// config/grafana/dashboards/agent-platform.json
+{
+  "dashboard": {
+    "title": "AI Agent Platform Overview",
+    "panels": [
+      {
+        "title": "Agent Request Rate",
+        "targets": [{
+          "expr": "sum(rate(agent_requests_total[5m])) by (agent_name)"
+        }],
+        "type": "graph"
+      },
+      {
+        "title": "Agent Error Rate",
+        "targets": [{
+          "expr": "sum(rate(agent_requests_total{status='failure'}[5m])) by (agent_name) / sum(rate(agent_requests_total[5m])) by (agent_name)"
+        }],
+        "type": "graph",
+        "alert": {
+          "conditions": [{
+            "evaluator": {"type": "gt", "params": [0.05]}
+          }]
+        }
+      },
+      {
+        "title": "Agent Latency (P95)",
+        "targets": [{
+          "expr": "histogram_quantile(0.95, sum(rate(agent_duration_seconds_bucket[5m])) by (agent_name, le))"
+        }],
+        "type": "graph"
+      },
+      {
+        "title": "LLM Cost (Hourly)",
+        "targets": [{
+          "expr": "sum(increase(llm_cost_total[1h])) by (agent_name)"
+        }],
+        "type": "graph"
+      },
+      {
+        "title": "Agent Confidence Distribution",
+        "targets": [{
+          "expr": "sum(rate(agent_confidence_bucket[5m])) by (agent_name, le)"
+        }],
+        "type": "heatmap"
+      }
+    ]
+  }
+}
+```
+
+# 로깅 전략
+
+## 구조화된 로깅
+
+```python
+# shared/logging/structured_logger.py
+import logging
+import json
+from datetime import datetime
+from typing import Dict, Any, Optional
+from pythonjsonlogger import jsonlogger
+
+class StructuredLogger:
+    """구조화된 로깅
+    
+    모든 로그를 JSON 형식으로 출력:
+    {
+        "timestamp": "2026-02-02T10:30:00Z",
+        "level": "INFO",
+        "logger": "agent.data_standardization",
+        "message": "Agent executed successfully",
+        "agent_name": "data_standardization",
+        "duration_ms": 1250,
+        "confidence": 0.95,
+        "trace_id": "abc123"
+    }
+    """
+    
+    def __init__(self, name: str):
+        self.logger = logging.getLogger(name)
+        self.logger.setLevel(logging.INFO)
+        
+        # JSON formatter
+        handler = logging.StreamHandler()
+        formatter = jsonlogger.JsonFormatter(
+            fmt='%(timestamp)s %(level)s %(name)s %(message)s',
+            rename_fields={'levelname': 'level', 'name': 'logger'}
+        )
+        handler.setFormatter(formatter)
+        
+        self.logger.addHandler(handler)
+    
+    def log(
+        self,
+        level: str,
+        message: str,
+        extra: Optional[Dict[str, Any]] = None
+    ):
+        """로그 기록"""
+        log_data = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'message': message
+        }
+        
+        if extra:
+            log_data.update(extra)
+        
+        getattr(self.logger, level.lower())(message, extra=log_data)
+    
+    def log_agent_execution(
+        self,
+        agent_name: str,
+        status: str,
+        duration_ms: float,
+        confidence: float,
+        trace_id: str
+    ):
+        """Agent 실행 로그"""
+        self.log('info', f"Agent {agent_name} executed", extra={
+            'agent_name': agent_name,
+            'status': status,
+            'duration_ms': duration_ms,
+            'confidence': confidence,
+            'trace_id': trace_id,
+            'event_type': 'agent_execution'
+        })
+    
+    def log_error(
+        self,
+        agent_name: str,
+        error: str,
+        trace_id: str
+    ):
+        """에러 로그"""
+        self.log('error', f"Agent {agent_name} failed", extra={
+            'agent_name': agent_name,
+            'error': error,
+            'trace_id': trace_id,
+            'event_type': 'agent_error'
+        })
+
+# BaseAgent에 통합
+class BaseAgent(ABC):
+    def __init__(self, metadata: AgentMetadata):
+        self.metadata = metadata
+        self.logger = StructuredLogger(f"agent.{metadata.name}")
+    
+    def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        import uuid
+        trace_id = str(uuid.uuid4())
+        
+        self.logger.log('info', f"Starting execution", extra={
+            'agent_name': self.metadata.name,
+            'trace_id': trace_id,
+            'input_task': input.get('task')
+        })
+        
+        try:
+            result = self.process(input)
+            
+            self.logger.log_agent_execution(
+                agent_name=self.metadata.name,
+                status='success',
+                duration_ms=result['metadata']['execution']['duration_ms'],
+                confidence=result['confidence'],
+                trace_id=trace_id
+            )
+            
+            return result
+            
+        except Exception as e:
+            self.logger.log_error(
+                agent_name=self.metadata.name,
+                error=str(e),
+                trace_id=trace_id
+            )
+            raise
+```
+
+## ELK Stack 통합
+
+### Filebeat 설정
+
+```yaml
+# config/filebeat.yml
+filebeat.inputs:
+  - type: container
+    paths:
+      - '/var/lib/docker/containers/*/*.log'
+    processors:
+      - add_kubernetes_metadata:
+          in_cluster: true
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "agent-platform-%{+yyyy.MM.dd}"
+
+setup.template.name: "agent-platform"
+setup.template.pattern: "agent-platform-*"
+```
+
+### Elasticsearch 쿼리
+
+```python
+# shared/logging/log_analyzer.py
+from elasticsearch import Elasticsearch
+from typing import List, Dict, Any
+from datetime import datetime, timedelta
+
+class LogAnalyzer:
+    """로그 분석"""
+    
+    def __init__(self, es_host: str = "elasticsearch:9200"):
+        self.es = Elasticsearch([es_host])
+    
+    def get_agent_errors(
+        self,
+        agent_name: str,
+        hours: int = 24
+    ) -> List[Dict[str, Any]]:
+        """Agent 에러 조회"""
+        query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"match": {"agent_name": agent_name}},
+                        {"match": {"level": "ERROR"}},
+                        {"range": {
+                            "timestamp": {
+                                "gte": f"now-{hours}h"
+                            }
+                        }}
+                    ]
+                }
+            },
+            "sort": [{"timestamp": "desc"}],
+            "size": 100
+        }
+        
+        result = self.es.search(index="agent-platform-*", body=query)
+        return [hit['_source'] for hit in result['hits']['hits']]
+    
+    def get_slow_executions(
+        self,
+        threshold_ms: float = 5000,
+        hours: int = 24
+    ) -> List[Dict[str, Any]]:
+        """느린 실행 조회"""
+        query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"match": {"event_type": "agent_execution"}},
+                        {"range": {"duration_ms": {"gte": threshold_ms}}},
+                        {"range": {"timestamp": {"gte": f"now-{hours}h"}}}
+                    ]
+                }
+            },
+            "sort": [{"duration_ms": "desc"}],
+            "size": 50
+        }
+        
+        result = self.es.search(index="agent-platform-*", body=query)
+        return [hit['_source'] for hit in result['hits']['hits']]
+    
+    def trace_execution(self, trace_id: str) -> List[Dict[str, Any]]:
+        """Trace ID로 전체 실행 추적"""
+        query = {
+            "query": {
+                "match": {"trace_id": trace_id}
+            },
+            "sort": [{"timestamp": "asc"}]
+        }
+        
+        result = self.es.search(index="agent-platform-*", body=query)
+        return [hit['_source'] for hit in result['hits']['hits']]
+```
+
+# 보안 관리
+
+## API 키 관리
+
+### Kubernetes Secrets
+
+```yaml
+# k8s/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-platform-secrets
+type: Opaque
+data:
+  openai-api-key: <base64-encoded>
+  anthropic-api-key: <base64-encoded>
+  database-password: <base64-encoded>
+
+---
+# Deployment에서 사용
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-platform
+spec:
+  template:
+    spec:
+      containers:
+      - name: platform
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: agent-platform-secrets
+              key: openai-api-key
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: agent-platform-secrets
+              key: anthropic-api-key
+```
+
+### Secrets 로테이션
+
+```python
+# scripts/rotate_secrets.py
+import boto3
+import kubernetes
+from datetime import datetime
+
+class SecretsRotator:
+    """API 키 자동 로테이션"""
+    
+    def __init__(self):
+        self.k8s = kubernetes.client.CoreV1Api()
+        self.secrets_manager = boto3.client('secretsmanager')
+    
+    def rotate_openai_key(self):
+        """OpenAI API 키 로테이션"""
+        # 1. 새 키 생성 (OpenAI 대시보드에서)
+        new_key = self._generate_new_openai_key()
+        
+        # 2. Kubernetes Secret 업데이트
+        self.k8s.patch_namespaced_secret(
+            name="agent-platform-secrets",
+            namespace="production",
+            body={
+                "data": {
+                    "openai-api-key": self._base64_encode(new_key)
+                }
+            }
+        )
+        
+        # 3. Pod 재시작 (새 키 적용)
+        self.k8s.delete_collection_namespaced_pod(
+            namespace="production",
+            label_selector="app=agent-platform"
+        )
+        
+        # 4. 이전 키 비활성화 (24시간 후)
+        self._schedule_key_revocation(old_key, delay_hours=24)
+        
+        print(f"✅ OpenAI API key rotated at {datetime.utcnow()}")
+```
+
+## 인증 및 권한
+
+### FastAPI JWT 인증
+
+```python
+# platform-api/middleware/auth.py
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+from datetime import datetime, timedelta
+
+security = HTTPBearer()
+
+SECRET_KEY = "your-secret-key"
+ALGORITHM = "HS256"
+
+def create_access_token(data: dict, expires_delta: timedelta = timedelta(hours=24)):
+    """JWT 토큰 생성"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + expires_delta
+    to_encode.update({"exp": expire})
+    
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """JWT 토큰 검증"""
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        
+        if username is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials"
+            )
+        
+        return username
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired"
+        )
+    except jwt.JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials"
+        )
+
+# API 엔드포인트에 적용
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.post("/api/agents/{agent_name}/execute")
+def execute_agent(
+    agent_name: str,
+    input_data: Dict,
+    username: str = Depends(verify_token)  # 인증 필수
+):
+    """Agent 실행 (인증 필요)"""
+    orchestrator = AgentOrchestrator()
+    result = orchestrator.run(agent_name, input_data)
+    
+    # 감사 로그
+    logger.info(f"User {username} executed agent {agent_name}")
+    
+    return result
+```
+
+### Rate Limiting
+
+```python
+# platform-api/middleware/rate_limit.py
+from fastapi import Request, HTTPException
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+
+@app.post("/api/agents/{agent_name}/execute")
+@limiter.limit("100/hour")  # 시간당 100회 제한
+def execute_agent(request: Request, agent_name: str, input_data: Dict):
+    """Rate limiting 적용"""
+    orchestrator = AgentOrchestrator()
+    return orchestrator.run(agent_name, input_data)
+```
+
+# 핵심 설계 결정 요약
+
+## CI/CD
+
+1. **변경 감지**: core/shared 변경 시 전체 테스트, agents/ 변경 시 해당 Agent만
+2. **자동 배포**: 개발 환경은 자동, 프로덕션은 수동 승인
+3. **컨테이너화**: Docker로 일관된 환경
+4. **Kubernetes**: 오케스트레이션 및 스케일링
+
+## 배포 전략
+
+1. **Blue-Green**: 빠른 전환, 쉬운 롤백
+2. **Canary**: 점진적 배포 (10% → 25% → 50% → 100%)
+3. **자동 롤백**: 에러율/레이턴시 임계값 초과 시
+
+## 모니터링
+
+1. **Prometheus**: 메트릭 수집 (요청률, 레이턴시, 비용)
+2. **Grafana**: 대시보드 시각화
+3. **알림**: Slack/Email 통합
+4. **자동 메트릭**: BaseAgent가 자동 수집
+
+## 로깅
+
+1. **구조화 로깅**: JSON 형식
+2. **Trace ID**: 전체 실행 추적
+3. **ELK Stack**: 로그 수집, 검색, 분석
+4. **로그 레벨**: INFO (프로덕션), DEBUG (개발)
+
+## 보안
+
+1. **Kubernetes Secrets**: API 키 저장
+2. **JWT 인증**: API 접근 제어
+3. **Rate Limiting**: 남용 방지
+4. **Secrets 로테이션**: 주기적 키 갱신
+
+## 시리즈 완료
+
+이 글로 **AI Agent 플랫폼 아키텍처 시리즈**를 마무리한다:
+
+1. **관점 선택**: Platform Engineering + Software Architecture
+2. **설계 원칙**: 5대 원칙 + Phase 1-4 전략
+3. **저장소 전략**: Monorepo + 모듈 분리
+4. **인터페이스 설계**: BaseAgent + Template Method Pattern
+5. **데이터 표준화**: 프롬프트/벡터/메타데이터 관리
+6. **운영 자동화**: CI/CD + 모니터링 + 배포 + 보안
+
+## 참고문헌
+
+**DevOps**:
+- Kim, G., et al. (2016). "The DevOps Handbook." IT Revolution Press.
+- Humble, J., & Farley, D. (2010). "Continuous Delivery." Addison-Wesley.
+- Forsgren, N., et al. (2018). "Accelerate: The Science of Lean Software and DevOps." IT Revolution Press.
+
+**Kubernetes**:
+- Burns, B., et al. (2019). "Kubernetes: Up and Running." O'Reilly.
+- Kubernetes Documentation. https://kubernetes.io/docs/
+
+**Monitoring**:
+- Beyer, B., et al. (2016). "Site Reliability Engineering." O'Reilly.
+- Prometheus Documentation. https://prometheus.io/docs/
+- Grafana Documentation. https://grafana.com/docs/
+
+**Security**:
+- OWASP Top 10. https://owasp.org/www-project-top-ten/
+- Kubernetes Security Best Practices. https://kubernetes.io/docs/concepts/security/

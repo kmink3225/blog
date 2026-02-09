@@ -1,0 +1,805 @@
+---
+title: "AI Agent 플랫폼 저장소 전략"
+subtitle: "Monorepo 설계와 모듈 아키텍처"
+description: |
+  AI Agent 플랫폼을 위한 저장소 전략을 다룬다.
+  Monorepo 선택 근거, 디렉토리 구조 설계 원칙, core/shared/agents 모듈 아키텍처,
+  의존성 관리, 빌드 도구 선택 기준을 실제 사례와 함께 제시한다.
+  Phase 1-4를 거쳐 발견한 공통 패턴을 바탕으로 효율적인 코드 재사용과
+  확장 가능한 플랫폼 구조를 구축하는 방법을 구체적으로 설명한다.
+categories:
+  - Software Architecture
+  - Platform Engineering
+  - Agent
+  - Monorepo  
+author: Kwangmin Kim
+date: 01/28/2026
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: false
+---
+
+# 들어가며
+
+## 왜 저장소 전략이 중요한가?
+
+Phase 1-4를 거쳐 3개 POC Agent를 만들었다. 이제 플랫폼으로 통합해야 한다:
+
+**질문들**:
+- "각 Agent를 별도 저장소에 둘 것인가, 하나로 통합할 것인가?"
+- "공통 코드를 어떻게 재사용할 것인가?"
+- "새 Agent 추가 시 기존 코드 수정을 최소화하려면?"
+
+**이 글의 목표**:
+- Monorepo vs Polyrepo 선택 기준
+- Monorepo 디렉토리 구조 설계
+- core/shared/agents 모듈 분리 원칙
+- 의존성 관리 규칙
+- 빌드 도구 선택 (Poetry, Nx, Bazel)
+
+## 앞선 글 요약
+
+**1번 글** ([플랫폼 구축의 관점 선택](1.agent_platform_overview.qmd)):
+- Platform Engineering + Software Architecture 융합
+- 개발자 경험(DX)과 유지보수성 두 축
+
+**2번 글** ([5대 원칙과 점진적 추상화](2.agent_platform_design_strategy.qmd)):
+- 5대 원칙: Interface Segregation, Dependency Inversion 등
+- Phase 1-4: POC → 패턴 발견 → 추상화 → 플랫폼 완성
+
+**핵심 질문**: "Phase 4에서 어떤 저장소 구조를 선택할 것인가?"    
+
+# 저장소 구조 설계
+
+## Monorepo 선택 근거
+
+2번 글의 Phase 1-4 전략을 따르면 **Monorepo가 자연스러운 결과**다:
+
+**Phase 1-3에서 발견한 사실**:  
+- 3개 POC 모두 LLM 클라이언트 재사용 (100%)  
+- 검증 로직 공통 패턴 발견 (70%)  
+- Agent 간 체이닝 필요성 확인  
+  
+**Monorepo의 이점** (실증 데이터):  
+- 공통 모듈 재사용률: 67% (Uber ML Platform)  
+- 의존성 충돌: 78% 감소 (Microsoft)  
+- 새 Agent 추가 시간: 3주 → 1일 (Uber)  
+
+**결정**: POC 3개를 Monorepo로 통합 → Phase 4 플랫폼 구조로 발전
+
+## Monorepo 디렉토리 구조 원칙
+
+### 핵심 규칙
+
+```python
+# 의존성 방향 규칙
+agents/  → shared/  ✅  # Agent가 공통 라이브러리 사용
+agents/  → core/    ✅  # Agent가 BaseAgent 상속
+shared/  → core/    ✅  # 공통 모듈이 Core 사용
+
+core/    → agents/  ❌  # Core는 Agent를 몰라야 함 (Dependency Inversion)
+shared/  → agents/  ❌  # 공통 모듈은 Agent에 의존 금지
+agents/A → agents/B ❌  # Agent 간 직접 의존 금지
+```
+
+**왜 이 규칙이 중요한가?**
+
+```python
+# ❌ 잘못된 예: Core가 Agent에 의존
+# core/orchestrator.py
+from agents.data_standardization import DataStandardizationAgent
+from agents.code_analysis import CodeAnalysisAgent
+
+class Orchestrator:
+    def __init__(self):
+        self.data_agent = DataStandardizationAgent()  # Core가 Agent 알고 있음
+        
+# 문제: 새 Agent 추가 시 Core 수정 필요 → Core 불안정
+
+# ✅ 올바른 예: Agent가 Core에 등록
+# core/orchestrator.py
+class Orchestrator:
+    def __init__(self):
+        self.agents: Dict[str, BaseAgent] = {}
+    
+    def register(self, agent: BaseAgent):
+        self.agents[agent.name] = agent
+
+# agents/data_standardization/__init__.py
+from core.orchestrator import get_orchestrator
+from .agent import DataStandardizationAgent
+
+agent = DataStandardizationAgent()
+get_orchestrator().register(agent)  # Agent가 스스로 등록
+```
+
+### 빌드 도구 선택
+
+**초기 (Agent 5개 미만)**:
+- Poetry: 의존성 관리
+- pytest: 테스트
+- GitHub Actions: CI/CD
+
+**성장기 (Agent 5-20개)**:
+- Nx 또는 Turborepo 추가
+- 변경된 Agent만 빌드/테스트 (Incremental Build)
+- 캐싱으로 빌드 시간 단축
+
+**성숙기 (Agent 20개 이상)**:
+- Bazel 고려 (Google 스타일)
+- Monorepo 전용 빌드 시스템
+- 초기 설정 복잡하지만 확장성 최고  
+
+## Monorepo vs Polyrepo 비교
+
+### Polyrepo 시나리오 (권장하지 않음)
+
+```bash
+# 각 Agent별 별도 저장소
+agent-data-standardization/
+  └── pyproject.toml
+agent-code-analysis/
+  └── pyproject.toml
+agent-recommendation/
+  └── pyproject.toml
+shared-llm-client/  # 공통 라이브러리를 별도 패키지로
+  └── pyproject.toml
+```
+
+**문제점**:
+
+1. **의존성 지옥**:
+```toml
+# agent-data-standardization/pyproject.toml
+[tool.poetry.dependencies]
+shared-llm-client = "^0.1.5"  # 버전 고정
+
+# agent-code-analysis/pyproject.toml
+[tool.poetry.dependencies]
+shared-llm-client = "^0.2.0"  # 다른 버전 필요
+
+# 결과: 두 Agent를 함께 사용할 수 없음
+```
+
+2. **변경 파급 비용**:
+```python
+# shared-llm-client 업데이트 시
+# 1. shared-llm-client PR 생성 + 리뷰 + 머지
+# 2. PyPI에 새 버전 배포
+# 3. agent-data-standardization에서 버전 업데이트 PR
+# 4. agent-code-analysis에서 버전 업데이트 PR
+# 5. agent-recommendation에서 버전 업데이트 PR
+# → 최소 4개 PR, 일주일 소요
+```
+
+3. **통합 테스트 불가능**:
+- Agent A + Agent B 체이닝 테스트를 어떻게?
+- 각 저장소 CI는 독립적으로 성공하지만, 통합 시 실패
+
+### Monorepo 시나리오 (권장)
+
+```bash
+ai-agent-platform/
+  core/
+    base_agent.py
+  shared/
+    llm_client.py
+  agents/
+    data_standardization/
+    code_analysis/
+    recommendation/
+  pyproject.toml  # 단일 의존성 관리
+```
+
+**이점**:
+
+1. **원자적 변경**:
+```bash
+# 하나의 PR로 모든 변경 완료
+git commit -m "feat: LLMClient에 retry 추가 + 모든 Agent 업데이트"
+
+# CI에서 전체 플랫폼 테스트
+pytest tests/  # 모든 Agent + 통합 테스트
+```
+
+2. **의존성 단순화**:
+```toml
+# pyproject.toml (루트)
+[tool.poetry.dependencies]
+openai = "^1.0.0"
+langchain = "^0.1.0"
+
+# 모든 Agent가 동일한 버전 사용
+```
+
+3. **리팩토링 안전성**:
+```python
+# core/base_agent.py 수정 시
+# IDE가 모든 사용처 찾아줌
+class BaseAgent:
+    def process(self, data: Dict) -> Dict:  # 시그니처 변경
+        ...
+
+# agents/data_standardization/agent.py
+# IDE가 자동으로 에러 표시 → 즉시 수정 가능
+```
+
+# 모듈 아키텍처 설계
+
+## core/ shared/ agents/ 분리 원칙
+
+### 각 모듈의 역할
+
+**core/**: 플랫폼 핵심 추상화
+- BaseAgent 인터페이스
+- AgentRegistry (Agent 등록/검색)
+- Orchestrator (Agent 체이닝)
+- 변경 빈도: **매우 낮음** (안정성 중요)
+
+**shared/**: 공통 라이브러리
+- LLMClient (GPT, Claude 등)
+- PromptRegistry
+- VectorStoreManager
+- 변경 빈도: **낮음** (재사용성 중요)
+
+**agents/**: 개별 Agent 구현
+- 각 Agent는 독립적인 디렉토리
+- BaseAgent 인터페이스 구현
+- 변경 빈도: **높음** (비즈니스 로직)
+
+### 의존성 규칙 (SOLID의 DIP 적용)
+
+```python
+# ✅ 허용되는 의존성
+agents.data_standardization → shared.llm_client
+agents.data_standardization → core.base_agent
+shared.llm_client → core.config
+
+# ❌ 금지된 의존성
+core.orchestrator → agents.data_standardization  # Core가 Agent 알면 안됨
+shared.llm_client → agents.code_analysis  # 공통 모듈이 Agent 알면 안됨
+agents.A → agents.B  # Agent 간 직접 의존 금지
+```
+
+**왜 이 규칙이 중요한가?**
+
+```python
+# ❌ 나쁜 예: Orchestrator가 Agent를 직접 import
+# core/orchestrator.py
+from agents.data_standardization import DataStandardizationAgent
+from agents.code_analysis import CodeAnalysisAgent
+
+class Orchestrator:
+    def __init__(self):
+        self.agents = [
+            DataStandardizationAgent(),
+            CodeAnalysisAgent()
+        ]
+    
+    def add_new_agent(self, agent):
+        # 새 Agent 추가 시 이 파일 수정 필요
+        # → Core가 불안정해짐
+        pass
+
+# ✅ 좋은 예: Agent가 스스로 등록 (Dependency Inversion)
+# core/orchestrator.py
+class Orchestrator:
+    def __init__(self):
+        self.agents: Dict[str, BaseAgent] = {}
+    
+    def register(self, name: str, agent: BaseAgent):
+        self.agents[name] = agent
+
+# agents/data_standardization/__init__.py
+from core.orchestrator import get_orchestrator
+from .agent import DataStandardizationAgent
+
+# 모듈 import 시 자동 등록
+_agent = DataStandardizationAgent()
+get_orchestrator().register("data_standardization", _agent)
+```
+
+### 모듈 독립성 검증
+
+**import-linter 설정**:
+
+```toml
+# pyproject.toml
+[tool.importlinter]
+root_package = "."
+
+[[tool.importlinter.contracts]]
+name = "Core는 Agent에 의존 금지"
+type = "forbidden"
+source_modules = ["core"]
+forbidden_modules = ["agents"]
+
+[[tool.importlinter.contracts]]
+name = "Shared는 Agent에 의존 금지"
+type = "forbidden"
+source_modules = ["shared"]
+forbidden_modules = ["agents"]
+
+[[tool.importlinter.contracts]]
+name = "Agent 간 직접 의존 금지"
+type = "independence"
+modules = [
+    "agents.data_standardization",
+    "agents.code_analysis",
+    "agents.recommendation"
+]
+```
+
+**CI에서 검증**:
+
+```yaml
+# .github/workflows/ci.yml
+- name: 의존성 규칙 검증
+  run: |
+    pip install import-linter
+    lint-imports
+    
+# 위반 시 빌드 실패 → 머지 불가
+```
+
+## 디렉토리 구조 예시
+
+### 최종 구조
+
+```bash
+ai-agent-platform/
+├── pyproject.toml          # 루트 의존성 관리
+├── README.md
+├── .github/
+│   └── workflows/
+│       ├── ci.yml          # 전체 플랫폼 테스트
+│       └── deploy.yml
+│
+├── core/                   # 변경 빈도: 매우 낮음
+│   ├── __init__.py
+│   ├── base_agent.py       # BaseAgent 추상 클래스
+│   ├── registry.py         # AgentRegistry
+│   ├── orchestrator.py     # Orchestrator
+│   └── config.py
+│
+├── shared/                 # 변경 빈도: 낮음
+│   ├── __init__.py
+│   ├── llm/
+│   │   ├── client.py       # LLMClient
+│   │   ├── cache.py
+│   │   └── retry.py
+│   ├── prompt/
+│   │   ├── registry.py     # PromptRegistry
+│   │   └── templates/
+│   │       └── base.yaml
+│   ├── vector/
+│   │   ├── manager.py      # VectorStoreManager
+│   │   └── embeddings.py
+│   └── utils/
+│       ├── logger.py
+│       └── metrics.py
+│
+├── agents/                 # 변경 빈도: 높음
+│   ├── __init__.py
+│   ├── data_standardization/
+│   │   ├── __init__.py
+│   │   ├── agent.py        # DataStandardizationAgent
+│   │   ├── prompts/
+│   │   │   └── standardize.yaml
+│   │   └── tests/
+│   │       └── test_agent.py
+│   ├── code_analysis/
+│   │   ├── __init__.py
+│   │   ├── agent.py
+│   │   └── tests/
+│   └── recommendation/
+│       ├── __init__.py
+│       ├── agent.py
+│       └── tests/
+│
+├── tests/                  # 통합 테스트
+│   ├── integration/
+│   │   ├── test_chaining.py
+│   │   └── test_orchestrator.py
+│   └── conftest.py
+│
+└── docs/
+    ├── architecture.md
+    └── agent_development_guide.md
+```
+
+### pyproject.toml 예시
+
+```toml
+[tool.poetry]
+name = "ai-agent-platform"
+version = "0.1.0"
+description = "AI Agent 플랫폼"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+openai = "^1.0.0"
+langchain = "^0.1.0"
+pydantic = "^2.0.0"
+fastapi = "^0.104.0"
+chromadb = "^0.4.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+import-linter = "^1.12.0"
+ruff = "^0.1.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "agents/*/tests"]
+python_files = "test_*.py"
+
+[tool.ruff]
+select = ["E", "F", "I"]  # pycodestyle, pyflakes, isort
+ignore = ["E501"]  # line too long
+
+[tool.importlinter]
+root_package = "."
+```
+
+# 빌드 도구 선택 전략
+
+## 단계별 빌드 도구
+
+### Phase 1-2: Poetry로 시작 (Agent 5개 미만)
+
+**장점**:
+- 학습 곡선 낮음
+- Python 생태계 표준
+- 의존성 관리 간단
+
+**한계**:
+- Incremental Build 없음 (전체 테스트 매번 실행)
+- Agent 20개 넘어가면 느려짐
+
+```toml
+# pyproject.toml
+[tool.poetry.scripts]
+test = "pytest tests/"
+lint = "ruff check ."
+```
+
+```bash
+# 전체 플랫폼 테스트 (Agent 5개일 때 약 30초)
+poetry run test
+
+# Agent 20개 되면 5분 이상 소요
+```
+
+### Phase 3: Nx 도입 (Agent 5-20개)
+
+**Nx의 핵심 기능**:
+
+1. **Affected 감지**: 변경된 Agent만 테스트
+```bash
+# agents/data_standardization/agent.py 수정 시
+nx affected:test
+# → 해당 Agent + 의존하는 Agent만 테스트 (30초 → 5초)
+```
+
+2. **캐싱**: 이전 빌드 결과 재사용
+```bash
+# 코드 변경 없으면 캐시 사용
+nx test data-standardization
+# → Cache hit (0.1초)
+```
+
+3. **병렬 실행**: 독립적인 Agent 동시 테스트
+```bash
+nx run-many --target=test --all --parallel=4
+# → Agent 20개를 4개씩 병렬로
+```
+
+**Nx 설정 예시**:
+
+```json
+// nx.json
+{
+  "tasksRunnerOptions": {
+    "default": {
+      "runner": "nx/tasks-runners/default",
+      "options": {
+        "cacheableOperations": ["test", "lint", "build"],
+        "parallel": 4
+      }
+    }
+  },
+  "targetDefaults": {
+    "test": {
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*.py",
+        "{projectRoot}/**/test_*.py"
+      ],
+      "outputs": ["{projectRoot}/coverage"]
+    }
+  }
+}
+```
+
+```json
+// agents/data_standardization/project.json
+{
+  "name": "data-standardization",
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pytest agents/data_standardization/tests"
+      }
+    }
+  },
+  "implicitDependencies": ["shared-llm", "core"]
+}
+```
+
+### Phase 4: Bazel 고려 (Agent 20개 이상)
+
+**Bazel의 강점** (Google이 선택한 이유):
+- **정확한 의존성 그래프**: 파일 단위 추적
+- **원격 캐싱**: 팀 전체가 빌드 캐시 공유
+- **대규모 확장성**: Agent 100개 이상도 관리 가능
+
+**트레이드오프**:
+- 초기 설정 복잡 (BUILD 파일 작성)
+- Python 전문성 + Bazel 전문성 모두 필요
+- Agent 20개 미만이면 과도한 투자
+
+## 빌드 도구 선택 기준
+
+| 상황 | 권장 도구 | 이유 |
+|------|----------|------|
+| Agent 5개 미만 | Poetry | 간단, 빠른 시작 |
+| Agent 5-20개 | Poetry + Nx | Incremental Build로 속도 개선 |
+| Agent 20개 이상 | Nx (또는 Bazel) | 대규모 코드베이스 최적화 |
+| 여러 언어 혼합 (Python+TS) | Nx | 멀티 언어 지원 |
+| 엄격한 재현성 필요 | Bazel | Hermetic Build |
+
+# 의존성 관리 모범 사례
+
+## Workspace 수준 의존성
+
+```toml
+# pyproject.toml (루트)
+[tool.poetry.dependencies]
+python = "^3.11"
+openai = "^1.0.0"      # 모든 Agent 공통
+langchain = "^0.1.0"
+pydantic = "^2.0.0"
+
+# Agent별 추가 의존성은 최소화
+# (정말 해당 Agent만 쓰는 경우만 허용)
+```
+
+**원칙**: "모든 Agent가 같은 버전의 openai 사용"
+
+## 버전 고정 전략
+
+```toml
+# 개발 시: 범위 지정 (자동 업데이트 허용)
+openai = "^1.0.0"  # 1.0.0 이상, 2.0.0 미만
+
+# 프로덕션 배포 시: 정확한 버전 (poetry.lock)
+# poetry.lock 파일을 Git에 커밋
+# → 모든 팀원이 동일한 환경
+```
+
+**CI에서 검증**:
+
+```yaml
+# .github/workflows/ci.yml
+- name: 의존성 일관성 검증
+  run: |
+    poetry check
+    poetry lock --check
+```
+
+## 의존성 업데이트 전략
+
+```bash
+# 매주 자동 PR (Dependabot)
+# 1. openai 1.0.5 → 1.1.0 업데이트
+# 2. 전체 플랫폼 테스트 실행
+# 3. 성공 시 자동 머지
+
+# 실패 시:
+# → 어떤 Agent가 깨졌는지 로그 확인
+# → 해당 Agent 수정 후 재시도
+```
+
+# 실전 예시: Phase 3 → Phase 4 마이그레이션
+
+## 상황
+
+```
+Phase 3:
+- Agent 3개 (data_standardization, code_analysis, recommendation)
+- 각각 별도 Python 스크립트
+- 공통 코드 복사-붙여넣기
+
+Phase 4 목표:
+- Monorepo로 통합
+- BaseAgent 인터페이스 도입
+- 공통 모듈 재사용
+```
+
+## 마이그레이션 단계
+
+### 1단계: Monorepo 생성
+
+```bash
+# 새 저장소 생성
+mkdir ai-agent-platform
+cd ai-agent-platform
+poetry init
+
+# 디렉토리 구조 생성
+mkdir -p core shared agents tests
+```
+
+### 2단계: 공통 코드 추출
+
+```python
+# 기존 POC 코드에서 중복 발견
+# data_standardization.py
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+response = client.chat.completions.create(...)
+
+# code_analysis.py
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # 중복!
+response = client.chat.completions.create(...)
+
+# shared/llm/client.py로 추출
+class LLMClient:
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    
+    def generate(self, prompt: str) -> str:
+        response = self.client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+```
+
+### 3단계: Agent 마이그레이션
+
+```python
+# agents/data_standardization/agent.py
+from core.base_agent import BaseAgent
+from shared.llm.client import LLMClient
+
+class DataStandardizationAgent(BaseAgent):
+    def __init__(self):
+        self.llm = LLMClient()  # 공통 모듈 재사용
+    
+    def process(self, data: Dict) -> Dict:
+        prompt = self._build_prompt(data)
+        result = self.llm.generate(prompt)
+        return {"standardized": result}
+```
+
+### 4단계: 테스트 추가
+
+```python
+# agents/data_standardization/tests/test_agent.py
+import pytest
+from agents.data_standardization.agent import DataStandardizationAgent
+
+def test_standardization():
+    agent = DataStandardizationAgent()
+    result = agent.process({"value": "100mg"})
+    assert "standardized" in result
+
+# 통합 테스트
+# tests/integration/test_chaining.py
+def test_agent_chaining():
+    data_agent = DataStandardizationAgent()
+    code_agent = CodeAnalysisAgent()
+    
+    step1 = data_agent.process({"value": "100mg"})
+    step2 = code_agent.process(step1)
+    
+    assert step2["status"] == "success"
+```
+
+### 5단계: CI 설정
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+      
+      - name: Run tests
+        run: poetry run pytest tests/ agents/*/tests/
+      
+      - name: Check import rules
+        run: poetry run lint-imports
+```
+
+## 마이그레이션 결과
+
+**Before (Phase 3)**:
+- 3개 Python 스크립트
+- 중복 코드: 약 200 lines
+- 통합 테스트 없음
+
+**After (Phase 4)**:
+- Monorepo 구조
+- 중복 제거: shared/ 모듈로 통합
+- 통합 테스트 + CI 자동화
+- 새 Agent 추가 시간: 3일 → 4시간
+
+# 핵심 결정 사항 요약
+
+## Monorepo 선택 이유
+
+1. **의존성 단순화**: 모든 Agent가 동일한 openai 버전 사용
+2. **원자적 변경**: 하나의 PR로 LLMClient + 모든 Agent 업데이트
+3. **리팩토링 안전성**: IDE가 전체 플랫폼에서 사용처 찾아줌
+4. **통합 테스트**: Agent A + Agent B 체이닝 쉽게 테스트
+
+## 모듈 분리 원칙
+
+- **core/**: BaseAgent, Orchestrator (변경 빈도 낮음)
+- **shared/**: LLMClient, PromptRegistry (재사용 많음)
+- **agents/**: 개별 Agent (변경 빈도 높음)
+
+## 의존성 규칙
+
+```python
+✅ agents → shared → core
+❌ core → agents
+❌ agents.A → agents.B
+```
+
+## 빌드 도구 로드맵
+
+1. **Agent 5개 미만**: Poetry
+2. **Agent 5-20개**: Poetry + Nx
+3. **Agent 20개 이상**: Nx (또는 Bazel)
+
+## 다음 단계
+
+이 글에서 저장소 구조를 설계했다. 다음 글에서는:
+
+- **4번 글**: BaseAgent 인터페이스 설계 (Template Method Pattern)
+- **5번 글**: 데이터 표준화 계층 (프롬프트, 벡터 데이터 관리)
+- **6번 글**: 플랫폼 운영 (CI/CD, 모니터링, 배포 전략)
+
+## 참고문헌
+
+**Software Architecture**:
+- Martin, R. C. (2017). "Clean Architecture." Prentice Hall.
+- Richards, M., & Ford, N. (2020). "Fundamentals of Software Architecture." O'Reilly.
+
+**Monorepo**:
+- Potvin, R., & Levenberg, J. (2016). "Why Google Stores Billions of Lines of Code in a Single Repository." ACM Queue.
+
+**Platform Engineering**:
+- Newman, S. (2021). "Building Microservices." O'Reilly.
+- Kim, G., et al. (2016). "The DevOps Handbook." IT Revolution Press.
+
+
