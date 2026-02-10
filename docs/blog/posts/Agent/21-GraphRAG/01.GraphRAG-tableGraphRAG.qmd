@@ -1,0 +1,650 @@
+---
+title: "표 데이터를 그래프로: Table GraphRAG 구축 전략"
+subtitle: "관계형 데이터에서 지식 그래프로의 변환: 금융 도메인 실전 사례와 구현 전략"
+description: |
+  표(Table) 데이터를 지식 그래프로 변환하는 GraphRAG 구축 방법론을 다룬 Part 2이다.  
+  금융감독원의 보험 비교추천서비스 데이터를 실전 사례로 활용하여 구체적인 구현 전략을 제시한다.  
+  주요 내용: (1) 연관성 특화 방식 - 엔티티 간 관계를 명시적으로 모델링하는 접근법  
+  (2) 구조 & 텍스트 특화 방식 - 표 전체를 하나의 엔티티로 취급하는 메타데이터 중심 접근법  
+  (3) Heterogeneous Graph 구축 - 두 방식을 통합한 이종 그래프 아키텍처  
+  (4) Prompt Engineering 전략 - Query-Task-Prompt 매핑, Routing, Few-shot Example Selection  
+  특히 Pinterest의 Text2SQL 경험과 LangChain의 Example Selector 활용법을 구체적으로 소개하며,  
+  도메인 전문가와의 협업을 통한 온톨로지 설계, 적절한 GDBMS 선택의 중요성을 강조한다.
+categories:
+  - AI
+  - RAG
+  - Prompt Engineering
+author: Kwangmin Kim
+date: 02/05/2025
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: false
+---
+
+(20260211에 퇴고 할 것)
+
+# 표(Table)를 그래프로 변환하는 전략: 금융 도메인 실전 사례
+
+## 들어가며: 왜 표 데이터를 그래프로 변환하는가
+
+표 데이터를 그래프로 변환하는 것은 GraphRAG 구축에서 가장 먼저 마주치는 구체적인 과제다.  
+많은 기업의 데이터는 엑셀, CSV, 데이터베이스 테이블 형태로 존재한다.  
+이런 구조화된 데이터를 **왜 굳이 그래프로 변환**해야 할까?  
+
+**핵심 이유: 암묵적 관계의 명시화**  
+
+표 형식의 데이터는 행과 열로 정보를 표현하지만,  
+**엔티티 간의 관계는 암묵적으로만 존재**한다.  
+예를 들어 "보험 비교추천서비스 운영현황" 표에서:  
+- "FIN_A 애플리케이션"과 "IN_A 보험사"가 같은 행에 있다 → 둘이 관련있다(암묵적)  
+- 하지만 "어떤 관계"인지는 명시되지 않음 (파트너? 소유? 계약?)  
+
+그래프로 변환하면 이 관계를 명시적으로 표현할 수 있다:  
+```
+(FIN_A)-[partners_with]->(IN_A)
+```
+
+이제 "FIN_A의 파트너 보험사는?"이라는 질문에 정확히 답할 수 있다.  
+
+## 표 데이터의 본질과 GraphRAG 접근법
+
+### 표와 관계형 데이터베이스의 구조적 유사성
+
+표는 본질적으로 **관계형 데이터베이스(SQL)의 축소판**이다.  
+
+**공통점**:  
+- **행(Row)**: 하나의 레코드, 하나의 데이터 포인트  
+- **열(Column)**: 속성, 필드  
+- **셀(Cell)**: 특정 값  
+- **PRIMARY KEY**: 행을 고유하게 식별하는 열 (예: 애플리케이션 ID)  
+- **FOREIGN KEY**: 다른 표/행과의 암묵적 연결 (예: 보험사 ID)  
+
+이런 구조적 유사성 때문에, 표를 그래프로 변환할 때는  
+**Text2SQL에서 사용되는 검증된 기법들을 적극적으로 차용**해야 한다.  
+
+**Pinterest의 Text2SQL 경험 활용**  
+
+발표자는 Pinterest가 공개한 Text2SQL 구축 경험을 참고할 것을 강조한다.  
+(출처: https://medium.com/pinterest-engineering/how-we-built-text-to-sql-at-pinterest-30bad30dabff)  
+
+Pinterest는 데이터 분석가들이 자연어로 질문하면 자동으로 SQL 쿼리를 생성하는 시스템을 구축했다.  
+그들이 직면한 문제들:  
+- 테이블 간의 JOIN 관계를 어떻게 추론할 것인가?  
+- 동일한 개념이 다른 테이블에서 다른 이름으로 존재할 때 어떻게 매칭할 것인가?  
+- 도메인 특화 용어를 어떻게 처리할 것인가?  
+
+이 문제들은 GraphRAG에서도 **동일하게 발생**한다.  
+Pinterest의 해결 방법(스키마 매핑, 메타데이터 관리, 프롬프트 설계)은 GraphRAG 구축에 직접 적용 가능하다.  
+
+### 두 가지 핵심 접근법: 연관성 vs 구조  
+
+표를 그래프로 변환하는 방법은 크게 두 가지로 나뉜다:  
+
+**1. 연관성 특화 방식 (Relation-Centric Approach)**  
+- 표의 각 행을 **엔티티와 관계로 분해**  
+- 엔티티 간의 연결을 명시적인 엣지로 표현  
+- 목표: Multi-hop 추론, 관계 기반 질의 지원  
+
+**2. 구조 & 텍스트 특화 방식 (Structure-Centric Approach)**  
+- 표 전체를 **하나의 큰 엔티티**로 취급  
+- 메타데이터(제목, 요약, 키워드)를 활용한 검색  
+- 목표: 의미적 유사도 검색, 전체 컨텍스트 보존  
+
+**두 방식은 상호 보완적**이다.  
+연관성 방식은 "A와 관련된 B는?"같은 구체적 질문에 강하고,  
+구조 방식은 "보험 관련 데이터"같은 넓은 질문에 강하다.  
+
+실무에서는 **두 방식을 결합한 Heterogeneous Graph**를 구축한다.  
+
+## 연관성 특화 방식: 엔티티 간 관계 모델링
+
+### 금융 도메인 사례: 고객-상품-약관 삼각 관계
+
+발표자는 금융 도메인의 구체적인 사례를 통해 연관성 특화 방식을 설명한다.  
+이 방식은 표의 각 행을 독립적인 데이터 포인트가 아니라,  
+**엔티티들 간의 관계를 표현하는 연결점**으로 해석한다.  
+
+**예시 데이터: 금융감독원 보험 비교추천서비스 운영현황 표**  
+
+이 표에는 다음과 같은 정보가 포함되어 있다:  
+
+| 항목 | 설명 | 예시 값 |
+|------|------|----------|
+| **애플리케이션 ID** | 보험 애플리케이션 식별자 | FIN_A, IN_A, IN_B |
+| **핀테크 회사** | 서비스 제공 기업 | Fintech_Company_X |
+| **보험사** | 파트너 보험사 | IN_A, IN_B |
+| **고객** | 서비스 이용 고객 | J |
+| **보험 상품** | 제공 상품 | carProductA, carProductB |
+
+**표 형태로 표현하면**:  
+```
+App_ID | Fintech    | Insurance | Customer | Product
+-------|------------|-----------|----------|--------------
+FIN_A  | Fintech_X  | IN_A      | J        | carProductA
+IN_A   | Fintech_X  | IN_A      | J        | carProductA  
+IN_B   | Fintech_X  | IN_B      | J        | carProductB
+```
+
+이 표를 단순히 "FIN_A 애플리케이션에는 IN_A 보험사와 carProductA 상품이 있다"라고  
+평면적으로 저장하는 것이 아니라,  
+다음과 같은 **그래프 구조로 변환**한다:  
+
+**그래프 표현**:  
+```cypher
+# 애플리케이션과 회사의 관계
+(FIN_A:InsuranceApp {id: "FIN_A"})
+  -[:belongs_to]-> (Fintech:Company {name: "Fintech_X"})
+
+# 애플리케이션과 보험사의 파트너십
+(FIN_A:InsuranceApp)
+  -[:partners_with]-> (IN_A:Insurance {id: "IN_A"})
+
+# 보험사와 상품의 관계
+(IN_A:Insurance)
+  -[:has_a_product]-> (carProductA:Product {name: "carProductA"})
+
+(IN_B:Insurance)
+  -[:has_a_product]-> (carProductB:Product {name: "carProductB"})
+
+# 고객과 서비스의 관계
+(J:Customer {id: "J"})
+  -[:uses]-> (FIN_A:InsuranceApp)
+
+# 애플리케이션의 상품 추천
+(FIN_A:InsuranceApp)
+  -[:recommends]-> (carProductA:Product)
+```
+
+### 이 그래프 구조가 왜 중요한가?
+
+**문제: 복잡한 질의 처리**  
+
+표 형태에서는 "고객 J가 사용 가능한 모든 보험 상품은?"이라는 질문에 답하려면:  
+1. J가 사용하는 애플리케이션을 찾는다 (여러 행 조회)  
+2. 그 애플리켄 가용 보험사를 찾는다 (JOIN 연산)  
+3. 보험사의 상품들을 찾는다 (또 다른 JOIN)  
+4. 결과를 통합한다  
+
+**이는 복잡한 다단계 SQL 쿼리가 필요하다.**  
+
+**해결: 그래프 경로 탐색**  
+
+반면 그래프에서는:  
+```cypher
+MATCH (J:Customer {id: "J"})
+      -[:uses]->(app:InsuranceApp)
+      -[:partners_with]->(insurance:Insurance)
+      -[:has_a_product]->(product:Product)
+RETURN DISTINCT product.name
+```
+
+J 노드에서 시작하여:  
+1. `uses` 관계를 따라가면 → FIN_A 발견  
+2. `partners_with` 관계를 따라가면 → IN_A 발견  
+3. `has_a_product` 관계를 따라가면 → carProductA 발견  
+
+**단순한 경로 탐색으로 답을 얻는다!**  
+
+### 약관 데이터의 그래프화: Product-Law 관계
+
+보험 상품은 특정 약관 조항을 따르다.  
+자동차보험 표준약관(출처: https://carinfo.knia.or.kr)을 보면:  
+
+**주요 약관 조항**:  
+- **35조**: 보험회사의 의무 사항  
+  - 내용: 보험회사가 피보험자를 위해 수행해야 하는 의무  
+  - 예: 사고 조사, 보상 처리, 정보 제공 등  
+
+- **36조**: 합의 등의 협조·대행 의무  
+  - 내용: 보험회사가 피해자와의 합의를 대행  
+  - 예: 교통사고 피해자 협상, 손해배상 협의 등  
+
+**기존 표 형태로 저장하면**:  
+```
+Product_ID | Law_ID  | Article | Content
+-----------|---------|---------|------------------------
+carProductA| lawA    | 35조   | 보험회사는 ...
+carProductA| lawB    | 36조   | 합의 등의 협조·대행 ...
+carProductB| lawA    | 35조   | 보험회사는 ...
+```
+
+이 데이터는 "어떤 상품이 어떤 약관을 따르는지" 정보를 담고 있으나,  
+**관계가 암묵적**이다 (같은 행에 있으면 관련되어 있다고 추측).  
+
+**그래프로 표현하면**:  
+```cypher
+# Product와 Law의 명시적 관계
+(carProductA:Product {id: "carProductA"})
+  -[:has_a_policy]-> (carLawA:Law {article: "35조", 
+                                   content: "보험회사는 ..."})
+
+(carProductA:Product)
+  -[:has_a_policy]-> (carLawB:Law {article: "36조", 
+                                   content: "합의 등의 협조·대행 ..."})
+
+(carProductB:Product {id: "carProductB"})
+  -[:has_a_policy]-> (carLawA:Law)
+```
+
+### 그래프 표현의 강력함
+
+**질의 1: "carProductA는 어떤 약관을 따르는가?"**  
+```cypher
+MATCH (carProductA:Product {id: "carProductA"})
+      -[:has_a_policy]->(law:Law)
+RETURN law.article, law.content
+
+결과:
+- 35조: 보험회사의 의무 ...
+- 36조: 합의 등의 협조·대행 ...
+```
+
+**질의 2: "35조가 적용되는 모든 보험 상품은?" (역방향 질의)**  
+```cypher
+MATCH (product:Product)
+      -[:has_a_policy]->(law:Law {article: "35조"})
+RETURN DISTINCT product.id
+
+결과:
+- carProductA
+- carProductB
+(두 상품 모두 35조 적용)
+```
+
+**질의 3: "carProductA와 동일한 약관을 공유하는 다른 상품은?"**  
+```cypher
+MATCH (carProductA:Product {id: "carProductA"})
+      -[:has_a_policy]->(law:Law)
+      <-[:has_a_policy]-(otherProduct:Product)
+WHERE otherProduct.id <> "carProductA"
+RETURN DISTINCT otherProduct.id
+
+결과:
+- carProductB (35조를 공유)
+```
+
+이처럼 그래프는 **양방향 추론**을 지원한다.  
+표 형태에서는 "상품 → 약관" 방향만 쉽게 조회되지만,  
+그래프는 "약관 → 상품" 역방향도 동일하게 쉽다.  
+
+### 연관성 특화 방식의 핵심 원칙
+
+연관성 특화 방식은 다음 세 가지 원칙을 따른다:  
+
+**1. 엔티티 타입을 명확히 정의한다**  
+표의 각 열이 어떤 엔티티 타입을 나타내는지 먼저 정의한다. 위 예시에서는:  
+- Insurance application (FIN_A, IN_A 등)  
+- Fintech (핀테크 회사)  
+- Insurance (보험사)  
+- Customer (고객)  
+- Product (보험 상품)  
+- Law (약관)  
+
+**2. 관계 타입을 비즈니스 의미에 맞게 정의한다**  
+단순히 "연결됨(connected)"이 아니라, 비즈니스 의미를 가진 관계 타입을 사용한다:  
+- `belongs_to`: 소속 관계  
+- `partners_with`: 파트너십 관계  
+- `has_a_product`: 상품 보유 관계  
+- `use_a_insurance`: 고객의 서비스 사용 관계  
+- `recommends`: 추천 관계  
+- `has_a_policy`: 약관 적용 관계  
+
+이렇게 명확한 관계 타입을 사용하면, 그래프 질의 시 "모든 추천 상품은?" (`recommends` 관계만 추적) vs "고객이 실제 사용하는 상품은?" (`use_a_insurance` 관계 추적) 같은 구체적인 질문에 정확히 답할 수 있다.  
+
+**3. 행 간의 암묵적 관계를 명시적으로 표현한다**  
+표에서는 "FIN_A와 IN_B는 같은 핀테크 회사에 속한다"는 정보가 같은 회사명이 반복되는 것으로만 표현된다. 그래프에서는 이를 명시적인 관계로 변환한다:  
+
+```
+[FIN_A] --belongs_to--> [Fintech_Company_X]
+[IN_B] --belongs_to--> [Fintech_Company_X]
+```
+
+이제 "같은 회사에 속한 다른 애플리케이션은?"이라는 질문에, Fintech_Company_X 노드를 매개로 하여 답할 수 있다.  
+
+## 구조 & 텍스트 특화 방식: 메타데이터와 시맨틱 정보 활용
+
+### Table 노드: 표 전체를 하나의 엔티티로
+
+연관성 특화 방식이 표의 행을 분해하여 개별 엔티티로 만든다면, 구조 & 텍스트 특화 방식은 **표 자체를 하나의 엔티티**로 취급한다. 이는 표의 맥락과 의미를 보존하기 위함이다.  
+
+"보험 비교추천서비스 운영현황" 표는 다음과 같은 구조로 그래프화된다:  
+
+```
+[Table: 보험 비교추천서비스 운영현황]
+  ├─ title: "보험 비교추천서비스 운영현황"
+  ├─ summarization: "LLM이 생성한 표 전체의 요약"
+  ├─ text: "표의 원문 텍스트"
+  ├─ vector: [0.123, 0.456, ...] (임베딩 벡터)
+  └─ keywords: ["보험", "비교", "추천", "핀테크", ...]
+```
+
+이 방식의 핵심은 **LLM을 활용한 표 요약**이다. 표의 모든 행과 열을 텍스트로 변환한 뒤, LLM에게 "이 표는 무엇을 설명하는가?"를 요약하도록 한다. 이 요약문은 표의 전체적인 맥락을 담고 있어, 벡터 검색 시 유용하다. 예를 들어 "핀테크 회사의 보험 서비스 현황"이라는 질문이 들어오면, 표의 요약문이 높은 유사도를 보여 이 표가 검색 결과에 포함된다.  
+
+### Pinterest의 Table Summary Prompt 차용
+
+발표자는 Pinterest의 Querybook 프로젝트에서 사용하는 table summary prompt를 참고할 것을 권장한다. (https://github.com/pinterest/querybook/blob/main/querybook/server/lib/ai_assistant/prompts/table_summary_prompt.py)  
+
+Pinterest는 대규모 데이터 웨어하우스에서 수천 개의 테이블을 관리하는데, 데이터 분석가들이 적절한 테이블을 찾도록 돕기 위해 각 테이블의 요약문을 LLM으로 생성한다. 그들의 프롬프트는 다음과 같은 요소를 포함한다:  
+
+- **테이블의 스키마 정보**: 열 이름, 데이터 타입, 제약 조건  
+- **샘플 데이터**: 실제 행 몇 개를 예시로 제공  
+- **비즈니스 컨텍스트**: 이 테이블이 어떤 비즈니스 프로세스에서 생성되는지  
+- **관련 테이블**: 이 테이블과 JOIN되는 다른 테이블들  
+
+이런 정보를 종합하여 LLM이 생성하는 요약문은 단순히 "이 테이블은 보험 데이터를 담고 있다" 수준이 아니라, "이 테이블은 핀테크 회사가 제공하는 보험 비교추천 서비스의 운영 현황을 담고 있으며, 각 회사별 제휴 보험사, 제공 상품, 고객 사용 현황을 포함한다"는 구체적인 설명이 된다.  
+
+**중요한 원칙: 도메인 전문가와의 협업**  
+
+발표자는 "도메인 전문가분과 반드시 협의하에 프롬프트를 구성해야 함"을 강조한다.  
+엔지니어가 혼자서 프롬프트를 작성하면, 도메인의 미묘한 뉘앙스를 놓친다.  
+
+**도메인 전문가가 필요한 이유**:  
+
+1. **용어의 정확한 의미 파악**  
+   - 보험 도메인: "상품" vs "플랜" vs "패키지" - 각각 다른 의미  
+   - "35조" vs "제35조" vs "35조항" - 같은 것 but 표기가 다름  
+   - 도메인 전문가만이 이런 용어의 표준화 기준을 제시  
+
+2. **중요한 메타데이터 식별**  
+   - 어떤 속성이 비즈니스적으로 중요한가?  
+   - 예: 보험 상품에서 "보험료"는 중요하지만 "상품 코드 생성일"은 덜 중요  
+   - 중요도에 따라 메타데이터 추출 우선순위 결정  
+
+3. **비즈니스 관계의 정확한 정의**  
+   - "파트너십"과 "제휴"의 차이는?  
+   - "추천"과 "판매"의 차이는?  
+   - 비즈니스 로직에 따라 관계 타입이 달라짐  
+
+**협업 프로세스 예시**:  
+```
+1단계: 엔지니어가 초안 프롬프트 작성
+   "이 표는 무엇을 설명하는지 요약하세요."
+
+2단계: 도메인 전문가 피드백
+   "보험 규제 관점에서 '금융감독원 승인 여부'도 포함해야 함"
+   "단순 설명이 아니라 '누가, 무엇을, 어떻게' 구조로 요약 필요"
+
+3단계: 프롬프트 개선
+   "이 표는 [누가: 핀테크 회사], [무엇을: 보험 비교추천 서비스], 
+    [어떻게: 제휴 보험사를 통해]를 설명합니다. 
+    금융감독원 승인 여부와 제공 상품 유형을 포함하여 요약하세요."
+
+4단계: 반복 개선 (3-5회 반복)
+```
+
+### Keyword와 Vector의 이중 인덱싱
+
+구조 & 텍스트 특화 방식은 표에 대해 **두 가지 검색 경로**를 제공한다:  
+
+**1. Keyword 기반 검색 (Exact Match)**  
+
+표에서 추출한 키워드를 인덱싱하여, **정확한 용어 매칭**을 지원한다.  
+
+**장점**:  
+- 고유명사, 상품명, 코드 등 정확한 매칭 가능  
+- "carProductA"라는 상품명이 언급된 표를 확실하게 찾음  
+- False Positive가 낮음 (틀린 것을 찾을 확률 낮음)  
+
+**단점**:  
+- 동의어, 표기 변형에 약함  
+- "자동차보험" vs "Car Insurance" vs "차량보험" 못 찾음  
+- 의미적 유사도 포착 불가  
+
+**구현 예시**:  
+```python
+# 키워드 추출
+keywords = [
+    "FIN_A", "IN_A", "carProductA",  # 엔티티 ID
+    "핀테크", "보험", "자동차보험",    # 도메인 용어
+    "35조", "36조"                     # 약관 조항
+]
+
+# Elasticsearch를 이용한 키워드 검색
+GET /tables/_search
+{
+  "query": {
+    "terms": {"keywords": ["carProductA"]}
+  }
+}
+```
+
+**2. Vector 기반 검색 (Semantic Match)**  
+
+표의 요약문과 원문을 임베딩하여, **의미적 유사도 검색**을 지원한다.  
+
+**장점**:  
+- 동의어, 패러프레이즈 처리 가능  
+- "자동차 보험 관련 데이터"로 "Car Insurance Product" 찾음  
+- 개념적 유사성 포착  
+
+**단점**:  
+- Exact Match가 필요한 경우 부정확  
+- 계산 비용이 높음 (벡터 유사도 계산)  
+- False Positive 가능성 (의미는 비슷하지만 다른 것)  
+
+**구현 예시**:  
+```python
+# 표 요약문 임베딩
+summary = "이 표는 핀테크 회사의 보험 비교추천 서비스 현황을 담고 있음..."
+embedding = embedding_model.encode(summary)  # [768] 차원 벡터
+
+# 질의 임베딩
+query = "자동차 보험 서비스 제공 현황"
+query_embedding = embedding_model.encode(query)
+
+# 코사인 유사도 검색
+similarity = cosine_similarity(embedding, query_embedding)
+# similarity = 0.87 (높은 유사도)
+```
+
+**3. 하이브리드 검색 (Best of Both Worlds)**  
+
+실무에서는 두 검색 결과를 **스코어 기반으로 결합**한다:  
+
+**RRF (Reciprocal Rank Fusion) 알고리즘**:  
+```python
+# Keyword 검색 결과
+keyword_results = [
+    {"table_id": "T1", "score": 1.0, "rank": 1},
+    {"table_id": "T3", "score": 0.8, "rank": 2}
+]
+
+# Vector 검색 결과  
+vector_results = [
+    {"table_id": "T2", "score": 0.95, "rank": 1},
+    {"table_id": "T1", "score": 0.87, "rank": 2}
+]
+
+# RRF 스코어 계산 (rank가 낮을수록 좋음)
+# RRF_score = 1/(k + rank)
+k = 60  # 상수
+
+T1_rrf = 1/(60 + 1) + 1/(60 + 2) = 0.0164 + 0.0161 = 0.0325
+T2_rrf = 1/(60 + 1) = 0.0164
+T3_rrf = 1/(60 + 2) = 0.0161
+
+# 최종 순위: T1 (1위) > T2 (2위) > T3 (3위)
+```
+
+RRF는 두 검색에서 모두 높은 순위를 받은 결과를 우대한다.  
+T1이 키워드와 벡터 검색 모두에서 발견되었으므로 1위!    
+
+## 메타데이터 통합과 Heterogeneous Graph 관리
+
+### 두 방식의 결합: 전체 그래프 아키텍처
+
+발표자는 연관성 특화 방식과 구조 & 텍스트 특화 방식을 별개로 사용하는 것이 아니라, **하나의 통합된 그래프**로 결합할 것을 제안한다. 이는 Heterogeneous Graph(이종 그래프)를 만드는 것이다.  
+
+전체 그래프는 다음과 같은 구조를 가진다:  
+
+```
+[Table: 보험 비교추천서비스 운영현황]
+  |
+  +-- contains --> [FIN_A: Insurance application]
+  |                 |
+  |                 +-- belongs_to --> [Fintech]
+  |                 +-- partners_with --> [IN_A: Insurance]
+  |                                         |
+  |                                         +-- has_a_product --> [carProductA: Product]
+  |                                                                  |
+  |                                                                  +-- has_a_policy --> [carLawA: Law]
+  |
+  +-- contains --> [IN_B: Insurance]
+                    |
+                    +-- has_a_product --> [carProductB: Product]
+```
+
+이 구조에서:  
+- **Table 노드**는 표 전체의 메타데이터와 요약을 담고 있어, 벡터 검색으로 접근 가능  
+- **개별 엔티티 노드**(Insurance application, Product, Law 등)는 구체적인 관계 추론에 사용  
+- `contains` 관계는 Table과 개별 엔티티를 연결  
+
+이렇게 하면, 사용자가 "보험 비교 서비스"라는 일반적인 질문을 하면 Table 노드를 통해 표 전체를 찾고, "carProductA는 어떤 약관을 따르는가?"라는 구체적인 질문을 하면 Product → Law 경로를 통해 정확한 답을 찾을 수 있다.  
+
+### Scalability와 GDBMS 선택의 중요성
+
+발표자는 "메타 데이터 통합 => Scalability & Heterogeneous graph 데이터 관리를 위해 적절한 GDBMS 선택 필요"라고 명시한다. 이는 매우 중요한 지적이다.  
+
+Heterogeneous Graph는 여러 타입의 노드(Table, Product, Law, Customer 등)와 여러 타입의 관계(contains, has_a_product, has_a_policy 등)를 포함한다. 이런 그래프를 효율적으로 저장하고 질의하려면, GDBMS가 다음을 지원해야 한다:  
+
+**1. 다중 레이블/타입 지원**  
+한 노드가 여러 레이블을 가질 수 있어야 한다. 예를 들어 어떤 엔티티는 동시에 `Product`이면서 `Regulated_Item`(규제 대상)일 수 있다.  
+
+**2. 스키마 유연성**  
+새로운 엔티티 타입이나 관계 타입이 추가될 때, 전체 그래프를 재구축하지 않고 점진적으로 확장할 수 있어야 한다.  
+
+**3. 인덱싱 전략**  
+노드의 레이블별로, 또는 관계 타입별로 독립적인 인덱스를 생성하여, 특정 타입의 노드나 관계만 빠르게 조회할 수 있어야 한다.  
+
+**4. 쿼리 최적화**  
+"Product 타입 노드 중 Law 타입 노드와 연결된 것"을 찾는 쿼리를 실행할 때, 전체 그래프를 스캔하지 않고 관련된 부분만 탐색하는 최적화가 필요하다.  
+
+발표자가 슬라이드에서 "개별 DB"라는 표현을 사용한 것은, 초기에는 각 엔티티 타입을 별도의 데이터베이스나 테이블에 저장하려는 시도를 했음을 암시한다. 하지만 이는 관계 탐색 시 여러 데이터베이스를 조인해야 하므로 비효율적이다. 따라서 Heterogeneous Graph를 네이티브로 지원하는 GDBMS를 선택하는 것이 중요하다. (Part 6에서 GDBMS 선택 전략을 상세히 다룬다.)  
+
+## Prompt Engineering 전략: Routing과 Hooking
+
+### Query-Task-Prompt 매핑의 중요성
+
+표 데이터를 그래프로 변환하고 나면, 사용자의 질문을 그래프 질의로 변환하는 단계가 필요하다. 이 과정에서 프롬프트 엔지니어링이 핵심 역할을 한다. 발표자는 "Prompt 추상화 수준에 따라 답변 품질또한 달라진다. Query, Task 그리고 Prompt 맵핑이 중요함"을 강조한다.  
+
+이 말의 의미를 구체적으로 풀어보자. 사용자의 질문(Query)은 다양한 수준의 복잡도를 가진다:  
+
+**단순한 질문 (Seen, Easy)**  
+- "carProductA의 가격은?"  
+- "IN_A가 제공하는 상품 목록은?"  
+
+**중간 복잡도 질문 (Seen, Difficult)**  
+- "J 고객이 가입할 수 있는 자동차 보험은?"  
+- "35조가 적용되는 모든 상품과 그 보험사는?"  
+
+**복잡한 질문 (Unseen, Difficult)**  
+- "핀테크 회사별 제공 상품 수와 적용 약관의 평균 개수를 비교하면?"  
+- "고객 J와 유사한 고객들이 선택한 상품의 공통점은?"  
+
+각 질문 유형에 대해 **동일한 프롬프트를 사용하면 품질이 떨어진다**. 단순한 질문에는 "그래프에서 X 노드의 Y 속성을 찾아라"는 직접적인 프롬프트가 효과적이지만, 복잡한 질문에는 "먼저 관련 엔티티들을 찾고, 그들 간의 관계를 분석하고, 패턴을 추출하라"는 단계별 프롬프트가 필요하다.  
+
+### Prompt Pool과 Routing 전략
+
+발표자는 Prompt Pool 개념을 제시한다. 이는 여러 개의 프롬프트를 미리 준비해두고, 질문의 특성에 따라 적절한 프롬프트를 선택하는 방식이다.  
+
+```
+Prompt Pool:
+├─ Prompt_1: 단순 엔티티 조회용 (general, seen, easy)
+├─ Prompt_2: 관계 탐색용 (specific, seen, moderate)
+├─ Prompt_3: 다단계 추론용 (specific, unseen, difficult)
+├─ Prompt_4: 집계 및 비교용 (general, seen, difficult)
+├─ Prompt_5: 패턴 분석용 (specific, unseen, difficult)
+└─ Prompt_6: 예외 처리용 (general, unseen, easy)
+```
+
+**Routing 메커니즘**은 입력된 Query를 분석하여, 어떤 Prompt를 사용할지 결정한다. 발표자는 이를 세 가지 축으로 분류한다:  
+
+**1. General vs Specific**  
+- General: 도메인에 독립적인 질문 ("X의 값은?")  
+- Specific: 도메인 특화 지식이 필요한 질문 ("이 상품은 금융감독원 규정을 준수하는가?")  
+
+**2. Seen vs Unseen**  
+- Seen: 학습 데이터에 유사한 예시가 있는 질문 유형  
+- Unseen: 새로운 형태의 질문  
+
+**3. Easy vs Difficult**  
+- Easy: 1-2 hop 탐색으로 답할 수 있는 질문  
+- Difficult: 다단계 추론, 집계, 비교 등이 필요한 질문  
+
+Routing은 질문을 이 세 축으로 분류한 뒤, Prompt Pool에서 가장 적합한 프롬프트를 선택한다. 예를 들어:  
+
+- "carProductA의 보험사는?" → (specific, seen, easy) → Prompt_2 선택  
+- "약관 수가 가장 많은 상품은?" → (general, seen, difficult) → Prompt_4 선택  
+- "고객 행동 패턴과 상품 추천의 상관관계는?" → (specific, unseen, difficult) → Prompt_5 선택  
+
+### Prompt Hooking: 기존 쿼리 분석 활용
+
+발표자는 "기존 쿼리들을 분석해서 Routing에 반영"한다고 말한다. 이는 Prompt Hooking 전략을 의미한다.  
+
+실제 서비스를 운영하면서 사용자들이 던진 질문들을 로깅하고 분석한다. 어떤 질문이 자주 등장하는지, 어떤 질문 패턴이 특정 프롬프트에서 좋은 성능을 보이는지를 학습한다. 이 데이터를 기반으로 Routing 규칙을 개선한다.  
+
+예를 들어, 처음에는 "X의 관련 약관은?"이라는 질문을 (general, seen, moderate)로 분류했는데, 실제로는 도메인 특화 지식이 많이 필요하여 (specific, seen, difficult)로 재분류해야 함을 발견할 수 있다. 또한 자주 등장하는 질문 패턴에 대해서는 별도의 최적화된 프롬프트를 추가로 만들 수도 있다.  
+
+### Few-shot Example Selection with LangChain
+
+발표자는 LangChain의 Example Selector를 활용할 것을 권장한다. (https://python.langchain.com/docs/how_to/#example-selectors)  
+
+Few-shot prompting은 LLM에게 몇 개의 예시를 제공하여 원하는 형태의 출력을 유도하는 기법이다. 하지만 모든 질문에 동일한 예시를 제공하는 것은 비효율적이다. 예시가 질문과 관련이 없으면 도움이 되지 않고, 토큰만 낭비한다.  
+
+LangChain의 Example Selector는 현재 질문과 가장 유사한 예시들을 동적으로 선택한다. 예를 들어:  
+
+**예시 Pool:**  
+```
+Example_1: "carProductA의 보험사는?" → "IN_A"
+Example_2: "J 고객이 사용하는 서비스는?" → "FIN_A"
+Example_3: "35조가 적용되는 상품은?" → "carProductA, ..."
+Example_4: "핀테크 회사별 상품 수는?" → "Fintech_X: 3개, ..."
+```
+
+**현재 질문:** "carProductB의 보험사는?"  
+
+Example Selector는 현재 질문과 Example_1이 가장 유사함을 감지하여, Example_1을 프롬프트에 포함시킨다. 이렇게 하면 LLM이 "아, 상품의 보험사를 찾는 질문이구나"를 이해하고, 유사한 형태로 답변한다.  
+
+LangChain은 여러 Selector 전략을 제공한다:  
+- **Semantic Similarity Selector**: 임베딩 벡터 유사도 기반  
+- **MMR Selector**: 유사도와 다양성을 동시에 고려  
+- **NGram Overlap Selector**: 어휘적 유사도 기반  
+- **Length-based Selector**: 프롬프트 길이 제약 고려  
+
+실무에서는 Semantic Similarity Selector를 기본으로 사용하되, 프롬프트가 너무 길어지는 것을 방지하기 위해 Length-based Selector와 결합하는 경우가 많다.  
+
+## 실전 적용 체크리스트
+
+표를 그래프로 변환할 때 다음 사항들을 체크해야 한다:  
+
+**1. 도메인 전문가와 온톨로지 정의**  
+- [ ] 주요 엔티티 타입 정의  
+- [ ] 관계 타입과 비즈니스 의미 정의  
+- [ ] 용어 표준화 (예: "상품" vs "플랜" vs "Product")  
+
+**2. 연관성 특화 방식 구현**  
+- [ ] 표의 행을 엔티티와 관계로 분해  
+- [ ] Entity Resolution 전략 수립  
+- [ ] 암묵적 관계의 명시화  
+
+**3. 구조 & 텍스트 특화 방식 구현**  
+- [ ] Table 노드 생성 및 메타데이터 정의  
+- [ ] LLM 기반 표 요약 프롬프트 작성  
+- [ ] 키워드 추출 전략 수립  
+- [ ] 벡터 임베딩 모델 선택  
+
+**4. Prompt Engineering**  
+- [ ] Prompt Pool 구축 (최소 3-5개 프롬프트)  
+- [ ] Routing 규칙 정의  
+- [ ] Few-shot example 수집 및 관리  
+- [ ] Example Selector 구현  
+
+**5. GDBMS 선택**  
+- [ ] Heterogeneous Graph 지원 확인  
+- [ ] 인덱싱 전략 수립  
+- [ ] 쿼리 성능 테스트  
+
+표 데이터는 구조화되어 있지만, 그 안에 담긴 관계는 암묵적이다. 이 암묵적 관계를 명시적인 그래프 구조로 변환하는 것이 표 GraphRAG의 핵심이다. 다음 Part 3에서는 비구조화된 문서를 그래프로 변환하는 더 복잡한 과제를 다룬다.  
