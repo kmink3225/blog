@@ -1,0 +1,378 @@
+---
+title: "Python with Statement"
+subtitle: "Context Manager를 활용한 리소스 관리"
+description: | 
+  Python의 with statement는 파일, 데이터베이스 연결, 네트워크 소켓 등의 리소스를 안전하게 관리하기 위한 컨텍스트 관리자(Context Manager) 프로토콜이다. with 블록을 사용하면 리소스의 획득과 해제를 자동으로 처리하여 메모리 누수를 방지하고, 예외 발생 시에도 리소스가 적절히 정리되도록 보장한다.
+categories:
+  - Engineering
+  - Python
+author: Kwangmin Kim
+date: 07/01/2023
+draft: false
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: true
+    page-layout: full
+execute: 
+  warning: false
+  message: false
+  eval: false
+  echo: true
+---
+
+# with Statement 개요
+
+Python의 `with` statement는 **컨텍스트 관리자(Context Manager)** 프로토콜을 활용하여 리소스를 안전하게 관리하는 구문이다. 파일 입출력, 데이터베이스 연결, 락(lock) 관리 등 리소스의 획득과 해제가 필요한 작업에서 자동으로 정리 작업을 수행한다.
+
+# 왜 with Statement를 사용하는가?
+
+## 수동 리소스 관리를 자동화
+
+전통적인 방식에서는 리소스를 수동으로 열고 닫아야 한다:
+
+```python
+# 위험한 방식 - 권장하지 않음
+f = open('file.txt', 'r')
+data = f.read()
+f.close()  # 만약 예외가 발생하면 실행되지 않음!
+```
+
+이 코드의 문제점:  
+- `f.read()` 중 예외가 발생하면 `f.close()`가 실행되지 않는다  
+- 파일 핸들이 열린 채로 남아 메모리 누수가 발생한다  
+- OS의 파일 디스크립터 제한에 도달할 수 있다  
+  - 파일 디스크립터 (FD, File Descriptor) : Unix/Linux 시스템에서 열린 파일이나 I/O 리소스를 식별하는 정수 값에서 유래된 용어
+  - python의 with statement는 OS와 무관하게 파일 디스크립터를 안전하게 관리하는 방법을 제공
+  - 운영체제는 각 프로세스마다 파일 디스크립터 테이블을 유지하며, 프로그램이 파일을 열면 OS가 사용 가능한 가장 작은 정수를 할당
+  - 표준 디스크립터: 0: stdin (표준 입력), 1: stdout (표준 출력), 2: stderr (표준 에러)
+  - 파일 디스크립터 제한: too many open files 오류 발생 가능 (각 프로세스는 열 수 있는 파일 디스크립터 개수에 제한이 있다.  일반적으로 1024개)
+
+```python
+# ❌ 파일을 닫지 않으면...
+for i in range(2000):
+    f = open(f'file{i}.txt', 'w')
+    # close() 호출 안 함!
+    
+# OSError: [Errno 24] Too many open files
+# with 구문은 파일 디스크립터를 자동으로 해제하여 이 문제를 방지
+```
+
+```python
+# ✅ 안전 - 자동으로 FD 해제
+for i in range(2000):
+    with open(f'file{i}.txt', 'w') as f:
+        f.write('data')
+    # 블록 종료 시 자동으로 close() 호출 → FD 반환
+```
+
+## 차선: try-finally 사용
+
+```python
+# 안전하지만 장황한 방식
+f = open('file.txt', 'r')
+try:
+    data = f.read()
+finally:
+    f.close()  # 예외 발생 여부와 관계없이 실행
+```
+
+이 방식은 안전하지만 코드가 장황하고 반복적이다.
+
+## 최선: with Statement 사용
+
+```python
+# 권장 방식 - 간결하고 안전
+with open('file.txt', 'r') as f:
+    data = f.read()
+# 블록을 벗어나면 자동으로 f.close() 호출
+```
+
+`with` 구문은 다음을 보장한다:
+1. **자동 정리**: 블록을 벗어날 때 자동으로 리소스 해제
+2. **예외 안전성**: 예외 발생 시에도 리소스가 정리됨
+3. **코드 간결성**: try-finally 보일러플레이트 제거
+
+# with Statement의 동작 원리
+
+## Context Manager 프로토콜
+
+`with` 구문은 **Context Manager 프로토콜**을 구현한 객체와 함께 작동한다. 이 프로토콜은 두 가지 특수 메서드를 요구한다:
+
+```python
+class ContextManager:
+    def __enter__(self):
+        """with 블록 진입 시 호출"""
+        print("리소스 획득")
+        return self  # as 절에 바인딩될 객체
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """with 블록 종료 시 호출 (예외 발생 여부와 무관)"""
+        print("리소스 해제")
+        return False  # 예외를 전파 (True면 예외 억제)
+```
+
+## 실행 흐름
+
+```python
+with ContextManager() as cm:
+    print("작업 수행")
+    # 여기서 예외가 발생해도 __exit__는 호출됨
+```
+
+실행 순서:
+1. `ContextManager()` 객체 생성
+2. `__enter__()` 메서드 호출 → 반환값이 `cm`에 바인딩
+3. `with` 블록 내부 코드 실행
+4. 블록 종료 또는 예외 발생 시 `__exit__()` 메서드 호출
+5. `__exit__` 반환값이 `False`면 예외 전파, `True`면 예외 억제
+
+# 실제 사용 예제
+
+## 파일 입출력
+
+```python
+# 파일 읽기
+with open('data.txt', 'r', encoding='utf-8') as f:
+    content = f.read()
+# 자동으로 파일이 닫힘
+
+# 파일 쓰기
+with open('output.txt', 'w', encoding='utf-8') as f:
+    f.write('Hello, World!')
+```
+
+## 여러 리소스 동시 관리
+
+```python
+# Python 3.1+ 방식
+with open('input.txt', 'r') as infile, \
+     open('output.txt', 'w') as outfile:
+    for line in infile:
+        outfile.write(line.upper())
+
+# Python 3.10+ 방식 (괄호 사용)
+with (
+    open('input.txt', 'r') as infile,
+    open('output.txt', 'w') as outfile
+):
+    outfile.write(infile.read())
+```
+
+## 데이터베이스 연결
+
+```python
+import sqlite3
+
+with sqlite3.connect('database.db') as conn:
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM users')
+    results = cursor.fetchall()
+# 연결 자동 커밋/롤백 및 종료
+```
+
+## 락(Lock) 관리
+
+```python
+import threading
+
+lock = threading.Lock()
+
+with lock:
+    # 임계 영역 (Critical Section)
+    shared_resource += 1
+# 자동으로 락 해제
+```
+
+# 커스텀 Context Manager 작성
+
+## 클래스 기반 방식
+
+```python
+class DatabaseConnection:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.connection = None
+    
+    def __enter__(self):
+        print(f"Connecting to {self.host}:{self.port}")
+        self.connection = self._connect()
+        return self.connection
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            print(f"Exception occurred: {exc_val}")
+            self.connection.rollback()
+        else:
+            self.connection.commit()
+        self.connection.close()
+        print("Connection closed")
+        return False  # 예외 전파
+
+# 사용
+with DatabaseConnection('localhost', 5432) as conn:
+    conn.execute('INSERT INTO ...')
+```
+
+## 함수 기반 방식 (contextlib)
+
+```python
+from contextlib import contextmanager
+
+@contextmanager
+def timer(name):
+    import time
+    start = time.time()
+    print(f"{name} 시작")
+    try:
+        yield  # with 블록으로 제어 이동
+    finally:
+        elapsed = time.time() - start
+        print(f"{name} 종료: {elapsed:.2f}초")
+
+# 사용
+with timer("데이터 처리"):
+    # 시간 측정 대상 코드
+    result = process_data()
+```
+
+# 일반적인 사용 사례
+
+## 파일 작업
+
+```python
+# CSV 파일 처리
+with open('data.csv', 'r') as f:
+    import csv
+    reader = csv.DictReader(f)
+    for row in reader:
+        print(row)
+```
+
+## 임시 디렉토리 관리
+
+```python
+import tempfile
+import shutil
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    # 임시 디렉토리에서 작업
+    print(f"임시 경로: {tmpdir}")
+    with open(f"{tmpdir}/temp.txt", 'w') as f:
+        f.write("임시 데이터")
+# 블록 종료 시 임시 디렉토리 자동 삭제
+```
+
+## 현재 디렉토리 변경
+
+```python
+import os
+from contextlib import contextmanager
+
+@contextmanager
+def change_dir(path):
+    old_dir = os.getcwd()
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        os.chdir(old_dir)
+
+with change_dir('/tmp'):
+    # /tmp에서 작업
+    print(os.getcwd())
+# 원래 디렉토리로 복귀
+```
+
+## 표준 출력 리다이렉션
+
+```python
+from contextlib import redirect_stdout
+
+with open('output.log', 'w') as f:
+    with redirect_stdout(f):
+        print("이 메시지는 파일로 출력됨")
+```
+
+# 주의사항 및 모범 사례
+
+## with 블록 내에서만 리소스 사용
+
+```python
+# ❌ 잘못된 사용
+with open('file.txt', 'r') as f:
+    data = f
+
+# data 사용 시도 (블록 밖에서)
+print(data.read())  # ValueError: I/O operation on closed file
+```
+
+```python
+# ✅ 올바른 사용
+with open('file.txt', 'r') as f:
+    data = f.read()
+
+# 데이터를 블록 내에서 읽어둠
+print(data)
+```
+
+## 예외 처리 주의
+
+```python
+# with는 리소스 정리를 보장하지만 예외는 전파됨
+try:
+    with open('file.txt', 'r') as f:
+        data = f.read()
+        result = process(data)  # 예외 발생 가능
+except ProcessingError as e:
+    print(f"처리 중 오류: {e}")
+```
+
+## 중첩 컨텍스트는 한 줄로 표현
+
+```python
+# ❌ 가독성 낮음
+with open('file1.txt', 'r') as f1:
+    with open('file2.txt', 'r') as f2:
+        with open('file3.txt', 'r') as f3:
+            pass
+
+# ✅ 권장 방식
+with (
+    open('file1.txt', 'r') as f1,
+    open('file2.txt', 'r') as f2,
+    open('file3.txt', 'r') as f3
+):
+    pass
+```
+
+# 내부 동작: 파일 객체의 경우
+
+Python의 `open()` 함수가 반환하는 파일 객체는 다음과 같이 동작한다:
+
+```python
+class FileWrapper:
+    def __init__(self, filename, mode):
+        self.file = open(filename, mode)
+    
+    def __enter__(self):
+        return self.file  # 파일 객체 반환
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.file.close()  # 예외 여부와 무관하게 닫기
+        return False
+```
+
+# 요약
+
+| 측면 | 설명 |
+|------|------|
+| **목적** | 리소스의 안전한 획득과 해제 자동화 |
+| **핵심 프로토콜** | `__enter__()`, `__exit__()` 메서드 |
+| **장점** | 자동 정리, 예외 안전성, 코드 간결성 |
+| **주요 사용처** | 파일 I/O, DB 연결, 락, 네트워크 소켓 |
+| **커스텀 생성** | 클래스 방식 또는 `@contextmanager` 데코레이터 |
+
+`with` statement는 Python에서 리소스를 다루는 표준적이고 안전한 방법이며, 파일 작업뿐만 아니라 모든 종류의 리소스 관리에 활용할 수 있다.
