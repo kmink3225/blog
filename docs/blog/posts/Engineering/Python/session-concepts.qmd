@@ -1,0 +1,182 @@
+---
+title: "세션 개념 정리: 웹 세션부터 Streamlit `session_state`까지"
+subtitle: "입문 → 중급 → 심화: 세션 저장 방식, 보안, 확장성, 실무 패턴"
+description: |
+  세션은 사용자별 상태를 관리하는 핵심 개념이다. 이 글은 HTTP의 무상태성, 서버/클라이언트 세션 저장 방식, 보안·확장성 문제를 설명하고 Streamlit의 `session_state`를 입문부터 심화까지 다룬다.
+categories:
+  - Engineering
+  - Python
+  - Web
+  - Streamlit
+author: Kwangmin Kim
+date: 02/14/2026
+draft: false
+format:
+  html:
+    toc: true
+    number-sections: true
+    code-fold: true
+execute:
+  eval: false
+---
+
+# 개요
+
+세션(session)은 한 사용자가 일정 기간 동안 시스템과 나누는 상호작용의 단위를 말한다. 웹 애플리케이션에서는 로그인 상태, 장바구니, 채팅 이력 등 사용자별 상태를 세션으로 관리한다. 이 글은 입문 레벨의 정의와 예제부터, 운영·보안·확장성 관점의 심화 내용까지 빠르게 살펴본다.
+
+# 1. 입문: 세션이란 무엇인가?
+
+- **무상태 HTTP**: HTTP는 요청-응답의 무상태 프로토콜이다. 즉 각 요청은 독립적이며 서버는 요청자가 누구인지 자동으로 기억하지 않는다.
+- **세션의 역할**: 세션은 여러 요청을 같은 사용자로 연결하고 그 사용자에 대한 상태(식별자, 권한, 임시 데이터 등)를 유지한다.
+- **식별자 전달 방식**: 보통 `cookie`에 `session_id`를 넣거나 Authorization 헤더에 토큰(JWT)을 담아 보낸다.
+
+## 간단한 예 (서버 사이드 세션)
+
+```python
+# Flask 예시 (단순화)
+from flask import Flask, session
+app = Flask(__name__)
+app.secret_key = 'replace_with_secure_key'
+
+@app.route('/visit')
+def visit():
+    session['visits'] = session.get('visits', 0) + 1
+    return f"Visits: {session['visits']}"
+```
+
+# 2. 세션 저장 방식 비교 (중급)
+
+- **서버 사이드 세션**
+  - 상태는 서버(메모리, Redis, DB 등)에 저장
+  - 클라이언트에는 식별자(`session_id`)만 전달
+  - 장점: 토큰 탈취 시 서버에서 무효화 가능, 민감 정보 서버 보관
+  - 단점: 중앙 저장소 필요, 확장·복제 고려 필요
+
+- **클라이언트 사이드 토큰 (예: JWT)**
+  - 상태 일부 또는 참조를 토큰으로 클라이언트에 보관
+  - 장점: 서버 확장성 우수(무상태 인증 가능)
+  - 단점: 토큰 무효화(로그아웃 즉시 반영) 어려움, 토큰 길이·보안 고려
+
+# 3. 운영(확장성)과 패턴
+
+## 저장소 선택
+
+- **메모리(단일 인스턴스)**: 간단하지만 인스턴스 재시작 시 소실, 수평 확장 불가
+- **Redis**: 빠르고 TTL 관리 용이, 여러 인스턴스 간 공유 가능 — 실무에서 가장 흔함
+- **관계형 DB**: 영구 저장 필요 시 사용 (레이턴시 고려)
+
+## 로드밸런싱 전략
+
+- **Sticky sessions**: 로드밸런서가 특정 사용자를 같은 인스턴스로 라우팅(구현 쉬움, 장애 대응 어려움)
+- **분산 세션 스토어**: Redis처럼 외부 저장소를 사용하면 어느 인스턴스든 세션 접근 가능(권장)
+
+## 만료 및 갱신
+
+- **고정 만료(fixed TTL)**: 발급 시점 기준으로 만료
+- **슬라이딩 윈도우**: 사용 활동 시 TTL을 갱신(세션 장기 유지를 방지하거나 UX에 따라 선택)
+
+# 4. 보안 고려사항 (중급→심화)
+
+- **HTTPS 강제**: 세션 식별자/토큰 전송은 반드시 TLS(HTTPS)를 사용
+- **쿠키 옵션**: `HttpOnly`, `Secure`, `SameSite` 설정으로 XSS/CSRF 위험 완화
+- **세션 고정화(Session Fixation)**: 로그인 시 세션 ID 재발행
+- **토큰 무효화 전략**: JWT 사용 시 블랙리스트 또는 짧은 만료 + 리프레시 토큰 패턴 적용
+- **민감 정보 금지**: 세션에 비밀번호·신용카드 등 민감정보 저장 금지
+
+# 5. Streamlit 특성: 왜 `session_state`가 필요한가? (입문)
+
+- Streamlit은 UI 상호작용마다 **전체 스크립트를 재실행**하는 모델을 사용한다.
+- 로컬 변수는 재실행 시 사라지므로, 상태가 필요한 경우 `st.session_state`를 사용해 값을 유지한다.
+
+```python
+import streamlit as st
+if 'count' not in st.session_state:
+    st.session_state.count = 0
+
+if st.button('증가'):
+    st.session_state.count += 1
+
+st.write(st.session_state.count)
+```
+
+- `st.session_state`는 브라우저 탭(세션) 단위로 유지되는 인메모리 상태이며, 앱 인스턴스 재시작 시 소실된다.
+
+# 6. Streamlit 실무 패턴 (중급)
+
+## 초기화와 키 관리
+
+```python
+if 'config' not in st.session_state:
+    st.session_state.config = {'model': 'gpt-4', 'temp': 0.7}
+```
+
+- `key` 기반 위젯 연결(`st.text_input(..., key='username')`)으로 위젯 값과 `session_state`를 동기화할 수 있다.
+
+## 리스트·딕셔너리 다루기
+
+- 리스트 조작 후 UI 일관성을 위해 `st.experimental_rerun()` 또는 적절한 rerun 호출을 사용
+- 버튼 key를 유니크하게 지정해 이벤트 충돌 방지
+
+## 페이지 간 상태 공유
+
+- Streamlit 앱의 `pages/` 구조에서 동일한 `st.session_state`를 공유할 수 있다(브라우저 탭 단위).
+
+# 7. 심화: 멀티 인스턴스·영속성 패턴 (심화)
+
+## 문제 요약
+
+- `st.session_state`는 인메모리이므로 앱 재시작 시 상태 손실
+- 여러 인스턴스(수평 확장) 환경에서 상태 일관성 문제가 발생할 수 있음
+
+## 권장 패턴
+
+1. **영속적 데이터는 외부 저장소로 분리**
+   - 채팅 기록, 사용자 설정 등은 Redis/DB에 저장하고 `session_state`에는 참조(예: `sid`)만 둔다.
+2. **세션 싱크 전략**
+   - 앱 진입 시 외부 저장소에서 초기값을 로드해 `st.session_state`에 채움
+   - 상태 변경 시 외부 저장소에 동기화(비동기 큐 사용 권장)
+3. **인증·민감 작업은 API 서버로 위임**
+   - Streamlit은 프레젠테이션 계층으로 두고, 인증·데이터 접근·모델 추론은 Flask/Django 등의 API로 처리
+
+```python
+# 예: Redis에 히스토리 저장 예시
+import streamlit as st
+import redis
+
+r = redis.Redis()
+
+if 'sid' not in st.session_state:
+    st.session_state.sid = generate_sid()
+
+sid = st.session_state.sid
+if r.exists(f"{sid}:history"):
+    st.session_state.history = [x.decode() for x in r.lrange(f"{sid}:history", 0, -1)]
+else:
+    st.session_state.history = []
+
+def add_message(msg):
+    r.rpush(f"{sid}:history", msg)
+    st.session_state.history.append(msg)
+```
+
+# 8. 운영·관찰성(Observability)
+
+- 세션 생성/만료/동기화 이벤트를 로그로 남기기
+- Redis 메모리 사용량, 세션 키 분포, TTL 통계 모니터링
+- 오류·동기화 실패에 대한 재시도 및 경고 알림 구성
+
+# 9. 테스트 전략
+
+- 세션 만료 시나리오 자동화 (시간 경과 시 세션 복구/무효화 테스트)
+- 동시성 테스트 (여러 요청이 동시에 들어올 때 일관성 보장)
+- 여러 인스턴스 환경에서 상태 일관성 및 복원성 테스트
+
+# 결론 및 권장사항
+
+- 세션에는 가능한 한 **작고 명확한 식별자와 최소 정보**만 두자.
+- 장기 보관·중요 데이터는 Redis/DB로 분리하고, Streamlit의 `session_state`는 UI·임시 상태 유지용으로 사용하자.
+- 프로덕션 환경에서는 Streamlit을 프레젠테이션으로 두고, 인증·비즈니스 로직·영속성은 검증된 백엔드(Flask/Django)와 Redis/DB로 처리하는 아키텍처를 권장한다.
+
+---
+
+필요하면 이 글을 바탕으로 `Streamlit + Redis` 예제 프로젝트(코드 + Dockerfile + 간단 README)를 생성해 드리겠습니다.
