@@ -1,0 +1,824 @@
+---
+title: "Streamlit Session State"
+subtitle: "Streamlit의 상태 관리와 동작 원리"
+description: | 
+  Streamlit은 사용자 상호작용마다 스크립트 전체를 재실행하는 독특한 방식으로 동작한다. session_state는 이러한 재실행 간에도 데이터를 유지하기 위한 핵심 메커니즘으로, 채팅 이력, 사용자 설정, 캐싱 등 다양한 상태 관리에 활용된다. Streamlit의 동작 원리를 이해하면 효과적인 웹 애플리케이션 개발이 가능하다.
+categories:
+  - Engineering
+  - Python
+  - Streamlit
+  - Web Development
+author: Kwangmin Kim
+date: 02/14/2026
+draft: false
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: true
+    page-layout: full
+execute: 
+  warning: false
+  message: false
+  eval: false
+  echo: true
+---
+
+# Streamlit의 동작 원리
+
+## 일반 웹 프레임워크 vs Streamlit
+
+### 전통적인 웹 프레임워크 (Flask, Django)
+
+전통적인 웹 프레임워크는 **이벤트 기반**으로 동작한다.
+
+```python
+# Flask 예시
+from flask import Flask, session
+
+app = Flask(__name__)
+
+@app.route('/increment')
+def increment():
+    session['count'] = session.get('count', 0) + 1
+    return f"Count: {session['count']}"
+
+# 버튼 클릭 시 /increment 엔드포인트만 실행됨
+```
+
+**특징:**
+- 특정 엔드포인트만 실행
+- 서버 메모리에 세션 유지
+- 명시적인 라우팅 필요
+
+### Streamlit의 독특한 방식
+
+Streamlit은 **전체 스크립트 재실행** 방식으로 동작한다.
+
+```python
+# Streamlit 예시
+import streamlit as st
+
+st.title("카운터")
+
+count = 0  # 문제: 매번 0으로 초기화됨
+if st.button("증가"):
+    count += 1 # 이 실행에서만 증가
+
+st.write(f"Count: {count}")   # 버튼 클릭한 실행에서는 1, 다음 실행에서는 다시 0. 즉, 항상 0 또는 1만 표시
+```
+
+- **상호작용(예. 버튼 클릭)마다** 스크립트 처음부터 끝까지 실행
+- 모든 변수가 다시 생성됨
+- 라우팅 개념 없음 (단일 페이지)
+- `st.session_state`를 쓰면 누적·유지 가능 (권장)
+
+```python
+import streamlit as st
+
+if "count" not in st.session_state:
+    st.session_state.count = 0
+
+if st.button("증가"):
+    st.session_state.count += 1
+
+st.write(st.session_state.count)
+```
+
+- `st.session_state`는 브라우저 탭(세션) 단위의 인메모리 저장소다.  
+- 키가 없을 때만 초기화하면 이후 재실행에서도 값이 유지되어 버튼을 누를 때마다 누적된다.  
+- 키(`key`): `st.session_state` 안에서 상태를 식별하는 문자열(이름)이다 — 즉 상태 항목의 고유 ID  
+    - `st.session_state`는 내부적으로 키→값 사전(dict)이다. 키는 상태 항목을 구분하는 문자열이다.  
+    - 예: "count", "messages", "user_id" 등이 키  
+
+## Streamlit의 실행 흐름
+
+### 초기 로드
+
+```python
+import streamlit as st
+
+# === 1차 실행 (페이지 로드) ===
+print("스크립트 시작")  # 출력됨
+
+st.title("안녕하세요")  # 화면에 표시
+
+count = 0
+st.write(f"카운트: {count}")  # 0 표시
+
+if st.button("증가"):
+    count += 1  # 클릭 시에만 실행
+
+print("스크립트 종료")  # 출력됨
+```
+
+**실행 순서:**
+1. 스크립트 처음부터 시작
+2. 모든 변수 초기화 (`count = 0`)
+3. 위젯 렌더링 (`st.title`, `st.button`)
+4. 스크립트 끝까지 실행
+
+### 버튼 클릭 후
+
+```python
+# === 2차 실행 (버튼 클릭) ===
+print("스크립트 시작")  # 다시 출력됨!
+
+st.title("안녕하세요")  # 다시 렌더링
+
+count = 0  # 다시 0으로 초기화!
+st.write(f"카운트: {count}")  # 여전히 0
+
+if st.button("증가"):  # 이번에는 True
+    count += 1  # count는 1이 됨
+
+st.write(f"최종: {count}")  # 1 표시 (이 실행에서만)
+
+print("스크립트 종료")  # 다시 출력됨!
+```
+
+**문제점:**
+- 버튼을 눌러도 다음 실행에서 `count = 0`으로 다시 초기화
+- 값이 누적되지 않음
+
+### 시각화
+
+```
+[1차 실행: 페이지 로드]
+count = 0
+버튼 렌더링
+화면: "카운트: 0"
+
+↓ 사용자가 버튼 클릭
+
+[2차 실행: 전체 스크립트 재실행]
+count = 0 (다시 초기화!)
+버튼 클릭 감지
+count = 1 (임시로만 1)
+화면: "카운트: 1"
+
+↓ 사용자가 다른 버튼 클릭
+
+[3차 실행: 다시 전체 재실행]
+count = 0 (또 초기화!)
+화면: "카운트: 0"
+```
+
+## session_state의 필요성
+
+### 문제 상황
+
+```python
+import streamlit as st
+
+st.title("채팅 앱")
+
+messages = []  # 매번 빈 리스트로 초기화!
+
+user_input = st.text_input("메시지 입력")
+if st.button("전송"):
+    messages.append(user_input)  # 추가해도...
+
+# 메시지 표시
+for msg in messages:
+    st.write(msg)  # 아무것도 표시 안 됨!
+
+# 다음 실행에서 messages는 다시 []로 초기화됨
+```
+
+**결과:** 상호작용 마다 리스트가 계속 초기화되므로 메시지를 입력해도 화면에 표시되지 않음
+
+### 해결: session_state 사용
+
+```python
+import streamlit as st
+
+st.title("채팅 앱")
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+user_input = st.text_input("메시지 입력")
+if st.button("전송") and user_input:
+    st.session_state.messages.append(user_input)
+
+# 메시지 표시
+for msg in st.session_state.messages:
+    st.write(msg)
+```
+
+* `if "messages" not in st.session_state`는 "messages"라는 키가 st.session_state(내부의 key→value 사전)에 존재하지 않으면 True가 되어 초기화 코드를 실행하라는 의미다.
+* 즉, "messages라는 이름의 상태 항목이 아직 생성되지 않았다면" 이라는 의미
+* 이후 재실행에서는 "messages" 키가 이미 존재하므로 초기화 코드가 실행되지 않고, 기존 리스트가 유지되어 메시지가 누적되어 표시된다.
+* 사용자가 메시지를 입력하거나 코드에서 st.session_state에 값을 할당하면 해당 "messages"키가 생긴다  
+* 이후 재실행에서는 초기화 코드가 건너뛰어지고 기존 값이 유지됨
+* **결과:** 메시지가 누적되어 표시됨
+
+## session_state 동작 원리
+
+### 내부 메커니즘
+
+Streamlit은 백엔드에서 각 사용자(브라우저 세션)마다 **고유한 상태 저장소**를 유지한다.
+
+```python
+# Streamlit 내부 (단순화된 버전)
+class SessionState:
+    def __init__(self):
+        self._state = {}
+    
+    def __setitem__(self, key, value):
+        self._state[key] = value
+    
+    def __getitem__(self, key):
+        return self._state[key]
+    
+    def __contains__(self, key):
+        return key in self._state
+
+# 각 사용자마다 별도 인스턴스 유지
+user1_session = SessionState()
+user2_session = SessionState()
+```
+
+### 사용자별 격리
+
+```python
+# 사용자 A가 접속
+st.session_state.count = 10
+
+# 사용자 B가 접속 (다른 브라우저)
+st.session_state.count = 5
+
+# 각 사용자는 독립적인 값 유지
+# A: count = 10
+# B: count = 5
+```
+
+### 생명주기
+
+```
+브라우저 탭 열기
+    ↓
+session_state 생성 (빈 딕셔너리)
+    ↓
+스크립트 실행 (초기화)
+    ↓
+사용자 상호작용 (버튼 클릭 등)
+    ↓
+스크립트 재실행 (session_state 유지)
+    ↓
+... 반복 ...
+    ↓
+브라우저 탭 닫기
+    ↓
+session_state 삭제
+```
+
+## session_state 사용 패턴
+
+### 초기화 패턴
+
+```python
+# 기본 패턴
+if "key" not in st.session_state:
+    st.session_state.key = initial_value
+
+# 예시: 카운터
+if "count" not in st.session_state:
+    st.session_state.count = 0
+
+# 예시: 리스트
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+# 예시: 딕셔너리
+if "config" not in st.session_state:
+    st.session_state.config = {"model": "gpt-4", "temp": 0.7}
+```
+
+**왜 이 패턴을 사용하는가?**
+- 처음 실행 시에만 초기화
+- 이후 재실행에서는 기존 값 유지
+- 중복 초기화 방지
+
+### 값 읽기/쓰기
+
+```python
+import streamlit as st
+
+# 초기화
+if "name" not in st.session_state:
+    st.session_state.name = "Guest"
+
+# 읽기 (2가지 방법)
+name1 = st.session_state.name  # 속성 방식
+name2 = st.session_state["name"]  # 딕셔너리 방식
+
+# 쓰기 (2가지 방법)
+st.session_state.name = "Alice"
+st.session_state["name"] = "Bob"
+
+# 삭제
+del st.session_state.name
+# 또는
+st.session_state.pop("name", None)
+```
+
+### 리스트 조작
+
+```python
+import streamlit as st
+
+# 초기화
+if "tasks" not in st.session_state:
+    st.session_state.tasks = [] #dict에서 task key에 대응되는 value에 빈 리스트 추가
+
+# 추가
+new_task = st.text_input("새 작업")
+if st.button("추가") and new_task:
+    st.session_state.tasks.append(new_task)
+
+# 표시
+for i, task in enumerate(st.session_state.tasks):
+    col1, col2 = st.columns([4, 1])
+    col1.write(task)
+    if col2.button("삭제", key=f"del_{i}"):
+        st.session_state.tasks.pop(i)
+        st.rerun()  # 화면 새로고침
+```
+
+### 조건부 렌더링
+
+```python
+import streamlit as st
+
+# 로그인 상태 관리
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    # 로그인 화면
+    username = st.text_input("사용자명")
+    password = st.text_input("비밀번호", type="password")
+    
+    if st.button("로그인"):
+        if username == "admin" and password == "1234":
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.rerun()
+        else:
+            st.error("로그인 실패")
+else:
+    # 메인 화면
+    st.write(f"환영합니다, {st.session_state.username}님")
+    
+    if st.button("로그아웃"):
+        st.session_state.logged_in = False
+        st.session_state.pop("username", None)
+        st.rerun()
+```
+
+### 페이지 간 상태 공유
+
+```python
+# pages/page1.py
+import streamlit as st
+
+if "shared_data" not in st.session_state:
+    st.session_state.shared_data = "Hello"
+
+st.write(st.session_state.shared_data)
+
+# pages/page2.py
+import streamlit as st
+
+# 같은 session_state 사용
+st.write(st.session_state.shared_data)  # "Hello"
+st.session_state.shared_data = "World"
+```
+
+## 실전 예제
+
+### 채팅 애플리케이션
+
+```python
+import streamlit as st
+from datetime import datetime
+
+st.title("💬 채팅 앱")
+
+# 메시지 초기화
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# 이전 메시지 표시
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+        st.caption(msg["time"])
+
+# 사용자 입력
+if prompt := st.chat_input("메시지를 입력하세요"):
+    # 사용자 메시지 추가
+    user_msg = {
+        "role": "user",
+        "content": prompt,
+        "time": datetime.now().strftime("%H:%M:%S")
+    }
+    st.session_state.messages.append(user_msg)
+    
+    # 사용자 메시지 표시
+    with st.chat_message("user"):
+        st.write(prompt)
+    
+    # 봇 응답 (간단한 예시)
+    bot_response = f"당신이 말한 '{prompt}'에 대한 응답입니다."
+    bot_msg = {
+        "role": "assistant",
+        "content": bot_response,
+        "time": datetime.now().strftime("%H:%M:%S")
+    }
+    st.session_state.messages.append(bot_msg)
+    
+    # 봇 응답 표시
+    with st.chat_message("assistant"):
+        st.write(bot_response)
+```
+
+### 설정 관리
+
+```python
+import streamlit as st
+
+st.title("⚙️ 설정")
+
+# 설정 초기화
+if "config" not in st.session_state:
+    st.session_state.config = {
+        "model": "gpt-4o-mini",
+        "temperature": 0.7,
+        "max_tokens": 1000,
+        "theme": "light"
+    }
+
+# 사이드바에 설정
+with st.sidebar:
+    st.header("모델 설정")
+    
+    model = st.selectbox(
+        "모델 선택",
+        ["gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"],
+        index=["gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"].index(
+            st.session_state.config["model"]
+        )
+    )
+    
+    temperature = st.slider(
+        "Temperature",
+        0.0, 1.0,
+        st.session_state.config["temperature"]
+    )
+    
+    max_tokens = st.number_input(
+        "Max Tokens",
+        100, 4000,
+        st.session_state.config["max_tokens"]
+    )
+    
+    if st.button("설정 저장"):
+        st.session_state.config["model"] = model
+        st.session_state.config["temperature"] = temperature
+        st.session_state.config["max_tokens"] = max_tokens
+        st.success("설정이 저장되었습니다")
+
+# 메인 영역에 현재 설정 표시
+st.subheader("현재 설정")
+st.json(st.session_state.config)
+```
+
+### 데이터 캐싱 (비용 절감)
+
+```python
+import streamlit as st
+from datetime import datetime, timedelta
+
+st.title("📊 데이터 대시보드")
+
+# 마지막 로드 시간 추적
+if "last_loaded" not in st.session_state:
+    st.session_state.last_loaded = None
+    st.session_state.data = None
+
+def load_data():
+    """시간이 오래 걸리는 데이터 로드"""
+    import time
+    time.sleep(2)  # 시뮬레이션
+    return {"value": 42, "timestamp": datetime.now()}
+
+# 데이터 로드 로직
+should_reload = (
+    st.session_state.last_loaded is None or
+    datetime.now() - st.session_state.last_loaded > timedelta(minutes=5)
+)
+
+if should_reload:
+    with st.spinner("데이터 로딩 중..."):
+        st.session_state.data = load_data()
+        st.session_state.last_loaded = datetime.now()
+    st.success("데이터가 로드되었습니다")
+else:
+    st.info(f"캐시된 데이터 사용 (로드 시간: {st.session_state.last_loaded})")
+
+# 데이터 표시
+if st.session_state.data:
+    st.json(st.session_state.data)
+
+# 수동 새로고침
+if st.button("데이터 새로고침"):
+    st.session_state.last_loaded = None
+    st.rerun()
+```
+
+### 멀티 스텝 폼
+
+```python
+import streamlit as st
+
+st.title("📝 회원가입")
+
+# 현재 단계 추적
+if "step" not in st.session_state:
+    st.session_state.step = 1
+    st.session_state.form_data = {}
+
+# 진행 상태 표시
+progress = (st.session_state.step - 1) / 2
+st.progress(progress)
+st.write(f"단계 {st.session_state.step}/3")
+
+# 단계별 폼
+if st.session_state.step == 1:
+    st.subheader("1단계: 기본 정보")
+    
+    name = st.text_input("이름", value=st.session_state.form_data.get("name", ""))
+    email = st.text_input("이메일", value=st.session_state.form_data.get("email", ""))
+    
+    if st.button("다음"):
+        if name and email:
+            st.session_state.form_data["name"] = name
+            st.session_state.form_data["email"] = email
+            st.session_state.step = 2
+            st.rerun()
+        else:
+            st.error("모든 필드를 입력하세요")
+
+elif st.session_state.step == 2:
+    st.subheader("2단계: 비밀번호")
+    
+    password = st.text_input("비밀번호", type="password")
+    confirm = st.text_input("비밀번호 확인", type="password")
+    
+    col1, col2 = st.columns(2)
+    if col1.button("이전"):
+        st.session_state.step = 1
+        st.rerun()
+    
+    if col2.button("다음"):
+        if password and password == confirm:
+            st.session_state.form_data["password"] = password
+            st.session_state.step = 3
+            st.rerun()
+        else:
+            st.error("비밀번호가 일치하지 않습니다")
+
+elif st.session_state.step == 3:
+    st.subheader("3단계: 확인")
+    
+    st.write("입력하신 정보:")
+    st.json({
+        "name": st.session_state.form_data["name"],
+        "email": st.session_state.form_data["email"]
+    })
+    
+    col1, col2 = st.columns(2)
+    if col1.button("이전"):
+        st.session_state.step = 2
+        st.rerun()
+    
+    if col2.button("가입 완료"):
+        st.success("회원가입이 완료되었습니다!")
+        st.balloons()
+        # 초기화
+        st.session_state.step = 1
+        st.session_state.form_data = {}
+```
+
+## 주의사항 및 권장 사항
+
+### 초기화 패턴 일관성
+
+```python
+# ✅ 권장: 일관된 패턴
+if "key" not in st.session_state:
+    st.session_state.key = value
+
+# ❌ 비권장: get 사용 (덜 명확)
+st.session_state.get("key", value)
+```
+
+### 키 네이밍
+
+```python
+# ✅ 명확한 이름
+if "user_messages" not in st.session_state:
+    st.session_state.user_messages = []
+
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = "gpt-4"
+
+# ❌ 모호한 이름
+if "data" not in st.session_state:
+    st.session_state.data = []
+
+if "val" not in st.session_state:
+    st.session_state.val = "something"
+```
+
+### 대용량 데이터 주의
+
+```python
+# ⚠️ 주의: 큰 데이터는 메모리 낭비
+if "large_data" not in st.session_state:
+    st.session_state.large_data = load_huge_dataset()  # 피하기
+
+# ✅ 권장: @st.cache_data 사용
+@st.cache_data
+def load_huge_dataset():
+    return pd.read_csv("huge_file.csv")
+
+data = load_huge_dataset()  # session_state 없이 캐싱
+```
+
+### 상태 초기화 위치
+
+```python
+# ✅ 권장: 파일 상단에 모아두기
+import streamlit as st
+
+# === 상태 초기화 섹션 ===
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "config" not in st.session_state:
+    st.session_state.config = {}
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+# === 여기까지 ===
+
+# 이후 앱 로직
+st.title("앱")
+...
+```
+
+### 디버깅
+
+```python
+import streamlit as st
+
+# 디버그 모드: 현재 상태 확인
+if st.sidebar.checkbox("디버그 모드"):
+    st.sidebar.subheader("Session State")
+    st.sidebar.json(dict(st.session_state))
+```
+
+## Streamlit 동작 요약
+
+### 실행 모델
+
+```
+사용자 접속
+    ↓
+[1차 실행]
+- 모든 변수 초기화
+- session_state 초기화 (if not in)
+- 위젯 렌더링
+    ↓
+사용자 상호작용 (버튼 클릭 등)
+    ↓
+[2차 실행]
+- 모든 변수 다시 초기화 (일반 변수는 리셋)
+- session_state는 유지 (재초기화 안 됨)
+- 위젯 다시 렌더링
+    ↓
+반복...
+```
+
+### 데이터 생명주기
+
+| 저장 방식 | 생명주기 | 용도 |
+|-----------|----------|------|
+| 일반 변수 | 단일 실행 | 임시 계산 |
+| session_state | 브라우저 세션 | 상태 유지 |
+| @st.cache_data | 앱 재시작 전까지 | 데이터 캐싱 |
+| 파일/DB | 영구 | 영속 저장 |
+
+## 결론
+
+**Streamlit의 핵심:**
+1. 전체 스크립트 재실행 방식
+2. session_state로 상태 유지
+3. 간단한 API로 복잡한 웹앱 구현
+
+**session_state 활용:**
+- 채팅 이력, 사용자 입력 저장
+- 설정 및 환경 변수 유지
+- 페이지 간 데이터 공유
+- 비용 절감 (API 호출 최소화)
+
+**기억할 패턴:**
+```python
+if "key" not in st.session_state:
+    st.session_state.key = initial_value
+```
+
+* 이 한 줄이 Streamlit 앱의 상태 관리의 핵심이다.
+    * 처음이면 초기화: `st.session_state.key_name = initial_value`
+
+
+## 실제 동작 흐름
+
+### 채팅 앱
+
+```python
+import streamlit as st
+
+st.title("채팅")
+
+# 메시지 리스트 초기화 (처음만)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# 이전 메시지 표시
+for msg in st.session_state.messages:
+    st.write(f"사용자: {msg}")
+
+# 새 메시지 입력
+user_input = st.text_input("메시지 입력")
+if st.button("전송"):
+    st.session_state.messages.append(user_input)
+    st.rerun()  # 화면 새로고침
+```
+
+### 설정 유지
+
+```python
+import streamlit as st
+
+# 모델 선택 초기화
+if 'selected_model' not in st.session_state:
+    st.session_state.selected_model = "gpt-4o-mini"
+
+# 사이드바에서 선택
+model = st.sidebar.selectbox(
+    "모델 선택",
+    ["gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"],
+    index=0 if st.session_state.selected_model == "gpt-4o-mini" else 1
+)
+
+# 선택값 저장
+st.session_state.selected_model = model
+
+# 메인 페이지에서 사용
+st.write(f"현재 모델: {st.session_state.selected_model}")
+```
+
+### 데이터 캐싱
+
+```python
+import streamlit as st
+from datetime import datetime
+
+# 마지막 인덱싱 시간 초기화
+if 'last_indexed' not in st.session_state:
+    st.session_state.last_indexed = datetime.now()
+
+# 리트리버 캐싱
+if "retriever" not in st.session_state:
+    st.session_state.retriever = create_retriever()  # 한 번만 생성
+
+# 이후 사용
+docs = st.session_state.retriever.get_relevant_documents(query)
+```
+
+## 요약
+
+| 개념 | 설명 |
+|------|------|
+| **Streamlit 재실행** | 상호작용마다 스크립트 전체 재실행 |
+| **일반 변수** | 매번 초기화됨 (값 유지 안 됨) |
+| **session_state** | 재실행 간 값 유지 |
+| **초기화 패턴** | `if 'key' not in st.session_state: ...` |
+| **용도** | 상태 유지, 설정 저장, 캐싱 |
+
+즉, `session_state`는 브라우저의 **localStorage**처럼, 페이지를 새로고침해도 데이터가 유지되는 저장소이다.
