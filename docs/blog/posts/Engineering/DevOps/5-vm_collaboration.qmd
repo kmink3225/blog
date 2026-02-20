@@ -1,0 +1,209 @@
+---
+title: "Azure VM에서 팀 협업하기"
+subtitle: "단일 VM에서 여러 개발자가 충돌 없이 협업하는 구조 설계"
+description: |
+  하나의 Azure VM에서 여러 개발자가 협업할 때 발생하는 혼란을 정리한다.
+  Git 브랜치와 파일시스템의 관계, Remote SSH 개발 흐름,
+  단일 VM에 복수의 클론을 두는 현실적인 구조와 포트 분리 운영까지 다룬다.
+categories:
+  - Engineering
+  - DevOps
+  - Git
+  - Azure
+author: Kwangmin Kim
+date: 12/20/2025
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: false
+---
+
+## 개요
+
+* 원래는 개발용 VM과 운영용 VM을 분리하는 것이 이상적이지만, PoC과제에서 비용 문제로 단일 VM에서 개발과 운영을 병행해야 하는 상황이 있을 수 있다.   
+* 이 글은 그런 상황에서 여러 개발자가 충돌 없이 협업할 수 있는 구조를 설계하는 방법을 다룬다.  
+* PoC과제에서 Azure VM 하나에서 여러 개발자가 코드를 수정하고 Streamlit/REACT으로 바로 결과를 확인하는 "핑퐁 개발" 환경을 잡아야 한다.  
+* 이 과정에서 Git 브랜치와 파일시스템의 관계, Remote SSH 개발 흐름, 단일 VM에 복수의 클론을 두는 현실적인 구조와 포트 분리 운영까지 다룬다.  
+
+## 단일 VM 및 단일 Repo에서 여러 명이 협업할 수 있는가?
+
+* 결론부터 말하면 **가능하다**. 브랜치를 따로 만들고 서브 디렉토리를 분리해 작업하면 하나의 repo에서 충분히 협업할 수 있다.  
+* 이것이 모노레포(Monorepo) 패턴의 기본이다.
+
+```
+agent_qna_chatbot/       ← 담당자 A
+agent_data_standardizer/ ← 담당자 B
+agent_code_analyzer/     ← 담당자 C
+```
+
+* 각자 맡은 서브 디렉토리 안에서만 작업하면 merge conflict가 거의 발생하지 않는다.
+* 충돌이 발생하는 상황은 주로 다음 세 가지다.  
+  - 공용 파일(`shared/`, `config/`, `pyproject.toml`)을 여러 사람이 동시에 수정할 때  
+  - 브랜치 전략 없이 모두 `main`에 직접 push할 때  
+  - 코드 리뷰 프로세스(PR)가 없을 때  
+
+## Git 브랜치와 파일시스템의 관계
+
+* 단일 VM 및 단일 Repo에서 "브랜치를 스왑하는 순간 상대방 작업이 사라진다"에 대한 우려
+* 이것은 **Git 자체가 아니라 환경 설정 문제**다.
+* Git은 브랜치를 바꿀 때 커밋된 내용을 절대 지우지 않는다.  
+* 각 브랜치의 커밋 히스토리는 완전히 독립적으로 보존된다.  
+
+```bash
+# 개발자 A: feature/A 브랜치에서 작업 후 커밋
+git commit -m "A의 작업"
+
+# 개발자 B가 같은 PC에서 브랜치를 스왑해도
+git checkout feature/B   # A의 커밋은 feature/A에 그대로 존재
+```
+
+## 문제가 생기는 건 딱 한 가지 상황
+
+> **두 명이 서버의 같은 파일시스템 경로를 공유**할 때다.
+
+```bash
+# 두 명이 동시에 이 경로에서 SSH 접속 중
+/home/azureuser/projects/agent/
+
+# 한 명이 브랜치를 바꾸면 폴더 자체가 바뀜 → 상대 작업 영향
+git checkout feature/B
+```
+
+* 브랜치는 논리적 개념이고, 파일시스템 폴더는 물리적 실체 하나뿐이다.  
+* 따라서 **같은 경로를 공유하면 한 명의 `git checkout`이 다른 사람의 작업에 영향을 준다**.  
+* 구체적으로 말하면, `branch-a`에서 새로 만든 폴더·파일들을 커밋한 상태에서 `git checkout branch-b`를 실행하는 순간 그 파일들이 현재 working directory 에서 사라진다.  
+* 이유는 Git이 각 브랜치를 **독립된 커밋 스냅샷**으로 관리하기 때문이다.  
+  - `branch-a`의 커밋 히스토리에는 해당 파일들이 존재하고,  
+  - `branch-b`의 커밋 히스토리에는 그 파일들이 없다.    
+  - `checkout`은 워킹 디렉토리를 대상 브랜치의 스냅샷에 맞게 교체하므로,  
+  - `branch-a`에만 있던 파일들은 물리적으로 삭제된다.    
+* 즉, 파일이 **사라진 게 아니라** `branch-a`로 다시 체크아웃하면 복원된다.  
+  - Git 내부 객체 저장소에는 그대로 남아 있기 때문이다.    
+  - 하지만 **같은 경로를 공유하는 다른 개발자 입장에서는** 자신이 편집하던 파일이 갑자기 없어진 것처럼 보이는 문제가 발생한다.    
+
+## 정석 개발 흐름: 로컬 vs VM
+
+| 구분 | 정석 방식 | 문제 방식 |
+|------|----------|-----------|
+| 개발 환경 | 로컬 PC | VM 직접 |
+| VM 역할 | 운영/배포 서버 | 개발 + 운영 혼용 |
+| 코드 리뷰 | PR/MR 가능 | 어려움 |
+| 실수 위험 | 낮음 | 높음 (운영 서버 직접 수정) |
+| 업계 표준 | ✅ | ❌ |
+
+정석 흐름은 다음과 같다.
+
+```
+로컬 PC (개발) → 로컬 Repo 에서 git push → GitHub/GitLab → VM (운영) Repo에서 git pull 
+```
+
+VM은 `git pull`로 검증된 코드만 받는 **읽기 전용 배포 대상**으로 두는 것이 원칙이다.
+
+## RAG처럼 클라우드 리소스 의존성이 강한 경우
+
+* RAG는 코드를 수정하고 결과를 즉시 확인하는 핑퐁 개발 방식이 필요하다.
+* 로컬 PC만으로는 Azure OpenAI, Azure AI Search 같은 클라우드 리소스에 접근하기 어렵다. 
+* 실제 방법은 세 가지다.
+
+**방법 1 — VS Code Remote SSH**
+
+```
+로컬 PC의 VS Code → SSH → Azure VM
+```
+
+* 코드 편집은 로컬 Repo에서 VS Code로 작업하고 git push, 실행은 VM repo에서 git pull을 수행한 후 RAG을 구동한다.  
+* VS Code가 SSH와 포트 포워딩을 자동으로 처리해서 사실상 로컬에서 개발하는 것과 동일한 경험이다. 
+* 현재 환경에 가장 적합하다.  
+
+**방법 2 — API Key만 로컬로 가져오기**
+
+* 원칙적으로 Azure OpenAI, AI Search 등은 API Key만 있으면 어디서든 호출 가능하다.  
+* 단, **Private Endpoint로 구성된 경우에는 VNet 외부에서 접근이 차단**된다.  
+  API Key가 있어도 네트워크 레벨에서 거부되므로 회사 VPN이나 VNet 연결 없이는 사용 불가능하다.  
+* Public Endpoint로 열려 있는 인스턴스(예: Sweden Central)만 로컬 PC에서 직접 호출할 수 있다.  
+* POC 환경처럼 KRC/EUS가 Private Endpoint로 묶여 있다면 이 방법은 사실상 사용 불가능하다.  
+
+**방법 3 — Dev Container / Codespaces**
+
+VM 환경 자체를 컨테이너로 정의해 로컬에서 동일 환경을 재현한다.
+
+현실적으로는 **방법 1(Remote SSH)**이 가장 빠르다.
+
+## VS Code Remote SSH의 본질
+
+Remote SSH는 결국 **VM 코드를 직접 작업**하는 것이다. 인터페이스만 VS Code일 뿐
+본질은 VM에서의 직접 편집이다.
+
+그래서 현실적인 타협점은 이렇다.
+
+```
+[VS Code 창 1 — 로컬]          [VS Code 창 2 — Remote SSH]
+코드 수정                         git pull
+git commit & push        →        streamlit run app.py
+                                  (결과 확인)
+```
+
+VM에서 직접 작업이 나쁜 게 아니라, **운영 경로를 건드리느냐 아니냐**가 핵심이다.
+
+## 현실적인 VM 구조: 3개의 Clone
+
+비용 문제로 개발용 VM과 운영용 VM을 분리하기 어려울 때는
+**원격 repo 1개 + VM에 clone 3개** 구조가 현실적이다.
+
+```
+[GitHub — 원격 repo 1개]
+          ↓
+[Azure VM — clone 3개]
+/home/azureuser/projects/agent/        ← 운영용 (git pull만)
+/home/azureuser/projects/agent-userA/  ← 개발자 A 작업용
+/home/azureuser/projects/agent-userB/  ← 개발자 B 작업용
+```
+
+각자 clone에서 브랜치를 스왑해도 다른 경로에는 전혀 영향이 없다.
+작업이 완료되면 push → PR → 운영 경로에서 `git pull`하는 흐름이다.
+
+주의할 점은 가상환경을 각 clone마다 따로 생성해야 한다는 것이다.
+공유하면 패키지 충돌이 발생할 수 있다.
+
+```bash
+cd /home/azureuser/projects/agent-userA
+python -m venv .venv  # 각자 독립 환경
+```
+
+## 포트 분리로 Streamlit 3개 동시 구동
+
+3개의 clone에서 Streamlit을 동시에 구동하려면 포트를 다르게 지정한다.
+Streamlit의 기본 포트는 `8501`이다.
+
+```bash
+# 운영용
+cd /home/azureuser/projects/agent
+streamlit run src/agent/app.py --server.port 8501
+
+# 개발자 A
+cd /home/azureuser/projects/agent-userA
+streamlit run src/agent/app.py --server.port 8502
+
+# 개발자 B
+cd /home/azureuser/projects/agent-userB
+streamlit run src/agent/app.py --server.port 8503
+```
+
+Azure VM의 네트워크 보안 그룹(NSG)에서 해당 포트들이 인바운드 허용되어
+있어야 외부에서 접근할 수 있다.
+
+개발·실험 단계에서는 이 구조가 충분히 현실적이다.
+트래픽이 많아지거나 안정성이 중요해지는 프로덕션 시점에 개발/운영 VM 분리를
+고려하면 된다.
+
+## 정리
+
+| 핵심 원칙 | 내용 |
+|----------|------|
+| VM 역할 분리 | 운영 경로는 `git pull`만, 개발은 별도 경로 |
+| 브랜치 충돌 방지 | 같은 경로 공유 금지, 각자 독립 clone |
+| 개발 흐름 | 로컬 편집 → push → VM pull (or Remote SSH) |
+| 포트 분리 | Streamlit 인스턴스마다 다른 포트 지정 |
+| 가상환경 | clone마다 별도 `.venv` 생성 |
