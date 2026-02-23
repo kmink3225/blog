@@ -361,7 +361,31 @@ repo: agent-commons/      ← Phase 2에서 추출한 공통 계약/모듈
 > "Korea Central, Sweden Central, East US에 OpenAI 인스턴스를 3개 배포했습니다. LLM의 Deployment Type이 특정 Region에 제한을 받는 것이 파악되었고, 쿼터 초과 시 자동 failover 하려면 Provider 또는 LangChain 레벨에서 직접 구현해야 하나요, 아니면 Azure API Management나 다른 managed 방법이 있나요?"
 
 **Q2. Document Intelligence vs LangChain PDFPlumber**
-> "DI(Document Intelligence)가 비정형 이미지나 복잡한 도면에서는 성능이 떨어지거나 이용성 면에서 적절치 않다고 판단했습니다. DI가 어떤 문서 유형(1개의 노드에 수십개의 복잡한 엣지가 연결된 지식그래프, 수많은 그림이 포함된 문서처럼 사용되는 엑셀파일, 계약서, 표 중심 문서, 반정형 보고서 등)에서 실질적인 이점이 있나요? 그리고 DI를 선택적으로 적용할 때 문서 타입을 사전 분류하는 전략을 어떻게 설계하면 좋을까요?"
+> "DI(Document Intelligence)가 비정형 이미지나 복잡한 도면에서는 성능이 떨어지거나 이용성 면에서 적절치 않다고 판단했습니다. DI가 어떤 문서 유형(1개의 노드에 수십개의 복잡한 엣지가 연결된 지식그래프, 수많은 그림이 포함된 문서처럼 사용되는 엑셀파일, 계약서, 표 중심 문서, 반정형 보고서 등)에서 실질적인 이점이 있나요? 그리고 DI를 선택적으로 적용할 때 문서 타입을 사전 분류하는 전략(문서가 들어왔을 때 **DI로 보낼지 말지를 먼저 판단**하는 로직)을 어떻게 설계하면 좋을까요?"
+
+예를 들면:
+
+```
+문서 입력
+    │
+    ▼
+[사전 분류기]
+    │
+    ├── "이건 표 중심 문서다"      → DI로 처리
+    ├── "이건 텍스트 중심 PDF다"   → PDFPlumber로 처리
+    ├── "이건 복잡한 도면이다"      → 비전 모델로 처리
+    └── "이건 Markdown이다"        → 직접 로드
+```
+
+즉 **모든 문서를 DI에 보내는 게 아니라**, 먼저 문서 유형을 판별해서 적합한 파서를 선택하자는 의도
+
+분류 기준은:
+- 파일 확장자 (`.pdf`, `.xlsx`, `.docx`)
+- 페이지당 이미지 비율
+- 텍스트 추출 가능 여부 (텍스트 레이어 존재 여부)
+- 사용자가 업로드 시 직접 유형 지정
+
+**"DI를 무조건 쓰기엔 비용과 성능 이슈가 있으니, Azure 엔지니어들이 실제로 어떤 기준으로 DI 적용 여부를 결정하는지 베스트 프랙티스를 듣고 싶음"**
 
 **Q3. Azure AI Search Hybrid Search 설정**
 > "`gpt-4.1-mini`에서 `search_type=similarity`를 설정할 경우 RAG의 성능이 저조한 것을 관찰했습니다. `search_type=hybrid`로 설정하여 성능이 향상되는 것을 확인했는데, 어떤 상황에서 Semantic Ranker(월 $250 추가 과금)를 함께 써야 효과가 극대화되나요? Semantic Ranker는 별도 과금인데 POC 단계에서 활성화할 가치가 있나요?"
@@ -371,11 +395,53 @@ repo: agent-commons/      ← Phase 2에서 추출한 공통 계약/모듈
 **Q4. VM vs Container Apps for Streamlit/REACT**
 > "현재 D8as v5 VM에서 Streamlit을 직접 실행 중입니다. POC 단계에서 Azure Container Apps로 전환하면 비용이나 관리 측면에서 이점이 있나요? 추후 서비스 배포시 (내부 조직 약 100명 규모), AKS로의 마이그레이션 경로도 고려해야 하나요?"
 
+```
+Container Apps: Azure가 내부적으로 K8s 클러스터를 관리해주는 서비스로, 컨테이너 기반 배포의 편의성과 확장성을 제공하지만, VM에 비해 초기 설정과 디버깅이 복잡할 수 있다. AKS는 완전한 K8s 환경을 제공하지만, 운영과 관리가 더 복잡하다.
+
+**결론: 지금 전환할 필요 없다**
+
+[현재 PoC]          [Phase 2 이후]
+VM (자유도 우선) →  Container Apps (운영 편의) → AKS (규모 확장 시)
+
+Container Apps는 코드가 안정화되고 Docker로 패키징하는 시점, 즉 **Phase 2 이후**에 고려하는 것이 적절하다. AKS는 Agent가 늘어나고 트래픽 관리가 복잡해지는 Phase 3 시점에 검토하면 된다.
+
+AKS 전환시기: Container Apps로 감당이 안 되는 상황이 생길 때다:
+
+1. GPU가 필요해질 때 (Azure Container Apps가 GPU를 지원하지 않기 때문)
+   → 로컬 모델 추론 (Llama, Mistral 등) 도입 시
+2. 네트워킹을 세밀하게 제어해야 할 때
+   → Agent 간 내부 통신 정책, Istio Service Mesh 등
+3. Agent 수가 많아지고 리소스 격리가 복잡해질 때
+   → Namespace 분리, Resource Quota, Node Pool 분리
+4. 비용 최적화가 중요해질 때
+   → Spot Node Pool, 노드 자동 확장 정밀 제어
+
+Phase 1 (지금): VM — 자유롭게 개발, 디버깅
+Phase 2 (코드 안정화 후) - Container Apps — Docker 이미지로 배포
+Phase 3 (Agent 플랫폼 확장 시) - AKS 검토 — GPU 모델 도입 or 트래픽/격리 요구사항 복잡해질 때
+```
+
 **Q5. VNet 구성 최적화**
 > "현재 네트워킹 지식이 부족해서 azure resource에서 자동 추천되는 옵션을 선택해서 vnet01~vnet01-4까지 4개 리전에 VNet이 만들어졌습니다. POC 목적에서 이 구성이 필요한지 또는 최적화할 수 있는지 검토해주실 수 있나요? 불필요한 비용이 발생하고 있지는 않은지 이해하고 싶습니다."
 
+```
+검토 포인트: 
+Private Endpoint DNS 조회 오버헤드 → 인프라 설정 문제이므로 워크샵에서 확인 가능
+VNet 피어링 홉 수 → 불필요한 VNet이 있으면 경로가 늘어날 수 있음 (Q5와 직접 연결)
+```
+
 **Q6. Private Endpoint + Streamlit 접속**
 > "VM은 Public IP로 Streamlit에 접속하고, Azure OpenAI는 Private Endpoint로 통신합니다. 현재 Streamlit에 인증이 없는데, Azure AD 기반 접근 제어를 가볍게 붙이는 방법이 있나요? (Azure Static Web App Auth, App Gateway + OIDC 등)"
+
+```
+개발자         → VM Public IP:8501 → Streamlit (인증 없음)
+외부 누구든지  → VM Public IP:8501 → Streamlit (인증 없음) ← 문제
+PoC 결과를 팀원이나 stakeholder에게 보여줄 때 "어떻게 접근하게 할 것인가" 와 "아무나 접근하지 못하게 막을 것인가" 
+사내 NSG IP white list 를 작성해서 VM public IP를 등록 시키면 충분하지 않을까?
+
+Azure AD까지 갈 것 없이, NSG(네트워크 보안 그룹)에서 회사 IP만 허용하는 것으로 충분하다고 생각
+NSG 인바운드 규칙: 포트 8501 (Streamlit) → 회사 공인 IP만 허용
+```
 
 **Q7. LLM Latency 질문**
 > "현재 PoC단계이기 때문에 Korea Central Region을 사용하고 있다. 그런데, 개인적으로 다른 용도로 OpenAI에서 api key를 받아 직접 LLM을 연결할떄는 latency가 azure openai에 비해 적은 것을 체감했습니다. 실제로 그런 이유가 있나 아니면 저의 개인적인 느낌일까요?" latency가 긴 이유가 있다면 다음의 원인 때문일까요? 
@@ -388,15 +454,91 @@ repo: agent-commons/      ← Phase 2에서 추출한 공통 계약/모듈
 
 ### 향후 플랫폼화 대비 질문
 
-**Q7. Multi-repo Monolithic Agent 아키텍처에서의 Azure 전략**
+**Q7. Multi-repo Monolithic Agent 아키텍처에서의 Azure 전략 (리소스 격리 설계 전반"에 대한 질문)**
 > "추후 3개의 Main Agent들을 독립 repository로 Agent를 분리하고, 각 Repository에 sub-agents를 다수 만들 계획입니다. 각 Agent가 동일한 Azure AI Search와 Azure OpenAI를 공유할 예정인데 리소스 격리(인덱스 네이밍 규칙, API Key 분리 등)를 어떻게 설계하는 게 베스트 프랙티스인가요?"
+
+```
+"현재 1개의 Azure AI Search 인스턴스에서 3개 Agent가 인덱스를 공유하려 합니다.
+인덱스를 Agent별로 분리(agent-qna-idx, agent-std-idx)하는 게 나은지,
+단일 인덱스에 필드로 구분하는 게 나은지 — PoC 단계 기준 권장 방향이 뭔가요?"
+
+API Key per Agent 분리 방법 & APIM 쿼터 할당 전략 관련 질문은 나중에
+```
 
 **Q8. Azure AI Foundry / AI Studio 활용**
 > "실험 메트릭을 자체 코드기반 로그 데이터로 수집하려 하는데, Azure AI Foundry의 Evaluation 기능이 RAG 성능 평가에 도움이 될 수 있나요? Prompt Flow와의 통합도 고려해야 할까요?"
 
+```
+Azure Prompt Flow는 LLM 기반 애플리케이션의 프롬프트 → 검색 → 후처리 흐름을 시각적으로 설계·테스트·배포하는 MLOps 도구
+
+입력(Query)
+    │
+    ▼
+[Flow 설계]              
+    ├── 노드 1: 임베딩 생성 (Azure OpenAI)
+    ├── 노드 2: 벡터 검색 (Azure AI Search)
+    ├── 노드 3: 프롬프트 조합
+    └── 노드 4: LLM 호출 → 출력
+    │
+[Evaluation]             ← RAG 품질 평가 (groundedness, relevance, coherence 점수)
+    │                       자체 eval 데이터셋 업로드 → 자동 채점
+[Variants / A/B Test]    ← 프롬프트 버전 비교 실험 (동일 입력, 다른 시스템 프롬프트)
+    │
+[Tracing / Monitoring]   ← 각 노드별 latency, 토큰 사용량, 실패율 추적
+    │
+[Deployment]             ← Azure ML Online Endpoint로 Flow 자체를 API화
+
+* multi-agent orchestration 기능 없음
+* node 내 python 코드 작업이 허용되어 있나?
+```
+
 **Q9. 비용 최적화**
 > "GPT-4.1, GPT-5-mini 등 최신 모델 deployment가 설정에 있는데, POC에서 비용 대비 성능이 가장 좋은 모델 선택 기준을 조언해주실 수 있나요? PTU(Provisioned Throughput) 전환 시점은 언제가 적절한가요?"
 
+| 타입 | 설명 | 속도 | 비용 |
+|------|------|------|------|
+| **Standard** | 리전 내 공유 인프라. TPM 쿼터 상한 있음 | 보통 (쿼터 소진 시 429 에러) | 토큰당 과금 |
+| **Global Standard** | MS가 전세계 여유 용량으로 자동 라우팅 | 빠름 (여유 용량 우선 사용) | Standard와 동일하거나 저렴 |
+| **Provisioned (PTU)** | 전용 용량 예약. 시간당 고정 과금 | 가장 빠름 + 레이턴시 예측 가능 | 고정비 (~월 수천\$), 사용량 무관 |
+| **Global Provisioned** | PTU를 전세계 분산 운영 | PTU와 동일 | PTU보다 높음 |
+| **Data Zone Standard** | EU 또는 US 데이터존 내에서만 라우팅 | Standard와 유사 | Standard와 유사 |
+
+현재 KRC-001 (Private Endpoint) → Standard 타입만 가능
+  └── Private Endpoint는 리전 고정이므로 Global Standard 사용 불가
+
+Sweden (Public) → Global Standard 사용 가능
+  └── GPT-4.1 등 최신 모델이 KRC Standard에 없을 때 Sweden Global Standard로 해결
+
+```
+Standard 월 비용 > PTU 고정비  → PTU 전환 검토
+                        ↑
+             대략 월 $3,000 이상 토큰 비용 발생 시점
+```
+
+PoC 단계에서는 Standard로 충분하고, 내부 100명 규모 서비스로 전환 시 토큰 사용량 측정 후 결정하면 된다.
+
+```
+TPM (Tokens Per Minute): 1분 동안 처리할 수 있는 토큰 수 한도다.
+토큰 = 텍스트를 쪼갠 단위
+"안녕하세요" ≈ 3~5 토큰
+GPT-4o 1회 호출 ≈ 입력 500 + 출력 200 = 700 토큰 소모
+TPM이 10,000이면 → 1분에 약 700토큰짜리 요청을 14번밖에 못 한다.
+```
+
+```
+쿼터 (Quota): Azure가 리전별로 각 계정에 할당한 **TPM 상한선**
+
+Azure OpenAI Korea Central
+  └── 내 계정 할당 쿼터: GPT-4o → 30,000 TPM, GPT-4o-mini → 100,000 TPM
+이 한도를 넘으면 `HTTP 429 Too Many Requests` 에러가 발생
+리전마다 쿼터가 다른 이유: Azure가 리전별로 GPU 물리 서버 수가 다름
+Korea Central은 서버가 적어서 기본 쿼터가 작고, East US는 많아서 크다.
+- Korea Central: GPT-4o 쿼터 낮음 → 빠르게 한도 도달
+- Sweden Central: 쿼터 높음 + Global Standard 가능 → fallback으로 적합
+- East US: 쿼터 높음 + 최신 모델 먼저 배포됨
+```
+
+다른 지역이 TPM 쿼터가 높고 Korea Central이 네트워크 거리상 유리하지만, 실제 체감 속도는 East US나 Sweden이 더 빠를 수 있다. 워크샵에서 실측 latency 비교 데이터를 요청하는 게 가장 확실하다.
 
 ### 세부 질문 5가지
 
@@ -415,6 +557,8 @@ repo: agent-commons/      ← Phase 2에서 추출한 공통 계약/모듈
 **Q5. Azure OpenAI 쿼터 관리 (멀티 Agent 환경)**
 > "Agent가 늘어나면 Azure OpenAI 쿼터 경쟁이 생깁니다. 현재 3개 리전에 OpenAI 인스턴스가 있는데, Agent별로 쿼터를 할당하거나 우선순위를 두는 방법이 있나요? APIM의 Load Balancing 정책으로 다중 OpenAI 엔드포인트를 관리하는 패턴을 써야 하나요?"
 
+**Q6. Azure Managed RAG와 직접 구현 RAG의 공존 전략**
+> "Azure AI Search의 Integrated Vectorization(Managed RAG)과 자체 구현 RAG를 동일한 AI Search 인덱스에서 혼용할 수 있나요? 또는 Agent 플랫폼에서 단순 Agent는 Managed, 복잡한 Agent는 직접 구현으로 분리 운영하는 게 권장되나요?"
 
 # 정리해야할 사항
 
