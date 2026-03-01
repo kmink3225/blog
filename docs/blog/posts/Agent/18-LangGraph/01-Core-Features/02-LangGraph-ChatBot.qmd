@@ -1,19 +1,134 @@
 ---
-title: "02 LangGraph ChatBot"
+title: "LangGraph 챗봇 구축"
+subtitle: "StateGraph로 구현하는 모듈형 챗봇"
+description: |
+    LangGraph를 사용해 챗봇을 설계하고 구현하는 방법을 설명한다. State/TypedDict와
+    Pydantic(BaseModel)의 선택 기준, 노드와 엣지 설계, 상태 기반 전이(state machine)
+    모델링, `add_messages` 리듀서를 통한 메시지 누적 패턴, 그래프 컴파일 및 실행 예시를
+    포함한다. 초보자도 따라할 수 있는 단계별 예제로 실무 적용까지 안내한다.
+categories:
+    - Agent
+    - LangGraph
+    - Chatbot
+    - AI
+    - Python
+author: Kwangmin Kim
+date: 07/15/2025
 format:
-  html:
-    code-fold: true
-    toc: true
-    number-sections: true
+    html:
+        code-fold: true
+        toc: true
+        number-sections: true
 ---
 
 # LangGraph 챗봇 구축
 
-먼저 `LangGraph`를 사용하여 간단한 챗봇을 만들어 보겠습니다. 이 챗봇은 사용자 메시지에 직접 응답할 것입니다. 비록 간단하지만, `LangGraph`로 구축하는 핵심 개념을 설명할 것입니다. 이 섹션이 끝나면 기본적인 챗봇을 구축하게 될 것입니다.
+* 간단한 chatbot 구현을 통해 LangGraph의 기본 개념을 이해한다. 
 
-`StateGraph`를 생성하는 것으로 시작하십시오. `StateGraph` 객체는 챗봇의 구조를 "상태 기계(State Machine)"로 정의합니다. 
+## State 클래스 정의
 
-`nodes`를 추가하여 챗봇이 호출할 수 있는 `llm`과 함수들을 나타내고, `edges`를 추가하여 봇이 이러한 함수들 간에 어떻게 전환해야 하는지를 지정합니다.
+* state graph 클래스 생성: **GraphState** 와 **State** 둘다 클래스명으로 사용되지만 **State**가 범용적으로 쓰인다.
+    * `class State(TypedDict)` vs `class GraphState(TypedDict)`: 이건 그냥 이름 차이만 있고 기능적으로 완전히 동일
+* `Class State` : LangGraph의 각 노드에서 저장 및 조회할 Key값들을 정의하는 역할을 한다.
+* state 클래스 정의 방식: `class State(TypedDict)` vs `class State(BaseModel)` 
+    * `TypedDict`는 타입 힌트 수준에서 딕셔너리 구조를 정의하는 방식  
+    * `BaseModel`은 Pydantic의 모델로 유효성 검사와 기본값 설정이 가능한 방식   
+    * 간단한 데이터 구조에는 `TypedDict`가 가볍고 편리하지만, 복잡한 유효성 검사나 기본값 설정이 필요한 경우 `BaseModel`이 더 적합  
+
+**TypedDict 방식**   
+* State 스키마를 받아서 노드/엣지를 등록하고 실행하는 프레임워크.
+* StateGraph는 거의 모든 LangGraph 프로젝트에 필수로 들어감
+* 단순한 유효성 검사 TypedDict가 가볍게 쓰기 좋다
+
+```python
+from langgraph.graph import StateGraph
+from typing import TypedDict
+
+# 1. State 정의
+class State(TypedDict):
+    query: str # query: Annotated[str, add_messages] 로 해도 된다.
+    result: str
+
+# 2. 노드 함수
+def search_node(state: State) -> State:
+    return {"result": f"검색 결과: {state['query']}"}
+
+def answer_node(state: State) -> State:
+    return {"result": f"최종 답변: {state['result']}"}
+
+# 3. 그래프 구성
+graph = StateGraph(State)
+graph.add_node("search", search_node)
+graph.add_node("answer", answer_node)
+graph.add_edge("search", "answer")
+graph.set_entry_point("search")
+graph.set_finish_point("answer")
+
+app = graph.compile()
+app.invoke({"query": "PCR 프로토콜이란?", "result": ""})
+```
+
+**BaseModel 방식**  
+* 보통 TypedDict로 정의: 데이터 구조 정의. "어떤 데이터를 담을 건지" 스키마 역할.  
+* State 정의 방식은 TypedDict 말고 Pydantic BaseModel로 대체하기도 한다.   
+* 복잡한 유효성 검사가 필요하면 Pydantic이 더 낫다.  
+* 간단한 데이터 구조 정의에는 TypedDict이 가볍고 편리하다.
+
+```python
+from langgraph.graph import StateGraph
+from pydantic import BaseModel
+
+# 1. State 정의 (유효성 검사 포함)
+class State(BaseModel):
+    query: str
+    result: str = ""
+    retry_count: int = 0
+
+# 2. 노드 함수
+def search_node(state: State) -> dict:
+    if state.retry_count > 2:
+        return {"result": "재시도 초과"}
+    return {"result": f"검색 결과: {state.query}", "retry_count": state.retry_count + 1}
+
+# 3. 그래프 구성 (동일)
+graph = StateGraph(State)
+graph.add_node("search", search_node)
+graph.set_entry_point("search")
+graph.set_finish_point("search")
+
+app = graph.compile()
+app.invoke(State(query="PCR 프로토콜이란?"))
+```
+
+* Pydantic은 `retry_count: int = 0` 처럼 타입 강제 + 기본값 설정이 되고, 잘못된 타입 넣으면 에러를 바로 잡는다. 
+* TypedDict는 그냥 힌트 수준이라 런타임에서 체크 안 함.
+
+* `State` 클래스는 챗봇이 다루는 데이터 구조를 정의하는 역할을 한다.
+* `StateGraph` 객체는 챗봇의 구조를 "상태 기계(State Machine)"로 정의  
+    * 상태 기계(State Machine): 시스템이 가질 수 있는 여러 '상태(state)'와 상태 사이를 옮겨다니게 하는 '전이(transition)' 규칙(일반적으로 이벤트·조건·액션)으로 동작을 정의한 모델이다. 챗봇 문맥에서는 챗봇의 흐름(질문 대기 → 검색 → 답변 생성 → 검증 등)을 명확히 모델링할 때 쓴다.
+* `add_node` 메서드를 사용하여 챗봇의 각 단계(노드)를 정의하는 함수를 등록한다. 
+* `add_edge` 메서드를 사용하여 노드 간의 흐름을 정의한다. 
+* `compile` 메서드를 호출하여 그래프를 실행 가능한 형태로 변환한다. 
+* `invoke` 메서드를 사용하여 그래프를 실행하고, 초기 상태를 전달한다.
+
+## 노드 정의  
+
+* 노드는 챗봇의 각 단계에서 수행할 작업을 정의하는 함수이다.  
+* 각 노드는 `State` 객체를 입력으로 받아서, 업데이트된 `State`를 반환한다.   
+* 노드 함수는 `State` 객체의 특정 필드를 업데이트하는 방식으로 동작한다. 예를 들어:  
+    * `search_node`는 `result` 필드를 업데이트하고,     
+    * `answer_node`는 `result` 필드를 다시 업데이트한다.     
+* `nodes`를 추가하여 챗봇이 호출할 수 있는 `llm`과 함수들을 나타내도록 한다.
+
+## Edge 정의
+ 
+* `edges`는 챗봇이 노드 간에 어떻게 전환해야 하는지를 지정한다. 
+* `add_edge` 메서드를 사용하여 노드 간의 흐름을 정의한다. 예를 들어, 
+    * `graph.add_edge("search", "answer")`는 `search` 노드가 완료된 후 `answer` 노드로 전환하도록 지정한다.  
+* `START`와 `END` 지점을 설정하여 그래프의 시작과 끝을 정의한다.
+* `edges`를 추가하여 봇이 이러한 함수들 간에 어떻게 전환해야 하는지를 지정한다.
+
+## Chatbot 구현
 
 ```python
 # API 키를 환경변수로 관리하기 위한 설정 파일
@@ -32,9 +147,7 @@ from langchain_teddynote import logging
 logging.langsmith("CH17-LangGraph-Modules")
 ```
 
-## Step-by-Step 개념 이해하기!
-
-### STEP 1. 상태(State) 정의
+### 상태(State) 정의
 
 ```python
 from typing import Annotated, TypedDict
@@ -47,11 +160,12 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
 ```
 
-### STEP 2. 노드(Node) 정의
+### 노드(Node) 정의
 
-다음으로 "`chatbot`" 노드를 추가합니다. 
-
-노드는 작업의 단위를 나타내며, 일반적으로 정규 **Python** 함수입니다.
+* `chatbot` 노드를 추가  
+* 노드는 작업의 단위를 나타내며, 일반적으로 정규 **Python** 함수
+* `chatbot` 함수는 현재 `State`를 입력으로 받아 "messages"라는 키 아래에 업데이트된 `messages` 목록을 포함하는 사전(TypedDict) 을 반환한다. 
+* `State`의 `add_messages` 함수는 이미 상태에 있는 메시지에 llm의 응답 메시지를 추가한다.
 
 ```python
 from langchain_openai import ChatOpenAI
@@ -59,14 +173,14 @@ from langchain_openai import ChatOpenAI
 # LLM 정의
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-
-# 챗봇 함수 정의
+# 챗봇 노드 정의: 함수로 복잡한 로직을 구현할 수 있다.
 def chatbot(state: State):
     # 메시지 호출 및 반환
+    # return State(messages=[llm.invoke(state["messages"])]) : 이것도 가능하지만, 굳이 State 객체로 반환할 필요는 없다. 그냥 dict로 반환해도 된다. messages=[llm.invoke(state["messages"])] 여기서 오해하면 안되는 것이 messages에 llm의 답변이 assign 되는 것이 아니라, llm의 답변이 기존 messages에 추가되는 것이다. 위의 state에서 add_messages 리듀서가 있기 때문에, llm의 답변이 기존 messages에 추가되는 방식으로 동작한다.
     return {"messages": [llm.invoke(state["messages"])]}
 ```
 
-### STEP 3. 그래프(Graph) 정의, 노드 추가
+### 그래프(Graph) 정의, 노드 추가
 
 ```python
 # 그래프 생성
@@ -78,39 +192,41 @@ graph_builder.add_node("chatbot", chatbot)
 
 **참고**
 
-- `chatbot` 노드 함수는 현재 `State`를 입력으로 받아 "messages"라는 키 아래에 업데이트된 `messages` 목록을 포함하는 사전(TypedDict) 을 반환합니다. 
+- `chatbot` 노드 함수는 현재 `State`를 입력으로 받아 "messages"라는 키 아래에 업데이트된 `messages` 목록을 포함하는 사전(TypedDict) 을 반환  
+- `State`의 `add_messages` 함수는 이미 상태에 있는 메시지에 llm의 응답 메시지를 추가  
 
-- `State`의 `add_messages` 함수는 이미 상태에 있는 메시지에 llm의 응답 메시지를 추가합니다. 
+### 그래프 엣지(Edge) 추가
 
-### STEP 4. 그래프 엣지(Edge) 추가
-
-다음으로, `START` 지점을 추가하세요. `START`는 그래프가 실행될 때마다 **작업을 시작할 위치** 입니다.
+* `START` 지점을 추가  
+* `START`는 그래프가 실행될 때마다 **작업을 시작할 위치** 를 명시.
 
 ```python
 # 시작 노드에서 챗봇 노드로의 엣지 추가
 graph_builder.add_edge(START, "chatbot")
 ```
 
-
-마찬가지로, `END` 지점을 설정하십시오. 이는 그래프 흐름의 종료(끝지점) 를 나타냅니다.
+* 마찬가지로, `END` 지점을 설정  
+* 이는 그래프 흐름의 종료(끝지점) 를 나타낸다.  
 
 ```python
 # 그래프에 엣지 추가
 graph_builder.add_edge("chatbot", END)
 ```
 
-### STEP 5. 그래프 컴파일(compile)
+### 그래프 컴파일(compile)
 
-마지막으로, 그래프를 실행할 수 있어야 합니다. 이를 위해 그래프 빌더에서 "`compile()`"을 호출합니다. 이렇게 하면 상태에서 호출할 수 있는 "`CompiledGraph`"가 생성됩니다.
+* 그래프를 실행: 그래프 빌더에서 `compile()`을 호출  
+* 이렇게 하면 상태에서 호출할 수 있는 "`CompiledGraph`"가 생성됨  
 
 ```python
 # 그래프 컴파일
 graph = graph_builder.compile()
 ```
 
-### STEP 6. 그래프 시각화
+### 그래프 시각화
 
-이제 그래프를 시각화해봅시다.
+* API 호출이라 시간이 걸릴 수 있다.  
+* mermaid 형태로 출력된다.  
 
 ```python
 from langchain_teddynote.graphs import visualize_graph
@@ -119,9 +235,14 @@ from langchain_teddynote.graphs import visualize_graph
 visualize_graph(graph)
 ```
 
-### STEP 7. 그래프 실행
+### 그래프 실행
 
-이제 챗봇을 실행해봅시다!
+* `invoke` : 답변을 완성시킨 후 한번에 화면에 출력 (빠르지만 사용자 입장에서는 답변이 생성되는 과정이 보이지 않아 답답할 수 있다.)
+    * LangChain의 `invoke`: 최종 답변만 반환하는 방식으로 동작한다. 
+    * LangGraph의 `invoke`: 노드 단위의 출력을 받을 수 있다.
+* `stream` : 답변이 생성되는 과정 자체를 스트리밍으로 보여준다. (사용자에게 안도감을 주지만 느리다)
+    * LangChain의 `stream`: 답변이 생성되는 과정 자체를 스트리밍으로 보여주는 방식으로 동작한다.
+    * LangGraph의 `stream`: 노드 단위의 출력을 스트리밍으로 받을 수 있다. (토큰 단위 streaming을 의미하는 것이 아님)
 
 ```python
 question = "서울의 유명한 맛집 TOP 10 추천해줘"
@@ -133,9 +254,31 @@ for event in graph.stream({"messages": [("user", question)]}):
         print("Assistant:", value["messages"][-1].content)
 ```
 
-자! 여기까지가 가장 기본적인 챗봇 구축이었습니다. 
+```
+Assistant: 서울에는 다양한 맛집이 많아서 선택하기가 쉽지 않지만, 다음은 서울에서 유명한 맛집 TOP 10을 추천해 드립니다. 각 식당은 고유의 매력을 가지고 있으니 참고해 보세요!
 
-아래는 이전 과정을 정리한 전체 코드입니다.
+1. **광장시장** - 전통 시장으로, 빈대떡, 마약김밥, 떡볶이 등 다양한 길거리 음식을 즐길 수 있습니다.
+
+2. **부암동 카페거리** - 예쁜 카페와 맛있는 디저트가 많은 곳으로, 특히 '카페 드 파리'의 생과일 빙수가 유명합니다.
+
+3. **이태원 앤틱 가구 거리** - 다양한 국제 요리를 즐길 수 있는 곳으로, 특히 '부리또'와 '타이 음식'이 인기입니다.
+
+4. **명동 교자** - 칼국수와 만두가 유명한 맛집으로, 항상 많은 사람들이 줄 서서 기다립니다.
+
+5. **삼청동 수제비** - 전통 수제비와 다양한 한식을 제공하는 곳으로, 아늑한 분위기에서 식사를 즐길 수 있습니다.
+
+6. **신사동 가로수길** - 다양한 트렌디한 카페와 레스토랑이 모여 있는 곳으로, 특히 '브런치' 메뉴가 인기입니다.
+
+7. **종로 통인시장** - 다양한 전통 음식을 맛볼 수 있는 시장으로, 특히 '김밥'과 '떡'이 유명합니다.
+
+8. **홍대** - 다양한 음식점과 카페가 밀집해 있는 지역으로, '버거'와 '퓨전 한식'이 인기입니다.
+
+9. **압구정 로데오 거리** - 고급 레스토랑과 카페가 많은 곳으로, 특히 '스시'와 '프렌치 레스토랑'이 유명합니다.
+
+10. **여의도 한강공원** - 피크닉을 즐기며 다양한 길거리 음식을 맛볼 수 있는 곳으로, 특히 '치킨'과 '맥주'가 인기입니다.
+
+각 지역마다 특색 있는 음식과 분위기를 즐길 수 있으니, 방문해 보시길 추천합니다!
+```
 
 ## 전체 코드
 
