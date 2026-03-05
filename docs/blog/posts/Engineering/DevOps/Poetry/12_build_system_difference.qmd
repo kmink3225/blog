@@ -1,0 +1,251 @@
+---
+title: "Python 빌드 시스템(Poetry, setuptools)과 pyproject.toml 이해"
+subtitle: Poetry, setuptools, PEP 517/518, pyproject.toml, 패키지 구조 일반화
+description: |
+    Poetry와 setuptools 등 다양한 빌드 시스템이 pyproject.toml로 통합 관리되는 원리, PEP 517/518 표준의 역할, wheel의 의미, 패키지 이름/임포트 이름 분리 등 실무 사례와 일반 원칙을 함께 정리한다.
+categories:
+    - Engineering
+    - Python
+    - DevOps
+author: Kwangmin Kim
+date: 2025-03-05
+format:
+    html:
+        page-layout: full
+        code-fold: true
+        toc: true
+        number-sections: true
+draft: false
+---
+
+## 개요
+
+> Python 프로젝트에서 외부 패키지(특히 사내/비공개 저장소)를 의존성으로 추가하거나, 여러 빌드 시스템을 혼용할 때 pyproject.toml과 빌드 표준(PEP 517/518)의 이해가 필수적이다. 현대 Python 패키징은 다양한 빌드 도구가 공존할 수 있도록 설계되어 있다.
+
+* Poetry로 관리되는 프로젝트에서 setuptools 기반의 외부 패키지를 설치하려 할 때, "빌드 백엔드가 다르면 설치가 안 되는 것 아닌가?"라는 의문이 생긴다.
+* AI와 구글링한 결과 **가능하다.** 그 이유는 PEP 517/518 표준이 있기 때문이다.
+
+## PEP 517/518 이란?
+
+> PEP 517/518은 Python 패키지의 빌드 시스템과 설치 과정을 표준화해, setuptools, poetry, flit 등 다양한 빌드 도구가 pyproject.toml 하나로 통합 관리될 수 있게 만든 핵심 규격이다. 이 표준 덕분에 빌드 도구가 달라도 pip/poetry 등 설치 도구가 자동으로 인식해 설치를 진행할 수 있다.
+
+* PEP 517과 PEP 518은 Python 패키지 빌드와 설치 방식을 표준화한 규격  
+    * 어떤 빌드 도구(예: setuptools, poetry, flit 등)와 의존 패키지를 사용할지 명시한다.  
+* PEP 517: pip, poetry 같은 설치 도구와 빌드 백엔드(예: setuptools, poetry-core) 사이의 인터페이스를 표준화했다.
+    * 설치 도구가 pyproject.toml을 읽고, 지정된 빌드 백엔드를 호출해 wheel을 만들고 설치할 수 있게 해준다고 한다 (자세히는 모름).
+* PEP 518: pyproject.toml의 [build-system] 섹션을 표준화했다.  
+    * 빌드 시스템과 의존 패키지를 명시하는 표준 형식을 정의했다.  
+
+즉, pyproject.toml에 빌드 시스템을 명확히 적으면, pip/poetry가 어떤 빌드 도구든 자동으로 인식해서 설치를 진행할 수 있게 해주는 표준이다.
+이 덕분에 Poetry와 setuptools 등 서로 다른 빌드 시스템이 공존할 수 있다.
+
+## 빌드 시스템이란?
+
+> Python 패키지는 소스코드만으로 배포되는 것이 아니라, 빌드 시스템(예: setuptools, poetry-core, flit 등)이 소스코드를 wheel 등 설치 가능한 형태로 변환해준다. pyproject.toml의 [build-system] 섹션에 어떤 빌드 도구를 쓸지 명시한다.
+
+Python 패키지를 설치할 때 내부적으로 일어나는 일은 다음과 같다.
+
+```
+pip install some-package
+  → 소스코드 다운로드
+  → pyproject.toml 읽기
+  → 빌드 백엔드 호출 (wheel 생성)
+  → wheel 설치
+```
+
+* **빌드 백엔드**는 소스코드를 설치 가능한 형태(wheel)로 변환하는 도구  
+* 대표적인 빌드 백엔드:  
+
+| 빌드 백엔드 | 설정 방식 | 특징 |
+|---|---|---|
+| `setuptools` | `pyproject.toml` + `setup.cfg` | 전통적, 가장 범용 |
+| `poetry-core` | `pyproject.toml` | Poetry 전용, 간결한 문법 |
+| `hatchling` | `pyproject.toml` | 신흥 표준 |
+| `flit-core` | `pyproject.toml` | 단순한 순수 Python 패키지용 |
+
+### .toml
+
+> pyproject.toml은 현대 Python 패키지의 표준 설정 파일로, 빌드 도구와 무관하게 모든 패키지에서 사용된다. 빌드 시스템마다 필요한 설정을 [build-system] 섹션에 추가해 활용한다.
+
+* pyproject.toml은 Poetry뿐만 아니라 setuptools, flit, hatch 등 다양한 빌드 시스템에서 공통적으로 사용하는 Python 패키지 표준 설정 파일이다.
+* 빌드 시스템마다 [build-system] 섹션에 자신이 필요한 설정을 추가해서 활용한다. 
+* 즉, pyproject.toml은 “이 프로젝트를 어떤 빌드 도구로, 어떤 방식으로 빌드할지”를 명시하는 공식 표준 파일이며, Poetry뿐 아니라 모든 현대 Python 패키지에서 사용된다.  
+* 빌드 도구마다 [build-system] 섹션에 자신이 필요한 설정을 추가해서 활용한다.  
+
+### Wheel이란?
+
+> wheel(.whl)은 Python 패키지의 표준 배포 포맷으로, 소스코드를 미리 빌드해 빠르게 설치할 수 있게 해준다. pip install 명령으로 바로 설치 가능하며, 빌드 환경이 필요 없다.
+
+* wheel은 .whl 확장자를 가진 아카이브(압축 파일)로, Python 패키지의 표준 배포 파일 포맷(.whl)이다.  
+* wheel 파일은 소스코드를 미리 빌드해서 압축한 것으로, pip가 빠르게 설치할 수 있도록 해준다.  
+    * 빌드가 끝난 상태(컴파일된 바이트코드, 메타데이터 등 포함)  
+    * pip install 명령으로 바로 설치 가능  
+    * 소스 배포(sdist)보다 설치가 훨씬 빠르고, 빌드 환경이 필요 없다  
+* 즉, wheel은 Python 패키지의 “설치 가능한 완제품”이라고 생각하면 된다.  
+
+## PEP 517/518이 해결한 것
+
+> PEP 517/518 표준 덕분에, 설치 도구(pip, poetry 등)와 빌드 도구(setuptools, poetry-core 등)가 분리되어 있어도 pyproject.toml만 있으면 서로 호환이 가능하다. 즉, 설치하는 쪽과 빌드하는 쪽이 달라도 문제없이 동작한다.
+
+### PEP 517 (2017)
+
+`pip`, `poetry` 등 **설치 도구(installer)** 와 **빌드 백엔드** 사이의 인터페이스를 표준화했다.
+
+```
+[pip / poetry install]
+       ↓
+   PEP 517 표준 인터페이스 호출
+       ↓
+  [setuptools / poetry-core / hatchling ...]
+  각자 알아서 wheel 생성
+       ↓
+  설치 완료
+```
+
+즉, **설치하는 쪽(poetry)과 빌드하는 쪽(setuptools)이 달라도 된다.**
+
+### PEP 518 (2016)
+
+`pyproject.toml`의 `[build-system]` 섹션을 표준화했다.
+
+```toml
+# setuptools 기반 패키지
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+```
+
+```toml
+# Poetry 기반 패키지
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"
+```
+
+## 실제 프로젝트 구성 비교
+
+> 실제로는 하나의 프로젝트(예: agent)는 Poetry, 다른 프로젝트(예: data_standardization)는 setuptools 등 서로 다른 빌드 시스템을 쓸 수 있다. pyproject.toml의 [build-system] 설정만 맞으면, 서로 다른 빌드 도구 간에도 의존성 추가와 설치가 가능하다.
+
+이번 프로젝트에서의 두 패키지:
+
+### agent repo (설치하는 쪽) — Poetry 2.x 혼용 형식
+
+```toml
+# /home/azureuser/projects/kmkim/agent/pyproject.toml
+
+[project]                          # PEP 621 표준 메타데이터
+name = "agent"
+version = "0.1.0"
+requires-python = "^3.11"
+dependencies = [
+    "streamlit (>=1.52.1,<2.0.0)",
+    "langchain (>=1.1.0,<2.0.0)",
+    # ...
+]
+
+[tool.poetry]                      # Poetry 전용 설정
+packages = [{include = "agent", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+```
+
+### data_standardization (설치되는 쪽) — setuptools
+
+```toml
+# /home/azureuser/projects/data_standardization/pyproject.toml
+
+[project]                          # PEP 621 표준 메타데이터
+name = "sg-data-standardization"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=1.5.0",
+    "openpyxl>=3.0.0",
+    "tqdm>=4.64.0",
+]
+
+[tool.setuptools]
+packages = ["data_standardization"]
+
+[tool.setuptools.package-dir]
+"data_standardization" = "source"  # source/ 디렉토리를 data_standardization 이름으로 노출
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+```
+
+## Poetry 2.x의 `[project]` + `[tool.poetry]` 혼용
+
+> Poetry 2.x부터는 Python 표준 메타데이터([project], PEP 621)를 우선 사용하고, Poetry 전용 설정만 [tool.poetry]에 남기는 방식이 권장된다. 이로 인해 설정 위치가 혼동될 수 있으니 주의가 필요하다.
+
+Poetry 1.x에서는 모든 설정이 `[tool.poetry]` 아래에 있었다.
+
+```toml
+# Poetry 1.x 방식
+
+[tool.poetry]
+name = "agent"
+version = "0.1.0"
+dependencies = { python = "^3.11", requests = "^2.28" }
+```
+
+Poetry 2.x부터는 Python 표준인 `[project]` (PEP 621)를 우선으로 사용하고,
+Poetry 전용 기능만 `[tool.poetry]`에 남겨둔다.
+
+```toml
+# Poetry 2.x 방식
+
+[project]                          # 표준 메타데이터
+name = "agent"
+dependencies = ["requests>=2.28"]
+
+[tool.poetry]                      # Poetry 전용 (패키지 경로 등)
+packages = [{include = "agent", from = "src"}]
+```
+
+::: {.callout-important}
+이 혼용 방식은 git dependency를 추가할 때 위치 선택에서 혼란을 일으킨다.
+이 문제는 다음 블로그에서 자세히 다룬다.
+:::
+
+
+## 패키지 이름 vs import 이름 분리
+
+> Python 패키지는 배포용 이름(설치 시 사용)과 import용 이름(코드에서 import할 때 사용)이 다를 수 있다. 보통 배포 이름에는 조직 prefix를 붙여 충돌을 방지하고, import 이름은 간결하게 유지한다. 이는 [tool.setuptools.package-dir] 등으로 매핑할 수 있다.
+
+```toml
+[project]
+name = "sg-data-standardization"   # pip/poetry에서 설치할 때 이름
+
+[tool.setuptools.package-dir]
+"data_standardization" = "source"  # Python에서 import할 때 이름
+```
+
+```python
+# 설치
+poetry add sg-data-standardization  # 패키지 이름
+
+# 사용
+import data_standardization         # import 이름 (다름!)
+```
+
+이렇게 설계한 이유:
+- 배포 이름(`sg-data-standardization`)에 조직 prefix를 붙여 충돌 방지
+    *  패키지를 PyPI나 사내 저장소에 배포할 때 다른 프로젝트나 외부 패키지와 이름이 겹치는 것을 방지
+- import 이름(`data_standardization`)은 간결하게 유지
+
+## 정리
+
+> 다양한 빌드 시스템이 pyproject.toml로 통합 관리되고, PEP 517/518 표준 덕분에 Poetry와 setuptools 등 서로 다른 빌드 도구가 공존할 수 있다. 패키지 이름과 import 이름을 분리해 관리하는 것도 실무에서 자주 쓰이는 패턴이다.
+
+| 항목 | 내용 |
+|---|---|
+| Poetry와 setuptools는 공존 가능한가? | **가능** — by PEP 517 표준 인터페이스 |
+| poetry가 setuptools 패키지를 설치하는 방법 | pyproject.toml의 `[build-system]` 을 읽어 setuptools에게 빌드 위임 |
+| Poetry 2.x에서 달라진 점 | `[project]` (PEP 621) 표준 메타데이터 우선 사용 |
+| 패키지 이름 ≠ import 이름 | `[tool.setuptools.package-dir]`로 매핑 가능 |
+
+다음 블로그에서는 실제로 **Poetry git dependency URL을 구성하는 방법과 위치 문제**를 다룬다.

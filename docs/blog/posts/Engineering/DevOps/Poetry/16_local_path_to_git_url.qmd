@@ -1,0 +1,245 @@
+---
+title: "Poetry local path → git URL 전환 전략 — poetry.lock으로 설치 검증하기"
+date: 2026-03-04
+categories: [python, poetry, dependency, packaging]
+---
+
+## 개요
+
+외부 패키지를 통합할 때 **두 단계 전략**이 효율적입니다.
+
+1. **개발 단계**: local path 의존성으로 빠르게 시작
+2. **배포/공유 단계**: git URL로 전환해 재현 가능하게
+
+이 블로그에서는 전환 과정 전체와 `poetry.lock`으로 올바르게 설치됐는지
+검증하는 방법을 다룹니다.
+
+---
+
+## 1. 전체 흐름 요약
+
+```
+[개발 초기]
+pyproject.toml에 local path 추가
+  → poetry add /path/to/package
+  → import 테스트 → 개발 진행
+
+        ↓ (PR 승인 & remote에 pyproject.toml 반영)
+
+[배포/공유]
+pyproject.toml에서 local path → git URL 교체
+  → poetry lock
+  → poetry install
+  → poetry.lock에서 commit hash 확인
+```
+
+---
+
+## 2. 단계 1 — local path로 설치
+
+### `poetry add`로 추가
+
+```bash
+cd /home/azureuser/projects/kmkim/agent
+poetry add /home/azureuser/projects/data_standardization
+```
+
+출력:
+
+```
+Package operations: 3 installs, 0 updates, 0 removals
+
+  - Installing et-xmlfile (2.0.0)
+  - Installing openpyxl (3.1.5)
+  - Installing sg-data-standardization
+      (1.0.0 /home/azureuser/projects/data_standardization)
+```
+
+### `pyproject.toml` 변경 내용
+
+```toml
+[project]
+dependencies = [
+    # ... 기존 의존성들 ...
+    "sg-data-standardization @ file:///home/azureuser/projects/data_standardization"
+]
+```
+
+### 설치 확인
+
+```python
+import data_standardization
+print(dir(data_standardization))
+# ['AbbreviationManager', 'CompletenessAnalyzer', 'DataLoader',
+#  'ReportGenerator', 'RuleAnalyzer', 'TokenAnalysis', 'TokenProcessor', ...]
+```
+
+::: {.callout-tip}
+local path 방식의 장점은 `data_standardization/source/` 코드를 수정하면
+**재설치 없이** 즉시 반영된다는 점입니다 (editable 설치와 유사).
+:::
+
+---
+
+## 3. 단계 2 — git URL로 전환
+
+PR이 승인되어 remote에 `pyproject.toml`이 반영된 후 전환합니다.
+
+### `pyproject.toml` 수정
+
+```toml
+# 변경 전
+"sg-data-standardization @ file:///home/azureuser/projects/data_standardization"
+
+# 변경 후
+"sg-data-standardization @ git+ssh://git@seegene_org/SeegeneDevelopmentPlatform/data_standardization.git@main"
+```
+
+### lock 파일 갱신
+
+```bash
+poetry lock
+```
+
+출력:
+
+```
+Resolving dependencies...
+
+Writing lock file
+```
+
+### 재설치
+
+```bash
+poetry install
+```
+
+출력:
+
+```
+Package operations: 0 installs, 1 update, 0 removals
+
+  - Updating sg-data-standardization
+    (1.0.0 /home/azureuser/projects/data_standardization -> 1.0.0 f3354b9)
+```
+
+`/home/...` (local path) → `f3354b9` (remote commit hash) 로 전환 완료.
+
+---
+
+## 4. `poetry.lock`으로 설치 검증
+
+`poetry.lock`은 실제로 설치된 버전과 출처를 정확히 기록합니다.
+
+### lock 파일에서 패키지 확인
+
+```bash
+grep -A 15 "sg-data-standardization" poetry.lock
+```
+
+git URL로 설치된 경우:
+
+```toml
+[[package]]
+name = "sg-data-standardization"
+version = "1.0.0"
+description = "데이터베이스 테이블/컬럼 명명 규칙 검증 및 물리명 자동 생성 패키지"
+optional = false
+python-versions = ">=3.11"
+
+[package.source]
+type = "git"
+url = "ssh://git@seegene_org/SeegeneDevelopmentPlatform/data_standardization.git"
+reference = "main"
+resolved_reference = "f3354b9..."   # ← 실제 설치된 commit hash
+```
+
+### `resolved_reference`의 의미
+
+| 항목 | 설명 |
+|---|---|
+| `reference = "main"` | 지정한 브랜치명 |
+| `resolved_reference = "f3354b9..."` | 실제 설치된 commit hash |
+
+`poetry install`은 항상 `resolved_reference`의 commit을 설치합니다.
+브랜치가 업데이트되어도 `poetry.lock`이 있으면 동일한 commit이 설치됩니다.
+
+---
+
+## 5. 최신 commit으로 업데이트하는 방법
+
+`poetry.lock`이 고정되어 있으므로 remote에 새 commit이 생겨도
+자동으로 업데이트되지 않습니다. 의도적으로 업데이트해야 합니다.
+
+```bash
+# 특정 패키지만 업데이트
+poetry update sg-data-standardization
+
+# 또는 lock 전체 재생성
+poetry lock
+poetry install
+```
+
+---
+
+## 6. local path와 git URL의 차이 비교
+
+| 항목 | local path | git URL |
+|---|---|---|
+| 설정 방법 | `file:///절대경로` | `git+ssh://...@branch` |
+| 재현성 | 해당 서버에서만 동작 | 어느 환경에서나 동일 설치 |
+| 코드 수정 반영 | 즉시 반영 | `poetry update` 필요 |
+| 팀 공유 | 불가 (경로가 다름) | 가능 (+ SSH alias 설정 필요) |
+| 추천 상황 | 개발/디버깅 단계 | CI/CD, 팀 협업, 배포 |
+
+---
+
+## 7. 최종 `pyproject.toml` 상태
+
+```toml
+[project]
+name = "agent"
+version = "0.1.0"
+requires-python = "^3.11"
+dependencies = [
+    "requests (>=2.32.5,<3.0.0)",
+    "streamlit (>=1.52.1,<2.0.0)",
+    "langchain (>=1.1.0,<2.0.0)",
+    # ... 기타 의존성 ...
+    "sg-data-standardization @ git+ssh://git@seegene_org/SeegeneDevelopmentPlatform/data_standardization.git@main"
+]
+
+[tool.poetry]
+packages = [{include = "agent", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+```
+
+---
+
+## 정리
+
+| 단계 | 방법 | 명령 |
+|---|---|---|
+| 개발 초기 설치 | local path | `poetry add /path/to/pkg` |
+| git URL로 전환 | `pyproject.toml` 수정 | 직접 편집 |
+| lock 파일 갱신 | — | `poetry lock` |
+| 재설치 | — | `poetry install` |
+| 설치 검증 | lock 파일 확인 | `grep -A15 패키지명 poetry.lock` |
+| 최신화 | — | `poetry update 패키지명` |
+
+---
+
+## 시리즈 전체 요약
+
+| 블로그 | 주제 |
+|---|---|
+| 1 | 문제 정의 — archive repo, pyproject.toml 부재, 빌드 시스템 차이 |
+| 2 | Poetry vs setuptools — PEP 517/518로 공존 가능한 이유 |
+| 3 | Poetry git dependency — URL 형식, 위치 문제, PEP 508 |
+| 4 | SSH 인증 — multi-account config alias 설정 |
+| 5 | repo 패키지화 — pyproject.toml 설계 및 PR 반영 |
+| **6** | **local path → git URL 전환 및 lock 파일 검증** |
