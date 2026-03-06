@@ -1,68 +1,157 @@
 ---
-title: "Poetry 프로젝트에서 외부 Git 패키지 통합과 빌드 시스템 이해"
-subtitle: Poetry, setuptools, PEP 517, 외부 패키지 의존성 관리
+title: "Poetry 프로젝트에서 외부 Git 패키지 통합"
+subtitle: "의존성 관리 원칙, 빌드 시스템 이해, Private repo 인증"
 description: |
-  Poetry 기반 Python 프로젝트에서 외부 Git 저장소의 패키지를 의존성으로 추가하는 과정과, 빌드 시스템(setuptools vs Poetry), PEP 517 표준의 역할, 인증 방식 등 실무 사례와 일반 원칙을 함께 정리한다.
+  Python 프로젝트에서 외부 Git 저장소의 코드를 재사용하는 올바른 방법은 코드 복사가 아닌 의존성 관리다.
+  이 글에서는 Python 의존성 관리의 일반 원칙과 빌드 시스템(setuptools vs Poetry, PEP 517) 개념을 먼저 정리하고,
+  archive 상태의 외부 Private repo에 pyproject.toml이 없어 Poetry 설치가 실패하는 실전 문제와 해결 방향을 다룬다.
 categories:
   - Engineering
   - DevOps
   - Python
+  - Poetry
+  - Security
+  - SSH
 author: Kwangmin Kim
-date: 05/01/2023
+date: 2025-03-06
 format: 
   html:
     page-layout: full
     code-fold: true
     toc: true
     number-sections: true
-draft: False
+draft: false
 ---
 
-# Poetry 프로젝트에 외부 Private Git 패키지 통합
+## 개요
 
-## 배경
+> 여러 프로젝트에서 공통으로 사용하는 코드는 별도의 패키지로 분리하고, 각 프로젝트에서 **의존성(dependency)** 으로 관리하는 것이 유지보수와 협업에 유리하다. pip, Poetry 등으로 외부 Git 저장소의 패키지를 직접 설치할 수 있으나, 대상 repo가 Python 패키지 형식을 갖춰야만 가능하다.
 
-> 여러 프로젝트에서 공통으로 사용하는 코드는 별도의 패키지로 분리하고, 각 프로젝트에서 의존성으로 관리하는 것이 유지보수와 협업에 유리하다. Python에서는 pip, Poetry, setuptools 등으로 외부 Git 저장소의 패키지를 직접 설치할 수 있다.
+### 이 글이 다루는 상황
 
-* Agent 프로젝트를 진행하던 중, 데이터 표준화 Agent를 개발해야했다. 
-* 이 Agent에 약어 생성 로직이 구현된 Tool을 붙여줘야했다.  
-* 그 tool은 별도의 GitHub repository(data_standardization)에 분리되어 있었다. 
-* 이 패키지를 현재 진행 중인 Streamlit 기반 AI 에이전트 프로젝트(agent)에서 호출해야 했다.
-* 단순히 코드를 복사해서 현재 진행중인 repo에 붙여넣는 방법도 있었지만, 파일들이 많기도 하고 여러 에이전트 프로젝트에서 공통으로 사용할 패키지였기 때문에 **의존성으로 관리**하는 것이 올바른 방향이라고 생각했다.
+```
+외부 repo (archive 상태, pyproject.toml 없음)
+        ↓  poetry add git+ssh://...
+여러 문제 발생
+        ↓
+각 문제의 원인과 해결 방향 파악
+```
 
-## 문제: 외부 repo가 archive 상태
+### 왜 코드 복사 대신 의존성 관리인가
 
-> GitHub 저장소가 archive(보관) 상태이면 코드를 읽거나 복제(clone)는 가능하지만, 직접 수정(push)이나 PR 생성이 불가능하다. 외부 패키지를 의존성으로 추가하려면, 필요한 설정 파일(pyproject.toml 등)을 추가할 수 있는 권한이 필요하다. 그렇지 않으면 저장소 관리자에게 요청해야 한다.
+외부 패키지 코드를 현재 프로젝트에 복사해 사용하면 단기적으론 빠르지만 아래와 같은 문제가 생긴다:
 
-* 외부 Repo는 GitHub에서 **archive** 처리된 상태였다.
-* GitHub에서 repository를 **archive** 처리하면 다음과 같은 제약이 생긴다.
+| 방식 | 장점 | 단점 |
+|---|---|---|
+| 코드 복사 | 즉시 사용 가능 | 원본 업데이트 반영 불가, 중복 유지보수 |
+| 의존성 관리 | 버전 추적, 업데이트 용이 | 패키지화 조건 충족 필요 |
+
+여러 프로젝트에서 동일 코드를 사용하는 경우라면 의존성으로 관리하는 것이 원칙이다.
+
+## Python 의존성 관리와 빌드 시스템 기초
+
+### Python 패키지 설치 도구의 동작 원리
+
+`pip install` 또는 `poetry add`가 외부 repo를 설치할 때 내부적으로 아래 순서로 동작한다:
+
+```
+1. 저장소 접근 (HTTPS 또는 SSH 인증)
+        ↓
+2. 패키지 인식 (pyproject.toml 또는 setup.py 탐색)
+        ↓
+3. 빌드 백엔드 결정 (build-backend 설정 읽기)
+        ↓
+4. 빌드 백엔드 호출하여 wheel/sdist 생성
+        ↓
+5. 생성된 패키지를 현재 환경에 설치
+```
+
+2단계에서 `pyproject.toml`이나 `setup.py`가 없으면 즉시 실패한다:
+
+```
+Source does not appear to be a Python project:
+no pyproject.toml or setup.py
+```
+
+### PEP 517/518 — 현대 Python 빌드 표준
+
+PEP 517/518 이전에는 setuptools + setup.py가 사실상 유일한 빌드 방법이었다. PEP 517/518 이후 빌드 프론트엔드(pip, Poetry)와 빌드 백엔드(setuptools, Poetry, Hatch 등)가 분리되었다.
+
+```
+빌드 프론트엔드 (pip, poetry add)
+        ↓  pyproject.toml의 [build-system] 읽기
+빌드 백엔드 (setuptools, poetry.core.masonry.api, hatchling 등)
+        ↓  wheel 또는 sdist 생성
+설치 완료
+```
+
+`pyproject.toml`의 `[build-system]` 섹션이 핵심이다:
+
+```toml
+# setuptools 기반 패키지
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Poetry 기반 패키지
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+```
+
+### setuptools vs Poetry 빌드 시스템 비교
+
+| 특징 | setuptools | Poetry |
+|---|---|---|
+| 설정 파일 | `pyproject.toml` / `setup.py` / `setup.cfg` | `pyproject.toml` |
+| 의존성 관리 | `requirements.txt` 별도 | `pyproject.toml` 통합 |
+| lock 파일 | 없음 (별도 도구 필요) | `poetry.lock` 자동 생성 |
+| 환경 격리 | 별도 venv 필요 | 내장 |
+| 적합한 상황 | 레거시 프로젝트, 범용성 | 신규 프로젝트, 엄격한 의존성 관리 |
+| build-backend | `setuptools.build_meta` | `poetry.core.masonry.api` |
+
+PEP 517 덕분에 **빌드 백엔드가 달라도** pip/Poetry는 `[build-system]`을 읽고 적절한 백엔드를 자동 호출한다. 즉, Poetry로 관리되는 프로젝트에서 setuptools 기반 외부 패키지도 설치 가능하다.
+
+### Private repo 인증 방식
+
+외부 repo가 Private이면 인증이 필요하다. 두 가지 방식이 있다:
+
+| 방식 | URL 형태 | 특징 |
+|---|---|---|
+| SSH 키 | `git+ssh://git@github.com/org/repo.git` | 키 파일로 인증, 안전 |
+| HTTPS 토큰 | `git+https://<token>@github.com/org/repo.git` | 토큰 URL 노출 위험 |
+
+실무에서는 SSH 방식을 권장한다. `~/.ssh/config`에 Host alias를 설정하면 멀티 계정도 관리 가능하다.
+
+## 실전 사례: 외부 Private repo 패키지 통합
+
+> Agent 프로젝트(Streamlit 기반 AI 에이전트)에서 데이터 표준화 로직이 담긴 외부 `data_standardization` repo를 의존성으로 추가해야 했다. 해당 repo는 archive 상태였고, `pyproject.toml`도 없었다.
+
+### 배경
+
+- Agent 프로젝트를 진행하던 중 데이터 표준화 Agent 개발이 필요했다
+- 약어 생성 로직이 구현된 Tool이 별도 GitHub repo(`data_standardization`)에 분리되어 있었다
+- 여러 에이전트 프로젝트에서 공통으로 사용할 패키지였기 때문에 의존성으로 관리하는 것이 올바른 방향이었다
+
+### 문제 1: 외부 repo가 archive 상태
+
+GitHub에서 repository를 **archive** 처리하면 읽기 전용 상태가 된다:
 
 | 가능한 것 | 불가능한 것 |
 |---|---|
 | clone, pull, fork | push, PR 생성 |
 | read-only 접근 | 코드 수정 반영 |
 
-즉, 패키지화를 위해 외부 repo를 pyproject.toml을 추가하고 싶어도 **직접 commit/push가 불가능**한 상태였다.
-
-```
-# archive된 repo에 push 시도
+```bash
 $ git push
 ERROR: Repository is archived.
-``` 
+```
 
-→ repo를 unarchive하거나, repository 관리자에게 PR을 열어 merge 요청을 해야 했다.
-→ 이 블로그에서는 unarchive 요청과 PR 생성 과정을 다루고, 다음 블로그에서는 pyproject.toml 작성과 Poetry 설치 과정을 다룬다.
+→ repo 관리자에게 unarchive 요청 또는 PR 권한 요청이 필요하다.
 
-## 문제: Poetry 문법에 맞는 pyproject.toml이 없음
+### 문제 2: pyproject.toml 없음
 
-> Poetry, pip 등으로 외부 Git 패키지를 설치하려면 해당 저장소가 Python 패키지로 인식될 수 있어야 한다. 즉, 최소한 setup.py(구형) 또는 pyproject.toml(PEP 517 표준)이 필요하다. pyproject.toml은 현대 Python 패키지의 표준 메타데이터 및 빌드 시스템 정의 파일이다.
-
-`poetry add git+https://github.com/...` 명령이 동작하려면 대상 외부 repo에 다음 둘 중 하나가 있어야 한다.
-
-- pyproject.toml (PEP 517 표준)
-- `setup.py` (구형 방식)
-
-해당 외부 repo의 디렉토리 구조:
+외부 repo의 디렉토리 구조:
 
 ```
 data_standardization/
@@ -73,57 +162,41 @@ data_standardization/
 │   └── ...
 ├── data/
 ├── output/
-└── README.md            ← pyproject.toml 없음!
+└── README.md            ← pyproject.toml 없음
 ```
 
-pyproject.toml이 없으니 Poetry는 이것을 Python 패키지로 인식하지 못했다.
+`pyproject.toml`이 없으니 Poetry는 이것을 Python 패키지로 인식하지 못했다:
 
 ```
 Source does not appear to be a Python project:
 no pyproject.toml or setup.py
 ```
 
-## 문제: 빌드 시스템이 다름 (setuptools vs Poetry)
+### 문제 3: 빌드 시스템 불일치
 
-> PEP 517 표준 덕분에, 서로 다른 빌드 시스템(예: Poetry, setuptools)이라도 pyproject.toml에 build-backend를 명확히 명시하면 pip/Poetry 등 빌드 프론트엔드가 자동으로 해당 빌드 백엔드를 호출해 설치를 진행할 수 있다.
-
-현재 에이전트 프로젝트는 **Poetry**로 관리되지만, 약어 생성 패키지는 **setuptools** 기반으로 관리되고 있었다.  
-
-### Poetry vs setuptools
-
-| 특징 | Poetry | setuptools |
-|---|---|---|
-| 빌드 시스템 | PEP 517 표준 기반 | 구형 방식 (setup.py) |
-| 의존성 관리 | pyproject.toml | setup.py |
-| 설치 방식 | `poetry add git+https://...` | `pip install git+https://...` |
-| 빌드 백엔드 | poetry.core.masonry.api | | setuptools.build_meta | 
-
-* setuptools   
-    * 주로 setup.py(또는 setup.cfg)로 설정을 관리한다.  
-    * 의존성 관리는 requirements.txt 등 별도 파일로 분리하거나, setup.py의 install_requires에 명시한다.  
-    * 전통적인 빌드 시스템으로, pip와 연동이 잘 되지만 환경 격리나 lock 파일 지원이 약하다.  
-    * setuptools: 유연하지만 설정이 복잡할 수 있다.  
-    * `build-backend = "setuptools.build_meta"`
-        * setuptools가 제공하는 빌드 시스템을 사용한다는 뜻이다.  
-        * 전통적인 setup.py 기반 패키지 빌드에 사용된다.  
-
-* Poetry  
-    * pyproject.toml 하나로 모든 설정(의존성, 빌드, 메타데이터 등)을 관리한다.   
-    * pyproject.toml에 직접 의존성을 선언하고, poetry.lock으로 버전 고정까지 자동 관리한다.  
-    * 빌드, 배포, 의존성 관리, 가상환경 생성까지 통합적으로 지원한다.    
-    * 명령어가 직관적이고, modern Python 프로젝트에 적합하다.
-    * `build-backend = "poetry.core.masonry.api"`
-        * build-backend 설정은 프로젝트를 빌드할 때 어떤 빌드 시스템(백엔드)을 사용할지”를 지정하는 것  
-        * Poetry가 제공하는 빌드 시스템을 사용한다는 뜻  
-* Private repo는 SSH 키 또는 HTTPS 토큰 인증이 필요하다. 
-    * SSH 키 인증: `git+ssh://git@github.com/username/repo.git`
-    * HTTPS 토큰 인증: `git+https://<token>@github.com/username/repo.git`
+Agent 프로젝트는 **Poetry**로 관리되지만, `data_standardization`은 `pyproject.toml` 자체가 없어 **setuptools** 기반으로 새로 작성해야 했다. PEP 517 덕분에 빌드 백엔드가 달라도 설치가 가능하다.
 
 ## 해결 방향
 
-> 외부 패키지를 의존성으로 추가하려면 해당 저장소에 pyproject.toml 또는 setup.py가 반드시 필요하다. 저장소가 archive 상태라면 관리자에게 unarchive 요청 또는 PR 권한 요청이 필요하다. Private repo는 SSH 키 또는 HTTPS 토큰 인증이 필요하다. Poetry, pip 등은 pyproject.toml의 build-backend에 따라 자동으로 빌드 시스템을 선택한다. 설치 후 정상적으로 import되는지 확인한다.
+| 문제 | 해결 방법 |
+|---|---|
+| archive 상태 | 관리자에게 unarchive 요청 → PR로 `pyproject.toml` 추가 |
+| pyproject.toml 없음 | setuptools 기반 `pyproject.toml` 직접 작성 |
+| 빌드 시스템 불일치 | PEP 517 표준으로 자동 해결 (백엔드 자동 선택) |
+| Private repo 인증 | SSH 키 + `~/.ssh/config` alias 설정 |
 
-1. 외부 repo (data standardization) unarchive 요청 → PR로 pyproject.toml 추가
+전체 흐름:
+
+```
+1. 외부 repo (data_standardization) unarchive 요청
+        ↓
 2. SSH 인증 설정 확인 및 git dependency URL 구성
-3. Poetry 프로젝트 (Agent 프로젝트)에 `poetry add projects.` 로 설치
-4. 설치 후, Agent 프로젝트에서 `import data_standardization`으로 패키지 사용 가능 확인  
+        ↓
+3. pyproject.toml 작성 → PR로 반영 (승인 전 local path로 임시 설치)
+        ↓
+4. Poetry 프로젝트 (Agent)에 poetry add로 설치
+        ↓
+5. import data_standardization 동작 확인
+```
+
+각 단계의 세부 내용은 이어지는 블로그(12~16번)에서 순서대로 다룬다.

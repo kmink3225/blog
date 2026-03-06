@@ -1,22 +1,74 @@
 ---
-title: "Poetry local path → git URL 전환 전략 — poetry.lock으로 설치 검증하기"
-date: 2026-03-04
-categories: [python, poetry, dependency, packaging]
+title: "Poetry local path 의존성에서 git URL로 전환하기"
+subtitle: "file:// → git+ssh://, poetry.lock 검증, lock 파일 resolved_reference 이해"
+description: |
+  소프트웨어 의존성 참조 방식의 일반 원칙을 정리하고, Poetry 프로젝트에서
+  개발 단계의 local path 의존성을 배포/공유를 위한 git URL로 전환하는
+  전 과정을 poetry.lock 검증까지 포함해 단계별로 설명한다.
+categories:
+  - Engineering
+  - DevOps
+  - Python
+  - Poetry
+  - Security
+  - SSH
+author: Kwangmin Kim
+date: 2025-03-10
+format:
+  html:
+    page-layout: full
+    code-fold: true
+    toc: true
+    number-sections: true
+draft: false
 ---
+
+## 의존성 참조 방식의 일반 원칙
+
+### 소프트웨어 의존성 참조 유형
+
+소프트웨어 공학에서 외부 라이브러리를 참조하는 방법은 크게 네 가지다.
+
+| 참조 방식 | 예시 | 특징 |
+|---|---|---|
+| **버전 범위** | `requests >= 2.28` | 레지스트리(PyPI 등)에서 설치, 가장 일반적 |
+| **직접 URL** | `pkg @ https://files.../pkg.tar.gz` | 특정 배포본 고정 |
+| **VCS URL** | `pkg @ git+ssh://git@github.com/org/repo.git@main` | Git 저장소 직접 참조 |
+| **로컬 경로** | `pkg @ file:///path/to/pkg` | 로컬 파일시스템 직접 참조 |
+
+로컬 경로 방식은 개발/디버깅에 빠르지만 다른 환경에서 재현 불가능하다.  
+VCS URL은 팀 공유와 CI/CD에서 재현 가능하며 SSH 인증을 활용한다.
+
+### 개발 단계별 의존성 전략
+
+외부 패키지를 새로 개발하면서 동시에 연동할 때, 단계별 의존성 전략이 효율적이다.
+
+| 단계 | 의존성 방식 | 이유 |
+|---|---|---|
+| **초기 개발** | local path (`file://`) | 코드 수정이 즉시 반영, 재설치 불필요 |
+| **통합 테스트** | local path 유지 | 로컬에서 빠른 피드백 |
+| **PR 승인 / 안정화** | git URL로 전환 | 팀원 재현 가능, CI/CD 연동 가능 |
+| **운영** | git URL + commit hash 고정 | 완전한 재현성 보장 |
+
+::: {.callout-note}
+## 이 글이 다루는 상황
+Poetry 2.x로 관리되는 `agent` 프로젝트에 사내 private repo `data_standardization`을
+개발 초기에는 local path로 연결하고, 코드가 안정된 후 git URL로 전환하는 전 과정을 다룬다.
+:::
 
 ## 개요
 
-외부 패키지를 통합할 때 **두 단계 전략**이 효율적입니다.
+외부 패키지를 통합할 때 **두 단계 전략**이 효율적이다.
 
 1. **개발 단계**: local path 의존성으로 빠르게 시작
 2. **배포/공유 단계**: git URL로 전환해 재현 가능하게
 
 이 블로그에서는 전환 과정 전체와 `poetry.lock`으로 올바르게 설치됐는지
-검증하는 방법을 다룹니다.
+검증하는 방법을 다룬다.
 
 ---
 
-## 1. 전체 흐름 요약
+## 전체 흐름 요약
 
 ```
 [개발 초기]
@@ -35,7 +87,7 @@ pyproject.toml에서 local path → git URL 교체
 
 ---
 
-## 2. 단계 1 — local path로 설치
+## 단계 1 — local path로 설치
 
 ### `poetry add`로 추가
 
@@ -76,14 +128,14 @@ print(dir(data_standardization))
 
 ::: {.callout-tip}
 local path 방식의 장점은 `data_standardization/source/` 코드를 수정하면
-**재설치 없이** 즉시 반영된다는 점입니다 (editable 설치와 유사).
+**재설치 없이** 즉시 반영된다는 점이다 (editable 설치와 유사).
 :::
 
 ---
 
-## 3. 단계 2 — git URL로 전환
+## 단계 2 — git URL로 전환
 
-PR이 승인되어 remote에 `pyproject.toml`이 반영된 후 전환합니다.
+PR이 승인되어 remote에 `pyproject.toml`이 반영된 후 전환한다.
 
 ### `pyproject.toml` 수정
 
@@ -128,9 +180,9 @@ Package operations: 0 installs, 1 update, 0 removals
 
 ---
 
-## 4. `poetry.lock`으로 설치 검증
+## `poetry.lock`으로 설치 검증
 
-`poetry.lock`은 실제로 설치된 버전과 출처를 정확히 기록합니다.
+`poetry.lock`은 실제로 설치된 버전과 출처를 정확히 기록한다.
 
 ### lock 파일에서 패키지 확인
 
@@ -162,15 +214,15 @@ resolved_reference = "f3354b9..."   # ← 실제 설치된 commit hash
 | `reference = "main"` | 지정한 브랜치명 |
 | `resolved_reference = "f3354b9..."` | 실제 설치된 commit hash |
 
-`poetry install`은 항상 `resolved_reference`의 commit을 설치합니다.
-브랜치가 업데이트되어도 `poetry.lock`이 있으면 동일한 commit이 설치됩니다.
+`poetry install`은 항상 `resolved_reference`의 commit을 설치한다.
+브랜치가 업데이트되어도 `poetry.lock`이 있으면 동일한 commit이 설치된다.
 
 ---
 
-## 5. 최신 commit으로 업데이트하는 방법
+## 최신 commit으로 업데이트하는 방법
 
 `poetry.lock`이 고정되어 있으므로 remote에 새 commit이 생겨도
-자동으로 업데이트되지 않습니다. 의도적으로 업데이트해야 합니다.
+자동으로 업데이트되지 않는다. 의도적으로 업데이트해야 한다.
 
 ```bash
 # 특정 패키지만 업데이트
@@ -183,7 +235,7 @@ poetry install
 
 ---
 
-## 6. local path와 git URL의 차이 비교
+## local path와 git URL의 차이 비교
 
 | 항목 | local path | git URL |
 |---|---|---|
@@ -195,7 +247,7 @@ poetry install
 
 ---
 
-## 7. 최종 `pyproject.toml` 상태
+## 최종 `pyproject.toml` 상태
 
 ```toml
 [project]
@@ -229,17 +281,3 @@ build-backend = "poetry.core.masonry.api"
 | lock 파일 갱신 | — | `poetry lock` |
 | 재설치 | — | `poetry install` |
 | 설치 검증 | lock 파일 확인 | `grep -A15 패키지명 poetry.lock` |
-| 최신화 | — | `poetry update 패키지명` |
-
----
-
-## 시리즈 전체 요약
-
-| 블로그 | 주제 |
-|---|---|
-| 1 | 문제 정의 — archive repo, pyproject.toml 부재, 빌드 시스템 차이 |
-| 2 | Poetry vs setuptools — PEP 517/518로 공존 가능한 이유 |
-| 3 | Poetry git dependency — URL 형식, 위치 문제, PEP 508 |
-| 4 | SSH 인증 — multi-account config alias 설정 |
-| 5 | repo 패키지화 — pyproject.toml 설계 및 PR 반영 |
-| **6** | **local path → git URL 전환 및 lock 파일 검증** |
