@@ -1,0 +1,497 @@
+---
+title: "DL for Longitudinal Data"
+subtitle: "LSTM, TCN, Transformer, Neural ODE — 시퀀스 학습과 연속 시간 역학"
+description: |
+  종단 데이터에 적용 가능한 딥러닝 기법을 다룬다.
+  가변 길이 시퀀스를 처리하는 LSTM/GRU, 병렬 연산의 TCN,
+  Attention 기반 Temporal Transformer, 그리고 연속 시간 역학을 모델링하는
+  Neural ODE를 구체적인 예시와 함께 설명한다.
+categories:
+  - Statistics
+  - Deep Learning
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# DL for Longitudinal Data
+
+## 왜 DL인가: ML의 한계
+
+| 상황 | ML의 한계 | DL 대안 |
+|------|----------|---------|
+| 가변 길이 시퀀스 | XGBoost는 고정 길이 피처 필요 | LSTM/GRU |
+| 장기 의존성 (먼 과거가 현재에 영향) | 수동 lag 피처로 한계 | LSTM, Transformer |
+| 연속 시간 불규칙 측정 | 이산 시점 가정 | Neural ODE |
+| 멀티모달 시계열 | 수동 피처 결합 어려움 | Attention 기반 모델 |
+
+---
+
+## 기법 1: LSTM / GRU
+
+### 핵심 구조
+
+LSTM(Long Short-Term Memory)은 **게이트(gate)** 구조로 장기 의존성을 학습한다.
+
+```
+입력 시퀀스: x₁, x₂, ..., x_T
+                 ↓    ↓         ↓
+Cell state: C₁ → C₂ → ... → C_T  ← 장기 기억
+Hidden state: h₁ → h₂ → ... → h_T ← 단기 기억
+                                   ↓
+                               예측값 ŷ
+```
+
+세 가지 게이트:
+- **Forget gate**: 이전 기억 중 무엇을 잊을지
+- **Input gate**: 새 정보 중 무엇을 기억할지
+- **Output gate**: 현재 hidden state로 무엇을 내보낼지
+
+### 예시: 만족도 시퀀스로 이탈 예측
+
+```python
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+
+class LongitudinalDataset(Dataset):
+    """사용자별 시계열 데이터셋"""
+    def __init__(self, df, features, target, max_len=8):
+        self.sequences = []
+        self.targets = []
+        self.masks = []
+
+        for uid in df["user_id"].unique():
+            user_df = df[df["user_id"] == uid].sort_values("week")
+            seq = user_df[features].values         # (T, n_features)
+            tgt = user_df[target].values[-1]       # 마지막 시점 레이블
+
+            # 패딩 (가변 길이 → 고정 길이)
+            T = len(seq)
+            pad_len = max_len - T
+            mask = [1] * T + [0] * pad_len
+            if pad_len > 0:
+                seq = np.vstack([seq, np.zeros((pad_len, seq.shape[1]))])
+
+            self.sequences.append(seq)
+            self.targets.append(tgt)
+            self.masks.append(mask)
+
+    def __len__(self):
+        return len(self.sequences)
+
+    def __getitem__(self, idx):
+        return (
+            torch.FloatTensor(self.sequences[idx]),
+            torch.FloatTensor(self.masks[idx]),
+            torch.FloatTensor([self.targets[idx]])
+        )
+
+
+class LSTMChurnPredictor(nn.Module):
+    """이탈 예측 LSTM"""
+    def __init__(self, input_size, hidden_size=64, n_layers=2, dropout=0.3):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=n_layers,
+            batch_first=True,
+            dropout=dropout,
+            bidirectional=False
+        )
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_size, 32),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(32, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x, mask):
+        # LSTM forward
+        output, (h_n, c_n) = self.lstm(x)
+
+        # 마지막 유효 시점의 hidden state 추출 (패딩 제외)
+        seq_lengths = mask.sum(dim=1).long()
+        batch_size = x.size(0)
+        last_hidden = output[
+            torch.arange(batch_size),
+            seq_lengths - 1,
+            :
+        ]
+        return self.classifier(last_hidden)
+
+
+# 학습
+features = ["satisfaction", "turn_count", "emotion_score", "personalized"]
+dataset = LongitudinalDataset(df, features, "will_churn_next_week")
+loader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+model = LSTMChurnPredictor(input_size=len(features))
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+criterion = nn.BCELoss()
+
+for epoch in range(50):
+    total_loss = 0
+    for seq, mask, target in loader:
+        pred = model(seq, mask)
+        loss = criterion(pred, target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    if (epoch + 1) % 10 == 0:
+        print(f"Epoch {epoch+1}: Loss = {total_loss/len(loader):.4f}")
+```
+
+### GRU: LSTM보다 단순한 대안
+
+```python
+class GRUChurnPredictor(nn.Module):
+    """GRU 기반 (LSTM보다 파라미터 적음, 비슷한 성능)"""
+    def __init__(self, input_size, hidden_size=64):
+        super().__init__()
+        self.gru = nn.GRU(input_size, hidden_size,
+                          batch_first=True, bidirectional=False)
+        self.fc = nn.Linear(hidden_size, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x, mask):
+        out, h_n = self.gru(x)
+        seq_lengths = mask.sum(dim=1).long()
+        last = out[torch.arange(x.size(0)), seq_lengths-1, :]
+        return self.sigmoid(self.fc(last))
+```
+
+---
+
+## 기법 2: Temporal Convolutional Network (TCN)
+
+### LSTM의 한계
+
+- 순차 처리 → 병렬화 불가 → 긴 시퀀스에서 느림
+- 기울기 소실 여전히 발생 가능
+
+### TCN 핵심: Dilated Causal Convolution
+
+```
+일반 Conv:  과거 + 미래 정보 모두 사용 (예측 시 문제)
+Causal:     과거 정보만 사용
+
+Dilated:    간격(dilation)을 두어 더 넓은 과거를 효율적으로 커버
+
+dilation=1: [t-1, t-2, t-3]      수용 범위: 3
+dilation=2: [t-2, t-4, t-6]      수용 범위: 6
+dilation=4: [t-4, t-8, t-12]     수용 범위: 12
+
+→ 층을 쌓을수록 수용 범위가 지수적으로 증가
+   병렬 연산으로 LSTM보다 빠름
+```
+
+```python
+class CausalConv1d(nn.Module):
+    """인과적 1D 합성곱 (미래 정보 차단)"""
+    def __init__(self, in_channels, out_channels, kernel_size, dilation):
+        super().__init__()
+        self.padding = (kernel_size - 1) * dilation
+        self.conv = nn.Conv1d(
+            in_channels, out_channels, kernel_size,
+            dilation=dilation, padding=self.padding
+        )
+
+    def forward(self, x):
+        out = self.conv(x)
+        return out[:, :, :-self.padding]  # 미래 패딩 제거
+
+
+class TCN(nn.Module):
+    """Temporal Convolutional Network"""
+    def __init__(self, input_size, num_channels, kernel_size=3):
+        super().__init__()
+        layers = []
+        for i, out_ch in enumerate(num_channels):
+            dilation = 2 ** i
+            in_ch = input_size if i == 0 else num_channels[i-1]
+            layers.append(CausalConv1d(in_ch, out_ch, kernel_size, dilation))
+            layers.append(nn.ReLU())
+
+        self.network = nn.Sequential(*layers)
+        self.fc = nn.Linear(num_channels[-1], 1)
+
+    def forward(self, x):
+        # x: (batch, time, features) → (batch, features, time)
+        x = x.transpose(1, 2)
+        out = self.network(x)
+        # 마지막 시점
+        last = out[:, :, -1]
+        return torch.sigmoid(self.fc(last))
+
+
+model_tcn = TCN(
+    input_size=len(features),
+    num_channels=[32, 64, 64],   # 3개 층, dilation=1,2,4
+    kernel_size=3
+)
+```
+
+---
+
+## 기법 3: Temporal Transformer
+
+### Attention 메커니즘의 장점
+
+```
+LSTM: 순차적으로 과거를 압축 → 먼 과거 정보 손실
+Transformer: 모든 시점 쌍의 관계를 직접 계산 → 먼 과거도 직접 참조
+```
+
+**Temporal Transformer 특징:**
+- **Positional Encoding**: 시간 순서 정보 주입
+- **Causal Mask**: 미래 정보 차단 (자기회귀)
+- **Multi-head Attention**: 여러 관점에서 시점 간 관계 학습
+
+```python
+class TemporalTransformer(nn.Module):
+    """종단 데이터 분류용 Transformer"""
+    def __init__(self, input_size, d_model=64, n_heads=4,
+                 n_layers=2, dropout=0.1, max_len=8):
+        super().__init__()
+
+        # 입력 임베딩
+        self.input_proj = nn.Linear(input_size, d_model)
+
+        # Positional Encoding (시간 순서 정보)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(max_len).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float()
+                             * (-np.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe.unsqueeze(0))
+
+        # Transformer Encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=n_heads,
+            dropout=dropout, batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, n_layers)
+
+        # 분류 헤드
+        self.classifier = nn.Sequential(
+            nn.Linear(d_model, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x, mask):
+        # 입력 투영 + 위치 인코딩
+        T = x.size(1)
+        x = self.input_proj(x) + self.pe[:, :T, :]
+
+        # 패딩 마스크 (True = 무시)
+        key_padding_mask = (mask == 0)
+
+        # Transformer
+        out = self.transformer(x, src_key_padding_mask=key_padding_mask)
+
+        # CLS 토큰 역할: 마지막 유효 시점
+        seq_lengths = mask.sum(dim=1).long()
+        last = out[torch.arange(x.size(0)), seq_lengths-1, :]
+        return self.classifier(last)
+
+
+model_transformer = TemporalTransformer(input_size=len(features))
+```
+
+### Attention Weight 시각화
+
+```python
+# Attention weight 추출 → "어느 시점이 예측에 중요한가?"
+def get_attention_weights(model, seq, mask):
+    model.eval()
+    with torch.no_grad():
+        # TransformerEncoder의 attention weight는 별도 훅 필요
+        attention_weights = []
+        hooks = []
+
+        def hook_fn(module, input, output):
+            # MultiheadAttention output: (output, attn_weights)
+            if isinstance(output, tuple):
+                attention_weights.append(output[1])
+
+        for layer in model.transformer.layers:
+            hooks.append(layer.self_attn.register_forward_hook(hook_fn))
+
+        _ = model(seq.unsqueeze(0), mask.unsqueeze(0))
+        for hook in hooks:
+            hook.remove()
+
+    return attention_weights  # (n_layers, n_heads, T, T)
+
+# 시각화
+import seaborn as sns
+attn = get_attention_weights(model_transformer, test_seq, test_mask)
+# 마지막 층, 첫 번째 헤드의 마지막 시점 attention
+attn_last = attn[-1][0, -1, :].numpy()
+
+plt.figure(figsize=(8, 3))
+plt.bar(range(1, len(attn_last)+1), attn_last)
+plt.xlabel("Week")
+plt.ylabel("Attention Weight")
+plt.title("이탈 예측: 어느 시점이 중요한가?")
+```
+
+```
+결과:
+Attention Weight
+0.35 │         █
+     │      █  █
+0.20 │   █  █  █
+     │   █  █  █  █
+0.10 │ █ █  █  █  █
+     └──────────────
+       1  2  3  4  5  6  7  8  Week
+
+→ Week 4~6 (개인화 초기)의 만족도가 이탈 예측에 가장 중요
+→ 이 시기의 사용자 경험이 장기 리텐션을 결정
+```
+
+---
+
+## 기법 4: Neural ODE (연속 시간 역학)
+
+### 동기: 불규칙 측정 시간
+
+LSTM/Transformer는 **이산 시점**을 가정한다.
+측정 간격이 불규칙하면 (사람마다 다른 방문 주기) 정보 손실이 생긴다.
+
+```
+사용자 A: Week 1, 2, 3, 4, 5, 6, 7, 8   (매주 방문)
+사용자 B: Day 3, Day 15, Day 45, Day 60 (불규칙 방문)
+
+LSTM: 두 사용자를 동일한 4개 시점으로 처리 → 간격 정보 무시
+Neural ODE: 실제 시간 간격을 반영한 연속 역학
+```
+
+### 핵심 아이디어
+
+hidden state $h(t)$가 미분 방정식을 따른다:
+
+$$\frac{dh(t)}{dt} = f_\theta(h(t), t)$$
+
+$f_\theta$: 신경망으로 매개변수화된 역학 함수
+
+관측치를 받을 때마다 ODE solver로 다음 시점까지 적분한다:
+
+$$h(t_2) = h(t_1) + \int_{t_1}^{t_2} f_\theta(h(t), t) \, dt$$
+
+```python
+from torchdiffeq import odeint
+
+class ODEFunc(nn.Module):
+    """상태 역학 함수 f_θ(h, t)"""
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.Tanh(),
+            nn.Linear(hidden_size, hidden_size)
+        )
+
+    def forward(self, t, h):
+        return self.net(h)
+
+
+class NeuralODE(nn.Module):
+    """불규칙 시점 종단 데이터용 Neural ODE"""
+    def __init__(self, input_size, hidden_size=64):
+        super().__init__()
+        self.encoder = nn.Linear(input_size, hidden_size)
+        self.odefunc = ODEFunc(hidden_size)
+        self.classifier = nn.Linear(hidden_size, 1)
+
+    def forward(self, x, t):
+        """
+        x: (batch, T, features) - 불규칙 시점 관측값
+        t: (T,) - 실제 측정 시간 (일/주 단위)
+        """
+        batch_size, T, _ = x.shape
+        h = torch.zeros(batch_size, 64)  # 초기 상태
+
+        for i in range(T):
+            # 현재 관측값으로 상태 업데이트
+            h = h + self.encoder(x[:, i, :])
+
+            # 다음 관측까지 ODE로 상태 전파
+            if i < T - 1:
+                t_span = torch.tensor([t[i], t[i+1]])
+                h = odeint(self.odefunc, h, t_span)[-1]
+
+        return torch.sigmoid(self.classifier(h))
+```
+
+---
+
+## 모델 비교
+
+| | LSTM/GRU | TCN | Transformer | Neural ODE |
+|-|----------|-----|-------------|-----------|
+| **장기 의존성** | 보통 | 우수 | 매우 우수 | 우수 |
+| **병렬 연산** | 불가 | 가능 | 가능 | 불가 |
+| **불규칙 시점** | 불가 | 불가 | 불가 | 가능 |
+| **해석 가능성** | 낮음 | 낮음 | Attention | 낮음 |
+| **데이터 요구량** | 중간 | 중간 | 많음 | 많음 |
+| **구현 복잡도** | 낮음 | 중간 | 중간 | 높음 |
+
+### 권장 선택
+
+```
+불규칙 측정 시점          → Neural ODE
+긴 시퀀스 (T > 50)       → TCN (빠름)
+어느 시점이 중요한지 해석  → Transformer (Attention)
+빠른 프로토타입          → LSTM/GRU
+소규모 데이터 (< 1000명) → 통계 모델 (LMM, GAMM)
+```
+
+---
+
+## 실무 파이프라인
+
+```python
+# 종단 DL 파이프라인 전체
+class LongitudinalPipeline:
+    def __init__(self, model_type="lstm"):
+        self.model_type = model_type
+
+    def preprocess(self, df):
+        """가변 길이 시퀀스 → 패딩 + 마스킹"""
+        ...
+
+    def train(self, train_loader, val_loader, epochs=100):
+        """조기 종료 포함 학습"""
+        best_val_loss = float("inf")
+        patience = 10
+        no_improve = 0
+        for epoch in range(epochs):
+            train_loss = self._train_epoch(train_loader)
+            val_loss = self._eval_epoch(val_loader)
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                torch.save(self.model.state_dict(), "best_model.pt")
+                no_improve = 0
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    print(f"Early stopping at epoch {epoch}")
+                    break
+
+    def evaluate(self, test_loader):
+        """AUC, 정확도, AURPC 평가"""
+        ...
+```
+
+**다음**: `14-mixed-model-rl-longitudinal.qmd` — 강화학습: 동적 처치 결정

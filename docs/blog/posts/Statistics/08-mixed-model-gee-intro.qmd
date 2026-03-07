@@ -1,0 +1,339 @@
+---
+title: "GEE: Generalized Estimating Equations 개요"
+subtitle: "GLMM vs GEE: Conditional vs Marginal 효과"
+description: |
+  GEE(일반화 추정 방정식)는 군집/반복 측정 데이터에서 모집단 평균 효과(Marginal Effect)를
+  추정한다. GLMM의 Conditional 효과와의 차이, Working Correlation 구조 선택,
+  그리고 언제 GEE를 선택해야 하는지를 구체적 예시와 함께 설명한다.
+categories:
+  - Statistics
+  - GEE
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# GEE: Generalized Estimating Equations 개요
+
+## GEE란
+
+GEE는 군집화된(clustered) 또는 반복 측정 데이터에서 **모집단 평균 효과(Population-Average Effect)**를 추정하는 방법이다.
+
+GLMM이 "같은 사람이 처치를 받으면 어떻게 되는가?" (Conditional)를 답한다면,
+GEE는 "전체 모집단에 처치를 적용하면 평균적으로 어떻게 되는가?" (Marginal)를 답한다.
+
+### "Marginal"이란 무엇인가
+
+**Marginal**은 통계학에서 **"주변(부) 효과"** 또는 **"모집단 평균 효과"** 라고 번역한다. 일상 영어에서 "미미하다(marginal)"는 뜻과는 전혀 다른 의미다.
+
+어원은 수학의 **주변화(marginalization)** 다. 어떤 변수(여기서는 개인별 랜덤 효과 $u_i$)의 분포 전체에 걸쳐 평균을 내어(average out) 그 변수를 제거하는 연산을 말한다. 즉 개인 간 차이를 평균으로 뭉개버린 뒤의 효과가 Marginal Effect다.
+
+**주변화의 구체적 예시**: 전환 확률 $P(\text{전환} \mid \text{개인화}, u_i)$를 생각하자. 이 식은 처치 여부와 개인 특성 $u_i$를 **모두** 조건으로 건 확률이다. 특정 사람($u_i$가 고정된 상태)에게 처치 효과를 보면 **Conditional** 효과다.
+
+주변화란 여기서 $u_i$를 없애는 과정이다. "없앤다"는 것은 $u_i$가 가질 수 있는 모든 값(소극적 사용자, 보통 사용자, 적극적 사용자 등)에 대해, 각각의 전환 확률을 구한 뒤, 그 값들이 모집단에서 얼마나 자주 나타나는지(분포)를 가중치로 평균 내는 것이다:
+
+$$P(\text{전환} \mid \text{개인화}) = \int P(\text{전환} \mid \text{개인화}, u_i) \cdot \underbrace{p(u_i)}_{\text{모집단 분포}} \, du_i$$
+
+**Conditional vs Marginal 단계별 비교 예시**:
+
+> 상황: 개인화 추천 도입 효과를 측정하려 한다. 사용자는 세 유형이 있다.
+
+| 유형 | 모집단 비율 | 개인화 없을 때 전환율 | 개인화 있을 때 전환율 | 효과(차이) |
+|------|------------|-------------------|--------------------|-----------|
+| 냉담형 | 20% | 5% | 10% | +5%p |
+| 보통형 | 60% | 30% | 45% | +15%p |
+| 열성형 | 20% | 70% | 85% | +15%p |
+
+**Conditional 방식 (GLMM)**: 유형을 **고정**해서 각각 본다.
+
+- "이 사람이 냉담형이라면?" → 개인화 효과 = **+5%p** (냉담형의 $u_i$가 수식에 고정)
+- "이 사람이 보통형이라면?" → 개인화 효과 = **+15%p** (보통형의 $u_i$가 수식에 고정)
+- "이 사람이 열성형이라면?" → 개인화 효과 = **+15%p** (열성형의 $u_i$가 수식에 고정)
+
+→ 답이 사람마다 다르다. 어떤 사람인지($u_i$)를 알아야 효과를 말할 수 있다.
+
+**Marginal 방식 (GEE)**: 유형을 **모집단 비율로 섞어** 하나의 대표값을 낸다.
+
+$$0.20 \times 5\%p + 0.60 \times 15\%p + 0.20 \times 15\%p = 1\% + 9\% + 3\% = \mathbf{+13\%p}$$
+
+→ "어떤 사람인지 몰라도, 서비스 전체에 개인화를 도입하면 평균 **+13%p** 오른다"
+
+→ 유형 정보($u_i$)가 수식에서 사라졌다. 모든 유형이 비율대로 녹아들어 하나의 숫자가 됐다. 이것이 **주변화(marginalization)** 다.
+
+**수식으로 보는 $u_i$ 소거 과정**:
+
+GLMM의 Conditional 전환확률은 $u_i$가 수식 안에 명시적으로 남아있다:
+
+$$P(\text{전환} = 1 \mid x, u_i) = \text{logit}^{-1}(\beta_0 + \beta_1 x + u_i)$$
+
+여기서 $x$는 개인화 여부(0 또는 1), $u_i$는 개인 특성(랜덤 효과)이다. 이 식은 $u_i$가 고정되어 있어야만 값이 결정된다.
+
+주변화는 $u_i$ 자리에 모든 가능한 유형을 대입하고, 각 유형의 모집단 비율 $P(u_i = u_k)$를 가중치로 합산하는 것이다:
+
+$$P(\text{전환} = 1 \mid x) = \sum_{k} \underbrace{P(\text{전환} = 1 \mid x, u_i = u_k)}_{\text{유형 } k \text{의 전환확률}} \cdot \underbrace{P(u_i = u_k)}_{\text{유형 } k \text{의 모집단 비율}}$$
+
+위 예시에 대입하면 ($x = 1$, 개인화 적용 시):
+
+$$P(\text{전환} \mid \text{개인화}) = \underbrace{0.10}_{\text{냉담형}} \times \underbrace{0.20}_{\text{비율}} + \underbrace{0.45}_{\text{보통형}} \times \underbrace{0.60}_{\text{비율}} + \underbrace{0.85}_{\text{열성형}} \times \underbrace{0.20}_{\text{비율}} = 0.46$$
+
+개인화 미적용 시 ($x = 0$):
+
+$$P(\text{전환} \mid \text{비개인화}) = 0.05 \times 0.20 + 0.30 \times 0.60 + 0.70 \times 0.20 = 0.33$$
+
+Marginal Effect (개인화 도입의 집단 평균 효과):
+
+$$\Delta P_{\text{Marginal}} = P(\text{전환} \mid x=1) - P(\text{전환} \mid x=0) = 0.46 - 0.33 = +0.13 = \mathbf{+13\%p}$$
+
+최종 수식 $\Delta P_{\text{Marginal}} = +13\%p$에는 $u_i$가 더 이상 등장하지 않는다. 합산 과정에서 모든 유형이 비율대로 녹아들어 소거되었기 때문이다.
+
+이렇게 $u_i$를 모집단 비율(가중치)로 평균 낸 결과가 **Marginal 효과**다. 개인 특성($u_i$)이 수식에서 사라졌으므로 "주변화되었다(marginalized)"고 표현한다. 결국 **"$u_i$를 제거한다"는 것은 "모집단 전체를 대표하는 평균값을 구한다"는 의미**다.
+
+::: {.callout-tip}
+**핵심 직관**: Marginal은 "어떤 한 사람"의 이야기가 아니라, **모집단을 대표하는 가상의 평균적인 사람**에게 효과가 얼마냐를 묻는 것이다. 정책 입안자나 서비스 기획자는 "전체 사용자에게 이 기능을 도입하면 평균적으로 어떻게 되나?"를 알고 싶기 때문에 GEE(Marginal)가 적합하다. 반면 의사나 개인화 알고리즘은 "이 환자/사용자에게 효과가 있나?"를 알고 싶으므로 GLMM(Conditional)이 적합하다.
+:::
+
+두 효과의 차이를 가장 쉽게 파악하는 방법은 **질문 방식**이다:
+
+| 효과 유형 | 질문 형식 | 핵심 | 예시 |
+|----------|----------|------|------|
+| **Conditional (조건부)** | "이 사람의 특성이 고정된 상태에서, 처치를 받으면 어떻게 달라지나?" | 개인 내 변화 | 이 환자 (환자를 고정시키고)가 약을 먹으면 혈압이 얼마나 내려가나? |
+| **Marginal (주변부/모집단 평균)** | "집단 전체에 처치를 도입하면, 평균적으로 어떻게 달라지나?" | 집단 수준 변화 | 전 국민에게 이 약을 처방하면 평균 혈압이 얼마나 내려가나? |
+
+**도메인별 대응 예시**:
+
+| 도메인 | Conditional 질문 (GLMM) | Marginal 질문 (GEE) |
+|-------|------------------------|---------------------|
+| 임상 | 이 환자에게 약이 효과 있나? | 이 약을 집단에 도입하면 평균 효과는? |
+| A/B 테스트 | 이 사용자가 개인화 추천을 받으면 전환율이 오르나? | 개인화를 서비스 전체에 도입하면 전환율이 오르나? |
+| 교육 | 이 학생이 소규모 학급에 가면 성적이 오르나? | 전국 학급 규모를 줄이면 평균 성적이 오르나? |
+
+**왜 선형 모델에서는 두 효과가 같은가?** 선형 모델에서는 $f(x) = ax + b$ 꼴이므로 $E[f(u)] = f(E[u])$가 항등식으로 성립한다. 따라서 Conditional 효과를 평균 낸 것이 Marginal 효과와 동일하다.
+
+**왜 로지스틱 모델에서는 달라지는가?** 로지스틱 링크($\text{logit}$)는 비선형 함수다. 수학의 Jensen 부등식에 의해 $E[f(u)] \neq f(E[u])$이 되어, 개인별 Conditional 효과를 평균한 값이 집단 수준 Marginal 효과와 수치적으로 달라진다. 이것이 GLMM과 GEE가 같은 데이터에서 다른 계수를 내놓는 근본 이유다.
+
+## GLMM vs GEE
+
+| 구분 | GLMM | GEE |
+|------|------|-----|
+| **효과 유형** | Conditional (조건부) | Marginal (주변부) |
+| **질문** | 같은 사람에게 처치 효과 | 집단 평균 처치 효과 |
+| **랜덤 효과** | 명시적으로 모델링 | 없음 (Working Correlation으로 대처) |
+| **추정 방법** | MLE (Laplace, GH) | Quasi-likelihood |
+| **수렴 문제** | 자주 발생 | 드묾 |
+| **비정규 결과** | 지원 | 지원 |
+| **추천 상황** | 개인 효과가 관심 / 예측 목적 | 정책 효과 / 공중보건 / 집단 수준 결론 |
+
+### 수치 예시: 왜 결과가 다른가
+
+```
+시나리오: 개인화 → 프리미엄 전환 (이진 결과)
+
+사용자 기저 전환 성향 (u_i):
+- 고성향 사용자 (u_i = +2): 기저 전환확률 = 70%
+  개인화 후 전환확률 = 88%  → 개인 내 변화: +18%p
+
+- 저성향 사용자 (u_i = -2): 기저 전환확률 = 12%
+  개인화 후 전환확률 = 22%  → 개인 내 변화: +10%p
+
+GLMM 추정: 개인화의 Conditional OR = 3.5
+  → "같은 사람이 개인화를 받으면 오즈 3.5배"
+
+GEE 추정: 개인화의 Marginal OR = 2.1
+  → "전체 집단에 개인화 적용 시 평균 오즈 2.1배"
+
+왜 다른가?
+비선형 link(logit)에서는 개인 수준 OR의 평균 ≠ 모집단 수준 OR
+```
+
+::: {.callout-note}
+**수치 차이의 원리**: Jensen 부등식에 의해, 비선형 함수 $f$에 대해 $E[f(u)] \neq f(E[u])$가 일반적으로 성립한다. logit 링크처럼 비선형 $f$를 쓰는 모델에서는 개인 수준 OR을 단순 평균해도 집단 수준 OR이 나오지 않는다.
+
+**실무적 해석**: GLMM의 OR = 3.5는 "동일한 사람이 개인화를 받으면 오즈 3.5배", GEE의 OR = 2.1은 "서비스 전체에 개인화를 도입하면 집단 평균 오즈 2.1배". 두 수치 모두 정확하다. **답하려는 질문이 다를 뿐이다.**
+
+- 개인 효과가 궁금하다면 → **GLMM** (OR 3.5)
+- 정책·서비스 도입 효과가 궁금하다면 → **GEE** (OR 2.1)
+:::
+
+## GEE 핵심 개념: Working Correlation
+
+GEE는 랜덤 효과 대신 **Working Correlation Matrix**로 군집 내 상관을 처리한다.
+
+### Working Correlation이란
+
+**Working Correlation**은 GEE 추정 과정에서 연구자가 명시하는 **군집 내 관측치들 사이의 상관 구조 가정**이다. "Working(작업용, 임시)"이라는 수식어가 붙은 이유가 핵심이다.
+
+> 이 구조 가정이 실제와 달라도(틀려도) 고정 효과 추정치는 여전히 일치 추정량(consistent estimator)이다. GEE는 분산 추정에 **Sandwich Estimator**를 쓰기 때문에 오명세된 상관 구조를 자동 보정한다.
+
+이 강건성(robustness) 덕분에 GEE는 상관 구조를 정확히 모르더라도 안전하게 쓸 수 있다.
+
+**직관적 예시**: 동일 환자에게 주 1회씩 12주간 혈압을 측정한다고 하자.
+
+- 같은 환자의 측정값들은 서로 다른 환자 간 값보다 더 비슷하다 → **군집 내 상관** 존재
+- 인접한 주의 측정값끼리는 더 비슷하고, 멀어질수록 덜 비슷하다 → **시계열 패턴** 존재
+- 단순히 "같은 군집이면 모두 같은 유사도"라고 가정할 수도 있다 → **교환 가능(Exchangeable) 구조**
+
+Working Correlation은 이 "유사성 패턴의 모양"을 어떻게 가정할지 결정한다.
+
+$$\text{Cov}(Y_i) = A_i^{1/2} R_i(\alpha) A_i^{1/2}$$
+
+- $A_i$: 분산 행렬 (결과 분포에 따라 결정)
+- $R_i(\alpha)$: Working Correlation Matrix (연구자가 선택)
+
+### Working Correlation 구조
+
+| 구조 | 설명 | 적합 상황 |
+|------|------|----------|
+| **Independence** | 상관 없음 (GLM과 동일) | 군집 크기 클 때 |
+| **Exchangeable** | 모든 쌍 동일 상관 $\alpha$ | 순서 없는 반복 측정 |
+| **AR(1)** | 인접할수록 상관 높음 | 시계열 반복 측정 |
+| **Unstructured** | 모든 쌍 자유 추정 | 작은 군집, 많은 군집 |
+
+**GEE의 강건성**: Working Correlation을 틀리게 지정해도 고정 효과 추정은 일치 추정량(consistent estimator). 단, 분산 추정은 Sandwich Estimator로 보정.
+
+## GEE 적용 예시
+
+### 개인화 전환율 분석 (이진 결과)
+
+```python
+import statsmodels.api as sm
+
+# GEE: Exchangeable Correlation (같은 사용자의 세션끼리 동일 상관)
+model_gee = sm.GEE(
+    endog=df["converted"],
+    exog=sm.add_constant(df[["personalized", "week", "segment_MIEP", "segment_N"]]),
+    groups=df["user_id"],
+    family=sm.families.Binomial(),
+    cov_struct=sm.cov_struct.Exchangeable()
+).fit()
+
+print(model_gee.summary())
+print(f"\nWorking Correlation α = {model_gee.cov_struct.dep_params:.3f}")
+```
+
+```r
+library(gee)
+
+model_gee <- gee(
+  converted ~ personalized + week + segment,
+  data = df,
+  id = user_id,
+  family = binomial(link = "logit"),
+  corstr = "exchangeable"
+)
+
+summary(model_gee)
+```
+
+```
+결과:
+                   Estimate  Std.Err  z       OR
+(Intercept)         -3.45    0.15   -23.0
+personalized         0.41    0.08     5.1   1.51  ← Marginal OR
+week                 0.03    0.02     1.5
+segmentMIEP          0.55    0.12     4.6   1.73
+segmentN            -0.32    0.16    -2.0   0.73
+
+Working Correlation α = 0.38
+(같은 사용자의 세션 간 상관 = 0.38)
+
+GLMM 결과와 비교:
+  GLMM personalized: 0.65 (Conditional OR = 1.92)
+  GEE  personalized: 0.41 (Marginal OR = 1.51)
+  → GEE가 더 보수적 (모집단 평균 효과)
+```
+
+### Working Correlation 지정 비교
+
+```python
+results = {}
+
+for corstr in ["independence", "exchangeable", "ar1", "unstructured"]:
+    try:
+        m = sm.GEE(
+            endog=df["converted"],
+            exog=sm.add_constant(df[["personalized", "week"]]),
+            groups=df["user_id"],
+            family=sm.families.Binomial(),
+            cov_struct=getattr(sm.cov_struct, corstr.capitalize())()
+        ).fit()
+        results[corstr] = {"coef": m.params["personalized"], "se": m.bse["personalized"]}
+    except:
+        pass
+
+import pandas as pd
+print(pd.DataFrame(results).T)
+```
+
+```
+               coef     se
+independence   0.41   0.09  ← 상관 무시 → SE 과소추정
+exchangeable   0.41   0.08  ← 적절 (상관 반영)
+ar1            0.41   0.08  ← 비슷
+unstructured   0.41   0.10  ← SE 가장 크나 가장 유연
+
+→ 계수(coef)는 Working Correlation에 거의 무관 (GEE의 강건성)
+→ SE는 구조 선택에 따라 달라짐
+→ QIC로 최적 구조 선택
+```
+
+### QIC: Working Correlation 선택 기준
+
+GEE용 정보 기준. AIC와 유사하게 낮을수록 좋다.
+
+```r
+library(geepack)
+library(MuMIn)
+
+m_exch <- geeglm(converted ~ personalized + week + segment,
+                 data=df, id=user_id, family=binomial, corstr="exchangeable")
+m_ar1  <- geeglm(converted ~ personalized + week + segment,
+                 data=df, id=user_id, family=binomial, corstr="ar1")
+
+QIC(m_exch)
+QIC(m_ar1)
+```
+
+## 언제 GLMM, 언제 GEE?
+
+```
+결과 변수가 이진/카운트인 반복 측정 데이터
+
+└── 개인 수준 효과에 관심? (예: 개인화가 이 사람에게 얼마나?)
+    └── YES → GLMM
+
+└── 집단 수준 효과에 관심? (예: 전체 서비스에 개인화 도입 시 전환율?)
+    └── YES → GEE
+
+└── 수렴 문제가 자주 생기는가?
+    └── YES → GEE (더 안정적)
+
+└── 예측 모델 만들기?
+    └── YES → GLMM (개인별 예측 가능)
+
+└── 정책/개입의 집단 평균 효과?
+    └── YES → GEE (공중보건, 마케팅 ROI 등)
+```
+
+### 실무 가이드라인
+
+| 도메인 | 권장 | 이유 |
+|--------|------|------|
+| 임상 시험 (개인 치료 효과) | GLMM | 환자별 효과가 관심 |
+| 공중보건 (정책 효과) | GEE | 인구 수준 평균 효과가 관심 |
+| AI 개인화 (개인 만족도) | GLMM | 개인별 예측 및 효과 필요 |
+| 마케팅 ROI (전체 캠페인) | GEE | 전체 전환율 변화가 관심 |
+| 교육 연구 (학교 정책) | GEE | 전체 학생 평균 효과가 관심 |
+
+## 정리
+
+| | GLMM | GEE |
+|-|------|-----|
+| 효과 | Conditional | Marginal |
+| 랜덤 구조 | 명시적 모델링 | Working Correlation |
+| 수렴 | 어려울 수 있음 | 안정적 |
+| 추정 | MLE | Quasi-likelihood |
+| 예측 | 개인 수준 가능 | 집단 수준만 |
+| 관심사 | 개인 효과 / 메커니즘 | 집단 평균 효과 / 정책 |
+
+**다음**: `09-mixed-model-gam-intro.qmd` — GAM: 비선형 관계를 유연하게

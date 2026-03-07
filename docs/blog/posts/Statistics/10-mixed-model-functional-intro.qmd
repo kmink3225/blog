@@ -1,0 +1,319 @@
+---
+title: "Functional Data Analysis (FDA) 개요"
+subtitle: "데이터 자체가 함수일 때 — 종단 궤적의 함수형 접근"
+description: |
+  FDA는 반복 측정 데이터를 이산적 관측치가 아닌 연속 함수로 바라본다.
+  Basis 표현, Functional PCA(FPCA), Functional Regression,
+  그리고 종단 성장 궤적 분석에의 적용을 다룬다.
+  기존 Statistics/FDA 폴더의 내용과 연계하여 통합적으로 설명한다.
+categories:
+  - Statistics
+  - FDA
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# Functional Data Analysis (FDA) 개요
+
+> **기존 파일과의 관계**:
+> `Statistics/FDA/index.qmd` — FDA 전반 개요 (기존)
+> `Statistics/FDA/topics.qmd` — RT-PCR 신호 응용 사례 (기존)
+> 이 파일은 **종단 데이터 분석 맥락**에서 FDA를 재정리하고 LMM/GAMM과의 연결을 다룬다.
+
+---
+
+## 왜 FDA인가: "데이터가 함수"라는 관점 전환
+
+### 기존 접근: 이산 관측치
+
+```
+사용자 A의 만족도:
+Week 1: 3.5
+Week 2: 3.8
+Week 3: 4.1
+Week 4: 4.3
+...
+→ n × p 행렬로 분석 (각 시점이 변수)
+```
+
+### FDA 접근: 연속 함수
+
+```
+사용자 A의 만족도 = 함수 X_A(t), t ∈ [1, 8]
+
+이산 관측치는 이 연속 함수의 노이즈 있는 샘플:
+X_A(1) = 3.5, X_A(2) = 3.8, ...
+
+→ 분석 단위 = 함수 자체
+```
+
+**FDA가 유리한 상황:**
+
+| 상황 | 예시 |
+|------|------|
+| 관측 시점이 사람마다 다름 | 불규칙 방문 데이터 |
+| 관측 시점이 매우 많음 | 1초마다 측정한 생리 신호 |
+| 함수의 특성(최댓값, 변곡점 등)이 관심사 | 성장 속도가 최대인 시점 |
+| 시간 전체의 패턴 비교 | 두 그룹의 궤적 형태 비교 |
+
+---
+
+## FDA의 핵심: Basis 표현
+
+이산 관측치를 연속 함수로 변환하는 방법: **Basis 함수의 선형 결합**
+
+$$X_i(t) = \sum_{k=1}^{K} c_{ik} \phi_k(t) = \mathbf{c}_i^T \boldsymbol{\phi}(t)$$
+
+- $\phi_k(t)$: Basis 함수 (미리 정해진 함수들)
+- $c_{ik}$: 계수 (데이터에서 추정)
+
+### 주요 Basis 함수
+
+| Basis | 특징 | 적합 데이터 |
+|-------|------|-----------|
+| **B-spline** | 국소적, 부드러움 조절 가능 | 일반적 종단 궤적 |
+| **Fourier** | 주기적 패턴 | 계절성, 일주기 데이터 |
+| **Wavelet** | 국소-주파수 정보 | 비정상 시계열 |
+| **Polynomial** | 단순하지만 유연성 낮음 | 단순 추세 |
+
+### B-spline 예시
+
+```r
+library(fda)
+
+# B-spline basis: 8주 기간, 5개 basis 함수
+basis_bspline <- create.bspline.basis(
+  rangeval = c(1, 8),
+  nbasis = 8,        # basis 함수 수 (많을수록 유연, 과적합 위험)
+  norder = 4         # 3차 다항식 (cubic)
+)
+
+# 스무딩 파라미터(λ) 설정 — 클수록 부드러움
+# GCV(Generalized Cross-Validation)로 최적 λ 선택
+lambda_vals <- 10^seq(-4, 2, by=0.5)
+gcv_vals <- sapply(lambda_vals, function(lam) {
+  fd_par <- fdPar(basis_bspline, 2, lam)  # 2차 도함수에 패널티
+  smooth_result <- smooth.basis(week_obs, satisfaction_matrix, fd_par)
+  mean(smooth_result$gcv)
+})
+
+lambda_opt <- lambda_vals[which.min(gcv_vals)]
+
+# 최적 λ로 스무딩
+fd_par <- fdPar(basis_bspline, 2, lambda_opt)
+fd_smooth <- smooth.basis(week_obs, satisfaction_matrix, fd_par)
+satisfaction_fd <- fd_smooth$fd   # 함수형 데이터 객체
+```
+
+```python
+# Python: scikit-fda
+from skfda import FDataGrid
+from skfda.preprocessing.smoothing import BasisSmoother
+from skfda.representation.basis import BSplineBasis
+
+# B-spline basis 정의
+basis = BSplineBasis(domain_range=(1, 8), n_basis=8, order=4)
+
+# 함수형 데이터 생성 및 스무딩
+fd_raw = FDataGrid(satisfaction_matrix, sample_points=weeks)
+smoother = BasisSmoother(basis)
+fd_smooth = smoother.fit_transform(fd_raw)
+```
+
+---
+
+## Functional PCA (FPCA)
+
+일반 PCA를 함수형 데이터로 확장. 함수들의 주요 변동 패턴을 추출.
+
+### 개념
+
+$$X_i(t) = \mu(t) + \sum_{j=1}^{J} \xi_{ij} \psi_j(t) + \epsilon_i(t)$$
+
+- $\mu(t)$: 전체 평균 함수
+- $\psi_j(t)$: $j$번째 주성분 함수 (Eigenfunction)
+- $\xi_{ij}$: 개인 $i$의 $j$번째 점수 (FPC Score)
+
+### 예시: 만족도 궤적의 주요 변동 패턴
+
+```r
+library(fda)
+
+# FPCA
+fpca_result <- pca.fd(satisfaction_fd, nharm=3)  # 3개 주성분
+
+# 설명 분산 비율
+fpca_result$varprop
+# [1] 0.62 0.21 0.09  → 1, 2, 3번째 PC가 각각 62%, 21%, 9% 설명
+
+# 주성분 함수 시각화
+plot(fpca_result$harmonics, lty=1:3,
+     xlab="Week", ylab="", main="주요 변동 패턴")
+```
+
+```
+FPC 1 (62% 설명): 전반적 수준 차이 (높게 유지 vs 낮게 유지)
+FPC 2 (21% 설명): 초반-후반 차이 (초반에 높고 후반에 낮음 vs 반대)
+FPC 3 ( 9% 설명): 중간 시점의 변동
+
+→ 대부분의 개인 간 차이는 FPC 1,2로 설명 가능
+→ FPC Score를 downstream 분석에 활용 가능
+```
+
+### FPC Score 활용
+
+```r
+# FPC Score 추출
+fpc_scores <- fpca_result$scores
+# n_users × 3 행렬
+
+# FPC Score로 사용자 그룹 분류
+library(ggplot2)
+score_df <- data.frame(
+  user_id = 1:n_users,
+  fpc1 = fpc_scores[,1],
+  fpc2 = fpc_scores[,2]
+)
+
+ggplot(score_df, aes(x=fpc1, y=fpc2)) +
+  geom_point(alpha=0.5) +
+  labs(x="FPC1: 전반적 수준", y="FPC2: 초반-후반 패턴",
+       title="사용자 궤적 패턴 분포")
+```
+
+---
+
+## Functional Regression
+
+### Scalar-on-Function Regression
+
+함수형 예측 변수 → 스칼라 결과
+
+$$Y_i = \alpha + \int \beta(t) X_i(t) \, dt + \epsilon_i$$
+
+$\beta(t)$: 시간 $t$에서의 예측 변수 효과 함수
+
+**예시**: 8주간 대화 패턴(함수) → 최종 프리미엄 전환 여부(스칼라)
+
+```r
+library(fda)
+
+# Scalar-on-Function Regression
+# 결과: 최종 전환 여부 (0/1)
+# 예측: 8주간 만족도 함수
+
+# beta 함수를 위한 basis
+beta_basis <- create.bspline.basis(c(1,8), nbasis=6)
+beta_fd_par <- fdPar(beta_basis, 2, lambda=0.1)
+
+# 모델 적합
+scal_fun_reg <- fRegress(
+  y = converted_vector,    # n명의 최종 전환 여부
+  xfdlist = list(ones=rep(1,n_users), sat=satisfaction_fd),
+  betalist = list(beta0=fdPar(1), beta1=beta_fd_par)
+)
+
+# β(t) 시각화: 언제의 만족도가 전환에 가장 중요한가?
+plot(scal_fun_reg$betaestlist[[2]]$fd,
+     xlab="Week", ylab="β(t)",
+     main="시점별 만족도의 전환 예측력")
+```
+
+```
+결과 해석:
+β(t)
++0.3 │              ╭────  ← 후반부 만족도가 전환에 가장 중요
+     │           ╱
+0.0  │─────────╱
+     │
+-0.1 │  (초반 만족도는 전환과 약한 음의 관계 — ceiling effect)
+     └──────────────────── Week
+         1  2  3  4  5  6  7  8
+
+해석: 7~8주의 만족도가 최종 전환에 가장 강한 양의 영향
+     → 장기 만족도 유지가 전환의 핵심
+```
+
+### Function-on-Scalar Regression
+
+스칼라 예측 변수 → 함수형 결과
+
+$$Y_i(t) = \alpha(t) + \beta(t) X_i + \epsilon_i(t)$$
+
+$\beta(t)$: 예측 변수의 시점별 효과
+
+**예시**: 세그먼트(스칼라) → 만족도 궤적(함수)
+
+```r
+# MIEP 세그먼트가 전체 궤적에 미치는 영향 (시점별)
+# 각 시점에서 MIEP vs SI의 차이를 β(t)로 추정
+
+fun_scalar_reg <- fRegress(
+  y = satisfaction_fd,   # 함수형 결과
+  xfdlist = list(ones=rep(1,n_users),
+                 miep=(segment=="MIEP")*1),
+  betalist = list(
+    beta0=fdPar(create.bspline.basis(c(1,8), 8), 2, 0.01),
+    beta1=fdPar(create.bspline.basis(c(1,8), 8), 2, 0.01)
+  )
+)
+
+plot(fun_scalar_reg$betaestlist[[2]]$fd,
+     main="MIEP 세그먼트 효과 β(t)")
+```
+
+---
+
+## LMM vs GAMM vs FDA 비교
+
+| | LMM | GAMM | FDA |
+|-|-----|------|-----|
+| **시간 효과** | 선형 | 비선형 (Spline) | 함수 전체 |
+| **개인 차이** | 랜덤 절편/기울기 | 랜덤 절편/궤적 | FPC Score |
+| **결과 변수** | 스칼라 | 스칼라 | 함수 가능 |
+| **예측 변수** | 스칼라 | 스칼라 | 함수 가능 |
+| **해석** | 계수 | 곡선 + 계수 | β(t) 함수 |
+| **적합 상황** | 선형 궤적 | 비선형 궤적 | 함수 자체가 관심사 |
+| **소프트웨어** | R/Python | R(mgcv) | R(fda), Python(scikit-fda) |
+
+### 언제 FDA를 쓰는가
+
+```
+다음 중 하나라도 해당하면 FDA 고려:
+
+1. 관측 시점이 사람마다 다름 (불규칙 종단)
+2. 관측 시점이 매우 촘촘 (센서 데이터, 생리 신호)
+3. 함수의 특성이 관심사
+   - 최댓값 달성 시점
+   - 변곡점 (성장 가속/감속 시점)
+   - 두 함수의 교차 여부
+4. 함수 자체가 예측 변수 또는 결과 변수
+5. 두 집단의 궤적 형태 자체를 비교
+```
+
+---
+
+## Python: scikit-fda 간단 예시
+
+```python
+from skfda import FDataGrid
+from skfda.ml.regression import HistoricalLinearRegression
+from skfda.preprocessing.dim_reduction import FPCA
+
+# 함수형 데이터 생성
+fd = FDataGrid(
+    data_matrix=satisfaction_matrix,  # n_users × n_weeks
+    sample_points=list(range(1, 9))
+)
+
+# FPCA
+fpca = FPCA(n_components=3)
+fpc_scores = fpca.fit_transform(fd)
+
+print(f"설명 분산: {fpca.explained_variance_ratio_}")
+# [0.62, 0.21, 0.09]
+```
+
+**다음**: `11-mixed-model-comparison.qmd` — 전체 기법 비교 및 선택 가이드

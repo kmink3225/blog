@@ -1,0 +1,432 @@
+---
+title: "ML for Longitudinal Data"
+subtitle: "Random Survival Forest, XGBoost 시계열 피처, HMM, Lasso"
+description: |
+  종단 데이터에 적용 가능한 머신러닝 기법을 다룬다.
+  전통 통계 모델(LMM, Cox)의 비선형 대안으로서 Random Survival Forest,
+  시간 피처 공학 기반 XGBoost, 잠재 상태 전환의 Hidden Markov Model,
+  고차원 종단 데이터의 Lasso를 구체적 예시와 함께 설명한다.
+categories:
+  - Statistics
+  - Machine Learning
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# ML for Longitudinal Data
+
+## 왜 ML인가: 통계 모델의 한계
+
+| 상황 | 통계 모델의 한계 | ML 대안 |
+|------|----------------|---------|
+| 비선형 교호작용 다수 | LMM은 선형 가정 | Random Forest, XGBoost |
+| 수백 개의 공변량 | 자유도 부족, 다중공선성 | Lasso, Elastic Net |
+| 생존 시간 + 비선형 | Cox는 비례 위험 가정 | Random Survival Forest |
+| 관측 안 된 상태 전환 | 모델 명세 어려움 | HMM |
+| 예측 정확도가 최우선 | 해석보다 성능 | Gradient Boosting |
+
+---
+
+## 기법 1: Random Survival Forest
+
+### Cox Proportional Hazard의 한계
+
+Cox 모델 가정: **비례 위험(Proportional Hazard)**
+
+$$h(t \mid X) = h_0(t) \exp(X\beta)$$
+
+- 각 공변량 효과가 시간에 따라 일정 (PH 가정)
+- 공변량 간 선형 결합만 허용
+- 교호작용이 많으면 명세하기 어려움
+
+**Random Survival Forest**는 이 가정 없이 비선형 생존 함수를 추정한다.
+
+### 아이디어
+
+일반 Random Forest에서 split criterion을 생존 데이터에 맞게 변경:
+
+- **Log-rank statistic**으로 최적 분기점 탐색
+- 각 leaf에서 넬슨-알렌(Nelson-Aalen) 누적 위험 함수 추정
+- 여러 트리의 예측을 앙상블
+
+### 예시: 사용자 이탈 예측
+
+```python
+from sksurv.ensemble import RandomSurvivalForest
+from sksurv.util import Surv
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+# 데이터 준비
+# event: 이탈 여부 (True/False)
+# time: 이탈까지의 주 수 (또는 관찰 종료 시점)
+y = Surv.from_dataframe("churned", "weeks_active", df)
+
+X = df[["segment_MIEP", "segment_N", "avg_satisfaction",
+        "total_sessions", "personalized_ratio"]]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+# Random Survival Forest
+rsf = RandomSurvivalForest(
+    n_estimators=200,
+    min_samples_split=10,
+    min_samples_leaf=5,
+    n_jobs=-1,
+    random_state=42
+)
+rsf.fit(X_train, y_train)
+
+# 평가: C-index (Concordance Index)
+c_index = rsf.score(X_test, y_test)
+print(f"C-index: {c_index:.3f}")
+# C-index: 0.78 (0.5=랜덤, 1.0=완벽)
+```
+
+### Cox vs RSF 비교
+
+```python
+from sksurv.linear_model import CoxPHSurvivalAnalysis
+
+cox = CoxPHSurvivalAnalysis()
+cox.fit(X_train, y_train)
+cox_ci = cox.score(X_test, y_test)
+
+print(f"Cox C-index: {cox_ci:.3f}")  # 0.72
+print(f"RSF C-index: {c_index:.3f}")  # 0.78
+# → RSF가 더 높음: 비선형 교호작용 포착
+```
+
+### 변수 중요도 (VIMP)
+
+```python
+import matplotlib.pyplot as plt
+
+# Permutation-based VIMP
+vimp = rsf.feature_importances_
+feat_df = pd.DataFrame({
+    "feature": X.columns,
+    "importance": vimp
+}).sort_values("importance", ascending=True)
+
+feat_df.plot.barh(x="feature", y="importance",
+                  title="Random Survival Forest: 변수 중요도")
+```
+
+```
+변수 중요도:
+avg_satisfaction     |████████████  0.31  ← 가장 중요
+personalized_ratio   |████████      0.22
+total_sessions       |██████        0.18
+segment_MIEP         |████          0.15
+segment_N            |██            0.14
+```
+
+---
+
+## 기법 2: XGBoost + 시간 피처 공학
+
+### 핵심 아이디어
+
+반복 측정 데이터를 XGBoost에 넣으려면 **시간적 의존성을 피처로 명시**해야 한다.
+
+```
+원본 데이터:
+user_id | week | satisfaction | personalized | segment
+   1    |  1   |     3.5      |      0       |   SI
+   1    |  2   |     3.8      |      0       |   SI
+   1    |  3   |     4.1      |      0       |   SI
+   ...
+
+XGBoost 입력:
+user_id | week | satisfaction | sat_lag1 | sat_lag2 | sat_rolling3 | trend_2w | ...
+   1    |  3   |     4.1      |   3.8    |   3.5    |     3.8      |  +0.3    | ...
+```
+
+### 피처 공학 전략
+
+```python
+import pandas as pd
+import numpy as np
+
+def create_temporal_features(df, target="satisfaction", lags=[1, 2, 3]):
+    """종단 데이터를 XGBoost 입력 피처로 변환"""
+    df = df.sort_values(["user_id", "week"])
+    result = df.copy()
+
+    # 1. Lag 피처: 이전 시점 값
+    for lag in lags:
+        result[f"{target}_lag{lag}"] = (
+            result.groupby("user_id")[target].shift(lag)
+        )
+
+    # 2. 롤링 통계: 이전 n시점 평균/표준편차
+    result[f"{target}_rolling3_mean"] = (
+        result.groupby("user_id")[target]
+        .transform(lambda x: x.shift(1).rolling(3).mean())
+    )
+    result[f"{target}_rolling3_std"] = (
+        result.groupby("user_id")[target]
+        .transform(lambda x: x.shift(1).rolling(3).std())
+    )
+
+    # 3. 추세: 최근 2시점 변화량
+    result[f"{target}_trend2"] = (
+        result[f"{target}_lag1"] - result[f"{target}_lag2"]
+    )
+
+    # 4. 누적 개인화 비율
+    result["cumulative_personalized"] = (
+        result.groupby("user_id")["personalized"]
+        .transform(lambda x: x.expanding().mean())
+    )
+
+    # 5. 세션 번호 (개인 내 시간 경과)
+    result["session_num"] = (
+        result.groupby("user_id").cumcount() + 1
+    )
+
+    return result.dropna()  # lag로 인한 NaN 제거
+
+df_feat = create_temporal_features(df)
+print(df_feat.shape)   # (원본보다 적은 행, 더 많은 열)
+```
+
+### XGBoost 학습: 이탈 예측
+
+```python
+import xgboost as xgb
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.metrics import roc_auc_score
+
+# 피처와 타겟
+features = [
+    "satisfaction_lag1", "satisfaction_lag2", "satisfaction_lag3",
+    "satisfaction_rolling3_mean", "satisfaction_rolling3_std",
+    "satisfaction_trend2", "cumulative_personalized",
+    "session_num", "segment_MIEP", "segment_N", "week"
+]
+target = "will_churn_next_week"  # 다음 주에 이탈 여부
+
+# 사용자 단위로 train/test 분리 (데이터 누출 방지)
+gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+train_idx, test_idx = next(gss.split(df_feat, groups=df_feat["user_id"]))
+
+X_train = df_feat.iloc[train_idx][features]
+X_test  = df_feat.iloc[test_idx][features]
+y_train = df_feat.iloc[train_idx][target]
+y_test  = df_feat.iloc[test_idx][target]
+
+# XGBoost
+model = xgb.XGBClassifier(
+    n_estimators=300,
+    max_depth=5,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42,
+    eval_metric="auc"
+)
+model.fit(
+    X_train, y_train,
+    eval_set=[(X_test, y_test)],
+    verbose=50,
+    early_stopping_rounds=20
+)
+
+auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
+print(f"AUC: {auc:.3f}")   # AUC: 0.84
+```
+
+### 주의: 데이터 누출 방지
+
+```
+잘못된 방법:
+random_split → 같은 사용자의 week3(train)과 week5(test)가 분리
+week5 예측에 week3 값이 lag 피처로 들어감 → 시험 데이터 누출
+
+올바른 방법:
+1. 사용자 단위 분리: GroupShuffleSplit(groups=user_id)
+2. 시간 단위 분리: 앞 6주=train, 뒤 2주=test
+3. Walk-forward validation: 매주 재학습
+```
+
+---
+
+## 기법 3: Hidden Markov Model (HMM)
+
+### 핵심 아이디어
+
+사용자는 언제든 관측되지 않는 **잠재 상태(latent state)**에 있다.
+HMM은 이 잠재 상태의 전환 패턴을 학습한다.
+
+```
+잠재 상태:
+State 1: "탐색 중"  — 단순 질문, 짧은 세션
+State 2: "학습 중"  — 깊은 질문, 긴 세션
+State 3: "문제 해결 중" — 에러 관련, 반복 질문
+State 4: "이탈 직전" — 부정 감정, 짧아지는 세션
+
+관측: 만족도, 턴 수, 감정 점수, 세션 길이 등
+
+→ HMM이 학습하는 것:
+  1. 초기 상태 확률 π
+  2. 상태 전환 행렬 A (State i → State j 확률)
+  3. 방출 분포 B (State i에서 관측값의 분포)
+```
+
+### 예시
+
+```python
+from hmmlearn import hmm
+import numpy as np
+
+# 관측 시퀀스 준비 (사용자별 시계열)
+# 각 시점의 피처: [만족도, 턴 수, 감정 점수]
+obs_sequences = []  # 각 원소: (n_weeks_i × n_features) 배열
+lengths = []        # 각 사용자의 시퀀스 길이
+
+for uid in df["user_id"].unique():
+    user_data = df[df["user_id"] == uid].sort_values("week")
+    obs = user_data[["satisfaction", "turn_count", "emotion_score"]].values
+    obs_sequences.append(obs)
+    lengths.append(len(obs))
+
+X_hmm = np.vstack(obs_sequences)
+
+# Gaussian HMM (연속형 관측)
+model_hmm = hmm.GaussianHMM(
+    n_components=4,    # 잠재 상태 수 (도메인 지식 기반 설정)
+    covariance_type="full",
+    n_iter=100,
+    random_state=42
+)
+model_hmm.fit(X_hmm, lengths)
+
+# 각 사용자의 상태 시퀀스 예측
+for uid, obs, length in zip(df["user_id"].unique()[:3],
+                             obs_sequences[:3], lengths[:3]):
+    states = model_hmm.predict(obs)
+    print(f"User {uid}: {states}")
+```
+
+```
+출력:
+User 0: [2 2 2 1 1 3 3 3]   ← 탐색→학습→문제해결 전환
+User 1: [1 1 1 1 1 1 3 0]   ← 탐색 유지 후 이탈 직전
+User 2: [2 2 3 2 2 2 2 2]   ← 학습 중심, 잠깐 문제해결
+```
+
+### HMM 결과 활용
+
+```python
+# 상태 전환 행렬 시각화
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+trans_mat = model_hmm.transmat_
+state_names = ["탐색 중", "학습 중", "문제 해결", "이탈 직전"]
+
+plt.figure(figsize=(8, 6))
+sns.heatmap(trans_mat,
+            xticklabels=state_names,
+            yticklabels=state_names,
+            annot=True, fmt=".2f", cmap="Blues")
+plt.title("상태 전환 행렬 A")
+plt.ylabel("현재 상태")
+plt.xlabel("다음 상태")
+```
+
+```
+상태 전환 행렬:
+             탐색   학습  문제해결  이탈직전
+탐색   │ 0.65  0.20   0.10    0.05
+학습   │ 0.10  0.72   0.12    0.06
+문제해결│ 0.08  0.15   0.60    0.17  ← 이탈 위험 높음
+이탈직전│ 0.05  0.03   0.10    0.82  ← 자기 흡수성 높음
+
+→ "이탈 직전" 상태에 진입하면 빠져나오기 어려움 (0.82)
+→ 이 상태 감지 즉시 개입 필요
+```
+
+---
+
+## 기법 4: Lasso/Elastic Net for High-dimensional Longitudinal
+
+### 문제 설정
+
+공변량이 수백~수천 개인 종단 데이터:
+- EHR(전자의무기록): 수백 개 진단 코드 × 수십 시점
+- 유전체 데이터: 수만 개 SNP × 반복 측정
+
+표준 LMM은 차원의 저주로 적합 불가 → **정규화** 필요
+
+### 방법
+
+```python
+from sklearn.linear_model import Lasso, ElasticNet
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+
+# 고차원 피처 (예: 수백 개의 과거 행동 지표)
+X_high_dim = df_feat[high_dim_features]  # n × 500+ 피처
+y = df["will_churn_next_week"]
+
+# Lasso (L1 정규화): 변수 선택 효과
+pipeline = Pipeline([
+    ("scaler", StandardScaler()),
+    ("lasso", Lasso(alpha=0.01))
+])
+pipeline.fit(X_train_hd, y_train)
+
+# 선택된 변수 확인
+coef = pipeline["lasso"].coef_
+selected = np.array(high_dim_features)[coef != 0]
+print(f"선택된 변수 수: {len(selected)} / {len(high_dim_features)}")
+print("중요 변수:", selected[:10])
+```
+
+### 랜덤 효과 + 정규화: glmmLasso
+
+```r
+library(glmmLasso)
+
+# 고차원 공변량 + 사용자 랜덤 효과
+m_glmmlasso <- glmmLasso(
+  satisfaction ~ week + personalized + feature1 + feature2 + ... + feature500,
+  rnd = list(user_id = ~1),
+  lambda = 10,        # 정규화 강도 (CV로 선택)
+  data = df
+)
+
+# 0이 아닌 계수 = 선택된 변수
+coef_selected <- m_glmmlasso$coefficients[m_glmmlasso$coefficients != 0]
+```
+
+---
+
+## 통계 모델 vs ML: 종단 데이터 선택 기준
+
+| 기준 | 통계 모델 (LMM/GLMM) | ML |
+|------|---------------------|-----|
+| **해석** | 높음 (계수, 신뢰구간) | 낮음 (블랙박스) |
+| **비선형** | 제한적 (GAMM으로 보완) | 자연스럽게 처리 |
+| **고차원** | 어려움 | Lasso/RF로 처리 |
+| **인과 추론** | 적합 | 부적합 (예측만) |
+| **불확실성 정량화** | 자연스럽게 제공 | 별도 작업 필요 |
+| **소표본** | 강함 (구조 가정으로 보완) | 약함 |
+| **예측 성능** | 보통 | 높음 |
+| **결측치** | LMM은 자연스럽게 처리 | 별도 처리 필요 |
+
+**실무 권장:**
+
+```
+인과 추론 / 효과 추정 / 신뢰구간 필요 → 통계 모델 (LMM, GLMM)
+예측 정확도 최우선 / 비선형 복잡한 관계 → ML (XGBoost, RSF)
+탐색적 분석 / 변수 중요도 → ML 먼저, 통계 모델로 검증
+```
+
+**다음**: `13-mixed-model-dl-longitudinal.qmd` — DL for Longitudinal Data

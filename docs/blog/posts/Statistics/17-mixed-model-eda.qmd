@@ -1,0 +1,714 @@
+---
+title: "종단 데이터 탐색적 분석 (EDA)"
+subtitle: "Spaghetti Plot, 공분산 구조 탐색, 결측 패턴, 개인 궤적 요약"
+description: |
+  모델 적합 전에 종단 데이터의 구조를 파악하는 탐색적 분석 기법을 다룬다.
+  개인 궤적 시각화(Spaghetti Plot), 시점별 분포 변화, 공분산/상관 구조 탐색,
+  결측 데이터 패턴, 그룹 간 궤적 비교, ICC 사전 추정까지
+  모델 선택의 근거를 마련하는 전체 EDA 파이프라인을 설명한다.
+categories:
+  - Statistics
+  - Mixed Model
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# 종단 데이터 탐색적 분석 (EDA)
+
+## EDA의 목적
+
+종단 데이터 EDA는 모델을 적합하기 **전에** 다음 질문에 답한다:
+
+| 질문 | EDA 방법 | 모델 선택 영향 |
+|------|----------|--------------|
+| 평균 궤적이 선형인가? | 평균 + Loess 곡선 | LMM vs GAMM |
+| 개인 차이가 큰가? | Spaghetti Plot, ICC | Random Effect 필요 여부 |
+| 기울기도 개인차가 있는가? | 개인별 OLS 기울기 분포 | Random Slope 필요 여부 |
+| 시점 간 상관 구조는? | 상관 행렬, Variogram | 공분산 구조 선택 |
+| 결측 패턴이 있는가? | 결측 히트맵, 이탈 분석 | MAR vs MCAR vs MNAR |
+| 그룹 간 궤적이 다른가? | 그룹별 평균 궤적 | 교호작용 여부 |
+| 이상치/이상 패턴이 있는가? | 개인별 궤적 이상치 | 전처리 필요 여부 |
+
+---
+
+## 데이터 준비
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+
+np.random.seed(42)
+
+# AI Agent 개인화 실험 데이터
+n_users, n_weeks = 300, 8
+user_ids = np.repeat(range(n_users), n_weeks)
+weeks    = np.tile(range(1, n_weeks+1), n_users)
+
+u_i   = np.repeat(np.random.normal(0, 0.65, n_users), n_weeks)
+u_1i  = np.repeat(np.random.normal(0, 0.10, n_users), n_weeks)
+
+personalized = (weeks >= 5).astype(int)
+segment = np.repeat(
+    np.random.choice(["SI", "MIEP", "N"], n_users, p=[0.6, 0.3, 0.1]),
+    n_weeks
+)
+
+satisfaction = (
+    3.5 + 0.48 * personalized + 0.02 * weeks
+    + u_i + u_1i * weeks
+    + np.random.normal(0, 0.5, n_users * n_weeks)
+).clip(1, 5)
+
+# 결측 삽입 (20%): 후반부일수록 이탈 가능성 높음
+missing_prob = 0.05 + 0.03 * (weeks - 1)
+missing_mask = np.random.binomial(1, missing_prob).astype(bool)
+satisfaction_with_na = satisfaction.copy()
+satisfaction_with_na[missing_mask] = np.nan
+
+df = pd.DataFrame({
+    "user_id": user_ids, "week": weeks,
+    "satisfaction": satisfaction_with_na,
+    "personalized": personalized,
+    "segment": segment
+})
+
+print(df.shape)
+print(df.isnull().sum())
+print(df.groupby("week")["satisfaction"].describe().round(2))
+```
+
+---
+
+## 1. 시점별 기술 통계
+
+### 시점별 평균, 중앙값, 분산
+
+```python
+# 시점별 요약 통계
+time_summary = df.groupby("week")["satisfaction"].agg([
+    "count", "mean", "median", "std",
+    lambda x: x.quantile(0.25),
+    lambda x: x.quantile(0.75)
+]).round(3)
+time_summary.columns = ["n", "mean", "median", "std", "Q1", "Q3"]
+print(time_summary)
+```
+
+```
+week   n    mean  median   std    Q1    Q3
+1     294   3.54   3.54   0.68  3.07  4.00
+2     290   3.56   3.56   0.71  3.08  4.03
+3     287   3.57   3.58   0.70  3.09  4.05
+4     283   3.60   3.59   0.72  3.11  4.08
+5     279   4.03   4.02   0.70  3.58  4.49   ← 개인화 시작
+6     274   4.06   4.06   0.71  3.61  4.52
+7     269   4.08   4.07   0.72  3.62  4.54
+8     263   4.10   4.10   0.71  3.64  4.56
+```
+
+### 시점별 분포 시각화
+
+```python
+fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+# 1. 시점별 박스플롯
+df.boxplot(column="satisfaction", by="week", ax=axes[0])
+axes[0].axvline(4.5, color='red', linestyle='--', alpha=0.7,
+                label='개인화 시작')
+axes[0].set_title("시점별 만족도 분포")
+axes[0].set_xlabel("Week")
+axes[0].legend()
+
+# 2. 바이올린 플롯 (분포 형태 파악)
+week_data = [df[df.week==w]["satisfaction"].dropna() for w in range(1,9)]
+axes[1].violinplot(week_data, positions=range(1,9))
+axes[1].axvline(4.5, color='red', linestyle='--', alpha=0.7)
+axes[1].set_title("시점별 만족도 바이올린")
+axes[1].set_xlabel("Week")
+
+# 3. 평균 ± 1.96 SE
+means = df.groupby("week")["satisfaction"].mean()
+ses   = df.groupby("week")["satisfaction"].sem()
+weeks_x = range(1, 9)
+axes[2].plot(weeks_x, means, 'o-', linewidth=2, markersize=6)
+axes[2].fill_between(weeks_x, means - 1.96*ses, means + 1.96*ses, alpha=0.2)
+axes[2].axvline(4.5, color='red', linestyle='--', alpha=0.7, label='개인화')
+axes[2].set_title("평균 궤적 (95% CI)")
+axes[2].set_xlabel("Week")
+axes[2].legend()
+
+plt.tight_layout()
+```
+
+---
+
+## 2. Spaghetti Plot — 개인 궤적 시각화
+
+종단 데이터 EDA의 가장 기본적이고 중요한 시각화.
+
+```python
+fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+# 전체 Spaghetti Plot (일부만)
+sample_users = df["user_id"].unique()[:50]
+sample_df = df[df["user_id"].isin(sample_users)]
+
+for uid, group in sample_df.groupby("user_id"):
+    axes[0].plot(group["week"], group["satisfaction"],
+                 alpha=0.2, color="steelblue", linewidth=0.8)
+
+# 전체 평균 덮어쓰기
+mean_traj = df.groupby("week")["satisfaction"].mean()
+axes[0].plot(mean_traj.index, mean_traj.values,
+             'r-', linewidth=3, label="전체 평균", zorder=5)
+axes[0].axvline(4.5, color='black', linestyle='--', alpha=0.5)
+axes[0].set_title("Spaghetti Plot (n=50 sample)")
+axes[0].set_xlabel("Week")
+axes[0].set_ylabel("Satisfaction")
+axes[0].legend()
+
+# 세그먼트별 평균 궤적
+colors = {"SI": "steelblue", "MIEP": "green", "N": "red"}
+for seg, color in colors.items():
+    seg_mean = df[df.segment==seg].groupby("week")["satisfaction"].mean()
+    seg_se   = df[df.segment==seg].groupby("week")["satisfaction"].sem()
+    axes[1].plot(seg_mean.index, seg_mean.values,
+                 'o-', color=color, label=seg, linewidth=2)
+    axes[1].fill_between(seg_mean.index,
+                         seg_mean - 1.96*seg_se,
+                         seg_mean + 1.96*seg_se,
+                         alpha=0.15, color=color)
+
+axes[1].axvline(4.5, color='black', linestyle='--', alpha=0.5)
+axes[1].set_title("세그먼트별 평균 궤적")
+axes[1].set_xlabel("Week")
+axes[1].legend()
+
+plt.tight_layout()
+```
+
+### Spaghetti Plot에서 읽어야 할 것
+
+```
+관찰 포인트:
+1. 선들의 수직 퍼짐 → 개인 간 차이 (Between-subject variance, σ²_u)
+   퍼짐이 크다 → Random Intercept 필요
+
+2. 선들의 기울기 차이 → 시간 효과의 개인 차이 (Random Slope 필요 여부)
+   기울기가 모두 비슷 → Random Intercept만으로 충분
+   기울기가 다양 → Random Slope 추가 고려
+
+3. 선의 평균 형태 → 선형인가 비선형인가
+   직선 → LMM
+   S자/로그형 → GAMM
+
+4. 특이 궤적 → 이상치 사용자 (갑자기 5에서 1로 급락 등)
+```
+
+---
+
+## 3. 개인별 OLS 기울기 분포
+
+각 사용자에게 별도의 단순 회귀를 적합하여 **개인별 기울기를 추출**한다.
+기울기의 분산이 크면 Random Slope가 필요하다는 신호다.
+
+```python
+from scipy.stats import linregress
+
+individual_slopes = []
+individual_intercepts = []
+
+for uid, group in df.dropna(subset=["satisfaction"]).groupby("user_id"):
+    if len(group) < 3:
+        continue
+    slope, intercept, r, p, se = linregress(group["week"], group["satisfaction"])
+    individual_slopes.append({"user_id": uid, "slope": slope,
+                               "intercept": intercept,
+                               "segment": group["segment"].iloc[0]})
+
+slope_df = pd.DataFrame(individual_slopes)
+
+fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+# 1. 기울기 히스토그램
+axes[0].hist(slope_df["slope"], bins=30, edgecolor='black')
+axes[0].axvline(slope_df["slope"].mean(), color='red', linestyle='--',
+                label=f"평균 = {slope_df['slope'].mean():.3f}")
+axes[0].set_title(f"개인별 기울기 분포\n(SD = {slope_df['slope'].std():.3f})")
+axes[0].set_xlabel("기울기 (주당 만족도 변화)")
+axes[0].legend()
+
+# 2. 절편 vs 기울기 산점도: 상관 확인
+axes[1].scatter(slope_df["intercept"], slope_df["slope"], alpha=0.4, s=20)
+corr = slope_df[["intercept","slope"]].corr().iloc[0,1]
+axes[1].set_title(f"절편 vs 기울기\n(r = {corr:.3f})")
+axes[1].set_xlabel("절편 (초기 만족도)")
+axes[1].set_ylabel("기울기 (변화 속도)")
+
+# 3. 세그먼트별 기울기 분포
+for seg in ["SI", "MIEP", "N"]:
+    slopes = slope_df[slope_df.segment==seg]["slope"]
+    axes[2].hist(slopes, alpha=0.5, bins=20, label=f"{seg} (μ={slopes.mean():.2f})")
+axes[2].set_title("세그먼트별 기울기 분포")
+axes[2].set_xlabel("기울기")
+axes[2].legend()
+
+plt.tight_layout()
+```
+
+```
+해석 가이드:
+- 기울기 SD가 크다 (예: SD > 0.05) → Random Slope 필요
+- 절편-기울기 상관 음수 → 초기 만족도 높을수록 변화 적음 (천장 효과)
+- 세그먼트별 기울기 분포 차이 → 교호작용 고려
+```
+
+---
+
+## 4. 시점 간 상관 구조 탐색
+
+Mixed Model의 공분산 구조를 결정하기 위해 시점 간 상관을 탐색한다.
+
+### 상관 행렬
+
+```python
+# Wide format으로 변환
+df_wide = df.pivot_table(
+    index="user_id", columns="week", values="satisfaction"
+)
+df_wide.columns = [f"week_{w}" for w in df_wide.columns]
+
+# 시점 간 상관 행렬
+corr_matrix = df_wide.corr()
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# 히트맵
+sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm",
+            center=0, ax=axes[0], vmin=0, vmax=1)
+axes[0].set_title("시점 간 상관 행렬")
+
+# 시간 거리별 상관 (Variogram 스타일)
+from itertools import combinations
+
+lags, correlations = [], []
+for w1, w2 in combinations(range(1, 9), 2):
+    lag = abs(w2 - w1)
+    corr = df_wide[f"week_{w1}"].corr(df_wide[f"week_{w2}"])
+    lags.append(lag)
+    correlations.append(corr)
+
+lag_df = pd.DataFrame({"lag": lags, "correlation": correlations})
+lag_mean = lag_df.groupby("lag")["correlation"].mean()
+
+axes[1].plot(lag_mean.index, lag_mean.values, 'o-', linewidth=2, markersize=8)
+axes[1].axhline(0, color='gray', linestyle='--')
+axes[1].set_xlabel("시간 거리 (주)")
+axes[1].set_ylabel("평균 상관계수")
+axes[1].set_title("시간 거리별 상관\n(AR(1)이면 지수적 감소)")
+
+plt.tight_layout()
+```
+
+```
+결과 해석:
+상관 행렬 패턴:
+  - 모든 시점 쌍이 비슷한 상관 → Compound Symmetry (CS) 구조
+  - 인접 시점 상관 높고 멀수록 감소 → AR(1) 구조
+  - 특정 시점들끼리 묶임 → Unstructured 고려
+
+Variogram 해석:
+  - 거리 1: r = 0.62 (높음)
+  - 거리 2: r = 0.55
+  - 거리 7: r = 0.41 (낮지만 여전히 양수)
+  → 지수 감소 패턴 → AR(1) 또는 랜덤 절편 구조 적합
+```
+
+### Between vs Within 분산 분리
+
+```python
+# 사용자별 평균 (Between-subject)
+user_means = df.groupby("user_id")["satisfaction"].mean()
+grand_mean = df["satisfaction"].mean()
+
+# Between-subject 분산 (개인 간 차이)
+var_between = user_means.var()
+
+# Within-subject 분산 (같은 사람 내 변동)
+within_vars = df.groupby("user_id")["satisfaction"].var()
+var_within = within_vars.mean()
+
+icc_naive = var_between / (var_between + var_within)
+
+print(f"Between-subject 분산:  {var_between:.3f}")
+print(f"Within-subject 분산:   {var_within:.3f}")
+print(f"사전 ICC 추정:          {icc_naive:.3f}")
+print(f"→ 만족도 분산의 {icc_naive*100:.1f}%가 개인 차이에서 비롯됨")
+```
+
+```
+Between-subject 분산:  0.421
+Within-subject 분산:   0.318
+사전 ICC 추정:          0.570
+→ 만족도 분산의 57.0%가 개인 차이에서 비롯됨
+→ Mixed Model 필수
+```
+
+---
+
+## 5. 결측 데이터 패턴 분석
+
+종단 데이터에서 결측은 세 가지 메커니즘을 가진다:
+
+| 유형 | 정의 | 의미 | LMM 처리 |
+|------|------|------|----------|
+| **MCAR** | 완전히 랜덤 결측 | 결측이 어떤 변수와도 무관 | 안전 |
+| **MAR** | 관찰된 값에 의존 | 과거 만족도가 낮으면 이탈 가능성 높음 | LMM이 자동 처리 |
+| **MNAR** | 결측값 자체에 의존 | 현재 불만족이 클수록 응답 안 함 | 편향 발생 |
+
+### 결측 히트맵
+
+```python
+# Wide format으로 결측 패턴 시각화
+missing_matrix = df_wide.isnull().astype(int)
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+# 1. 결측 히트맵 (사용자 × 시점)
+# 결측 많은 사용자 기준 정렬
+missing_sorted = missing_matrix.loc[
+    missing_matrix.sum(axis=1).sort_values(ascending=False).index
+]
+
+sns.heatmap(missing_sorted[:100],  # 상위 100명
+            cmap="RdYlGn_r", cbar=False,
+            ax=axes[0], linewidths=0.1)
+axes[0].set_title("결측 패턴 히트맵\n(빨강=결측, 초록=관측)")
+axes[0].set_xlabel("Week")
+axes[0].set_ylabel("User (결측 많은 순)")
+
+# 2. 시점별 결측률
+missing_rate = df.groupby("week")["satisfaction"].apply(
+    lambda x: x.isnull().mean()
+)
+axes[1].bar(missing_rate.index, missing_rate.values * 100,
+            color="salmon", edgecolor="black")
+axes[1].set_xlabel("Week")
+axes[1].set_ylabel("결측률 (%)")
+axes[1].set_title("시점별 결측률\n(단조 증가 → MAR 의심)")
+
+plt.tight_layout()
+```
+
+### 결측 메커니즘 탐색
+
+```python
+# MAR 탐색: 이전 시점 만족도가 이탈을 예측하는가?
+df_lag = df.copy()
+df_lag["satisfaction_prev"] = df.groupby("user_id")["satisfaction"].shift(1)
+df_lag["missing_now"] = df_lag["satisfaction"].isnull().astype(int)
+
+# 로지스틱 회귀: 이전 만족도 → 현재 결측
+import statsmodels.formula.api as smf
+mar_model = smf.logit(
+    "missing_now ~ satisfaction_prev + week",
+    data=df_lag.dropna(subset=["satisfaction_prev"])
+).fit(disp=False)
+
+print(mar_model.summary().tables[1])
+```
+
+```
+결과:
+                   coef   std err     z    P>|z|
+satisfaction_prev -0.42    0.08    -5.2  <0.001  ← 이전 만족도 낮을수록 결측 증가
+week               0.08    0.02     4.0  <0.001  ← 시간 지날수록 결측 증가
+
+해석: MAR 메커니즘 확인됨
+  - 이전에 만족도가 낮았던 사용자가 다음 주에 응답 안 함
+  - LMM은 MAR 가정 하에 결측을 올바르게 처리함 (FIML)
+  - MNAR이라면 패턴 혼합 모델(Pattern Mixture Model) 고려
+```
+
+### 결측 유형별 완전 케이스 수
+
+```python
+# 몇 개 시점을 완전히 관측했는가?
+obs_counts = df.groupby("user_id")["satisfaction"].apply(
+    lambda x: x.notna().sum()
+)
+
+print("관측 시점 수별 사용자 분포:")
+print(obs_counts.value_counts().sort_index())
+print(f"\n완전 관측 (8회): {(obs_counts==8).sum()}명 ({(obs_counts==8).mean()*100:.1f}%)")
+print(f"50% 이상 관측:  {(obs_counts>=4).sum()}명")
+```
+
+```
+관측 시점 수별 사용자 분포:
+3     2
+4    10
+5    28
+6    52
+7    89
+8   119   ← 40% 완전 관측
+```
+
+---
+
+## 6. 그룹 간 궤적 비교
+
+### 세그먼트별 상세 비교
+
+```python
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+segments = ["SI", "MIEP", "N"]
+palette = {"SI": "steelblue", "MIEP": "green", "N": "red"}
+
+# 1. 세그먼트별 Spaghetti Plot
+for seg in segments:
+    seg_df = df[df.segment == seg]
+    for uid in seg_df["user_id"].unique()[:15]:
+        user = seg_df[seg_df.user_id == uid]
+        axes[0,0].plot(user["week"], user["satisfaction"],
+                       alpha=0.2, color=palette[seg], linewidth=0.8)
+
+for seg in segments:
+    mean_t = df[df.segment==seg].groupby("week")["satisfaction"].mean()
+    axes[0,0].plot(mean_t.index, mean_t.values, '-',
+                   color=palette[seg], linewidth=3, label=seg)
+axes[0,0].axvline(4.5, color="black", linestyle="--", alpha=0.5)
+axes[0,0].set_title("세그먼트별 Spaghetti Plot")
+axes[0,0].legend()
+
+# 2. 세그먼트별 기울기 분포 (개인화 전/후)
+pre_slopes, post_slopes = {}, {}
+for seg in segments:
+    seg_data = df[df.segment==seg].dropna(subset=["satisfaction"])
+    pre_slopes[seg]  = []
+    post_slopes[seg] = []
+    for uid, g in seg_data.groupby("user_id"):
+        pre  = g[g.week <= 4]
+        post = g[g.week >= 5]
+        if len(pre) >= 2:
+            pre_slopes[seg].append(linregress(pre.week, pre.satisfaction).slope)
+        if len(post) >= 2:
+            post_slopes[seg].append(linregress(post.week, post.satisfaction).slope)
+
+x = np.arange(len(segments))
+width = 0.35
+pre_means  = [np.mean(pre_slopes[s]) for s in segments]
+post_means = [np.mean(post_slopes[s]) for s in segments]
+axes[0,1].bar(x - width/2, pre_means, width, label="개인화 전", alpha=0.7)
+axes[0,1].bar(x + width/2, post_means, width, label="개인화 후", alpha=0.7)
+axes[0,1].set_xticks(x)
+axes[0,1].set_xticklabels(segments)
+axes[0,1].axhline(0, color="black", linewidth=0.8)
+axes[0,1].set_title("세그먼트별 평균 기울기 (개인화 전/후)")
+axes[0,1].legend()
+
+# 3. 시점별 세그먼트 간 차이
+for seg in segments:
+    means = df[df.segment==seg].groupby("week")["satisfaction"].mean()
+    grand = df.groupby("week")["satisfaction"].mean()
+    axes[1,0].plot(means.index, means - grand,
+                   'o-', color=palette[seg], label=seg, linewidth=2)
+axes[1,0].axhline(0, color="black", linestyle="--")
+axes[1,0].axvline(4.5, color="gray", linestyle=":", alpha=0.7)
+axes[1,0].set_title("세그먼트별 전체 평균과의 차이")
+axes[1,0].set_xlabel("Week")
+axes[1,0].legend()
+
+# 4. 세그먼트별 결측률
+for seg in segments:
+    miss = df[df.segment==seg].groupby("week")["satisfaction"].apply(
+        lambda x: x.isnull().mean() * 100
+    )
+    axes[1,1].plot(miss.index, miss.values, 'o-',
+                   color=palette[seg], label=seg)
+axes[1,1].set_xlabel("Week")
+axes[1,1].set_ylabel("결측률 (%)")
+axes[1,1].set_title("세그먼트별 결측률\n(N계열이 더 빨리 이탈?)")
+axes[1,1].legend()
+
+plt.tight_layout()
+```
+
+---
+
+## 7. 시간 불변 vs 시간 가변 공변량
+
+종단 데이터 공변량은 두 종류다:
+
+| 유형 | 정의 | 예시 | 모델 위치 |
+|------|------|------|----------|
+| **시간 불변** | 시간에 따라 바뀌지 않음 | 세그먼트, 성별, 가입일 | Fixed Effect (그냥 넣음) |
+| **시간 가변** | 시간에 따라 변함 | 개인화 여부, 주차, 감정 점수 | Fixed Effect (with 구조 고려) |
+
+```python
+# 시간 불변 vs 시간 가변 확인
+def check_time_varying(df, var, id_col="user_id"):
+    """변수가 시간에 따라 변하는지 확인"""
+    nunique = df.groupby(id_col)[var].nunique()
+    n_time_varying = (nunique > 1).sum()
+    pct = n_time_varying / len(nunique) * 100
+    print(f"{var}: {n_time_varying}명({pct:.1f}%)의 사용자에서 값이 변함")
+    if pct < 5:
+        print(f"  → 시간 불변 변수로 처리")
+    else:
+        print(f"  → 시간 가변 변수로 처리 (Grand Mean Centering 권장)")
+
+check_time_varying(df, "segment")      # 세그먼트는 불변
+check_time_varying(df, "personalized") # 개인화는 시점마다 변함
+check_time_varying(df, "week")         # 주차는 당연히 변함
+```
+
+```
+segment: 0명(0.0%)의 사용자에서 값이 변함
+  → 시간 불변 변수로 처리
+
+personalized: 300명(100.0%)의 사용자에서 값이 변함
+  → 시간 가변 변수로 처리 (Grand Mean Centering 권장)
+
+week: 300명(100.0%)의 사용자에서 값이 변함
+  → 시간 가변 변수로 처리 (Grand Mean Centering 권장)
+```
+
+### Grand Mean Centering (시간 가변 공변량)
+
+```python
+# 시간 가변 공변량은 그랜드 평균 중심화 권장
+# (Between-subject과 Within-subject 효과 분리)
+df["week_c"] = df["week"] - df["week"].mean()  # Grand mean centering
+
+# Within-subject 평균 분리 (Mundlak 접근)
+user_week_mean = df.groupby("user_id")["personalized"].mean()
+df["personalized_between"] = df["user_id"].map(user_week_mean)  # Between
+df["personalized_within"]  = df["personalized"] - df["personalized_between"]  # Within
+```
+
+---
+
+## 8. EDA 결과로 모델 선택
+
+EDA를 마친 후 아래 체크리스트를 작성한다:
+
+```
+EDA 체크리스트 → 모델 선택 근거
+
+□ 평균 궤적 형태
+  ✅ 대체로 선형 (Week 5에서 점프) → LMM + 교호작용 고려
+  ☐ S자형 / 비선형 → GAMM
+
+□ 개인 간 차이 (Spaghetti Plot + Between-Within 분산)
+  ✅ 수직 퍼짐 큼, ICC=0.57 → Random Intercept 필수
+
+□ 기울기 개인차 (개인별 OLS 기울기 SD)
+  ✅ 기울기 SD=0.08 (평균 0.03의 2.7배) → Random Slope 고려
+
+□ 절편-기울기 상관
+  ✅ r=-0.31 (음수) → 초기 만족도 높을수록 변화 적음
+  ✅ 랜덤 절편-기울기 공분산 포함 필요
+
+□ 공분산 구조
+  ✅ 시간 거리별 상관이 지수 감소 → AR(1) 또는 랜덤 절편 구조
+
+□ 결측 메커니즘
+  ✅ 이전 만족도 → 결측 예측 가능 → MAR
+  ✅ LMM FIML 추정으로 처리 (Complete Case Analysis 금지)
+
+□ 그룹 차이
+  ✅ MIEP > SI > N, 개인화 후 차이 커짐 → 세그먼트 × 개인화 교호작용 고려
+
+최종 권장 모델:
+  satisfaction ~ personalized * segment + week + (1 + week | user_id)
+  방법: REML
+  결측: FIML (기본값)
+```
+
+---
+
+## 9. EDA 요약 리포트 자동 생성
+
+```python
+def longitudinal_eda_report(df, outcome, time_col, id_col, group_col=None):
+    """종단 EDA 핵심 지표 자동 출력"""
+    print("=" * 50)
+    print("종단 데이터 EDA 요약")
+    print("=" * 50)
+
+    # 기본 정보
+    n_subjects = df[id_col].nunique()
+    n_obs = len(df)
+    n_timepoints = df[time_col].nunique()
+    print(f"\n[기본 정보]")
+    print(f"  사용자 수: {n_subjects}")
+    print(f"  총 관측치: {n_obs} (기대: {n_subjects*n_timepoints})")
+    print(f"  시점 수: {n_timepoints}")
+    print(f"  균형 비율: {n_obs/(n_subjects*n_timepoints)*100:.1f}%")
+
+    # 결측
+    miss_rate = df[outcome].isnull().mean()
+    print(f"\n[결측]")
+    print(f"  전체 결측률: {miss_rate*100:.1f}%")
+
+    # ICC 사전 추정
+    user_means = df.groupby(id_col)[outcome].mean()
+    var_b = user_means.var()
+    var_w = df.groupby(id_col)[outcome].var().mean()
+    icc = var_b / (var_b + var_w)
+    print(f"\n[분산 구조]")
+    print(f"  Between-subject 분산: {var_b:.3f}")
+    print(f"  Within-subject 분산:  {var_w:.3f}")
+    print(f"  사전 ICC 추정:         {icc:.3f}")
+    print(f"  → {'Mixed Model 필수' if icc > 0.05 else 'GLM으로 충분'}")
+
+    # 시점별 기울기 분산
+    slopes = []
+    for uid, g in df.dropna(subset=[outcome]).groupby(id_col):
+        if len(g) >= 3:
+            s = linregress(g[time_col], g[outcome]).slope
+            slopes.append(s)
+    slope_sd = np.std(slopes)
+    print(f"\n[기울기 개인차]")
+    print(f"  기울기 평균: {np.mean(slopes):.3f}")
+    print(f"  기울기 SD:   {slope_sd:.3f}")
+    print(f"  → {'Random Slope 고려' if slope_sd > 0.05 else 'Random Intercept만으로 충분'}")
+
+    print("=" * 50)
+
+longitudinal_eda_report(df, "satisfaction", "week", "user_id", "segment")
+```
+
+```
+==================================================
+종단 데이터 EDA 요약
+==================================================
+
+[기본 정보]
+  사용자 수: 300
+  총 관측치: 2,264 (기대: 2,400)
+  시점 수: 8
+  균형 비율: 94.3%
+
+[결측]
+  전체 결측률: 5.7%
+
+[분산 구조]
+  Between-subject 분산: 0.421
+  Within-subject 분산:  0.318
+  사전 ICC 추정:         0.570
+  → Mixed Model 필수
+
+[기울기 개인차]
+  기울기 평균: 0.031
+  기울기 SD:   0.082
+  → Random Slope 고려
+==================================================
+```

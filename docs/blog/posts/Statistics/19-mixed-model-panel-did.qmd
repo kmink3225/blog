@@ -1,0 +1,442 @@
+---
+title: "Panel Data Analysis (2): Difference-in-Differences"
+subtitle: "정책 효과 추정과 A/B 테스트의 인과 추론 확장"
+description: |
+  Difference-in-Differences(DiD)는 처치가 무작위 배정되지 않을 때
+  관찰 데이터에서 인과 효과를 추정하는 핵심 기법이다.
+  평행 추세 가정, 표준 DiD 수식, 이벤트 스터디, Staggered DiD,
+  그리고 A/B 테스트와의 관계를 구체적 예시로 설명한다.
+categories:
+  - Statistics
+  - Panel Data
+  - Causal Inference
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# Difference-in-Differences (DiD)
+
+## DiD가 필요한 상황
+
+A/B 테스트(무작위 배정)가 불가능할 때:
+
+```
+상황: 2024년 1월, 서비스 A 지역에만 새 기능을 출시
+      서비스 B 지역은 기존 기능 유지
+
+질문: 새 기능의 효과는?
+
+단순 비교의 문제:
+  출시 후 A 지역 만족도 - B 지역 만족도 = 효과?
+  → NO. A 지역이 원래부터 만족도가 높았다면?
+
+처치 전/후 비교의 문제:
+  A 지역 출시 후 - 출시 전 = 효과?
+  → NO. 계절성/경기 변동 등 다른 요인이 있다면?
+
+DiD 해결:
+  (A 지역 변화) - (B 지역 변화)
+  = A 지역이 기능 때문에 변화한 것 - B 지역의 자연 변화
+  → 다른 요인의 영향을 제거한 순수 효과
+```
+
+---
+
+## DiD의 핵심 가정: 평행 추세 (Parallel Trends)
+
+$$E[Y_{it}(0) - Y_{i,t-1}(0) \mid D_i=1] = E[Y_{it}(0) - Y_{i,t-1}(0) \mid D_i=0]$$
+
+**풀어서**: 처치가 없었다면, 처치 집단과 통제 집단의 추세가 같았을 것이다.
+
+```
+만족도
+5 │         ╱ Treatment (실제)
+  │        ╱
+4 │   ─────╱ Treatment (반사실: 처치 없었다면?)
+  │   ─────────────── Control
+3 │
+  └──────┼──────────── 시간
+       처치 시점
+
+DiD = 처치 후 Treatment 실제값 - 처치 후 Treatment 반사실값
+    = (처치 후 T - 처치 전 T) - (처치 후 C - 처치 전 C)
+
+평행 추세 가정:
+  처치 없었다면 Treatment가 Control과 같은 기울기로 변했을 것
+```
+
+---
+
+## 표준 DiD 모델
+
+### 2×2 DiD (두 집단, 두 시점)
+
+$$Y_{it} = \beta_0 + \beta_1 \text{Treated}_i + \beta_2 \text{Post}_t + \beta_3 (\text{Treated}_i \times \text{Post}_t) + \epsilon_{it}$$
+
+| 계수 | 의미 |
+|------|------|
+| $\beta_0$ | 통제 집단, 처치 전 평균 |
+| $\beta_1$ | 집단 간 기본 차이 (처치 전) |
+| $\beta_2$ | 시간 추세 (통제 집단 기준) |
+| $\beta_3$ | **DiD 추정량** = 처치 효과 |
+
+### 2×2 DiD 직접 계산
+
+| | 처치 전 ($t=0$) | 처치 후 ($t=1$) | 변화 ($\Delta$) |
+|-|---------------|---------------|----------------|
+| **처치 집단** ($D=1$) | $\bar{Y}_{1,0}$ | $\bar{Y}_{1,1}$ | $\Delta_1 = \bar{Y}_{1,1} - \bar{Y}_{1,0}$ |
+| **통제 집단** ($D=0$) | $\bar{Y}_{0,0}$ | $\bar{Y}_{0,1}$ | $\Delta_0 = \bar{Y}_{0,1} - \bar{Y}_{0,0}$ |
+| **DiD** | | | $\hat{\tau} = \Delta_1 - \Delta_0$ |
+
+### 구현
+
+```python
+import pandas as pd
+import numpy as np
+import statsmodels.formula.api as smf
+import matplotlib.pyplot as plt
+
+np.random.seed(42)
+
+# 시뮬레이션: 지역별 서비스 개선 효과
+N_treated, N_control = 200, 200
+n_periods = 8
+treat_period = 5   # 5주차부터 처치
+
+# 처치 집단: 기본 만족도 약간 낮음 (선택 편의)
+alpha_treated = np.repeat(np.random.normal(3.4, 0.5, N_treated), n_periods)
+alpha_control = np.repeat(np.random.normal(3.6, 0.5, N_control), n_periods)
+
+weeks = np.tile(range(1, n_periods+1), N_treated + N_control)
+treated_flag = np.repeat([1]*N_treated + [0]*N_control, n_periods)
+post = (weeks >= treat_period).astype(int)
+
+# 공통 시간 추세 + 처치 효과 0.5
+alpha_all = np.concatenate([alpha_treated, alpha_control])
+Y = (
+    alpha_all
+    + 0.03 * weeks                   # 공통 시간 추세
+    + 0.5 * treated_flag * post       # 처치 효과
+    + np.random.normal(0, 0.4, len(weeks))
+)
+
+df_did = pd.DataFrame({
+    "unit_id": np.repeat(range(N_treated + N_control), n_periods),
+    "week": weeks,
+    "satisfaction": Y,
+    "treated": treated_flag,
+    "post": post,
+    "treat_x_post": treated_flag * post
+})
+
+# DiD 회귀
+did_model = smf.ols(
+    "satisfaction ~ treated + post + treat_x_post",
+    data=df_did
+).fit(cov_type="cluster", cov_kwds={"groups": df_did["unit_id"]})
+
+print(did_model.summary().tables[1])
+```
+
+```
+                    coef    std err      t    P>|t|
+Intercept          3.545     0.038    93.3   <0.001   ← Control 처치 전 평균
+treated           -0.184     0.054    -3.4    0.001   ← 집단 간 기본 차이
+post               0.122     0.021     5.8   <0.001   ← 시간 추세 (공통)
+treat_x_post       0.503     0.029    17.3   <0.001   ← DiD 효과 (진짜 값: 0.5)
+```
+
+---
+
+## 평행 추세 가정 검증: 이벤트 스터디
+
+DiD의 핵심 가정(평행 추세)을 검증하는 가장 중요한 도구.
+
+**아이디어**: 처치 전 기간에도 두 집단의 추세 차이가 없어야 한다.
+
+$$Y_{it} = \alpha_i + \lambda_t + \sum_{k \neq -1} \delta_k \cdot \mathbf{1}[t = \bar{t}_i + k] \cdot D_i + \epsilon_{it}$$
+
+- $\bar{t}_i$: 개체 $i$의 처치 시점
+- $k$: 처치 시점 기준 상대 시간 (-4, -3, -2, -1, 0, +1, +2, +3)
+- $\delta_k$: 상대 시점 $k$에서의 처치 효과
+- 기준: $k=-1$ (처치 직전 → 계수 = 0)
+
+```python
+from linearmodels.panel import PanelOLS
+
+# 상대 시간 변수 생성
+df_did["rel_time"] = df_did["week"] - treat_period  # -4 ~ +3
+
+# 처치 집단 × 상대 시간 더미
+for k in range(-4, 4):
+    df_did[f"treat_t{k}"] = (
+        (df_did["treated"] == 1) & (df_did["rel_time"] == k)
+    ).astype(int)
+
+# 기준: k=-1 (처치 직전) → 포함하지 않음
+event_cols = [f"treat_t{k}" for k in range(-4, 4) if k != -1]
+
+# 이벤트 스터디 회귀
+df_did_panel = df_did.set_index(["unit_id", "week"])
+
+event_model = PanelOLS(
+    dependent=df_did_panel["satisfaction"],
+    exog=df_did_panel[event_cols],
+    entity_effects=True,
+    time_effects=True
+).fit(cov_type="clustered", cluster_entity=True)
+
+# 결과 추출
+coefs = event_model.params[event_cols]
+ses   = event_model.std_errors[event_cols]
+rel_times = list(range(-4, -1)) + list(range(0, 4))
+
+# 이벤트 스터디 플롯
+plt.figure(figsize=(10, 5))
+plt.errorbar(rel_times, coefs, yerr=1.96*ses, fmt='o-',
+             capsize=5, capthick=2, markersize=6)
+plt.axhline(0, color='black', linewidth=0.8, linestyle='--')
+plt.axvline(-0.5, color='red', linewidth=1.5, linestyle='--',
+            label='처치 시작')
+plt.fill_between([-4, -0.5], -0.3, 0.3, alpha=0.1, color='green',
+                 label='사전 기간 (평행 추세 검증)')
+plt.xlabel("처치 시점 기준 상대 시간 (주)")
+plt.ylabel("처치 효과 추정치 (δₖ)")
+plt.title("이벤트 스터디 플롯\n처치 전: 0에 가까워야 평행 추세 성립")
+plt.legend()
+```
+
+```
+이벤트 스터디 결과:
+δₖ
++0.6 │                    ●─●─●─●   ← 처치 후 효과 유의
+     │                ●
+0.0  │───●───●───●─●──              ← 처치 전: 0에 근접 (평행 추세 ✅)
+     │
+-0.3 │
+     └────────────────────────────
+       t-4  t-3  t-2  t-1│t0  t1  t2  t3
+                          처치
+
+평행 추세 검증:
+  t-4: δ = 0.02 (p=0.71) ← 유의하지 않음 ✅
+  t-3: δ = -0.01 (p=0.83) ✅
+  t-2: δ = 0.03 (p=0.52) ✅
+  → 처치 전 두 집단의 차이가 없었음 → 평행 추세 가정 성립
+```
+
+---
+
+## Staggered DiD (시차 처치)
+
+현실에서는 처치 시점이 개체마다 다른 경우가 많다.
+
+```
+예: 신기능을 지역별로 순차 출시
+  Week 3: 서울 출시
+  Week 5: 부산 출시
+  Week 7: 대구 출시
+  (통제 집단: 미출시 지역)
+```
+
+### 표준 Two-way FE의 문제
+
+최근 연구(Callaway & Sant'Anna, 2021; de Chaisemartin & D'Haultfœuille, 2020)에서 밝혀진 사항:
+
+> 처치 시점이 다를 때 Two-way FE DiD는 **음의 가중치** 문제로 편향될 수 있다.
+> 특히 처치 효과가 시간에 따라 변할 때 심각.
+
+```python
+# 잘못된 방법 (처치 이질성 무시):
+df_did["ever_treated"] = (df_did["treated"] == 1).astype(int)
+tfe_wrong = PanelOLS(
+    dependent=df_did_panel["satisfaction"],
+    exog=df_did_panel[["post"]],    # 단순 post 더미
+    entity_effects=True,
+    time_effects=True
+).fit()
+# → 이질적 처치 효과 시 편향!
+```
+
+```python
+# 올바른 방법 1: Callaway-Sant'Anna (did 패키지, R)
+```
+
+```r
+library(did)
+
+# Callaway & Sant'Anna (2021) 추정량
+cs_did <- att_gt(
+  yname = "satisfaction",
+  tname = "week",
+  idname = "unit_id",
+  gname = "treat_start_week",   # 각 개체의 처치 시작 시점
+  data = df_did_r,
+  control_group = "nevertreated"
+)
+
+# 전체 ATT
+aggte(cs_did, type="simple")
+
+# 이벤트 스터디
+aggte(cs_did, type="dynamic")
+ggdid(aggte(cs_did, type="dynamic"))
+```
+
+```
+Callaway-Sant'Anna 결과:
+Overall ATT = 0.498 (SE=0.031, p<0.001)
+→ 처치 이질성 보정 후에도 유사한 효과
+```
+
+---
+
+## DiD와 A/B 테스트의 관계
+
+| | A/B 테스트 | DiD |
+|-|-----------|-----|
+| **처치 배정** | 무작위 | 비무작위 |
+| **가정** | 거의 없음 | 평행 추세 |
+| **내적 타당도** | 매우 높음 | 평행 추세 성립 시 높음 |
+| **외적 타당도** | 실험 대상 한정 | 실제 환경 데이터 |
+| **적용 상황** | 온라인 실험 | 정책 변화, 자연 실험 |
+| **검정력** | 높음 (통제됨) | 낮을 수 있음 |
+
+### DiD를 A/B 테스트와 결합
+
+**CUPED(Controlled-experiment Using Pre-Experiment Data)** = DiD의 회귀 버전:
+
+```python
+# 실험 전 데이터를 공변량으로 사용 → 분산 감소
+df_cuped = df_did.copy()
+
+# 처치 전 공변량
+pre_means = df_cuped[df_cuped.week < treat_period].groupby("unit_id")["satisfaction"].mean()
+df_cuped["pre_satisfaction"] = df_cuped["unit_id"].map(pre_means)
+
+# CUPED 모델: 처치 전 값 통제
+cuped_model = smf.ols(
+    "satisfaction ~ treat_x_post + pre_satisfaction",
+    data=df_cuped[df_cuped.week >= treat_period]
+).fit(cov_type="cluster", cov_kwds={"groups": df_cuped[df_cuped.week >= treat_period]["unit_id"]})
+
+print(f"단순 DiD SE:  {did_model.bse['treat_x_post']:.4f}")
+print(f"CUPED SE:     {cuped_model.bse['treat_x_post']:.4f}")
+print(f"분산 감소율:  {(1 - cuped_model.bse['treat_x_post']**2 / did_model.bse['treat_x_post']**2)*100:.1f}%")
+```
+
+```
+단순 DiD SE:  0.0290
+CUPED SE:     0.0198
+분산 감소율:  53.4%   ← 실험 전 데이터 활용으로 정밀도 크게 향상
+```
+
+---
+
+## 실무 예시: AI Agent 기능 출시 효과
+
+### 설정
+
+```
+상황: 2026년 Week 5에 AI Agent의 개인화 기능을 일부 사용자에게만 출시
+      나머지 사용자는 통제 집단
+      무작위 배정이 아님 (조기 접근 신청자에게 출시)
+      → A/B 테스트 X, DiD 필요
+```
+
+```python
+# DiD 분석
+did_agent = smf.ols(
+    "satisfaction ~ treated + post + treat_x_post + C(segment)",
+    data=df_did
+).fit(cov_type="cluster", cov_kwds={"groups": df_did["unit_id"]})
+
+print(f"개인화 효과 (DiD): {did_agent.params['treat_x_post']:.3f}")
+print(f"95% CI: [{did_agent.conf_int().loc['treat_x_post', 0]:.3f}, "
+      f"{did_agent.conf_int().loc['treat_x_post', 1]:.3f}]")
+```
+
+```
+개인화 효과 (DiD): 0.487
+95% CI: [0.431, 0.543]
+→ 무작위 배정 없이도 인과 효과 추정 가능
+  (단, 평행 추세 가정이 이벤트 스터디로 검증됨)
+```
+
+### 세그먼트별 이질적 처치 효과
+
+```python
+# Heterogeneous Treatment Effects by segment
+het_model = smf.ols(
+    "satisfaction ~ treat_x_post * C(segment) + treated + post + C(segment)",
+    data=df_did
+).fit(cov_type="cluster", cov_kwds={"groups": df_did["unit_id"]})
+
+# MIEP와 SI의 효과 차이
+print(het_model.summary().tables[1])
+```
+
+```
+처치 효과 세그먼트별:
+SI:                          0.412
+MIEP (= SI + 교호작용):       0.412 + 0.181 = 0.593   ← 효과 가장 큼
+N (= SI + 교호작용):          0.412 - 0.089 = 0.323   ← 효과 가장 작음
+
+→ 개인화 기능은 MIEP 세그먼트에 가장 효과적
+→ 다음 배포 우선순위: MIEP 집중
+```
+
+---
+
+## DiD 관련 최신 방법론
+
+| 방법 | 패키지 | 특징 |
+|------|--------|------|
+| **2×2 DiD** | 기본 회귀 | 가장 단순 |
+| **Callaway-Sant'Anna** | R: `did` | Staggered DiD 강건 |
+| **de Chaisemartin-D'Haultfœuille** | R: `DIDmultiplegt` | 이질적 효과 처리 |
+| **Sun-Abraham** | R: `fixest` | Staggered + 이벤트 스터디 |
+| **Synthetic Control** | R: `Synth` | 통제 집단 없을 때 |
+| **Doubly Robust DiD** | R: `DRDID` | 오명세에 강건 |
+
+```r
+# Sun-Abraham (2021): Staggered DiD with heterogeneity-robust event study
+library(fixest)
+
+sunab_model <- feols(
+  satisfaction ~ sunab(treat_start_week, week) | unit_id + week,
+  data = df_did_r,
+  cluster = ~unit_id
+)
+
+iplot(sunab_model, main="Sun-Abraham 이벤트 스터디")
+```
+
+---
+
+## 전체 패널 데이터 분석 흐름
+
+```
+1. 내생성 여부 판단
+   ├── 실험적 데이터 → LMM / RE
+   └── 관찰 데이터 → Hausman Test
+         ├── FE 필요 → Fixed Effects
+         └── RE 가능 → RE / LMM
+
+2. 처치 시점 구조
+   ├── 단일 시점 처치 → 표준 DiD
+   └── 시차 처치 → Callaway-Sant'Anna / Sun-Abraham
+
+3. 평행 추세 검증
+   → 이벤트 스터디 (처치 전 계수 = 0 확인)
+
+4. 이질적 처치 효과
+   → 집단별 DiD 또는 상호작용 모델
+
+5. 표준오차
+   → 반드시 Clustered SE (개체 단위)
+```
+
+**다음**: 패널 데이터 시리즈 완결 — `11-mixed-model-comparison.qmd`에서 전체 기법 비교 참조

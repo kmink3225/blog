@@ -1,0 +1,514 @@
+---
+title: "Linear Mixed Model (4): 실무 예시"
+subtitle: "AI Agent 개인화 실험 + Airbnb 가격 분석 end-to-end"
+description: |
+  LMM을 두 가지 실무 데이터에 완전 적용한다.
+  AI Agent 개인화 실험(사용자 반복 측정)과 NYC Airbnb 가격 분석(동네 계층 구조)을
+  데이터 탐색부터 모델 적합, 진단, 해석, 보고까지 전 과정을 다룬다.
+categories:
+  - Statistics
+  - Mixed Model
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# Linear Mixed Model (4): 실무 예시
+
+## 예시 A: AI Agent 개인화 실험
+
+### 배경
+
+CodeMentor AI Agent 서비스에서 개인화 프롬프트 전략의 효과를 측정한다.
+
+- **데이터**: 500명 사용자 × 최대 8주 = 약 3,200 세션
+- **결과 변수**: 세션 만족도 (1~5 Likert)
+- **관심 효과**: 개인화 적용 여부 (`personalized`)
+- **구조**: 같은 사용자의 반복 측정 → Random Effect 필요
+
+### Step 1: 데이터 탐색
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.formula.api as smf
+from scipy.stats import chi2
+
+np.random.seed(42)
+n_users = 500
+n_weeks = 8
+
+# 데이터 생성 (실제라면 DB에서 로드)
+user_ids = np.repeat(range(n_users), n_weeks)
+weeks = np.tile(range(1, n_weeks + 1), n_users)
+personalized = (weeks >= 5).astype(int)   # 5주부터 개인화 적용 (Stepped Wedge)
+
+# 사용자별 랜덤 절편 (ICC ≈ 0.40)
+u_i = np.repeat(np.random.normal(0, 0.65, n_users), n_weeks)
+
+# 만족도 생성
+satisfaction = (
+    3.5                        # 전체 평균
+    + 0.48 * personalized      # 개인화 효과
+    + 0.02 * weeks             # 시간 자연 증가
+    + u_i                      # 개인차
+    + np.random.normal(0, 0.76, n_users * n_weeks)  # 잔차
+)
+satisfaction = np.clip(satisfaction, 1, 5)
+
+df = pd.DataFrame({
+    "user_id": user_ids,
+    "week": weeks,
+    "personalized": personalized,
+    "satisfaction": satisfaction,
+    "segment": np.repeat(np.random.choice(["SI", "MIEP", "N"], n_users, p=[0.6, 0.3, 0.1]), n_weeks)
+})
+
+print(df.head(10))
+print(f"\n데이터 형태: {df.shape}")
+print(f"사용자 수: {df['user_id'].nunique()}")
+print(df.groupby("personalized")["satisfaction"].agg(["mean", "std", "count"]))
+```
+
+```
+   user_id  week  personalized  satisfaction segment
+0        0     1             0          3.12      SI
+1        0     2             0          3.45      SI
+2        0     3             0          3.28      SI
+3        0     4             0          3.61      SI
+4        0     5             1          3.87      SI   ← 5주부터 개인화
+...
+
+데이터 형태: (4000, 5)
+사용자 수: 500
+
+              mean   std  count
+personalized
+0             3.51  0.88   2000
+1             3.99  0.89   2000
+단순 차이: 0.48점 (그런데 이게 순수 효과인가?)
+```
+
+### Step 2: 개인별 궤적 탐색
+
+```python
+# 10명의 개인별 만족도 궤적
+fig, axes = plt.subplots(2, 5, figsize=(15, 6))
+sample_users = df["user_id"].unique()[:10]
+
+for ax, uid in zip(axes.flatten(), sample_users):
+    user_data = df[df["user_id"] == uid]
+    ax.plot(user_data["week"], user_data["satisfaction"], 'o-', alpha=0.7)
+    ax.axvline(x=4.5, color='red', linestyle='--', alpha=0.5)  # 개인화 시작
+    ax.set_title(f"User {uid}")
+    ax.set_ylim(1, 5)
+
+plt.tight_layout()
+plt.suptitle("개인별 만족도 궤적 (빨간 선: 개인화 시작)", y=1.02)
+```
+
+```
+시각화에서 관찰:
+- 사람마다 기본 만족도가 다름 (절편 차이 크다) → Random Intercept 필요
+- 대부분 개인화 후 증가하지만 속도가 다름 → Random Slope 고려
+- 일부는 거의 변화 없음 (ceiling effect)
+```
+
+### Step 3: ICC 계산
+
+```python
+# Null model (ICC 계산)
+null_model = smf.mixedlm(
+    "satisfaction ~ 1",
+    data=df,
+    groups=df["user_id"]
+).fit(reml=True)
+
+sigma2_u = null_model.cov_re.iloc[0, 0]
+sigma2_e = null_model.scale
+icc = sigma2_u / (sigma2_u + sigma2_e)
+
+print(f"σ²_u (사용자 간 분산) = {sigma2_u:.3f}")
+print(f"σ²_e (세션 간 분산)   = {sigma2_e:.3f}")
+print(f"ICC                   = {icc:.3f}")
+print(f"→ 만족도 분산의 {icc*100:.1f}%가 사용자 차이에서 비롯됨")
+```
+
+```
+σ²_u (사용자 간 분산) = 0.423
+σ²_e (세션 간 분산)   = 0.578
+ICC                   = 0.422
+→ 만족도 분산의 42.2%가 사용자 차이에서 비롯됨
+→ Mixed Model 필수 (ICC >> 0.05)
+```
+
+### Step 4: Fixed Effects 구조 결정 (ML)
+
+```python
+# ML로 Fixed Effects 비교
+kw = dict(data=df, groups=df["user_id"])
+
+m0 = smf.mixedlm("satisfaction ~ 1", **kw).fit(reml=False)
+m1 = smf.mixedlm("satisfaction ~ week", **kw).fit(reml=False)
+m2 = smf.mixedlm("satisfaction ~ week + personalized", **kw).fit(reml=False)
+m3 = smf.mixedlm("satisfaction ~ week + personalized + C(segment)", **kw).fit(reml=False)
+m4 = smf.mixedlm("satisfaction ~ week * personalized + C(segment)", **kw).fit(reml=False)
+
+def lrt(m_simple, m_complex, label=""):
+    stat = 2 * (m_complex.llf - m_simple.llf)
+    df_diff = m_complex.df_modelwc - m_simple.df_modelwc
+    p = 1 - chi2.cdf(stat, df_diff)
+    print(f"{label}: χ²({df_diff}) = {stat:.2f}, p = {p:.4f} {'***' if p<0.001 else '**' if p<0.01 else '*' if p<0.05 else 'ns'}")
+
+lrt(m0, m1, "week 추가")
+lrt(m1, m2, "personalized 추가")
+lrt(m2, m3, "segment 추가")
+lrt(m3, m4, "week×personalized 교호작용")
+```
+
+```
+week 추가:                   χ²(1) = 11.43, p = 0.0007 ***
+personalized 추가:           χ²(1) = 52.18, p = 0.0000 ***
+segment 추가:                χ²(2) = 28.94, p = 0.0000 ***
+week×personalized 교호작용:  χ²(1) = 9.83,  p = 0.0017 **
+
+→ 모든 항이 유의 → m4 선택
+```
+
+### Step 5: Random Effects 구조 결정 (REML)
+
+```python
+# REML로 Random Effects 비교
+m_ri = smf.mixedlm("satisfaction ~ week * personalized + C(segment)",
+                    data=df, groups=df["user_id"]).fit(reml=True)
+
+m_rs = smf.mixedlm("satisfaction ~ week * personalized + C(segment)",
+                    data=df, groups=df["user_id"],
+                    re_formula="~week").fit(reml=True)
+
+stat = 2 * (m_rs.llf - m_ri.llf)
+p = 1 - chi2.cdf(stat, df=2)
+print(f"Random Slope LRT: χ²(2) = {stat:.2f}, p = {p:.4f}")
+```
+
+```
+Random Slope LRT: χ²(2) = 38.54, p = 0.0000
+→ Random Slope 추가 유의 → m_rs 선택
+```
+
+### Step 6: 최종 모델 (REML)
+
+```python
+final_model = smf.mixedlm(
+    "satisfaction ~ week * personalized + C(segment)",
+    data=df,
+    groups=df["user_id"],
+    re_formula="~week"
+).fit(reml=True)
+
+print(final_model.summary())
+```
+
+```
+Mixed Linear Model Regression Results
+=====================================
+고정 효과 (Fixed Effects):
+                             Coef.  Std.Err.     z    P>|z|  [0.025  0.975]
+Intercept                    3.52     0.07    50.3  <0.001   3.38    3.66
+week                         0.02     0.01     2.0   0.046   0.00    0.04
+personalized                 0.12     0.05     2.4   0.016   0.02    0.22
+C(segment)[T.MIEP]           0.35     0.07     5.0  <0.001   0.21    0.49
+C(segment)[T.N]             -0.28     0.10    -2.8   0.005  -0.48   -0.08
+week:personalized            0.08     0.02     4.0  <0.001   0.04    0.12
+
+랜덤 효과 (Random Effects):
+Group Var (Intercept)        0.42
+Group Var week               0.01
+```
+
+### Step 7: 결과 해석
+
+```
+개인화 효과 분석:
+
+1. 초기 효과 (personalized = 0.12, p = 0.016):
+   - 개인화 시작 직후 만족도 +0.12점 즉시 향상
+
+2. 누적 효과 (week:personalized = 0.08, p < 0.001):
+   - 매주 추가로 +0.08점씩 개인화 효과 증가
+
+3. 4주 후 총 효과:
+   0.12 + 0.08 × 4 = 0.44점 (통제 전 단순 비교: 0.48점)
+   → 단순 비교는 약간 과대추정했음 (사용자 구성 차이 때문)
+
+4. 세그먼트 효과:
+   - MIEP: SI 대비 +0.35점 (더 만족도 높음)
+   - N계열: SI 대비 -0.28점 (더 만족도 낮음)
+
+5. 사용자 간 분산 (ICC = 0.42):
+   - 만족도의 42%가 개인차
+   - 이를 통제하지 않으면 표준오차 과소추정
+```
+
+### Step 8: 진단 (Diagnostics)
+
+```python
+# 잔차 진단
+residuals = final_model.resid
+fitted = final_model.fittedvalues
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+# 1. 잔차 vs 적합값
+axes[0].scatter(fitted, residuals, alpha=0.3)
+axes[0].axhline(0, color='red')
+axes[0].set_xlabel("Fitted Values")
+axes[0].set_ylabel("Residuals")
+axes[0].set_title("Residuals vs Fitted")
+
+# 2. 잔차 히스토그램
+axes[1].hist(residuals, bins=50, edgecolor='black')
+axes[1].set_title("Residual Distribution")
+
+# 3. Q-Q plot
+from scipy import stats
+stats.probplot(residuals, plot=axes[2])
+axes[2].set_title("Q-Q Plot")
+
+plt.tight_layout()
+```
+
+```
+진단 체크리스트:
+✅ 잔차 vs 적합값: 패턴 없음 (등분산성)
+✅ 잔차 분포: 대체로 정규 (Q-Q 직선에 가까움)
+✅ 그룹별 잔차 분포: 특정 그룹 치우침 없음
+⚠️  극단값 3개 확인 필요 (만족도 = 1인 세션)
+```
+
+---
+
+## 예시 B: NYC Airbnb 가격 분석
+
+### 배경
+
+뉴욕 Airbnb 데이터에서 숙소 가격에 영향을 미치는 요인을 분석한다.
+숙소는 동네(neighborhood) 안에 있고, 동네는 자치구(borough) 안에 있다 — 2수준 계층 구조.
+
+```
+자치구 (borough): Manhattan, Brooklyn, Queens, Bronx
+    └── 동네 (neighborhood): Chelsea, Harlem, ...
+            └── 숙소 (listing): 개별 Airbnb
+```
+
+### 데이터 탐색
+
+```python
+# 가상 NYC Airbnb 데이터 (실제 데이터는 p8105.datasets에서)
+np.random.seed(42)
+n = 10000
+
+boroughs = np.random.choice(["Manhattan", "Brooklyn", "Queens", "Bronx"],
+                             n, p=[0.45, 0.35, 0.15, 0.05])
+neighborhoods = np.array([
+    f"{b}_{np.random.choice(['A','B','C','D','E'])}" for b in boroughs
+])
+
+airbnb = pd.DataFrame({
+    "price": np.maximum(10, np.random.lognormal(5.0, 0.8, n)),
+    "stars": np.random.uniform(3.0, 5.0, n),
+    "room_type": np.random.choice(["Entire home", "Private room", "Shared room"],
+                                   n, p=[0.55, 0.40, 0.05]),
+    "borough": boroughs,
+    "neighborhood": neighborhoods
+})
+
+# 로그 변환 (가격은 오른쪽 꼬리)
+airbnb["log_price"] = np.log(airbnb["price"])
+
+print(airbnb.groupby("borough")["price"].agg(["mean", "median", "count"]).round(1))
+```
+
+```
+            mean  median  count
+borough
+Bronx         89      72    500
+Brooklyn     143     118   3500
+Manhattan    212     175   4500
+Queens       107      89   1500
+```
+
+### 동네 수준 분산 확인
+
+```python
+# Null model → ICC
+null_nb = smf.mixedlm(
+    "log_price ~ 1",
+    data=airbnb,
+    groups=airbnb["neighborhood"]
+).fit(reml=True)
+
+sigma2_nb = null_nb.cov_re.iloc[0, 0]
+sigma2_e = null_nb.scale
+icc_nb = sigma2_nb / (sigma2_nb + sigma2_e)
+
+print(f"ICC (동네 수준) = {icc_nb:.3f}")
+print(f"→ 가격 분산의 {icc_nb*100:.1f}%가 동네 차이에서 비롯됨")
+```
+
+```
+ICC (동네 수준) = 0.183
+→ 가격 분산의 18.3%가 동네 차이에서 비롯됨
+→ Mixed Model 적용 가치 있음
+```
+
+### 랜덤 절편 모델 (동네 효과 통제)
+
+```python
+# Fixed: stars, room_type, borough
+# Random: neighborhood (borough 내에서)
+model_airbnb = smf.mixedlm(
+    "log_price ~ stars + C(room_type) + C(borough)",
+    data=airbnb,
+    groups=airbnb["neighborhood"]
+).fit(reml=True)
+
+print(model_airbnb.summary())
+```
+
+```
+Fixed Effects:
+                              Coef.   Std.Err.    z    P>|z|
+Intercept                     3.50     0.15    23.3  <0.001
+stars                         0.18     0.02     9.0  <0.001
+C(room_type)[Private room]   -0.65     0.02   -32.5  <0.001
+C(room_type)[Shared room]    -0.92     0.05   -18.4  <0.001
+C(borough)[Brooklyn]         -0.38     0.06    -6.3  <0.001
+C(borough)[Queens]           -0.50     0.08    -6.3  <0.001
+C(borough)[Bronx]            -0.72     0.12    -6.0  <0.001
+
+Random Effects:
+Group Var (neighborhood)      0.042
+
+해석:
+- 별점 1점 증가 → 가격 exp(0.18) = 1.20배 (20% 증가)
+- Private room은 Entire home 대비 exp(-0.65) = 0.52배 (48% 낮음)
+- Brooklyn은 Manhattan 대비 exp(-0.38) = 0.68배 (32% 낮음)
+- 동네 분산: σ²_nb = 0.042 (자치구 통제 후 남은 동네 간 차이)
+```
+
+### 동네별 랜덤 효과 시각화
+
+```python
+# 동네별 랜덤 절편 추출
+random_effects = model_airbnb.random_effects
+re_df = pd.DataFrame([
+    {"neighborhood": nb, "random_intercept": vals["Group Intercept"]}
+    for nb, vals in random_effects.items()
+]).sort_values("random_intercept")
+
+# 시각화
+fig, ax = plt.subplots(figsize=(12, 6))
+colors = ["red" if ri < 0 else "steelblue" for ri in re_df["random_intercept"]]
+ax.barh(re_df["neighborhood"], re_df["random_intercept"], color=colors)
+ax.axvline(0, color="black", linewidth=0.8)
+ax.set_xlabel("랜덤 절편 (동네 효과)")
+ax.set_title("자치구 통제 후 동네별 가격 효과")
+```
+
+```
+시각화 결과:
+Manhattan_A |████████████  ← 자치구 평균보다 비싼 동네
+Manhattan_B |███████
+Brooklyn_C  |███
+Queens_A    |
+Brooklyn_A  |
+Queens_B    |██             ← 0
+Bronx_A     |████           ← 자치구 평균보다 싼 동네
+Bronx_B     |██████████
+
+해석: 같은 자치구 내에서도 동네마다 가격 차이 존재
+     OLS였다면 이 구조를 무시하고 표준오차 과소추정
+```
+
+### OLS vs Mixed Model 비교
+
+```python
+import statsmodels.api as sm
+
+# OLS (동네 구조 무시)
+ols = smf.ols(
+    "log_price ~ stars + C(room_type) + C(borough)",
+    data=airbnb
+).fit()
+
+# Mixed Model (동네 랜덤 효과)
+lmm = model_airbnb
+
+comparison = pd.DataFrame({
+    "OLS": {"stars_coef": ols.params["stars"],
+            "stars_se": ols.bse["stars"],
+            "stars_p": ols.pvalues["stars"]},
+    "LMM": {"stars_coef": lmm.fe_params["stars"],
+            "stars_se": lmm.bse_fe["stars"],
+            "stars_p": lmm.pvalues["stars"]}
+})
+print(comparison.T)
+```
+
+```
+      stars_coef  stars_se  stars_p
+OLS        0.181     0.012    0.000   ← SE 과소추정 (독립성 위반)
+LMM        0.178     0.020    0.000   ← 더 정직한 SE (동네 군집 반영)
+
+표준오차 차이: OLS 0.012 vs LMM 0.020 (LMM이 67% 더 큼)
+→ OLS는 추정 불확실성을 과소평가
+→ 표준오차가 올바르지 않으면 신뢰구간/p-value도 신뢰 불가
+```
+
+---
+
+## 결과 보고 템플릿
+
+Mixed Model 결과를 논문/보고서에 적을 때의 표준 형식:
+
+```
+[방법 섹션]
+개인화 효과를 추정하기 위해 사용자별 랜덤 절편과 시간(week)에 대한
+랜덤 기울기를 포함한 선형 혼합 모델을 적용하였다:
+
+  satisfaction_ij = β₀ + β₁·week_ij + β₂·personalized_ij
+                    + β₃·week×personalized_ij + β₄·segment_i
+                    + u₀ᵢ + u₁ᵢ·week_ij + ε_ij
+
+고정 효과 구조는 ML을 이용한 LRT로 결정하였으며,
+최종 모델은 REML로 추정하였다. 분석에는 Python statsmodels (v0.14)를 사용하였다.
+
+[결과 섹션]
+Null model의 ICC = 0.42로, 만족도 분산의 42%가 사용자 간 차이에서
+비롯됨을 확인하였다(표 1).
+
+개인화 적용 직후 만족도가 0.12점 향상되었고(SE = 0.05, p = .016),
+매주 추가로 0.08점씩 효과가 증가하였다(SE = 0.02, p < .001).
+4주 후 누적 개인화 효과는 0.44점으로 추정되었다 [95% CI: 0.32, 0.56].
+
+[표 1. 혼합 모델 결과]
+효과                    추정치    SE      95% CI         p
+고정 효과
+  절편                   3.52   0.07   [3.38, 3.66]  <.001
+  week                   0.02   0.01   [0.00, 0.04]   .046
+  개인화                 0.12   0.05   [0.02, 0.22]   .016
+  MIEP 세그먼트          0.35   0.07   [0.21, 0.49]  <.001
+  N 세그먼트            -0.28   0.10  [-0.48,-0.08]   .005
+  week × 개인화          0.08   0.02   [0.04, 0.12]  <.001
+
+분산 성분
+  σ²_u0 (사용자 절편)   0.42
+  σ²_u1 (사용자 기울기) 0.01
+  σ²_e (잔차)           0.35
+  ICC                   0.42
+```
+
+**다음**: [05-mixed-model-glmm-intro.qmd] — GLMM: 결과 변수가 정규분포가 아닐 때

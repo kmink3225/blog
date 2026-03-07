@@ -1,0 +1,327 @@
+---
+title: "GAM/GAMM: 비선형 종단 데이터 분석"
+subtitle: "Spline 기반 비선형 관계 + 랜덤 효과의 결합"
+description: |
+  GAM(Generalized Additive Model)은 선형 가정을 완화하여 공변량과 결과의
+  비선형 관계를 데이터에서 학습한다. GAMM은 여기에 랜덤 효과를 더해
+  반복 측정 데이터의 비선형 궤적을 분석한다.
+  Spline의 직관적 이해, 자유도(EDF) 해석, 종단 성장 궤적 모델링을 다룬다.
+categories:
+  - Statistics
+  - GAM
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# GAM/GAMM: 비선형 종단 데이터 분석
+
+## 왜 GAM인가: 선형성 가정의 한계
+
+LMM은 공변량과 결과의 관계가 **선형**이라고 가정한다:
+
+$$E[Y] = \beta_0 + \beta_1 X$$
+
+실제 데이터에서는 비선형 관계가 흔하다:
+
+```
+만족도
+5 │        ╭──────
+  │       ╱
+4 │      ╱
+  │    ╱
+3 │  ╱
+  │ ╱ (처음엔 빠르게 증가, 이후 안정)
+2 │╱
+  └──────────────── 개인화 기간 (주)
+
+→ 선형 모델: 직선으로 과소/과대 추정
+→ GAM: 데이터에서 실제 곡선 형태를 학습
+```
+
+**GAM이 유용한 상황:**
+- 만족도 성장 궤적이 S자형 또는 로그형
+- 시간 효과가 초반과 후반에 다름
+- 공변량 효과가 일정 범위에서만 강하고 나머지에서는 약함
+
+---
+
+## GAM의 핵심: Spline
+
+GAM은 공변량 $X$의 효과를 **Spline 함수**로 표현한다:
+
+$$E[Y] = \beta_0 + f(X)$$
+
+$f(X)$는 여러 개의 기저 함수(Basis Function)의 합:
+
+$$f(X) = \sum_{k=1}^{K} \beta_k b_k(X)$$
+
+### 직관적 이해: 구간별 연결된 곡선
+
+```
+X 범위를 여러 구간으로 나누고 각 구간에 부드러운 곡선을 맞춤
+단, 구간 경계(knot)에서 부드럽게 연결
+
+knot:  |    |    |    |    |
+       1    2    3    4    5  (개인화 주차)
+
+각 구간의 국소적 패턴을 학습 →
+전체적으로 부드러운 곡선이 됨
+```
+
+### Spline 종류
+
+| 종류 | 특징 | 권장 상황 |
+|------|------|----------|
+| **Thin Plate Regression Spline (TPRS)** | 자동 knot, 공간 효율적 | mgcv 기본값 |
+| **Cubic Regression Spline** | 3차 다항식 구간, 직관적 | 1D smoothing |
+| **P-spline** | 인접 계수 패널티 | 주기적 데이터 |
+| **Cyclic Spline** | 시작=끝 연속 | 계절성, 시간 순환 |
+
+---
+
+## GAM 기본 모델
+
+```r
+library(mgcv)
+
+# GAM: 시간 효과를 비선형으로
+m_gam <- gam(
+  satisfaction ~ s(week) + personalized + segment,
+  data=df,
+  method="REML"   # 스무딩 파라미터 추정에 REML 사용
+)
+
+summary(m_gam)
+```
+
+```
+Parametric coefficients:
+              Estimate Std.Error t-value Pr(>|t|)
+(Intercept)    3.48     0.03     116.0   <0.001
+personalized   0.47     0.05       9.4   <0.001
+segmentMIEP    0.34     0.05       6.8   <0.001
+segmentN      -0.27     0.07      -3.9   <0.001
+
+Approximate significance of smooth terms:
+        edf  Ref.df  F      p-value
+s(week) 2.34   2.93  8.4   <0.001
+
+해석:
+- personalized, segment: 선형 고정 효과 (일반적 해석)
+- s(week): 주차의 비선형 효과 (EDF=2.34 → 약간의 곡선)
+
+EDF(Effective Degrees of Freedom):
+- EDF = 1: 선형 (직선)
+- EDF > 1: 비선형 (곡선), 클수록 더 구불구불
+- EDF = 2.34: 약한 곡선 (2차 다항식과 비슷)
+```
+
+### Smooth 효과 시각화
+
+```r
+plot(m_gam, select=1, shade=TRUE,
+     xlab="Week", ylab="s(week)", main="시간의 비선형 효과")
+abline(h=0, lty=2)
+```
+
+```
+시각화 결과:
+s(week)
++1.0 │       ╭────────
+     │      ╱         (개인화 효과가 초반에 급격히 증가)
+0.0  │─────╱
+     │
+-0.5 │  (초반 1~2주는 기준보다 낮음)
+     └──────────────── Week
+         1  2  3  4  5  6  7  8
+```
+
+---
+
+## GAMM: GAM + 랜덤 효과
+
+반복 측정 데이터에 GAM을 적용하려면 **랜덤 효과를 추가**해야 한다.
+
+### 수식
+
+$$Y_{ij} = \beta_0 + f(\text{week}_{ij}) + \beta_1 \text{personalized}_{ij} + u_i + \epsilon_{ij}$$
+
+- $f(\text{week})$: 시간의 비선형 효과 (Spline)
+- $u_i$: 사용자별 랜덤 절편
+
+### mgcv::gamm 사용
+
+```r
+library(mgcv)
+
+m_gamm <- gamm(
+  satisfaction ~ s(week) + personalized + segment,
+  random = list(user_id = ~1),  # 랜덤 절편
+  data = df,
+  method = "REML"
+)
+
+# GAMM은 두 개의 결과 반환
+summary(m_gamm$gam)   # GAM 파트 (smooth terms)
+summary(m_gamm$lme)   # LME 파트 (랜덤 효과)
+```
+
+```
+$gam:
+Parametric:
+  personalized: 0.48 (p < 0.001)
+  segmentMIEP:  0.35 (p < 0.001)
+
+Smooth:
+  s(week): EDF=2.71, F=12.3, p<0.001
+
+$lme:
+Random Effects:
+  user_id (Intercept) σ²_u = 0.41
+```
+
+### 개인별 비선형 궤적: Random Smooth
+
+사용자마다 시간 궤적 자체가 다를 때:
+
+```r
+library(mgcv)
+
+# fs 스무드: 사용자별 랜덤 궤적
+m_gamm_fs <- gam(
+  satisfaction ~ s(week) + personalized + segment +
+                 s(week, user_id, bs="fs", m=1),
+  #              ↑ "factor-smooth": 각 user_id의 개별 궤적
+  data=df,
+  method="REML"
+)
+```
+
+```
+이 모델이 가정하는 것:
+- 전체 평균 궤적 s(week): 전체 사용자 공통 패턴
+- 개별 궤적 s(week, user_id, bs="fs"): 사용자마다 다른 시간 패턴
+
+→ Random Intercept만 있던 기존 모델보다 훨씬 유연
+→ 단, 데이터가 충분히 많아야 (사용자당 관측치 ≥ 5 권장)
+```
+
+---
+
+## 실무 예시: 만족도 성장 궤적
+
+### 문제 설정
+
+개인화 도입 후 만족도가 어떤 패턴으로 변화하는가?
+- 선형이라면: LMM으로 충분
+- 비선형이라면: GAMM 필요
+
+```r
+# 1단계: 시각적 확인
+library(ggplot2)
+library(dplyr)
+
+df %>%
+  group_by(week, personalized) %>%
+  summarise(mean_sat = mean(satisfaction), .groups="drop") %>%
+  ggplot(aes(x=week, y=mean_sat, color=factor(personalized))) +
+  geom_point(size=3) + geom_smooth(method="loess", se=TRUE) +
+  labs(title="주차별 평균 만족도 (Loess 곡선)",
+       x="Week", y="만족도", color="개인화")
+
+# 2단계: 선형 vs 비선형 모델 비교 (ML 사용)
+m_linear <- gamm(
+  satisfaction ~ week + personalized + segment,
+  random=list(user_id=~1), data=df, method="ML"
+)
+
+m_nonlinear <- gamm(
+  satisfaction ~ s(week) + personalized + segment,
+  random=list(user_id=~1), data=df, method="ML"
+)
+
+# LRT
+anova(m_linear$lme, m_nonlinear$lme)
+```
+
+```
+           Df   AIC    BIC  logLik  Test   L.Ratio p-value
+m_linear    7  9234  9276  -4610.0
+m_nonlinear 8  9220  9268  -4602.3  1 vs 2  15.4   <0.001
+
+→ 비선형 모델이 유의하게 우수 → GAMM 채택
+```
+
+### 최종 GAMM 결과 해석
+
+```r
+m_final <- gamm(
+  satisfaction ~ s(week, by=factor(personalized)) + segment,
+  # s(week, by=personalized): 개인화 전/후 각각 다른 비선형 궤적
+  random=list(user_id=~1),
+  data=df, method="REML"
+)
+
+plot(m_final$gam, pages=1, shade=TRUE)
+```
+
+```
+시각화:
+만족도 변화 (개인화 전: 파랑, 개인화 후: 빨강)
+
+개인화 전:  완만한 자연 증가 (거의 직선, EDF≈1)
+개인화 후:  빠른 초기 증가 후 안정 (S자형, EDF≈2.8)
+
+→ 선형 모델이었다면 초기 급증을 포착하지 못했을 것
+```
+
+---
+
+## GAM vs GAMM vs LMM 비교
+
+| 모델 | 시간 효과 | 랜덤 효과 | 사용 상황 |
+|------|----------|----------|----------|
+| LMM | 선형 (β·week) | 있음 | 시간 효과가 선형 |
+| GAM | 비선형 s(week) | 없음 | 독립 관측치, 비선형 |
+| GAMM | 비선형 s(week) | 있음 | 반복 측정 + 비선형 |
+| GAMM+fs | 개인별 비선형 | 있음 | 궤적 형태도 개인차 있음 |
+
+### 모델 선택 흐름
+
+```
+반복 측정 데이터 (종단)
+│
+├── 시간 효과가 선형이라 확신? → LMM (01~04)
+│
+└── 선형 여부 불확실?
+    │
+    ├── 선형 vs 비선형 LRT → p > 0.05 → LMM 유지
+    │
+    └── p < 0.05 (비선형) → GAMM
+                              │
+                              ├── 모든 사용자가 같은 궤적? → s(week) + (1|id)
+                              └── 사용자마다 궤적 다름? → s(week, id, bs="fs")
+```
+
+---
+
+## Python에서 GAM
+
+```python
+from pygam import LinearGAM, s, f
+
+# GAM (반복 측정 미지원, 독립 관측치 가정)
+gam = LinearGAM(
+    s(0) +    # week (spline)
+    f(1) +    # personalized (factor/linear)
+    f(2)      # segment (factor)
+)
+gam.fit(X, y)
+gam.summary()
+
+# GAMM → R 사용 권장 (mgcv)
+```
+
+**다음**: `10-mixed-model-functional-intro.qmd` — Functional Data Analysis
