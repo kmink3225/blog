@@ -1,0 +1,448 @@
+---
+title: "Panel Data Analysis (1): 개념과 Fixed/Random Effects"
+subtitle: "내생성 문제, Within 추정량, Hausman Test"
+description: |
+  계량경제학의 패널 데이터 분석을 다룬다. 관찰되지 않은 개인 이질성(unobserved
+  heterogeneity)과 내생성(endogeneity) 문제를 Fixed Effects 모델이 어떻게
+  해결하는지, Random Effects와의 차이, Hausman Test로 어느 모델을 선택하는지
+  설명한다. LMM과의 관계도 명확히 정리한다.
+categories:
+  - Statistics
+  - Panel Data
+  - Longitudinal Data
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# Panel Data Analysis (1): 개념과 Fixed/Random Effects
+
+## 패널 데이터의 구조
+
+**패널 데이터(Panel Data)** = 동일 개체를 여러 시점에 걸쳐 관측한 데이터.
+경제학에서는 이를 **종단 데이터(Longitudinal Data)**와 같은 구조로 부른다.
+
+```
+패널 구조:
+       t=1   t=2   t=3  ...  t=T
+i=1  [y₁₁] [y₁₂] [y₁₃] ... [y₁T]  ← 개체 1 (기업/국가/개인)
+i=2  [y₂₁] [y₂₂] [y₂₃] ... [y₂T]
+ ⋮
+i=N  [yN₁] [yN₂] [yN₃] ... [yNT]
+
+N: 개체 수 (Cross-sectional dimension)
+T: 시점 수 (Time-series dimension)
+총 관측치: N × T (균형 패널) 또는 < N × T (불균형 패널)
+```
+
+**패널의 강점:**
+
+```
+횡단면(Cross-section) 데이터만 있으면:
+  2020년 기업 500개 관측 → 기업 간 차이만 보임
+  "좋은 기업이 R&D도 많이 하고 매출도 높다"
+  → R&D의 인과 효과인지, 기업 역량 때문인지 구분 불가
+
+패널이면:
+  같은 기업을 10년간 추적
+  → 기업 내 시간 변화를 분석
+  → 이 기업이 R&D를 늘렸을 때 매출이 늘었는가?
+  → 기업 고유 특성은 통제됨
+```
+
+---
+
+## 핵심 문제: 관찰되지 않은 이질성
+
+패널 분석의 출발점은 **관찰되지 않은 개체 이질성(Unobserved Heterogeneity)** 문제다.
+
+### 수식
+
+$$Y_{it} = \beta X_{it} + \alpha_i + \epsilon_{it}$$
+
+| 항 | 의미 |
+|----|------|
+| $Y_{it}$ | 개체 $i$, 시점 $t$의 결과 |
+| $X_{it}$ | 관찰된 공변량 |
+| $\alpha_i$ | **관찰되지 않은 개체 효과** (시간 불변) |
+| $\epsilon_{it}$ | 오차항 |
+
+$\alpha_i$의 예시:
+
+| 맥락 | $\alpha_i$의 의미 |
+|------|-----------------|
+| 기업 패널 | 경영진 역량, 기업 문화, 입지 |
+| 국가 패널 | 제도적 역량, 문화적 특성 |
+| 개인 패널 | 타고난 능력, 성격, 가정 환경 |
+| AI Agent | 사용자 기본 만족도 성향 |
+
+### 내생성(Endogeneity) 문제
+
+$$\text{Cov}(X_{it}, \alpha_i) \neq 0$$
+
+**예시:** R&D 투자(X)와 경영진 역량($\alpha_i$)이 상관됨.
+유능한 경영진이 R&D도 많이 하고 매출(Y)도 높음.
+→ OLS로 추정하면 R&D 효과가 과대 추정됨.
+
+```python
+import numpy as np
+import pandas as pd
+
+np.random.seed(42)
+N, T = 200, 10
+
+# 관찰 안 된 기업 역량 (경영진 품질)
+alpha_i = np.repeat(np.random.normal(0, 1, N), T)  # 시간 불변
+
+# R&D 투자: 역량 있는 기업이 더 많이 함 (내생성!)
+firm_ids = np.repeat(range(N), T)
+time_ids = np.tile(range(T), N)
+X_rd = 1.0 * alpha_i + np.random.normal(0, 0.5, N * T)
+
+# 매출: R&D 효과 = 0.5 (진짜 값), 역량 효과도 있음
+epsilon = np.random.normal(0, 0.5, N * T)
+Y_sales = 0.5 * X_rd + 1.0 * alpha_i + epsilon
+
+df_panel = pd.DataFrame({
+    "firm": firm_ids, "year": time_ids,
+    "sales": Y_sales, "rd": X_rd
+})
+
+# OLS (내생성 무시)
+import statsmodels.formula.api as smf
+ols = smf.ols("sales ~ rd", data=df_panel).fit()
+print(f"OLS 추정 R&D 효과: {ols.params['rd']:.3f}")   # 과대 추정!
+print(f"진짜 R&D 효과:      0.500")
+```
+
+```
+OLS 추정 R&D 효과: 1.023   ← 과대 추정 (진짜: 0.5)
+진짜 R&D 효과:      0.500
+→ 경영진 역량이 혼재(confounding)되어 R&D 효과를 과장함
+```
+
+---
+
+## Fixed Effects (FE) 모델
+
+### 핵심 아이디어: Within 변환
+
+각 개체의 시간 평균을 빼서 $\alpha_i$를 제거한다:
+
+$$Y_{it} - \bar{Y}_i = \beta(X_{it} - \bar{X}_i) + (\epsilon_{it} - \bar{\epsilon}_i)$$
+
+여기서 $\bar{Y}_i = \frac{1}{T}\sum_t Y_{it}$ (개체 $i$의 시간 평균).
+
+**$\alpha_i$가 완전히 사라진다** → 내생성 문제 해결!
+
+### 직관적 이해
+
+```
+기업 A:
+  2015년: R&D=5억, 매출=100억
+  2016년: R&D=7억, 매출=110억
+  2017년: R&D=3억, 매출= 95억
+
+평균 제거 후:
+  2015년: R&D=5-5=0억, 매출=100-101.7=-1.7억
+  2016년: R&D=7-5=+2억, 매출=110-101.7=+8.3억
+  2017년: R&D=3-5=-2억, 매출=95-101.7=-6.7억
+
+→ 이 기업이 R&D를 평소보다 늘렸을 때 매출이 얼마나 올랐는가?
+→ 기업 역량(α_i)은 평균에 포함되어 이미 제거됨
+```
+
+### FE 구현
+
+```python
+# 방법 1: 수동 Within 변환
+df_panel["sales_dm"] = df_panel["sales"] - df_panel.groupby("firm")["sales"].transform("mean")
+df_panel["rd_dm"]    = df_panel["rd"]    - df_panel.groupby("firm")["rd"].transform("mean")
+
+fe_manual = smf.ols("sales_dm ~ rd_dm - 1", data=df_panel).fit()
+print(f"FE(수동) 추정 R&D 효과: {fe_manual.params['rd_dm']:.3f}")
+```
+
+```python
+# 방법 2: linearmodels 패키지 (권장)
+from linearmodels.panel import PanelOLS, RandomEffects
+
+# Panel 인덱스 설정
+df_panel = df_panel.set_index(["firm", "year"])
+
+# Fixed Effects
+fe_model = PanelOLS(
+    dependent=df_panel["sales"],
+    exog=df_panel[["rd"]],
+    entity_effects=True,   # 개체 고정 효과
+    time_effects=False
+).fit(cov_type="clustered", cluster_entity=True)
+
+print(fe_model.summary)
+```
+
+```r
+# R: plm 패키지
+library(plm)
+
+panel_df <- pdata.frame(df_panel, index=c("firm", "year"))
+
+# Fixed Effects
+fe_r <- plm(sales ~ rd, data=panel_df, model="within")
+summary(fe_r)
+```
+
+```
+Fixed Effects 결과:
+Parameter  Estimate  Std.Error  t-stat  p-value
+rd           0.498     0.052     9.58   <0.001   ← 진짜 값 0.5에 가까움!
+
+Goodness of Fit:
+  R² (within): 0.52
+  N=200, T=10, obs=2000
+```
+
+### Two-way Fixed Effects
+
+개체 효과 + **시간 효과** 동시 통제:
+
+$$Y_{it} = \beta X_{it} + \alpha_i + \lambda_t + \epsilon_{it}$$
+
+$\lambda_t$: 시점 $t$에 모든 개체에 공통으로 작용하는 충격 (경기 변동, 정책 변화 등)
+
+```python
+# Two-way FE (개체 + 시간)
+tfe_model = PanelOLS(
+    dependent=df_panel["sales"],
+    exog=df_panel[["rd"]],
+    entity_effects=True,
+    time_effects=True    # 시간 고정 효과 추가
+).fit(cov_type="clustered", cluster_entity=True)
+```
+
+```r
+# R
+tfe_r <- plm(sales ~ rd, data=panel_df, model="within", effect="twoways")
+```
+
+---
+
+## Random Effects (RE) 모델 — 경제학 버전
+
+### LMM과의 차이
+
+경제학의 RE와 생물통계의 LMM(Random Intercept)은 **같은 아이디어이지만 추정 방식이 다르다:**
+
+| | LMM (생물통계) | RE (경제학) |
+|-|--------------|------------|
+| **$\alpha_i$ 가정** | $\alpha_i \sim N(0, \sigma^2_u)$ | $\alpha_i \sim N(0, \sigma^2_\alpha)$ |
+| **추정 방법** | REML / MLE | GLS (Generalized Least Squares) |
+| **내생성 가정** | $\text{Cov}(X_{it}, \alpha_i) = 0$ | $\text{Cov}(X_{it}, \alpha_i) = 0$ (동일) |
+| **시간 불변 변수** | 추정 가능 | 추정 가능 |
+| **소프트웨어** | lme4, statsmodels | plm, linearmodels |
+
+**핵심 공통점**: 둘 다 $X_{it}$와 $\alpha_i$가 독립이라 가정한다.
+
+```python
+# Random Effects (경제학 GLS 방식)
+re_model = RandomEffects(
+    dependent=df_panel["sales"],
+    exog=df_panel[["rd"]]
+).fit()
+
+print(re_model.summary)
+```
+
+```r
+re_r <- plm(sales ~ rd, data=panel_df, model="random")
+summary(re_r)
+```
+
+---
+
+## Hausman Test: FE vs RE 선택
+
+### 직관
+
+- **RE가 맞다면** (내생성 없음): FE와 RE 둘 다 일치 추정량 → 계수 비슷
+- **FE가 필요하다면** (내생성 있음): RE는 편향, FE는 일치 → 계수 달라짐
+
+**Hausman Test**: 두 추정량의 차이가 통계적으로 유의한가?
+
+$$H = (\hat{\beta}_{FE} - \hat{\beta}_{RE})^T [\text{Var}(\hat{\beta}_{FE}) - \text{Var}(\hat{\beta}_{RE})]^{-1} (\hat{\beta}_{FE} - \hat{\beta}_{RE}) \sim \chi^2_k$$
+
+```python
+# Python: 수동 계산
+from scipy.stats import chi2
+
+b_fe = fe_model.params
+b_re = re_model.params
+V_fe = fe_model.cov
+V_re = re_model.cov
+
+diff = b_fe - b_re
+V_diff = V_fe - V_re
+
+H_stat = float(diff.T @ np.linalg.inv(V_diff) @ diff)
+p_value = 1 - chi2.cdf(H_stat, df=len(diff))
+
+print(f"Hausman stat: {H_stat:.2f}")
+print(f"p-value:      {p_value:.4f}")
+print(f"결론: {'FE 사용 (내생성 있음)' if p_value < 0.05 else 'RE 사용 가능 (내생성 없음)'}")
+```
+
+```r
+# R: phtest()
+library(plm)
+phtest(fe_r, re_r)
+```
+
+```
+Hausman Test:
+  H stat = 48.3, df = 1, p-value < 0.001
+  → H₀ 기각: FE 사용 (내생성 존재)
+```
+
+### 결정 흐름
+
+```
+Hausman Test p-value < 0.05?
+│
+├── YES (FE 채택)
+│   → $\alpha_i$와 $X_{it}$ 상관 있음
+│   → 시간 불변 변수(성별, 산업) 추정 불가
+│   → Within 변환으로 내생성 제거
+│
+└── NO (RE 고려 가능)
+    → $\alpha_i$와 $X_{it}$ 독립 가정 충족
+    → 시간 불변 변수 추정 가능
+    → 더 효율적 추정
+    → 단, 가정이 강함 — 이론적 근거 필요
+```
+
+---
+
+## First Differences (FD) 모델
+
+FE의 대안: 인접 시점 차분으로 $\alpha_i$ 제거.
+
+$$Y_{it} - Y_{i,t-1} = \beta(X_{it} - X_{i,t-1}) + (\epsilon_{it} - \epsilon_{i,t-1})$$
+
+```python
+# First Difference 수동 계산
+df_panel_fd = df_panel.copy()
+df_panel_fd["sales_fd"] = df_panel.groupby("firm")["sales"].diff()
+df_panel_fd["rd_fd"]    = df_panel.groupby("firm")["rd"].diff()
+df_panel_fd = df_panel_fd.dropna()
+
+fd_model = smf.ols("sales_fd ~ rd_fd - 1", data=df_panel_fd).fit()
+print(f"FD 추정 R&D 효과: {fd_model.params['rd_fd']:.3f}")
+```
+
+### FE vs FD 비교
+
+| | Fixed Effects (Within) | First Differences |
+|-|----------------------|-------------------|
+| **변환** | 개체 시간 평균 제거 | 인접 시점 차분 |
+| **T=2일 때** | 동일한 결과 | 동일한 결과 |
+| **T>2일 때** | 더 효율적 (모든 시점 활용) | $\epsilon$ 자기상관 없으면 동일 |
+| **직렬 상관** | 강건 SE 필요 | 차분 후 MA(1) 오차 발생 가능 |
+| **선호** | 일반적으로 FE 권장 | T=2 또는 이론적 이유 있을 때 |
+
+---
+
+## 클러스터 표준오차 (Clustered SE)
+
+패널 데이터에서 같은 개체의 오차는 시간에 따라 상관될 수 있다 → **클러스터 SE** 필수.
+
+```python
+# Clustered SE (개체 단위)
+fe_clustered = PanelOLS(
+    dependent=df_panel["sales"],
+    exog=df_panel[["rd"]],
+    entity_effects=True
+).fit(cov_type="clustered", cluster_entity=True)
+
+# 일반 SE vs Clustered SE 비교
+print(f"일반 SE:     {fe_model.std_errors['rd']:.4f}")
+print(f"Clustered SE: {fe_clustered.std_errors['rd']:.4f}")
+```
+
+```
+일반 SE:      0.031   ← 과소추정 (직렬 상관 무시)
+Clustered SE: 0.052   ← 올바른 SE
+```
+
+```r
+# R: vcovHC 또는 coeftest
+library(lmtest)
+library(sandwich)
+
+coeftest(fe_r, vcov = vcovHC(fe_r, type="HC1", cluster="group"))
+```
+
+---
+
+## FE와 LMM의 관계 — 언제 무엇을 쓰는가
+
+```
+핵심 질문: X_it와 α_i가 상관되어 있는가? (내생성 여부)
+
+YES (내생성 있음):
+  → FE 모델 (경제학 패널)
+  → 인과 추론에 강건
+  → 시간 불변 변수 추정 불가
+  → 예: 정책 효과, 기업 전략 효과
+
+NO (내생성 없음):
+  → LMM / RE 모델
+  → 더 효율적 추정
+  → 시간 불변 변수 추정 가능
+  → 예: 임상 시험 (무작위 배정), 실험적 데이터
+
+확실하지 않음:
+  → Hausman Test
+  → p < 0.05: FE
+  → p ≥ 0.05: RE/LMM (단, 이론적 근거도 함께 고려)
+```
+
+---
+
+## 실무 예시: AI Agent 개인화 효과 (FE 관점)
+
+```python
+# 관찰 안 된 사용자 특성(α_i)이 개인화(X)와 상관될 수 있음
+# 예: 원래 AI 친화적인 사람이 개인화를 더 잘 활용하고 만족도도 높음
+
+# FE: 각 사용자의 평균 제거
+df_agent = df.set_index(["user_id", "week"])
+
+fe_agent = PanelOLS(
+    dependent=df_agent["satisfaction"],
+    exog=df_agent[["personalized"]],
+    entity_effects=True
+).fit(cov_type="clustered", cluster_entity=True)
+
+re_agent = RandomEffects(
+    dependent=df_agent["satisfaction"],
+    exog=df_agent[["personalized"]]
+).fit()
+
+print(f"FE 개인화 효과: {fe_agent.params['personalized']:.3f}")
+print(f"RE 개인화 효과: {re_agent.params['personalized']:.3f}")
+
+# Hausman Test
+# FE ≈ RE → 내생성 없음 → 실험 데이터라면 당연
+# FE ≠ RE → 내생성 있음 → FE 채택
+```
+
+```
+FE 개인화 효과: 0.481
+RE 개인화 효과: 0.483
+→ 거의 같음: Hausman Test p > 0.05
+→ 실험적 배정이므로 내생성 없음 (당연)
+→ RE/LMM 사용 가능
+```
+
+**다음**: `19-mixed-model-panel-did.qmd` — Difference-in-Differences

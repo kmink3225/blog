@@ -1,0 +1,529 @@
+---
+title: "회귀 진단 (Diagnostics)"
+subtitle: "잔차 분석, 이상치, 이분산성, Bootstrap 추론"
+description: |
+  선형 모델과 혼합 모델의 가정을 검토하는 진단 기법을 다룬다.
+  잔차 분석(정규성, 이분산성, 자기상관), Cook's distance 기반 이상치 탐지,
+  이상치 대응 전략(로그 변환, Robust Regression), 그리고 가정이 깨질 때의
+  Bootstrap 추론까지 포함한다.
+categories:
+  - Statistics
+  - Longitudinal Data
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# 회귀 진단 (Diagnostics)
+
+## 왜 진단인가
+
+모델을 적합한 후 **가정이 실제로 충족되는지** 확인하지 않으면:
+
+- 표준오차가 틀려 → 신뢰구간/p-value 신뢰 불가
+- 계수 추정이 편향될 수 있음
+- 결론 자체가 오염
+
+**진단은 선택이 아니라 의무다.**
+
+---
+
+## 선형 모델의 핵심 가정
+
+| 가정 | 수식 | 위반 시 |
+|------|------|---------|
+| **선형성** | $E[Y] = X\beta$ | 계수 편향 |
+| **등분산성** | $\text{Var}(\epsilon_i) = \sigma^2$ (일정) | SE 과소/과대 추정 |
+| **정규성** | $\epsilon_i \sim N(0, \sigma^2)$ | 소표본에서 추론 오류 |
+| **독립성** | $\text{Cov}(\epsilon_i, \epsilon_j) = 0$ | SE 과소추정 (Mixed Model로 해결) |
+| **영향점 없음** | 이상치/레버리지 점 없음 | 계수 왜곡 |
+
+---
+
+## 잔차 분석
+
+### 기본 잔차 시각화
+
+```python
+import statsmodels.formula.api as smf
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy import stats
+
+# 모델 적합
+model = smf.ols("price ~ stars + C(borough) + C(room_type)", data=df).fit()
+
+residuals = model.resid
+fitted    = model.fittedvalues
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+# 1. 잔차 vs 적합값: 이분산성 확인
+axes[0,0].scatter(fitted, residuals, alpha=0.3, s=10)
+axes[0,0].axhline(0, color='red', linewidth=1)
+axes[0,0].set_xlabel("Fitted Values")
+axes[0,0].set_ylabel("Residuals")
+axes[0,0].set_title("Residuals vs Fitted\n(등분산: 수평 밴드여야 함)")
+
+# 2. Q-Q plot: 정규성 확인
+stats.probplot(residuals, plot=axes[0,1])
+axes[0,1].set_title("Normal Q-Q Plot\n(직선에 가까울수록 정규분포)")
+
+# 3. Scale-Location: 등분산성 (sqrt(|잔차|) vs 적합값)
+axes[1,0].scatter(fitted, np.sqrt(np.abs(residuals)), alpha=0.3, s=10)
+axes[1,0].set_xlabel("Fitted Values")
+axes[1,0].set_ylabel("√|Residuals|")
+axes[1,0].set_title("Scale-Location\n(수평이어야 등분산)")
+
+# 4. 잔차 히스토그램
+axes[1,1].hist(residuals, bins=50, edgecolor='black')
+axes[1,1].set_xlabel("Residuals")
+axes[1,1].set_title("Residual Distribution")
+
+plt.tight_layout()
+```
+
+### 그룹별 잔차 분포 (범주형 변수)
+
+```python
+# borough별 잔차 분포 — 그룹별 이분산성 확인
+import seaborn as sns
+
+df_diag = df.copy()
+df_diag["resid"] = model.resid
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# 바이올린 플롯: 잔차 분포 형태
+sns.violinplot(data=df_diag, x="borough", y="resid", ax=axes[0])
+axes[0].axhline(0, color='red', linestyle='--')
+axes[0].set_title("Borough별 잔차 분포\n(각 그룹에서 중앙이 0이고 폭이 비슷해야 함)")
+
+# 상자 그림: 이상치 탐지
+sns.boxplot(data=df_diag, x="borough", y="resid", ax=axes[1])
+axes[1].axhline(0, color='red', linestyle='--')
+axes[1].set_title("Borough별 잔차 상자 그림")
+```
+
+```
+진단 결과 예시 (NYC Airbnb):
+- Manhattan: 잔차 분산이 매우 큼 (이분산성 의심)
+- Bronx: 잔차 분산이 상대적으로 작음
+- 전체적으로 오른쪽 꼬리가 매우 김 (극단적 고가 숙소)
+→ 로그 변환 또는 Robust Regression 고려
+```
+
+### 공변량에 대한 잔차 산점도
+
+```python
+# stars vs 잔차: 비선형 관계 잔존 여부
+plt.scatter(df["stars"], model.resid, alpha=0.3, s=10)
+plt.axhline(0, color='red')
+plt.xlabel("Stars")
+plt.ylabel("Residuals")
+plt.title("Stars vs 잔차\n(패턴이 없어야 선형성 충족)")
+```
+
+---
+
+## 이상치와 영향점
+
+### 세 가지 개념 구분
+
+```
+Outlier (이상치):    Y 방향으로 모델과 크게 다름 (잔차 큼)
+Leverage (레버리지): X 방향으로 다른 점 (극단적 X값)
+Influential Point:   제거 시 계수가 크게 변하는 점 = Outlier + Leverage
+```
+
+```python
+# OLS 영향점 진단
+influence = model.get_influence()
+
+# 1. 표준화 잔차 (|값| > 3 이면 의심)
+std_resid = influence.resid_studentized_internal
+outliers = np.where(np.abs(std_resid) > 3)[0]
+print(f"표준화 잔차 > 3인 관측치: {len(outliers)}개")
+
+# 2. Leverage (hat values): 평균의 2~3배 이상이면 고레버리지
+hat_values = influence.hat_matrix_diag
+n, p = model.nobs, len(model.params)
+high_leverage = np.where(hat_values > 2 * p / n)[0]
+print(f"고레버리지 관측치: {len(high_leverage)}개")
+
+# 3. Cook's Distance: 영향력 통합 지표
+cooks_d = influence.cooks_distance[0]
+influential = np.where(cooks_d > 4 / n)[0]
+print(f"영향점 (Cook's D > 4/n): {len(influential)}개")
+
+# 영향점 시각화
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# Cook's Distance plot
+axes[0].stem(range(len(cooks_d)), cooks_d, markerfmt=",", linefmt="C0-")
+axes[0].axhline(4/n, color='red', linestyle='--', label=f"threshold = 4/n")
+axes[0].set_xlabel("Observation Index")
+axes[0].set_ylabel("Cook's Distance")
+axes[0].set_title("Cook's Distance\n(빨간선 위 = 영향점)")
+axes[0].legend()
+
+# Leverage vs 표준화 잔차
+axes[1].scatter(hat_values, std_resid, alpha=0.4)
+axes[1].axhline(3, color='red', linestyle='--')
+axes[1].axhline(-3, color='red', linestyle='--')
+axes[1].axvline(2*p/n, color='orange', linestyle='--')
+axes[1].set_xlabel("Leverage (hat value)")
+axes[1].set_ylabel("Standardized Residuals")
+axes[1].set_title("Leverage vs Residuals")
+```
+
+### R에서의 진단
+
+```r
+# R: 4가지 진단 플롯 한번에
+fit <- lm(price ~ stars + borough + room_type, data=df)
+par(mfrow=c(2,2))
+plot(fit)
+```
+
+```
+plot(fit) 4가지:
+1. Residuals vs Fitted: 이분산성, 비선형성
+2. Normal Q-Q: 정규성
+3. Scale-Location: 등분산성 (더 명확)
+4. Residuals vs Leverage: 영향점 (Cook's D 등고선 포함)
+```
+
+---
+
+## 이분산성 공식 검정
+
+시각적 확인에 더해 공식 검정을 실시한다.
+
+```python
+from statsmodels.stats.diagnostic import het_breuschpagan, het_white
+
+# Breusch-Pagan 검정: H₀ = 등분산
+bp_stat, bp_p, _, _ = het_breuschpagan(model.resid, model.model.exog)
+print(f"Breusch-Pagan: stat={bp_stat:.2f}, p={bp_p:.4f}")
+# p < 0.05 → 이분산성 존재
+
+# White 검정: 더 일반적
+w_stat, w_p, _, _ = het_white(model.resid, model.model.exog)
+print(f"White test:    stat={w_stat:.2f}, p={w_p:.4f}")
+```
+
+### 이분산성 대응 전략
+
+| 전략 | 방법 | 사용 상황 |
+|------|------|----------|
+| **로그 변환** | `log(price) ~ ...` | 우측 꼬리 데이터 (가격, 소득) |
+| **WLS (가중 최소제곱)** | `wls(..., weights=1/σ²_i)` | 분산 패턴이 명확할 때 |
+| **Sandwich SE** | `HC3` 표준오차 | 계수는 유지, SE만 보정 |
+| **Robust Regression** | `rlm()` | 이상치 영향 최소화 |
+
+```python
+# Sandwich (Heteroskedasticity-Robust) SE
+import statsmodels.formula.api as smf
+
+model_hc3 = smf.ols("price ~ stars + C(borough)", data=df).fit(
+    cov_type="HC3"   # 이분산 강건 표준오차
+)
+print(model_hc3.summary())
+# 계수는 동일, SE만 이분산에 강건하게 조정됨
+```
+
+```r
+library(sandwich)
+library(lmtest)
+
+fit <- lm(price ~ stars + borough, data=df)
+# HC3 강건 표준오차로 계수 검정
+coeftest(fit, vcov = vcovHC(fit, type="HC3"))
+```
+
+---
+
+## 정규성 검정
+
+```python
+from scipy.stats import shapiro, kstest, normaltest
+
+# Shapiro-Wilk (소표본 권장, n < 5000)
+stat, p = shapiro(model.resid[:5000])
+print(f"Shapiro-Wilk: stat={stat:.4f}, p={p:.4f}")
+
+# K-S 검정 (대표본)
+stat, p = kstest(model.resid, 'norm',
+                 args=(model.resid.mean(), model.resid.std()))
+print(f"K-S test: stat={stat:.4f}, p={p:.4f}")
+```
+
+**주의**: 대표본에서는 정규성 검정이 항상 유의하게 나온다. 중심극한정리로 인해 n이 충분히 크면 비정규성이 추론에 미치는 영향이 작아진다.
+
+---
+
+## 이상치 대응 전략
+
+### 전략 1: 로그 변환
+
+```python
+# 가격 로그 변환 전후 비교
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+# 원래 분포
+axes[0].hist(df["price"], bins=100, edgecolor='black')
+axes[0].set_title(f"price (skewness={df['price'].skew():.2f})")
+
+# 로그 변환
+axes[1].hist(np.log(df["price"]), bins=100, edgecolor='black')
+axes[1].set_title(f"log(price) (skewness={np.log(df['price']).skew():.2f})")
+
+# 로그 스케일 모델
+model_log = smf.ols("log_price ~ stars + C(borough) + C(room_type)",
+                    data=df).fit()
+```
+
+**로그 스케일 계수 해석:**
+
+```
+stars 계수 = 0.18 (log 스케일)
+→ stars 1점 증가 시 가격 exp(0.18) = 1.20배 (20% 증가)
+
+borough=Brooklyn 계수 = -0.38
+→ Manhattan 대비 exp(-0.38) = 0.68배 (32% 낮음)
+```
+
+### 전략 2: Robust Regression
+
+```r
+library(MASS)
+
+# M-추정 Robust Regression (이상치 영향 최소화)
+fit_robust <- rlm(price ~ stars + borough + room_type, data=df)
+summary(fit_robust)
+
+# Huber M-estimation 가중치 확인
+# 가중치 낮은 관측치 = 이상치로 인식된 것
+weights <- fit_robust$w
+df[weights < 0.5, ]  # 이상치로 다운웨이팅된 관측치
+```
+
+### 전략 3: 극단값 제외
+
+```python
+# 상위 0.5% 제외 후 재분석 (주 분석 → 민감도 분석)
+price_threshold = df["price"].quantile(0.995)
+df_trimmed = df[df["price"] <= price_threshold]
+
+model_trimmed = smf.ols(
+    "price ~ stars + C(borough) + C(room_type)",
+    data=df_trimmed
+).fit()
+
+# 원본 vs 극단값 제외 결과 비교
+print("원본 stars 계수:", model.params["stars"])
+print("극단값 제외:", model_trimmed.params["stars"])
+```
+
+---
+
+## Bootstrap 추론
+
+### 언제 필요한가
+
+- 잔차가 심하게 비정규
+- 이상치가 많아 계수 분포 불안정
+- 소표본
+
+### 기본 Bootstrap (독립 관측치)
+
+```python
+import numpy as np
+from sklearn.utils import resample
+
+def bootstrap_ci(model_formula, data, param, n_boot=1000, ci=0.95):
+    """Bootstrap 신뢰구간 계산"""
+    boot_params = []
+
+    for _ in range(n_boot):
+        # 복원 추출
+        boot_sample = data.sample(len(data), replace=True)
+        boot_model = smf.ols(model_formula, data=boot_sample).fit()
+        boot_params.append(boot_model.params[param])
+
+    boot_params = np.array(boot_params)
+    alpha = (1 - ci) / 2
+    lower = np.percentile(boot_params, 100 * alpha)
+    upper = np.percentile(boot_params, 100 * (1 - alpha))
+
+    return {"estimate": np.mean(boot_params),
+            "ci_lower": lower, "ci_upper": upper,
+            "se": np.std(boot_params)}
+
+result = bootstrap_ci(
+    "price ~ stars + C(borough)",
+    df, "stars", n_boot=1000
+)
+print(f"stars 계수: {result['estimate']:.2f}")
+print(f"95% Bootstrap CI: [{result['ci_lower']:.2f}, {result['ci_upper']:.2f}]")
+print(f"Bootstrap SE: {result['se']:.2f}")
+```
+
+### Cluster Bootstrap (반복 측정 데이터 필수)
+
+반복 측정 / 종단 데이터에서는 **개체(cluster) 단위**로 resampling해야 한다.
+
+```python
+def cluster_bootstrap_ci(model_formula, data, group_col, param,
+                          n_boot=1000, ci=0.95):
+    """
+    Cluster Bootstrap: 군집 단위 resampling
+    같은 사용자의 모든 세션을 함께 추출/제외
+    """
+    groups = data[group_col].unique()
+    boot_params = []
+
+    for _ in range(n_boot):
+        # 군집(사용자) 단위 복원 추출
+        sampled_groups = np.random.choice(groups, len(groups), replace=True)
+        boot_data = pd.concat([
+            data[data[group_col] == g] for g in sampled_groups
+        ]).reset_index(drop=True)
+
+        try:
+            boot_model = smf.mixedlm(
+                model_formula, data=boot_data, groups=boot_data[group_col]
+            ).fit(reml=True)
+            boot_params.append(boot_model.fe_params[param])
+        except:
+            pass  # 수렴 실패 시 건너뜀
+
+    boot_params = np.array(boot_params)
+    alpha = (1 - ci) / 2
+    lower = np.percentile(boot_params, 100 * alpha)
+    upper = np.percentile(boot_params, 100 * (1 - alpha))
+
+    return {"estimate": np.mean(boot_params),
+            "ci_lower": lower, "ci_upper": upper,
+            "se": np.std(boot_params)}
+
+result = cluster_bootstrap_ci(
+    "satisfaction ~ personalized + week",
+    df, group_col="user_id", param="personalized",
+    n_boot=500
+)
+print(f"개인화 효과: {result['estimate']:.3f}")
+print(f"95% Cluster Bootstrap CI: [{result['ci_lower']:.3f}, {result['ci_upper']:.3f}]")
+```
+
+```r
+# R에서 Cluster Bootstrap (lme4)
+library(lme4)
+library(boot)
+
+# Cluster bootstrap으로 Mixed Model CI
+bootMer_result <- bootMer(
+  final_model,
+  FUN = function(m) fixef(m)["personalized"],
+  nsim = 500,
+  type = "case",      # case bootstrap = cluster resampling
+  use.u = FALSE
+)
+
+boot.ci(bootMer_result, type="perc")  # percentile CI
+```
+
+### Bootstrap vs Wald CI 비교
+
+```python
+# 정규 Wald CI vs Bootstrap CI 비교
+wald_ci = model_lmm.conf_int().loc["personalized"]
+
+print("비교:")
+print(f"Wald CI:      [{wald_ci[0]:.3f}, {wald_ci[1]:.3f}]")
+print(f"Bootstrap CI: [{result['ci_lower']:.3f}, {result['ci_upper']:.3f}]")
+```
+
+```
+비교:
+Wald CI:      [0.381, 0.579]   ← 정규분포 가정 기반
+Bootstrap CI: [0.374, 0.591]   ← 실제 분포 기반
+
+대부분 비슷하지만 잔차가 심하게 비정규이거나 이상치가 많으면 차이가 커짐
+```
+
+---
+
+## Mixed Model 전용 진단
+
+### DHARMa 패키지 (R, GLMM 진단)
+
+```r
+library(DHARMa)
+library(lme4)
+
+model_glmm <- glmer(converted ~ personalized + week + (1|user_id),
+                    data=df, family=binomial)
+
+# 시뮬레이션 기반 잔차 (GLMM에 적합)
+simres <- simulateResiduals(fittedModel=model_glmm, n=500)
+
+# 종합 진단 플롯
+plot(simres)
+# 왼쪽: QQ plot (균등분포 가정)
+# 오른쪽: 잔차 vs 적합값
+
+# 개별 검정
+testDispersion(simres)       # 과산포
+testZeroInflation(simres)    # 영과잉
+testSpatialAutocorrelation(simres)  # 공간 자기상관
+testTemporalAutocorrelation(simres, time=df$week)  # 시간 자기상관
+```
+
+### 랜덤 효과 정규성 확인
+
+```python
+# 사용자별 랜덤 효과 추출
+random_effects = model_lmm.random_effects
+re_values = [v["Group Intercept"] for v in random_effects.values()]
+
+# 정규성 시각화
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+axes[0].hist(re_values, bins=30, edgecolor='black')
+axes[0].set_title("랜덤 효과 분포\n(정규분포여야 함)")
+
+stats.probplot(re_values, plot=axes[1])
+axes[1].set_title("랜덤 효과 Q-Q Plot")
+```
+
+---
+
+## 진단 체크리스트
+
+모든 회귀/혼합 모델 분석 후 아래를 확인한다:
+
+```
+선형 모델 기본 진단:
+□ Residuals vs Fitted: 패턴 없음 (선형성, 등분산성)
+□ Q-Q plot: 직선에 가까움 (정규성)
+□ Scale-Location: 수평 (등분산성)
+□ Cook's Distance: 영향점 없음 (or 처리됨)
+□ 그룹별 잔차 분포: 그룹 간 일관성
+
+혼합 모델 추가 진단:
+□ 랜덤 효과 정규성 확인
+□ DHARMa 잔차 (GLMM)
+□ 과산포 검정 (카운트/이진 결과)
+□ 수렴 확인 (isSingular = FALSE)
+
+이분산성 대응:
+□ 로그 변환 고려 (오른쪽 꼬리 분포)
+□ Robust SE (HC3) 또는 Robust Regression
+□ 극단값 제외 후 민감도 분석
+
+추론 신뢰성:
+□ 잔차 비정규 + 소표본 → Bootstrap CI
+□ 군집/반복 측정 → Cluster Bootstrap
+```

@@ -1,0 +1,168 @@
+---
+title: "GLMM (1): Generalized Linear Mixed Model 개요"
+subtitle: "LMM에서 비정규 결과 변수로 확장"
+description: |
+  GLMM은 LMM(정규분포 가정)을 이진형, 카운트형 등 비정규 결과 변수로 확장한다.
+  GLM의 Link Function과 LMM의 Random Effect를 결합한 구조를 설명하고,
+  로지스틱 혼합 모델과 포아송 혼합 모델의 기초를 다룬다.
+categories:
+  - Statistics
+  - Longitudinal Data
+  - GLMM
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# GLMM: Generalized Linear Mixed Model 개요
+
+## LMM의 한계: 정규분포 가정
+
+LMM은 결과 변수가 **정규분포**를 따른다고 가정한다:
+
+$$Y_{ij} = X_{ij}\beta + u_i + \epsilon_{ij}, \quad \epsilon_{ij} \sim N(0, \sigma^2_e)$$
+
+그러나 실무에서는 정규분포가 아닌 결과 변수가 흔하다:
+
+| 결과 변수 | 분포 | LMM 적용 시 문제 |
+|----------|------|----------------|
+| 전환 여부 (0/1) | 이항분포 | 예측값이 [0,1] 범위를 벗어남 |
+| 클릭 수, 턴 수 | 포아송 | 음수 예측값 가능 |
+| 리뷰 점수 (1~5) | 순서형 | 연속형 처리 시 정보 손실 |
+| 생존 시간 | 지수/와이블 | 오른쪽 꼬리 데이터에 부적합 |
+
+## GLMM의 구조
+
+GLMM = GLM의 Link Function + LMM의 Random Effect
+
+$$g(E[Y_{ij} | u_i]) = X_{ij}\beta + Z_{ij}u_i$$
+
+$$u_i \sim N(0, G)$$
+
+| 구성 요소 | LMM | GLMM |
+|----------|-----|------|
+| Random Effect | $u_i \sim N(0, \sigma^2_u)$ | 동일 |
+| 결과 분포 | 정규분포 | 이항, 포아송, 감마 등 |
+| Link Function | Identity ($g = \mu$) | Logit, Log 등 |
+
+## Family별 GLMM 정리
+
+| 결과 변수 | Family | Link | 모델명 | 계수 해석 |
+|----------|--------|------|--------|----------|
+| 연속형 | Gaussian | Identity | LMM | 평균 차이 |
+| 이진 (0/1) | Binomial | Logit | 로지스틱 혼합 | 로그 오즈비 |
+| 카운트 | Poisson | Log | 포아송 혼합 | 로그 비율비 |
+| 과산포 카운트 | Negative Binomial | Log | NB 혼합 | 로그 비율비 |
+| 양수 연속형 | Gamma | Log | 감마 혼합 | 로그 비율비 |
+
+## 로지스틱 혼합 모델
+
+이진 결과(전환 여부, 이탈 여부)에 적용.
+
+$$\log\frac{P(Y_{ij}=1|u_i)}{1-P(Y_{ij}=1|u_i)} = \beta_0 + \beta_1 X_{ij} + u_i$$
+
+$$u_i \sim N(0, \sigma^2_u)$$
+
+### 예시: 개인화 후 프리미엄 전환 여부
+
+```python
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+# 이진 결과: 프리미엄 전환 (0/1)
+model_logit = smf.glm(
+    "converted ~ personalized + week + C(segment)",
+    data=df,
+    family=sm.families.Binomial()
+).fit()
+
+# 위는 GLM (독립 가정) — 사용자 반복 측정 무시
+
+# GLMM (R에서)
+```
+
+```r
+library(lme4)
+
+# 로지스틱 혼합 모델
+model_glmm_logit <- glmer(
+  converted ~ personalized + week + segment + (1 | user_id),
+  data = df,
+  family = binomial(link = "logit")
+)
+
+summary(model_glmm_logit)
+```
+
+```
+Random Effects:
+ Groups   Name        Variance Std.Dev.
+ user_id  (Intercept)  1.23    1.11    ← 사용자 간 전환 성향 차이
+
+Fixed Effects:
+                   Estimate Std.Error z-value Pr(>|z|)
+(Intercept)         -3.20     0.18   -17.8   <0.001
+personalized         0.65     0.12     5.4   <0.001   ← log OR
+week                 0.05     0.02     2.5    0.012
+segmentMIEP          0.89     0.15     5.9   <0.001
+segmentN            -0.52     0.20    -2.6    0.009
+```
+
+### 오즈비 해석
+
+```r
+# 오즈비 (OR)
+exp(fixef(model_glmm_logit))
+
+# personalized: exp(0.65) = 1.92
+# → 개인화 적용 시 전환 오즈 1.92배
+# → 단, 이것은 '같은 사용자의 전환 성향을 통제한 후'의 효과
+#   (GLM의 OR과 다를 수 있음 → Marginal vs Conditional 효과 차이)
+```
+
+## 포아송 혼합 모델
+
+카운트 결과(세션당 턴 수, 메시지 수)에 적용.
+
+$$\log(E[Y_{ij}|u_i]) = \beta_0 + \beta_1 X_{ij} + u_i$$
+
+```r
+# 포아송 혼합 모델
+model_glmm_pois <- glmer(
+  turn_count ~ personalized + week + segment + (1 | user_id),
+  data = df,
+  family = poisson(link = "log")
+)
+```
+
+## Marginal vs Conditional 효과
+
+GLMM의 중요한 개념적 차이:
+
+| 구분 | 설명 | 질문 |
+|------|------|------|
+| **Conditional (Subject-specific)** | 랜덤 효과 주어졌을 때의 효과 | "같은 사람이 개인화 받으면?" |
+| **Marginal (Population-average)** | 전체 모집단에서의 평균 효과 | "전체적으로 개인화하면?" |
+
+- **GLMM**: Conditional 효과를 추정
+- **GEE**: Marginal 효과를 추정 (→ `08-mixed-model-gee-intro.qmd` 참조)
+
+정규분포(LMM)에서는 둘이 같지만, 비선형 link(logit, log)에서는 **다르다**.
+
+```
+로지스틱 예시:
+u_i = 0인 사람의 전환 확률: 1 / (1 + exp(3.20 - 0.65)) = 7.4%
+전체 모집단 평균 전환 확률: (u_i의 분포를 적분) = 5.9%
+
+→ GLMM의 0.65는 conditional OR
+   GEE의 계수는 이보다 작은 marginal OR
+
+어떤 것이 관심인지에 따라 GLMM과 GEE를 선택
+```
+
+## 상세 내용
+
+- **로지스틱 혼합 모델 상세**: `06-mixed-model-glmm-binary.qmd`
+- **포아송 혼합 모델 상세**: `07-mixed-model-glmm-count.qmd`
+- **GEE와 비교**: `08-mixed-model-gee-intro.qmd`
