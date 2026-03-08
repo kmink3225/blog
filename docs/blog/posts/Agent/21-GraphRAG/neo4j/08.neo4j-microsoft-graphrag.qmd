@@ -1,0 +1,324 @@
+---
+title: "Microsoft GraphRAG 방식 구현"
+subtitle: "Global Search & Local Search: 계층적 커뮤니티 요약 기반 GraphRAG"
+description: |
+  Microsoft Research(2024)의 GraphRAG 논문에서 제안한 Global Search와 Local Search를
+  Neo4j로 구현한다. Global Search는 전체 커뮤니티 요약을 활용하고,
+  Local Search는 특정 엔티티 주변의 그래프를 탐색하여 상세한 답변을 생성한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+  - Neo4j
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Microsoft GraphRAG 방식 구현
+
+## Microsoft GraphRAG 개요
+
+Microsoft Research가 2024년 4월 발표한 GraphRAG는 두 가지 검색 모드를 제시한다.
+
+```
+Global Search  ── "AI 업계의 전체적인 동향은?"
+  → 커뮤니티 요약을 활용한 포괄적 답변
+  → 전체 그래프의 거시적 패턴 파악에 적합
+
+Local Search   ── "일론 머스크의 주요 업적은?"
+  → 특정 엔티티 주변 그래프를 탐색한 상세 답변
+  → 특정 엔티티에 대한 미시적 정보에 적합
+```
+
+---
+
+## 사전 요구사항
+
+이 파일은 이전 파일들이 완료된 상태를 가정한다.
+
+```
+필요한 사전 작업:
+  ✅ 03: LLMGraphTransformer로 KG 구축 완료
+  ✅ 04: 벡터 인덱스 생성 완료
+  ✅ 06: Louvain 커뮤니티 감지 완료 (louvain_community 속성)
+  ✅ 07: PageRank 계산 완료 (pagerank 속성)
+  ✅ 06: 커뮤니티 요약 생성 완료 (Community 노드 + summary 속성)
+```
+
+---
+
+## Global Search
+
+### 개념
+
+1. 모든 커뮤니티의 요약을 LLM에 제공
+2. LLM이 커뮤니티 요약들을 종합하여 전체적 답변 생성
+
+```
+[Community 1 요약]: "Tesla와 SpaceX를 중심으로 한 전기차·우주 클러스터"
+[Community 2 요약]: "Google, DeepMind를 중심으로 한 AI 연구 클러스터"
+[Community 3 요약]: "OpenAI, Microsoft를 중심으로 한 LLM 상업화 클러스터"
+    ↓ LLM
+질문: "AI 업계 동향은?" → 3개 커뮤니티를 종합한 포괄적 답변
+```
+
+### 구현
+
+```python
+from langchain_neo4j import Neo4jGraph
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import OpenAIEmbeddings
+
+graph = Neo4jGraph(url="bolt://localhost:7687",
+                   username="neo4j", password="password")
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+embedder = OpenAIEmbeddings(model="text-embedding-3-small")
+
+GLOBAL_SEARCH_PROMPT = PromptTemplate.from_template("""
+다음 커뮤니티 요약들을 바탕으로 질문에 종합적으로 답하세요.
+
+모든 관련 커뮤니티의 정보를 통합하여 전체적인 그림을 제시하세요.
+특정 커뮤니티의 정보만이 아닌 여러 커뮤니티에 걸친 패턴도 언급하세요.
+
+질문: {question}
+
+커뮤니티 요약:
+{community_summaries}
+
+종합 답변:
+""")
+
+def global_search(question: str, top_k_communities: int = 10) -> str:
+    """커뮤니티 요약 기반 전체적 답변 생성."""
+
+    # 가장 큰 (중요한) 커뮤니티들의 요약 조회
+    communities = graph.query("""
+    MATCH (c:Community)
+    WHERE c.summary IS NOT NULL
+    RETURN c.id AS id, c.size AS size, c.summary AS summary
+    ORDER BY c.size DESC
+    LIMIT $top_k
+    """, params={"top_k": top_k_communities})
+
+    if not communities:
+        return "커뮤니티 요약이 없습니다. 먼저 커뮤니티 감지와 요약 생성을 실행하세요."
+
+    summaries_text = "\n\n".join(
+        f"[그룹 {c['id']}, 규모: {c['size']}개 엔티티]\n{c['summary']}"
+        for c in communities
+    )
+
+    return llm.invoke(
+        GLOBAL_SEARCH_PROMPT.format(
+            question=question,
+            community_summaries=summaries_text,
+        )
+    ).content
+
+# 실행
+answer = global_search("AI 업계에서 주목할 만한 트렌드와 주요 기업은?")
+print(answer)
+```
+
+---
+
+## Local Search
+
+### 개념
+
+1. 벡터 검색으로 관련 엔티티 찾기
+2. 해당 엔티티 주변 그래프를 Cypher로 깊이 탐색
+3. 원본 문서 텍스트 + 그래프 컨텍스트를 LLM에 제공
+
+```
+질문: "일론 머스크의 주요 사업은?"
+  ↓ 벡터 검색
+[Elon Musk] 노드 발견
+  ↓ Cypher 탐색
+(Elon Musk)-[:FOUNDED]->(Tesla), (SpaceX), (PayPal)
+(Tesla)-[:LOCATED_IN]->(Austin)
+(Tesla)-[:PRODUCES]->(Model S), (Model 3)
+  ↓ 원본 문서 텍스트 + 그래프 관계
+LLM → 상세하고 정확한 답변
+```
+
+### 구현
+
+```python
+from langchain_neo4j import Neo4jVector
+
+LOCAL_SEARCH_PROMPT = PromptTemplate.from_template("""
+다음 정보를 바탕으로 질문에 구체적으로 답하세요.
+
+질문: {question}
+
+관련 문서:
+{documents}
+
+관련 그래프 정보:
+{graph_context}
+
+답변:
+""")
+
+def local_search(question: str, k: int = 5) -> str:
+    """엔티티 중심 상세 탐색 및 답변 생성."""
+
+    # Step 1: 벡터 검색
+    vector_store = Neo4jVector.from_existing_index(
+        embedding=embedder,
+        url="bolt://localhost:7687",
+        username="neo4j",
+        password="password",
+        index_name="document_embeddings",
+    )
+    vector_results = vector_store.similarity_search(question, k=k)
+
+    # Step 2: 발견된 엔티티 주변 그래프 탐색
+    entity_ids = [
+        doc.metadata.get("id")
+        for doc in vector_results
+        if doc.metadata.get("id")
+    ]
+
+    graph_contexts = []
+    for entity_id in entity_ids[:3]:
+        # 2-hop 탐색
+        neighbors = graph.query("""
+        MATCH path = (n {id: $id})-[r*1..2]-(m)
+        WHERE n:__Entity__ AND m:__Entity__
+        WITH n, r, m, length(path) AS depth
+        RETURN n.id AS entity,
+               [rel IN r | type(rel)] AS relations,
+               m.id AS neighbor,
+               labels(m)[0] AS neighbor_type,
+               depth
+        ORDER BY depth
+        LIMIT 20
+        """, params={"id": entity_id})
+
+        for row in neighbors:
+            rel_chain = " → ".join(row["relations"])
+            graph_contexts.append(
+                f"({row['entity']}) -[{rel_chain}]-> "
+                f"({row['neighbor_type']}:{row['neighbor']})"
+            )
+
+    # Step 3: 원본 문서 + 그래프 컨텍스트 결합
+    docs_text = "\n\n".join(
+        f"[문서 {i+1}] {doc.page_content}"
+        for i, doc in enumerate(vector_results)
+    )
+    graph_text = "\n".join(graph_contexts) if graph_contexts else "관련 그래프 정보 없음"
+
+    return llm.invoke(
+        LOCAL_SEARCH_PROMPT.format(
+            question=question,
+            documents=docs_text,
+            graph_context=graph_text,
+        )
+    ).content
+
+# 실행
+answer = local_search("일론 머스크의 주요 사업과 각 사업의 특징은?")
+print(answer)
+```
+
+---
+
+## Global vs Local Search 라우팅
+
+질문 유형에 따라 자동으로 검색 모드를 선택한다.
+
+```python
+ROUTER_PROMPT = PromptTemplate.from_template("""
+다음 질문이 어떤 검색 방식에 적합한지 판단하세요.
+
+"global": 전체적인 패턴, 요약, 트렌드, 업계 동향 등 광범위한 질문
+"local": 특정 인물, 회사, 사건 등에 대한 구체적인 질문
+
+질문: {question}
+
+"global" 또는 "local" 중 하나만 출력:
+""")
+
+def route_and_search(question: str) -> str:
+    """질문 유형에 따라 Global 또는 Local Search 실행."""
+
+    route = llm.invoke(
+        ROUTER_PROMPT.format(question=question)
+    ).content.strip().lower()
+
+    print(f"라우팅 결정: {route}")
+
+    if route == "global":
+        return global_search(question)
+    else:
+        return local_search(question)
+
+# 테스트
+questions = [
+    "AI 업계의 주요 기업과 트렌드는?",        # → global
+    "Tesla의 창립자와 설립 연도는?",           # → local
+    "전기차 시장의 경쟁 구도는?",             # → global
+    "일론 머스크가 설립한 회사 목록은?",       # → local
+]
+
+for q in questions:
+    print(f"\n질문: {q}")
+    print(f"답변: {route_and_search(q)[:200]}...")
+```
+
+---
+
+## 전체 파이프라인 통합
+
+```python
+from langchain_core.runnables import RunnableLambda
+
+def microsoft_graphrag_pipeline(question: str) -> str:
+    """Microsoft GraphRAG 완전 파이프라인."""
+
+    # 라우팅
+    route = llm.invoke(
+        ROUTER_PROMPT.format(question=question)
+    ).content.strip().lower()
+
+    if "global" in route:
+        return global_search(question, top_k_communities=10)
+    else:
+        return local_search(question, k=5)
+
+# 사용
+result = microsoft_graphrag_pipeline(
+    "AI 분야에서 가장 영향력 있는 인물과 그들의 주요 업적은?"
+)
+print(result)
+```
+
+---
+
+## 정리
+
+```
+Microsoft GraphRAG 두 가지 모드:
+
+Global Search (거시적):
+  커뮤니티 요약 → LLM 종합 답변
+  적합: "업계 동향", "전체 패턴", "요약" 질문
+
+Local Search (미시적):
+  벡터 검색 → 엔티티 발견 → Cypher 2~3 hop 탐색 → LLM 상세 답변
+  적합: "특정 인물/회사/사건" 질문
+
+라우팅:
+  LLM이 질문 분석 → global or local 결정 → 해당 검색 실행
+
+사전 준비:
+  KG 구축 (03) → 커뮤니티 감지 (06) → 커뮤니티 요약 생성 (06) → 검색
+```
+
+다음 파일에서는 자연어를 Cypher로 변환하는 Text2Cypher QA 시스템을 구현한다.

@@ -1,0 +1,300 @@
+---
+title: "GDS: PageRank & 중심성 분석"
+subtitle: "그래프에서 중요 노드 식별하여 GraphRAG 검색 순위 개선"
+description: |
+  Neo4j GDS의 PageRank와 중심성(Centrality) 알고리즘으로 지식 그래프에서
+  중요한 엔티티를 식별한다. 검색 결과 재랭킹, 허브 노드 우선 탐색,
+  중요도 기반 커뮤니티 요약에 PageRank 점수를 활용하는 방법을 다룬다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+  - Neo4j
+  - GDS
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# GDS: PageRank & 중심성 분석
+
+## 왜 중요 노드를 식별해야 하는가
+
+모든 엔티티가 동등하게 중요하지 않다.
+
+```
+지식 그래프 예시:
+  [Elon Musk] ──→ [Tesla], [SpaceX], [PayPal], [OpenAI], [Boring Company]
+  [John Smith] ──→ [Company A]
+
+→ Elon Musk: 많은 연결 = 중요한 허브 노드
+→ John Smith: 적은 연결 = 덜 중요한 노드
+```
+
+GraphRAG에서 중요 노드를 우선적으로 검색하면:
+- 더 관련성 높은 결과 반환
+- 커뮤니티의 대표 노드를 요약의 중심으로 활용
+- 탐색 시 허브 노드에서 시작하여 효율적 탐색
+
+---
+
+## PageRank
+
+웹 페이지의 중요도를 링크 구조로 계산하는 알고리즘.
+많은 노드가 가리키는 노드일수록, 그리고 중요한 노드가 가리킬수록 높은 점수.
+
+### 실행
+
+```python
+from graphdatascience import GraphDataScience
+from langchain_neo4j import Neo4jGraph
+
+gds = GraphDataScience("bolt://localhost:7687", auth=("neo4j", "password"))
+graph_neo4j = Neo4jGraph(...)
+
+# 그래프 프로젝션
+G, _ = gds.graph.project(
+    "kg_for_pagerank",
+    ["__Entity__"],
+    {"ALL_RELATIONS": {"orientation": "NATURAL"}},
+)
+
+# PageRank 계산 및 저장
+result = gds.pageRank.write(
+    G,
+    writeProperty="pagerank",   # 노드 속성으로 저장
+    maxIterations=20,
+    dampingFactor=0.85,         # 감쇠 계수 (기본값 권장)
+    tolerance=0.0000001,
+)
+
+print(f"처리 노드: {result['nodePropertiesWritten']}개")
+print(f"수렴 반복: {result['ranIterations']}회")
+
+gds.graph.drop(G)
+```
+
+### 결과 확인
+
+```python
+top_nodes = graph_neo4j.query("""
+MATCH (n:__Entity__)
+WHERE n.pagerank IS NOT NULL
+RETURN n.id AS entity,
+       labels(n)[0] AS type,
+       round(n.pagerank, 4) AS pagerank
+ORDER BY pagerank DESC
+LIMIT 20
+""")
+
+print("=== PageRank 상위 20개 엔티티 ===")
+for n in top_nodes:
+    print(f"  {n['pagerank']:.4f} | {n['type']}:{n['entity']}")
+```
+
+---
+
+## 중심성 알고리즘
+
+### Degree Centrality (연결도)
+
+```python
+G, _ = gds.graph.project(
+    "kg_degree",
+    ["__Entity__"],
+    {"ALL_RELATIONS": {"orientation": "UNDIRECTED"}},
+)
+
+gds.degree.write(G, writeProperty="degree_centrality")
+gds.graph.drop(G)
+
+# 결과: 가장 많은 관계를 가진 노드
+graph_neo4j.query("""
+MATCH (n:__Entity__)
+RETURN n.id AS entity, n.degree_centrality AS degree
+ORDER BY degree DESC LIMIT 10
+""")
+```
+
+### Betweenness Centrality (매개 중심성)
+
+두 노드 사이의 최단 경로에 얼마나 자주 등장하는가.
+**정보 흐름의 병목 지점** 식별에 유용.
+
+```python
+G, _ = gds.graph.project(
+    "kg_betweenness",
+    ["__Entity__"],
+    {"ALL_RELATIONS": {"orientation": "UNDIRECTED"}},
+)
+
+gds.betweenness.write(G, writeProperty="betweenness")
+gds.graph.drop(G)
+```
+
+### Closeness Centrality (근접 중심성)
+
+다른 모든 노드에 얼마나 가까운가. 정보 전파 속도와 관련.
+
+```python
+G, _ = gds.graph.project(
+    "kg_closeness",
+    ["__Entity__"],
+    {"ALL_RELATIONS": {"orientation": "UNDIRECTED"}},
+)
+
+gds.closeness.write(G, writeProperty="closeness")
+gds.graph.drop(G)
+```
+
+---
+
+## GraphRAG에서 활용: 검색 결과 재랭킹
+
+벡터 검색 결과에 PageRank 점수를 결합하여 재랭킹한다.
+
+```python
+from langchain_neo4j import Neo4jVector
+from langchain_openai import OpenAIEmbeddings
+
+embedder = OpenAIEmbeddings(model="text-embedding-3-small")
+
+# retrieval_query에 pagerank 점수 포함
+retrieval_query = """
+MATCH (node)
+OPTIONAL MATCH (node)-[r]->(related:__Entity__)
+WITH node, score,
+     coalesce(node.pagerank, 0) AS pagerank,
+     collect(related.id)[..5] AS related_entities
+
+// 벡터 유사도 + PageRank 결합 점수
+WITH node, score,
+     pagerank,
+     related_entities,
+     (score * 0.7 + pagerank * 0.3) AS combined_score
+
+RETURN node.text AS text,
+       node.id AS entity,
+       combined_score AS score,
+       related_entities
+ORDER BY combined_score DESC
+"""
+
+vector_store = Neo4jVector.from_existing_index(
+    embedding=embedder,
+    index_name="document_embeddings",
+    retrieval_query=retrieval_query,
+)
+
+results = vector_store.similarity_search(
+    "Who are the most influential AI entrepreneurs?",
+    k=10,
+)
+```
+
+---
+
+## GraphRAG에서 활용: 커뮤니티 대표 노드
+
+커뮤니티 요약 시 PageRank 높은 노드를 중심으로 설명한다.
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+def summarize_community_with_pagerank(community_id: int, graph) -> str:
+    """PageRank 기반으로 커뮤니티의 핵심 노드 우선 요약."""
+
+    # PageRank 높은 노드 우선 조회
+    key_nodes = graph.query("""
+    MATCH (n:__Entity__ {louvain_community: $cid})
+    RETURN n.id AS id, labels(n)[0] AS type,
+           coalesce(n.pagerank, 0) AS pagerank
+    ORDER BY pagerank DESC
+    LIMIT 10
+    """, params={"cid": community_id})
+
+    # 핵심 노드들의 관계 조회
+    key_ids = [n["id"] for n in key_nodes[:3]]  # 상위 3개
+    relationships = graph.query("""
+    MATCH (a:__Entity__)-[r]->(b:__Entity__)
+    WHERE a.id IN $ids OR b.id IN $ids
+    AND a.louvain_community = $cid
+    AND b.louvain_community = $cid
+    RETURN a.id AS from, type(r) AS rel, b.id AS to
+    LIMIT 20
+    """, params={"ids": key_ids, "cid": community_id})
+
+    nodes_text = "\n".join(
+        f"- {n['id']} ({n['type']}, PageRank={n['pagerank']:.4f})"
+        for n in key_nodes
+    )
+    rels_text = "\n".join(
+        f"- ({r['from']}) -[{r['rel']}]-> ({r['to']})"
+        for r in relationships
+    )
+
+    prompt = f"""
+핵심 엔티티(PageRank 순):
+{nodes_text}
+
+주요 관계:
+{rels_text}
+
+위 정보를 바탕으로 이 그룹의 핵심 주제를 2~3문장으로 요약하세요.
+"""
+
+    return llm.invoke(prompt).content
+```
+
+---
+
+## 중심성 점수 시각화
+
+```python
+import json
+
+# 중심성 분포 확인
+distribution = graph_neo4j.query("""
+MATCH (n:__Entity__)
+WHERE n.pagerank IS NOT NULL
+WITH n.pagerank AS pr
+RETURN
+    count(pr) AS total,
+    min(pr) AS min_pr,
+    max(pr) AS max_pr,
+    avg(pr) AS avg_pr,
+    percentileCont(pr, 0.5) AS median_pr,
+    percentileCont(pr, 0.9) AS p90_pr,
+    percentileCont(pr, 0.99) AS p99_pr
+""")
+
+print("PageRank 분포:")
+for key, val in distribution[0].items():
+    print(f"  {key}: {val:.6f}")
+```
+
+---
+
+## 정리
+
+```
+중심성 알고리즘 비교:
+  PageRank        ← 링크 구조 기반 중요도 (가장 많이 쓰임)
+  Degree          ← 연결 수 기반 (단순, 빠름)
+  Betweenness     ← 정보 흐름 병목 식별
+  Closeness       ← 정보 전파 속도
+
+GraphRAG 활용:
+  검색 재랭킹:   score = 벡터유사도 * 0.7 + pagerank * 0.3
+  커뮤니티 요약: PageRank 높은 노드를 중심으로 설명
+  탐색 시작점:   PageRank 높은 노드에서 시작
+
+GDS 실행 순서:
+  gds.graph.project() → gds.pageRank.write() → gds.graph.drop()
+```
+
+다음 파일에서는 커뮤니티 요약과 검색을 결합한 Microsoft GraphRAG 방식을 구현한다.

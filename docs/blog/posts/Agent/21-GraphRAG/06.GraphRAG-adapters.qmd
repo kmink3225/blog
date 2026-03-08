@@ -1,0 +1,235 @@
+---
+title: "Vector Store Adapters"
+subtitle: "Chroma, PGVector, AstraDB 등 벡터 스토어 연결 가이드"
+description: |
+  langchain-graph-retriever가 지원하는 벡터 스토어 Adapter를 비교한다.
+  Adapter는 graph-retriever와 각 벡터 스토어를 연결하는 인터페이스로,
+  Shredding 필요 여부, 중첩 메타데이터 지원 여부, 인접 쿼리 최적화 여부가 핵심 차이다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Vector Store Adapters
+
+## Adapter란
+
+Adapter는 graph-retriever의 탐색 엔진과 각 벡터 스토어 사이를 연결하는 레이어다.
+
+```
+GraphRetriever → Adapter → Vector Store
+                  │
+                  ├─ search_with_embedding()  ← 벡터 유사도 검색
+                  └─ adjacent()              ← 메타데이터 기반 인접 노드 검색
+```
+
+Adapter마다 **지원하는 기능**이 다르다.
+
+## 지원 벡터 스토어 비교
+
+| 벡터 스토어 | 리스트 메타데이터 | 중첩 메타데이터 | 인접 쿼리 최적화 | Shredding 필요 |
+|------------|:--------------:|:-------------:|:-------------:|:------------:|
+| **AstraDB** | ✅ 지원 | ✅ 지원 | ✅ 최적화 | ❌ 불필요 |
+| **OpenSearch** | ✅ 지원 | ❌ 불가 | ❌ 미최적화 | ❌ 불필요 |
+| **Cassandra** | ✅ (Shredding) | ❌ 불가 | ❌ 미최적화 | ✅ 필요 |
+| **Chroma** | ✅ (Shredding) | ❌ 불가 | ❌ 미최적화 | ✅ 필요 |
+| **PGVector** | ✅ (Shredding) | ✅ JSONB | ❌ 미최적화 | ✅ 필요 |
+
+> **인접 쿼리 최적화**: 여러 엣지를 한 번의 쿼리로 처리. AstraDB만 지원하며, 나머지는 엣지 수만큼 별도 쿼리 발생.
+
+**결론**: 프로덕션은 AstraDB 권장, 로컬 개발·프로토타이핑은 Chroma 적합.
+
+---
+
+## Shredding이란
+
+Chroma, PGVector, Cassandra는 **리스트 타입 메타데이터로 필터링을 지원하지 않는다.**
+
+```python
+# 이 문서를 저장하면
+doc.metadata = {"keywords": ["wool", "domesticated", "friendly"]}
+
+# Chroma에서 metadata["keywords"] == "wool" 로 필터링 불가!
+```
+
+**해결책: ShreddingTransformer**
+
+리스트를 개별 키로 분해(shred)하여 저장한다.
+
+```python
+# Shredding 전
+{"keywords": ["wool", "domesticated"]}
+
+# Shredding 후
+{
+    'keywords→"wool"':        '§',
+    'keywords→"domesticated"': '§',
+}
+```
+
+이렇게 하면 `keywords→"wool" == "§"` 필터링이 가능해진다.
+
+---
+
+## Chroma Adapter (로컬 개발 권장)
+
+```python
+from langchain_chroma import Chroma
+from langchain_openai import OpenAIEmbeddings
+from langchain_graph_retriever.adapters.chroma import ChromaAdapter
+from langchain_graph_retriever.transformers import ShreddingTransformer
+from graph_retriever.strategies import Eager
+from langchain_graph_retriever import GraphRetriever
+
+# Step 1: Shredder 준비
+shredder = ShreddingTransformer()  # 모든 리스트 필드 shred
+
+# Step 2: 문서 shredding 후 저장
+shredded_docs = list(shredder.transform_documents(animals))
+vector_store = Chroma.from_documents(
+    documents=shredded_docs,
+    embedding=OpenAIEmbeddings(),
+    collection_name="animals",
+)
+
+# Step 3: ChromaAdapter로 감싸기
+#   두 번째 인자: shredder (역변환에 필요)
+#   세 번째 인자: shredded fields 집합 (엣지로 사용할 리스트 필드명)
+adapter = ChromaAdapter(vector_store, shredder, {"keywords"})
+
+# Step 4: GraphRetriever
+retriever = GraphRetriever(
+    store=adapter,
+    edges=[("habitat", "habitat"), ("origin", "origin"), ("keywords", "keywords")],
+    strategy=Eager(select_k=10, start_k=1, max_depth=2),
+)
+```
+
+---
+
+## In-Memory Adapter (테스트용)
+
+OpenAI API나 외부 서비스 없이 로컬에서 바로 테스트할 수 있다.
+
+```python
+from langchain_graph_retriever.adapters.in_memory import InMemoryAdapter
+from graph_retriever.testing import StaticEmbeddings
+
+# 의미 없는 정적 임베딩 (구조 테스트용)
+embedding = StaticEmbeddings(dim=128)
+
+adapter = InMemoryAdapter.from_documents(
+    documents=animals,
+    embedding=embedding,
+)
+
+retriever = GraphRetriever(
+    store=adapter,
+    edges=[("habitat", "habitat"), ("origin", "origin")],
+    strategy=Eager(select_k=5, start_k=1, max_depth=2),
+)
+```
+
+---
+
+## AstraDB Adapter (프로덕션 권장)
+
+```python
+from dotenv import load_dotenv
+from langchain_astradb import AstraDBVectorStore
+from langchain_openai import OpenAIEmbeddings
+from langchain_graph_retriever import GraphRetriever
+from graph_retriever.strategies import Eager
+
+load_dotenv()  # ASTRA_DB_APPLICATION_TOKEN, ASTRA_DB_API_ENDPOINT 필요
+
+# Shredding 불필요 - AstraDB는 리스트 메타데이터를 네이티브 지원
+vector_store = AstraDBVectorStore.from_documents(
+    collection_name="animals",
+    documents=animals,
+    embedding=OpenAIEmbeddings(),
+)
+
+# 일반 VectorStore를 바로 전달 (Adapter 명시 불필요)
+# → 자동으로 AstraAdapter 추론
+retriever = GraphRetriever(
+    store=vector_store,
+    edges=[("habitat", "habitat"), ("origin", "origin"), ("keywords", "keywords")],
+    strategy=Eager(select_k=10, start_k=1, max_depth=2),
+)
+```
+
+AstraDB는 Shredding 불필요하고, 인접 쿼리 최적화도 지원하여 대규모 그래프에서 성능이 가장 좋다.
+
+---
+
+## PGVector Adapter (PostgreSQL 사용 시)
+
+```python
+from langchain_postgres import PGVector
+from langchain_openai import OpenAIEmbeddings
+from langchain_graph_retriever.adapters.pgvector import PGVectorAdapter
+from langchain_graph_retriever.transformers import ShreddingTransformer
+
+connection = "postgresql+psycopg://user:password@localhost:5432/mydb"
+
+shredder = ShreddingTransformer()
+shredded_docs = list(shredder.transform_documents(animals))
+
+vector_store = PGVector(
+    embeddings=OpenAIEmbeddings(),
+    collection_name="animals",
+    connection=connection,
+    use_jsonb=True,  # 중첩 메타데이터 지원을 위해 JSONB 사용
+)
+vector_store.add_documents(shredded_docs)
+
+adapter = PGVectorAdapter(vector_store, shredder, {"keywords"})
+```
+
+---
+
+## 자동 Adapter 추론
+
+`GraphRetriever`에 VectorStore를 직접 전달하면 자동으로 적절한 Adapter를 추론한다.
+
+```python
+from langchain_chroma import Chroma
+
+vector_store = Chroma(...)  # 일반 Chroma 인스턴스
+
+# 자동 추론 시도 (단, Shredding이 필요한 경우는 직접 Adapter 지정 권장)
+retriever = GraphRetriever(
+    store=vector_store,  # Adapter 없이 바로 전달
+    edges=[("habitat", "habitat")],
+    strategy=Eager(select_k=5),
+)
+```
+
+리스트 메타데이터 엣지(keywords 등)를 사용하지 않는다면 Adapter 없이 바로 사용 가능하다.
+
+---
+
+## 선택 가이드
+
+```
+로컬 개발/테스트
+  → InMemoryAdapter (API 비용 없음, 구조 검증용)
+  → Chroma (간단, 빠른 설치)
+
+기존 PostgreSQL 사용 중
+  → PGVector + PGVectorAdapter
+
+기존 OpenSearch 사용 중
+  → OpenSearch (Shredding 불필요, 설정 간단)
+
+프로덕션 (성능 중요)
+  → AstraDB (리스트 지원, 인접 쿼리 최적화, 관리형 서비스)
+```
+
+다음 파일에서는 문서 전처리를 담당하는 Transformers를 살펴본다.

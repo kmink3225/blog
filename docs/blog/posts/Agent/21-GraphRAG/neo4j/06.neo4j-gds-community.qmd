@@ -1,0 +1,341 @@
+---
+title: "GDS: 커뮤니티 감지 (Louvain, Label Propagation)"
+subtitle: "Neo4j Graph Data Science로 전체 그래프에서 클러스터 자동 감지"
+description: |
+  Neo4j Graph Data Science(GDS) 라이브러리의 커뮤니티 감지 알고리즘을 활용한다.
+  Louvain과 Label Propagation으로 지식 그래프에서 관련 엔티티 클러스터를 자동 식별하고,
+  Microsoft GraphRAG의 Global Search 방식을 구현하기 위한 커뮤니티 요약을 생성한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+  - Neo4j
+  - GDS
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# GDS: 커뮤니티 감지
+
+## 왜 커뮤니티 감지가 필요한가
+
+지식 그래프에는 수천~수백만 개의 노드가 있다.
+GraphRAG에서 "전체적인 주제"를 다루는 질문에 답하려면
+**관련 노드들을 그룹(커뮤니티)으로 묶고 요약**해야 한다.
+
+```
+질문: "AI 업계의 주요 동향은?"
+→ 개별 문서 검색으로는 전체 그림 파악 불가
+→ 커뮤니티 감지: AI 관련 엔티티들을 클러스터로 묶기
+→ 각 커뮤니티 요약 → LLM이 전체적 답변 생성
+```
+
+이것이 Microsoft GraphRAG의 **Global Search** 핵심이다.
+
+---
+
+## GDS 설치 확인
+
+```python
+from graphdatascience import GraphDataScience
+
+gds = GraphDataScience(
+    "bolt://localhost:7687",
+    auth=("neo4j", "password"),
+)
+
+# GDS 버전 확인
+print(gds.version())  # 예: 2.6.0
+```
+
+Neo4j Docker 실행 시 `-e NEO4J_PLUGINS='["graph-data-science"]'` 옵션이 있었다면 자동 설치됨.
+
+---
+
+## GDS 워크플로우
+
+```
+Step 1: In-memory 그래프 프로젝션
+  (Neo4j DB → GDS 메모리 그래프)
+
+Step 2: 알고리즘 실행
+  (Louvain, Label Propagation 등)
+
+Step 3: 결과 저장
+  (community ID를 노드 속성으로 write)
+
+Step 4: 그래프 삭제
+  (메모리 해제)
+```
+
+---
+
+## Step 1: 그래프 프로젝션
+
+```python
+# Neo4j의 일부를 GDS 메모리로 로드
+G, result = gds.graph.project(
+    "knowledge_graph",          # 프로젝션 이름
+    ["__Entity__", "Document"], # 포함할 노드 레이블
+    {                           # 포함할 관계 타입
+        "FOUNDED": {"orientation": "UNDIRECTED"},
+        "WORKS_AT": {"orientation": "UNDIRECTED"},
+        "LOCATED_IN": {"orientation": "UNDIRECTED"},
+        "MENTIONS": {"orientation": "UNDIRECTED"},
+    },
+)
+
+print(f"노드 수: {result['nodeCount']}")
+print(f"관계 수: {result['relationshipCount']}")
+```
+
+---
+
+## Louvain 알고리즘
+
+가장 많이 사용되는 커뮤니티 감지 알고리즘.
+모듈성(modularity)을 최대화하는 방향으로 클러스터를 구성한다.
+
+### 통계 확인 (stats)
+
+```python
+# 실제 저장 없이 통계만 확인
+result = gds.louvain.stats(G)
+
+print(f"커뮤니티 수: {result['communityCount']}")
+print(f"모듈성: {result['modularity']:.4f}")  # 높을수록 좋은 클러스터
+print(f"커뮤니티 크기 분포: {result['communityDistribution']}")
+```
+
+### 결과 저장 (write)
+
+```python
+# communityId를 각 노드의 속성으로 저장
+result = gds.louvain.write(
+    G,
+    writeProperty="louvain_community",  # 저장할 속성명
+    maxLevels=10,          # 최대 계층 수
+    maxIterations=10,      # 반복 횟수
+    tolerance=0.0001,      # 수렴 기준
+    includeIntermediateCommunities=False,
+)
+
+print(f"커뮤니티 수: {result['communityCount']}")
+print(f"처리 시간: {result['computeMillis']}ms")
+```
+
+### 결과 확인
+
+```python
+from langchain_neo4j import Neo4jGraph
+
+graph = Neo4jGraph(...)
+
+# 커뮤니티별 구성 노드 확인
+communities = graph.query("""
+MATCH (n:__Entity__)
+WHERE n.louvain_community IS NOT NULL
+RETURN n.louvain_community AS community,
+       count(n) AS size,
+       collect(n.id)[..5] AS sample_nodes
+ORDER BY size DESC
+LIMIT 20
+""")
+
+for c in communities:
+    print(f"커뮤니티 {c['community']}: {c['size']}개 노드")
+    print(f"  샘플: {c['sample_nodes']}")
+```
+
+---
+
+## Label Propagation 알고리즘
+
+더 빠르지만 Louvain보다 결과가 덜 안정적.
+대규모 그래프의 초기 탐색에 적합.
+
+```python
+result = gds.labelPropagation.write(
+    G,
+    writeProperty="lpa_community",
+    maxIterations=10,
+)
+
+print(f"커뮤니티 수: {result['communityCount']}")
+```
+
+---
+
+## 커뮤니티 요약 생성 (Microsoft GraphRAG 방식)
+
+각 커뮤니티의 대표 노드들로 LLM 요약을 생성한다.
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+SUMMARY_PROMPT = PromptTemplate.from_template("""
+다음 엔티티들과 그들의 관계를 분석하여 이 그룹의 핵심 주제를 요약하세요.
+2~3문장으로 간결하게 작성하세요.
+
+엔티티 목록:
+{entities}
+
+관계 목록:
+{relationships}
+
+요약:
+""")
+
+def summarize_community(community_id: int, graph: Neo4jGraph) -> dict:
+    """커뮤니티의 노드와 관계를 조회하여 요약 생성."""
+
+    # 커뮤니티 노드 조회
+    nodes = graph.query("""
+    MATCH (n:__Entity__ {louvain_community: $community_id})
+    RETURN n.id AS id, labels(n)[0] AS type
+    LIMIT 20
+    """, params={"community_id": community_id})
+
+    # 커뮤니티 내부 관계 조회
+    rels = graph.query("""
+    MATCH (a:__Entity__ {louvain_community: $community_id})
+          -[r]->
+          (b:__Entity__ {louvain_community: $community_id})
+    RETURN a.id AS from, type(r) AS rel, b.id AS to
+    LIMIT 30
+    """, params={"community_id": community_id})
+
+    entities_text = "\n".join(
+        f"- {n['id']} ({n['type']})" for n in nodes
+    )
+    relationships_text = "\n".join(
+        f"- ({r['from']}) -[{r['rel']}]-> ({r['to']})" for r in rels
+    )
+
+    summary = llm.invoke(
+        SUMMARY_PROMPT.format(
+            entities=entities_text,
+            relationships=relationships_text,
+        )
+    ).content
+
+    return {
+        "community_id": community_id,
+        "size": len(nodes),
+        "summary": summary,
+    }
+
+# 상위 커뮤니티들 요약 생성
+top_communities = graph.query("""
+MATCH (n:__Entity__)
+WHERE n.louvain_community IS NOT NULL
+RETURN n.louvain_community AS id, count(n) AS size
+ORDER BY size DESC
+LIMIT 10
+""")
+
+community_summaries = []
+for c in top_communities:
+    summary = summarize_community(c["id"], graph)
+    community_summaries.append(summary)
+    print(f"커뮤니티 {c['id']} ({c['size']}개): {summary['summary'][:100]}...")
+```
+
+### 요약을 Neo4j에 저장
+
+```python
+# Community 노드 생성 및 요약 저장
+for cs in community_summaries:
+    graph.query("""
+    MERGE (c:Community {id: $community_id})
+    SET c.size = $size,
+        c.summary = $summary,
+        c.updated_at = datetime()
+    """, params={
+        "community_id": cs["community_id"],
+        "size": cs["size"],
+        "summary": cs["summary"],
+    })
+
+    # Community → Entity 연결
+    graph.query("""
+    MATCH (c:Community {id: $community_id})
+    MATCH (n:__Entity__ {louvain_community: $community_id})
+    MERGE (c)-[:CONTAINS]->(n)
+    """, params={"community_id": cs["community_id"]})
+```
+
+---
+
+## Global Search 구현
+
+커뮤니티 요약을 기반으로 전체적인 질문에 답한다.
+
+```python
+GLOBAL_SEARCH_PROMPT = PromptTemplate.from_template("""
+다음 커뮤니티 요약들을 바탕으로 질문에 종합적으로 답하세요.
+
+질문: {question}
+
+커뮤니티 요약:
+{summaries}
+""")
+
+def global_search(question: str, graph: Neo4jGraph, top_k: int = 5) -> str:
+    # 모든 커뮤니티 요약 조회
+    summaries = graph.query("""
+    MATCH (c:Community)
+    WHERE c.summary IS NOT NULL
+    RETURN c.id AS id, c.size AS size, c.summary AS summary
+    ORDER BY c.size DESC
+    LIMIT $top_k
+    """, params={"top_k": top_k})
+
+    summaries_text = "\n\n".join(
+        f"[커뮤니티 {s['id']}, {s['size']}개 엔티티]\n{s['summary']}"
+        for s in summaries
+    )
+
+    return llm.invoke(
+        GLOBAL_SEARCH_PROMPT.format(
+            question=question,
+            summaries=summaries_text,
+        )
+    ).content
+
+answer = global_search("AI 업계의 주요 기업과 동향은?", graph)
+print(answer)
+```
+
+---
+
+## 프로젝션 정리
+
+```python
+# 사용 완료된 GDS 프로젝션 삭제 (메모리 해제)
+gds.graph.drop(G)
+```
+
+---
+
+## 정리
+
+```
+GDS 커뮤니티 감지 흐름:
+  1. gds.graph.project()     ← Neo4j → GDS 메모리
+  2. gds.louvain.write()     ← 커뮤니티 ID를 노드 속성에 저장
+  3. 커뮤니티별 LLM 요약    ← Microsoft GraphRAG의 Global Search 기반
+  4. Community 노드 저장    ← 이후 Global Search에서 활용
+  5. gds.graph.drop()        ← 메모리 해제
+
+Louvain vs Label Propagation:
+  Louvain:           더 안정적, 높은 모듈성, 느림
+  Label Propagation: 빠름, 결과 비결정적
+```
+
+다음 파일에서는 GDS의 PageRank로 중요 노드를 식별한다.

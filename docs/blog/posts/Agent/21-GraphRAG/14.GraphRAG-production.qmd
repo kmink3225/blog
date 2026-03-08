@@ -1,0 +1,318 @@
+---
+title: "GraphRAG 프로덕션 배포 전략"
+subtitle: "AstraDB 선택, 비용 최적화, 모니터링, 업데이트 파이프라인"
+description: |
+  langchain-graph-retriever 기반 GraphRAG를 프로덕션에 배포하기 위한 전략을 다룬다.
+  Vector Store 선택 기준(AstraDB vs PGVector vs Chroma), 비용 최적화,
+  문서 업데이트 파이프라인, 성능 모니터링, LangGraph 에이전트와의 통합까지 정리한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# GraphRAG 프로덕션 배포 전략
+
+## Vector Store 선택 기준
+
+프로덕션 환경에서 가장 중요한 결정은 어떤 Vector Store를 사용할 것인가이다.
+
+| 기준 | AstraDB | PGVector | OpenSearch | Chroma |
+|------|:-------:|:--------:|:----------:|:------:|
+| **리스트 메타데이터** | ✅ 네이티브 | ✅ (Shredding) | ✅ 네이티브 | ✅ (Shredding) |
+| **인접 쿼리 최적화** | ✅ 지원 | ❌ | ❌ | ❌ |
+| **관리형 서비스** | ✅ | ❌ (자체 운영) | ❌ (자체 운영) | ❌ (자체 운영) |
+| **규모 확장** | ✅ | 중간 | ✅ | 소규모 |
+| **비용** | 유료 | 서버 비용 | 서버 비용 | 무료 |
+| **기존 인프라 통합** | 새 설치 | PostgreSQL 있으면 쉬움 | 있으면 쉬움 | 로컬만 |
+
+**권장:**
+- 엔터프라이즈 / 대규모: **AstraDB** (인접 쿼리 최적화로 성능 이점)
+- PostgreSQL 이미 사용 중: **PGVector**
+- 로컬 개발/소규모: **Chroma**
+
+---
+
+## AstraDB 프로덕션 설정
+
+```python
+import os
+from dotenv import load_dotenv
+from langchain_astradb import AstraDBVectorStore
+from langchain_openai import OpenAIEmbeddings
+from langchain_graph_retriever import GraphRetriever
+from graph_retriever.strategies import Eager
+
+load_dotenv()
+
+# 환경 변수
+# ASTRA_DB_APPLICATION_TOKEN=AstraCS:xxx...
+# ASTRA_DB_API_ENDPOINT=https://xxx.apps.astra.datastax.com
+
+store = AstraDBVectorStore(
+    embedding=OpenAIEmbeddings(model="text-embedding-3-small"),  # 비용 최적화
+    collection_name="production_docs",
+    # pre_delete_collection=False  # 프로덕션에서는 절대 True 금지
+)
+
+retriever = GraphRetriever(
+    store=store,
+    edges=[("keywords", "keywords"), ("category", "category")],
+    strategy=Eager(select_k=10, start_k=3, max_depth=2),
+)
+```
+
+---
+
+## 비용 최적화 전략
+
+### 임베딩 모델 선택
+
+```python
+# 비용 비교 (OpenAI 기준)
+# text-embedding-ada-002:   $0.0001 / 1K tokens (구형)
+# text-embedding-3-small:   $0.00002 / 1K tokens (권장)
+# text-embedding-3-large:   $0.00013 / 1K tokens (고품질 필요 시)
+
+embedding = OpenAIEmbeddings(model="text-embedding-3-small")
+```
+
+### 캐싱 적용
+
+```python
+from langchain.storage import LocalFileStore
+from langchain.embeddings import CacheBackedEmbeddings
+
+# 동일 텍스트는 임베딩 재계산하지 않음
+underlying_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+fs = LocalFileStore("./embedding_cache")
+cached_embeddings = CacheBackedEmbeddings.from_bytes_store(
+    underlying_embeddings,
+    fs,
+    namespace=underlying_embeddings.model,
+)
+
+store = AstraDBVectorStore(
+    embedding=cached_embeddings,
+    collection_name="production_docs",
+)
+```
+
+### Strategy 파라미터 최적화
+
+```python
+# 불필요하게 많은 문서를 검색하지 않도록 설정
+retriever = GraphRetriever(
+    store=store,
+    edges=[("keywords", "keywords")],
+    strategy=Eager(
+        select_k=5,      # 많을수록 LLM 토큰 비용 증가
+        start_k=2,       # 시작점 줄이기
+        adjacent_k=5,    # 엣지당 후보 문서 줄이기
+        max_depth=2,     # 3 이상은 노이즈 + 비용 증가
+    ),
+)
+```
+
+---
+
+## 문서 업데이트 파이프라인
+
+### 점진적 업데이트 (Incremental Update)
+
+```python
+import hashlib
+from langchain_core.documents import Document
+
+def compute_doc_hash(content: str, metadata: dict) -> str:
+    """문서 내용 해시 계산 (변경 감지용)."""
+    data = f"{content}{str(sorted(metadata.items()))}"
+    return hashlib.md5(data.encode()).hexdigest()
+
+def upsert_documents(store, new_docs: list[Document], shredder=None):
+    """변경된 문서만 업데이트."""
+    if shredder:
+        new_docs = list(shredder.transform_documents(new_docs))
+
+    # 기존 문서 해시 조회
+    existing_hashes = {}  # {doc_id: hash} 별도 DB에서 관리
+
+    docs_to_update = []
+    for doc in new_docs:
+        new_hash = compute_doc_hash(doc.page_content, doc.metadata)
+        if existing_hashes.get(doc.id) != new_hash:
+            docs_to_update.append(doc)
+
+    if docs_to_update:
+        store.add_documents(docs_to_update)
+        print(f"{len(docs_to_update)}개 문서 업데이트")
+    else:
+        print("변경된 문서 없음")
+```
+
+### 삭제 처리
+
+```python
+def delete_documents(store, doc_ids: list[str]):
+    """문서 삭제."""
+    # AstraDB
+    store.delete(ids=doc_ids)
+
+    # 연결된 엣지는 자동으로 무효화됨
+    # (탐색 시 해당 ID의 문서를 찾지 못하면 그냥 건너뜀)
+```
+
+---
+
+## LangGraph 에이전트와 통합
+
+GraphRAG는 LangGraph 에이전트의 도구(Tool)로 활용할 수 있다.
+
+```python
+from langchain_core.tools import tool
+from langchain_graph_retriever import GraphRetriever
+from langgraph.prebuilt import create_react_agent
+
+@tool
+def graph_search(query: str) -> str:
+    """그래프 탐색으로 관련 문서를 검색합니다. 복잡한 관계 기반 질문에 적합합니다."""
+    results = retriever.invoke(query)
+    return "\n\n".join(
+        f"[{doc.id}] {doc.page_content[:200]}"
+        for doc in results
+    )
+
+@tool
+def vector_search(query: str) -> str:
+    """벡터 유사도로 관련 문서를 검색합니다. 단순한 키워드 검색에 적합합니다."""
+    results = store.similarity_search(query, k=5)
+    return "\n\n".join(doc.page_content[:200] for doc in results)
+
+# 에이전트: 질문 유형에 따라 적절한 검색 도구 선택
+agent = create_react_agent(
+    model=ChatOpenAI(model="gpt-4o"),
+    tools=[graph_search, vector_search],
+)
+
+result = agent.invoke({
+    "messages": [("user", "버뮤다 슬루프의 역사와 특징에 대해 설명해줘")]
+})
+```
+
+---
+
+## 성능 모니터링
+
+### LangSmith 통합
+
+```python
+import os
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_API_KEY"] = "your_langsmith_key"
+os.environ["LANGCHAIN_PROJECT"] = "graphrag-production"
+
+# 이후 모든 LangChain/LangGraph 호출이 자동으로 트레이싱됨
+results = retriever.invoke("질의")  # LangSmith에 자동 기록
+```
+
+### 커스텀 메트릭 추적
+
+```python
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class RetrievalMetrics:
+    query: str
+    latency_ms: float
+    num_docs_retrieved: int
+    max_depth_reached: int
+    num_edges_traversed: int
+
+def tracked_retrieval(retriever, query: str) -> tuple[list, RetrievalMetrics]:
+    start = time.time()
+    results = retriever.invoke(query)
+    latency = (time.time() - start) * 1000
+
+    depths = [doc.metadata.get("_depth", 0) for doc in results]
+
+    metrics = RetrievalMetrics(
+        query=query,
+        latency_ms=latency,
+        num_docs_retrieved=len(results),
+        max_depth_reached=max(depths) if depths else 0,
+        num_edges_traversed=len([d for d in results if d.metadata.get("_depth", 0) > 0]),
+    )
+
+    return results, metrics
+
+# 사용
+results, metrics = tracked_retrieval(retriever, "질의")
+print(f"지연시간: {metrics.latency_ms:.0f}ms")
+print(f"검색 문서: {metrics.num_docs_retrieved}개")
+print(f"최대 탐색 깊이: {metrics.max_depth_reached}")
+```
+
+---
+
+## 배포 체크리스트
+
+```
+인프라:
+  [ ] Vector Store 선택 및 설정 완료
+  [ ] API 키 환경 변수로 관리 (하드코딩 금지)
+  [ ] 임베딩 캐시 설정
+
+성능:
+  [ ] Strategy 파라미터 튜닝 완료 (select_k, start_k, max_depth)
+  [ ] 평균 응답 시간 < 3초 (목표)
+  [ ] 임베딩 모델 비용 최적화 확인
+
+안정성:
+  [ ] 문서 업데이트 파이프라인 구축
+  [ ] 삭제/수정 처리 로직 검증
+  [ ] 에러 핸들링 (벡터 스토어 연결 실패 등)
+
+모니터링:
+  [ ] LangSmith 또는 커스텀 로깅 설정
+  [ ] 지연시간, 검색 품질 메트릭 추적
+  [ ] 알림 설정 (응답 시간 > 5초, 에러율 > 5%)
+
+평가:
+  [ ] 정기적인 A/B 테스트 (Vector RAG vs GraphRAG)
+  [ ] Multi-hop 질문 벤치마크 유지
+  [ ] 사용자 피드백 수집
+```
+
+---
+
+## 최종 아키텍처 요약
+
+```
+사용자 질의
+  │
+  ▼
+[LangGraph Agent]
+  ├─ 단순 질문 → vector_search tool
+  └─ 복잡한 관계 질문 → graph_search tool
+                          │
+                          ▼
+                      [GraphRetriever]
+                          │
+                          ├─ start_k개 벡터 검색 → AstraDB
+                          ├─ 메타데이터 엣지 탐색 → AstraDB (최적화된 인접 쿼리)
+                          └─ max_depth까지 반복
+                          │
+                          ▼
+                      [검색 결과 + 관계 정보]
+                          │
+                          ▼
+                      [LLM] → 최종 답변
+```
+
+이 시리즈를 통해 GraphRAG의 개념부터 프로덕션 배포까지 전체 흐름을 학습했다.

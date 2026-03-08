@@ -1,0 +1,323 @@
+---
+title: "Document Transformers"
+subtitle: "Shredding, Entity Extraction, Keyword Extraction으로 그래프 엣지 만들기"
+description: |
+  langchain-graph-retriever의 Document Transformer들을 살펴본다.
+  ShreddingTransformer는 리스트 메타데이터를 벡터 스토어가 이해할 수 있는 형태로 변환하고,
+  GLiNER/Spacy는 텍스트에서 엔티티를 추출하며, KeyBERT는 키워드를 추출하여 자동으로 엣지를 만든다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Document Transformers
+
+## Transformer의 역할
+
+Transformer는 문서를 그래프에 저장하기 **전에** 메타데이터를 보강하거나 변환한다.
+
+```
+원본 문서
+   │
+   ▼
+[ShreddingTransformer]  ← 리스트 메타데이터 분해
+   │
+   ▼
+[GlinerTransformer]     ← 텍스트에서 엔티티 추출 → 메타데이터 추가
+   │
+   ▼
+[KeybertTransformer]    ← 텍스트에서 키워드 추출 → 메타데이터 추가
+   │
+   ▼
+벡터 스토어 저장 → GraphRetriever에서 엣지로 활용
+```
+
+---
+
+## ShreddingTransformer
+
+### 왜 필요한가
+
+Chroma, PGVector, Cassandra는 **리스트 타입 메타데이터로 필터링 불가**하다.
+
+```python
+# 이 문서가 있을 때
+doc.metadata = {"keywords": ["wool", "domesticated", "friendly"]}
+
+# Chroma에서 이 쿼리는 동작하지 않음:
+# WHERE metadata["keywords"] CONTAINS "wool"
+```
+
+ShreddingTransformer는 리스트를 개별 키-값 쌍으로 분해한다.
+
+### 동작 원리
+
+```python
+from langchain_graph_retriever.transformers import ShreddingTransformer
+
+shredder = ShreddingTransformer()
+
+# 입력 문서
+doc.metadata = {
+    "type": "mammal",              # 단일 값: 그대로 유지
+    "origin": "south america",    # 단일 값: 그대로 유지
+    "keywords": ["wool", "domesticated", "friendly"],  # 리스트: shredding 대상
+}
+
+# 출력 문서
+shredded_doc.metadata = {
+    "type": "mammal",
+    "origin": "south america",
+    'keywords→"wool"':        '§',   # shredded key (§는 정적 값)
+    'keywords→"domesticated"': '§',
+    'keywords→"friendly"':    '§',
+    '__shredded_keys': '["keywords"]',  # shredding된 키 목록 기록
+}
+```
+
+이제 `keywords→"wool" == "§"` 필터링이 가능해진다.
+
+### 특정 필드만 shred하기
+
+```python
+# 모든 리스트 필드 shred (기본)
+shredder = ShreddingTransformer()
+
+# 특정 필드만 shred
+shredder = ShreddingTransformer(keys={"keywords", "tags"})
+
+# 엣지로 사용할 리스트 필드만 shred하면 저장 효율 높아짐
+```
+
+### ChromaAdapter와 함께 사용
+
+```python
+from langchain_graph_retriever.adapters.chroma import ChromaAdapter
+from langchain_graph_retriever.transformers import ShreddingTransformer
+
+shredder = ShreddingTransformer(keys={"keywords"})  # keywords만 shred
+shredded_docs = list(shredder.transform_documents(animals))
+
+vector_store = Chroma.from_documents(shredded_docs, embedding=OpenAIEmbeddings())
+
+# Adapter에 shredder와 shredded 필드 집합 전달
+adapter = ChromaAdapter(vector_store, shredder, {"keywords"})
+```
+
+---
+
+## HtmlTransformer: HTML 문서 파싱
+
+웹 페이지나 HTML 문서에서 텍스트를 추출한다.
+
+```python
+from langchain_graph_retriever.transformers.html import HtmlTransformer
+
+transformer = HtmlTransformer()
+
+# HTML 문서 → 텍스트 추출
+html_doc = Document(
+    page_content="<h1>Python</h1><p>Python is a programming language...</p>",
+    metadata={"url": "https://example.com/python"}
+)
+
+cleaned = list(transformer.transform_documents([html_doc]))
+# cleaned[0].page_content = "Python Python is a programming language..."
+```
+
+---
+
+## GlinerTransformer: Named Entity Extraction
+
+[GLiNER](https://github.com/urchade/GLiNER)를 사용해 텍스트에서 엔티티를 자동 추출하여 메타데이터에 추가한다.
+
+```bash
+pip install langchain-graph-retriever[gliner]
+```
+
+```python
+from langchain_graph_retriever.transformers.gliner import GlinerTransformer
+
+# 추출할 엔티티 타입 정의
+transformer = GlinerTransformer(
+    labels=["person", "organization", "location", "product"],
+    metadata_key="entities",  # 결과를 저장할 메타데이터 키
+)
+
+doc = Document(
+    page_content="Elon Musk founded Tesla in Palo Alto.",
+    metadata={}
+)
+
+result = list(transformer.transform_documents([doc]))
+# result[0].metadata = {
+#     "entities": [
+#         {"type": "person",       "entity": "Elon Musk"},
+#         {"type": "organization", "entity": "Tesla"},
+#         {"type": "location",     "entity": "Palo Alto"},
+#     ]
+# }
+```
+
+### 엣지로 활용
+
+```python
+# 같은 인물/조직이 언급된 문서들끼리 연결
+edges = [("entities", "entities")]
+
+# AstraDB (Dict-In-List 지원)에서 사용 가능
+# Chroma에서는 Shredding 필요
+```
+
+---
+
+## KeybertTransformer: 키워드 추출
+
+[KeyBERT](https://github.com/MaartenGr/KeyBERT)를 사용해 문서에서 핵심 키워드를 추출한다.
+
+```bash
+pip install langchain-graph-retriever[keybert]
+```
+
+```python
+from langchain_graph_retriever.transformers.keybert import KeybertTransformer
+
+transformer = KeybertTransformer(
+    top_n=5,              # 추출할 키워드 수
+    metadata_key="keywords",
+)
+
+doc = Document(
+    page_content="""
+    Graph neural networks (GNNs) are a type of neural network designed to
+    operate on graph-structured data. GNNs can learn node embeddings by
+    aggregating information from neighboring nodes.
+    """,
+    metadata={}
+)
+
+result = list(transformer.transform_documents([doc]))
+# result[0].metadata = {
+#     "keywords": ["graph neural networks", "gnn", "node embeddings",
+#                  "graph-structured", "neighboring nodes"]
+# }
+```
+
+### ShreddingTransformer와 함께
+
+키워드는 리스트이므로 Chroma 사용 시 Shredding 필요.
+
+```python
+# 파이프라인 구성
+from langchain_core.documents.transformers import BaseDocumentTransformer
+
+# 1단계: 키워드 추출
+keybert = KeybertTransformer(top_n=5, metadata_key="keywords")
+docs_with_keywords = list(keybert.transform_documents(documents))
+
+# 2단계: Shredding
+shredder = ShreddingTransformer(keys={"keywords"})
+shredded_docs = list(shredder.transform_documents(docs_with_keywords))
+
+# 3단계: 벡터 스토어 저장
+vector_store = Chroma.from_documents(shredded_docs, embedding=OpenAIEmbeddings())
+adapter = ChromaAdapter(vector_store, shredder, {"keywords"})
+```
+
+---
+
+## SpacyTransformer: NLP 처리
+
+spaCy를 활용한 더 세밀한 NLP 처리. 품사 태깅, 의존 관계 분석, 엔티티 인식 등을 제공한다.
+
+```bash
+pip install langchain-graph-retriever[spacy]
+python -m spacy download en_core_web_sm
+```
+
+```python
+from langchain_graph_retriever.transformers.spacy import SpacyTransformer
+
+transformer = SpacyTransformer(
+    model="en_core_web_sm",
+    metadata_key="named_entities",
+)
+```
+
+---
+
+## ParentTransformer: 청크-부모 관계
+
+긴 문서를 청크로 분할할 때 청크와 부모 문서를 연결하는 엣지를 생성한다.
+
+```python
+from langchain_graph_retriever.transformers.parent import ParentDocumentTransformer
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(chunk_size=500)
+
+# 청크 분할 + 부모 문서 ID를 메타데이터에 추가
+transformer = ParentDocumentTransformer(
+    child_splitter=splitter,
+    parent_id_key="parent_id",  # 부모 문서 ID를 저장할 메타데이터 키
+)
+
+# 청크들: metadata["parent_id"] = 원본 문서 ID
+# 엣지로 같은 부모를 가진 청크들끼리 연결
+edges = [("parent_id", "parent_id")]
+```
+
+---
+
+## 전체 파이프라인 예시: 기술 문서 처리
+
+```python
+from langchain_graph_retriever.transformers import ShreddingTransformer
+from langchain_graph_retriever.transformers.keybert import KeybertTransformer
+from langchain_graph_retriever.transformers.html import HtmlTransformer
+
+# Step 1: HTML 파싱
+html_transformer = HtmlTransformer()
+clean_docs = list(html_transformer.transform_documents(raw_html_docs))
+
+# Step 2: 키워드 추출
+keybert = KeybertTransformer(top_n=5, metadata_key="keywords")
+docs_with_keywords = list(keybert.transform_documents(clean_docs))
+
+# Step 3: Shredding (Chroma 사용 시)
+shredder = ShreddingTransformer(keys={"keywords"})
+shredded_docs = list(shredder.transform_documents(docs_with_keywords))
+
+# Step 4: 저장 및 GraphRetriever 구성
+vector_store = Chroma.from_documents(shredded_docs, embedding=OpenAIEmbeddings())
+adapter = ChromaAdapter(vector_store, shredder, {"keywords"})
+
+retriever = GraphRetriever(
+    store=adapter,
+    edges=[
+        ("keywords", "keywords"),  # 공통 키워드로 연결
+        ("category", "category"),  # 같은 카테고리로 연결
+    ],
+    strategy=Eager(select_k=10, start_k=2, max_depth=2),
+)
+```
+
+---
+
+## 정리
+
+| Transformer | 역할 | 필요 패키지 | Shredding 필요 |
+|------------|------|------------|:------------:|
+| **ShreddingTransformer** | 리스트 메타데이터 분해 | 기본 포함 | - |
+| **HtmlTransformer** | HTML → 텍스트 | beautifulsoup4 | ❌ |
+| **GlinerTransformer** | 엔티티 추출 | gliner | ✅ |
+| **KeybertTransformer** | 키워드 추출 | keybert | ✅ |
+| **SpacyTransformer** | NLP 처리 | spacy | ✅ |
+| **ParentTransformer** | 청크-부모 연결 | 기본 포함 | ❌ |
+
+다음 파일에서는 Movie Reviews 실전 예제를 살펴본다.

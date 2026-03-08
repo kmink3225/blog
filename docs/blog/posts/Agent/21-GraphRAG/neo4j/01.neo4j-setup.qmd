@@ -1,0 +1,249 @@
+---
+title: "Neo4j 설치 & 첫 연결"
+subtitle: "Docker로 Neo4j 실행, Python 드라이버 연결, LangChain 통합"
+description: |
+  Neo4j를 Docker로 설치하고, Python에서 직접 연결하는 방법과
+  LangChain의 Neo4jGraph를 통해 그래프를 조작하는 방법을 다룬다.
+  Neo4j Browser에서 데이터를 시각적으로 확인하는 방법도 포함한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+  - Neo4j
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Neo4j 설치 & 첫 연결
+
+## Neo4j 설치 방법
+
+### 방법 1: Docker (권장)
+
+```bash
+docker run \
+    --name neo4j \
+    -p 7474:7474 \
+    -p 7687:7687 \
+    -e NEO4J_AUTH=neo4j/password \
+    -e NEO4J_PLUGINS='["apoc", "graph-data-science"]' \
+    -d neo4j:5
+```
+
+- `7474`: Neo4j Browser (웹 UI)
+- `7687`: Bolt 프로토콜 (Python 드라이버 연결)
+- `-e NEO4J_PLUGINS`: APOC(유틸리티) + GDS(그래프 알고리즘) 플러그인 자동 설치
+
+### 방법 2: Neo4j Desktop
+
+[Neo4j Desktop](https://neo4j.com/download/) 다운로드 후 GUI로 로컬 DB 생성.
+GDS, APOC 플러그인을 GUI에서 클릭으로 추가 가능.
+
+### 방법 3: Neo4j Aura (클라우드, 무료 플랜)
+
+```
+https://console.neo4j.io → Free 인스턴스 생성
+→ Connection URI, Username, Password 발급
+```
+
+---
+
+## 패키지 설치
+
+```bash
+pip install neo4j                   # 공식 Python 드라이버
+pip install langchain-neo4j         # LangChain 통합
+pip install langchain-experimental  # LLMGraphTransformer
+pip install langchain-openai        # 임베딩/LLM
+pip install neo4j-graphrag          # Neo4j 공식 GraphRAG 패키지
+```
+
+---
+
+## 환경 변수 설정
+
+```bash
+# .env 파일
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=password
+OPENAI_API_KEY=sk-...
+```
+
+---
+
+## Python 드라이버로 직접 연결
+
+```python
+from neo4j import GraphDatabase
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+URI      = os.getenv("NEO4J_URI")
+USERNAME = os.getenv("NEO4J_USERNAME")
+PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+driver = GraphDatabase.driver(URI, auth=(USERNAME, PASSWORD))
+
+# 연결 확인
+driver.verify_connectivity()
+print("Neo4j 연결 성공!")
+
+# 간단한 쿼리
+with driver.session() as session:
+    result = session.run("RETURN 'Hello, Neo4j!' AS message")
+    print(result.single()["message"])
+
+driver.close()
+```
+
+---
+
+## LangChain Neo4jGraph로 연결
+
+LangChain에서는 `Neo4jGraph`로 더 편리하게 Neo4j를 다룬다.
+
+```python
+from langchain_neo4j import Neo4jGraph
+
+graph = Neo4jGraph(
+    url=os.getenv("NEO4J_URI"),
+    username=os.getenv("NEO4J_USERNAME"),
+    password=os.getenv("NEO4J_PASSWORD"),
+)
+
+# 스키마 확인
+print(graph.schema)
+```
+
+### 데이터 삽입
+
+```python
+# Cypher로 노드 생성
+graph.query("""
+CREATE (p:Person {name: 'Elon Musk', born: 1971})
+CREATE (c:Company {name: 'Tesla', founded: 2003})
+CREATE (p)-[:FOUNDED {year: 2003}]->(c)
+""")
+
+# 결과 조회
+result = graph.query("""
+MATCH (p:Person)-[r:FOUNDED]->(c:Company)
+RETURN p.name AS person, c.name AS company, r.year AS year
+""")
+print(result)
+# [{'person': 'Elon Musk', 'company': 'Tesla', 'year': 2003}]
+```
+
+### 스키마 자동 갱신
+
+```python
+# 데이터 삽입 후 스키마 갱신
+graph.refresh_schema()
+print(graph.schema)
+# Node properties:
+# Person {name: STRING, born: INTEGER}
+# Company {name: STRING, founded: INTEGER}
+# Relationship properties:
+# FOUNDED {year: INTEGER}
+# The relationships:
+# (:Person)-[:FOUNDED]->(:Company)
+```
+
+---
+
+## Neo4j Browser로 시각화
+
+브라우저에서 `http://localhost:7474` 접속 후 로그인.
+
+```cypher
+// 전체 그래프 조회
+MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50
+```
+
+노드와 관계가 그래프 형태로 시각화된다.
+
+---
+
+## neo4j-graphrag 패키지로 연결
+
+Neo4j 공식 GraphRAG 패키지는 별도의 드라이버 객체를 사용한다.
+
+```python
+import neo4j
+from neo4j_graphrag.embeddings import OpenAIEmbeddings
+from neo4j_graphrag.llm import OpenAILLM
+
+# Neo4j 드라이버
+driver = neo4j.GraphDatabase.driver(
+    os.getenv("NEO4J_URI"),
+    auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD")),
+)
+
+# 임베딩 모델
+embedder = OpenAIEmbeddings(model="text-embedding-3-small")
+
+# LLM
+llm = OpenAILLM(model_name="gpt-4o", model_params={"temperature": 0})
+```
+
+---
+
+## 연결 확인 체크리스트
+
+```python
+def check_neo4j_connection():
+    from neo4j import GraphDatabase
+    import os
+
+    driver = GraphDatabase.driver(
+        os.getenv("NEO4J_URI"),
+        auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD")),
+    )
+
+    try:
+        driver.verify_connectivity()
+        print("✅ Neo4j 연결 성공")
+
+        with driver.session() as session:
+            # 버전 확인
+            version = session.run("CALL dbms.components() YIELD name, versions RETURN name, versions[0] as version").single()
+            print(f"✅ Neo4j 버전: {version['version']}")
+
+            # GDS 플러그인 확인
+            try:
+                session.run("RETURN gds.version() AS version").single()
+                print("✅ GDS 플러그인 설치됨")
+            except Exception:
+                print("⚠️ GDS 플러그인 없음 (GDS 기능 사용 불가)")
+
+            # APOC 플러그인 확인
+            try:
+                session.run("RETURN apoc.version() AS version").single()
+                print("✅ APOC 플러그인 설치됨")
+            except Exception:
+                print("⚠️ APOC 플러그인 없음")
+
+    finally:
+        driver.close()
+
+check_neo4j_connection()
+```
+
+---
+
+## 정리
+
+```
+설치:    docker run -p 7474:7474 -p 7687:7687 neo4j:5
+접속:    bolt://localhost:7687 (Python), http://localhost:7474 (브라우저)
+
+LangChain: Neo4jGraph(url, username, password)
+공식 패키지: neo4j.GraphDatabase.driver(uri, auth=(user, pwd))
+```
+
+다음 파일에서는 Neo4j의 쿼리 언어인 Cypher를 배운다.

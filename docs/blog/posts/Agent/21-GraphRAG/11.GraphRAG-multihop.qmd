@@ -1,0 +1,293 @@
+---
+title: "Wikipedia Multi-hop QA"
+subtitle: "mentions + entities 엣지로 다단계 추론 구현하기"
+description: |
+  Wikipedia 문서 간 상호 참조(mentions)와 공통 엔티티(entities)를 엣지로 활용하여
+  Multi-hop 질문에 답하는 GraphRAG 시스템을 구축한다.
+  2wikimultihop 데이터셋을 기반으로, 일반 Vector RAG가 실패하는 복잡한 추론 질문에서
+  GraphRAG가 어떻게 다단계 연결을 통해 답을 찾는지 보여준다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Wikipedia Multi-hop QA
+
+## Multi-hop 추론이란
+
+**단순 질문 (1-hop):**
+```
+"테슬라는 어디에 본사가 있나요?"
+→ 테슬라 문서에서 바로 답 찾기
+```
+
+**Multi-hop 질문 (2-hop 이상):**
+```
+"일론 머스크가 창업한 회사의 CEO는 누구인가?"
+→ 1) 일론 머스크 문서 → 창업한 회사: 테슬라, SpaceX
+→ 2) 테슬라 문서 → 현재 CEO: Elon Musk (or 다른 CEO)
+→ 두 단계의 연결을 통해서만 답을 구할 수 있음
+```
+
+Vector RAG는 단일 쿼리로 유사한 문서만 검색하기 때문에 Multi-hop 추론이 어렵다.
+GraphRAG는 문서 간 연결을 따라가며 다단계 추론이 가능하다.
+
+## 2wikimultihop 데이터셋
+
+[2wikimultihop](https://github.com/Alab-NII/2wikimultihop) 데이터셋은 Wikipedia 기반
+Multi-hop QA 벤치마크다.
+
+각 문서는 다음 정보를 포함한다:
+```python
+{
+    "id": "article_unique_id",
+    "title": "Bermuda sloop",
+    "sentences": ["A Bermuda sloop is...", "The design originated..."],
+    "mentions": [
+        {"ref_ids": ["article_id_of_bermuda_rig"]},   # 하이퍼링크된 문서 ID
+        {"ref_ids": ["article_id_of_caribbean"]},
+    ]
+}
+```
+
+## 데이터 준비: mentions + entities
+
+```python
+import json
+from langchain_core.documents import Document
+from langchain_graph_retriever.transformers.spacy import SpacyNERTransformer
+
+# SpacyNER: 텍스트에서 인물, 장소, 조직 등 엔티티 추출
+NER_TRANSFORMER = SpacyNERTransformer(
+    limit=1000,
+    exclude_labels={"CARDINAL", "MONEY", "QUANTITY", "TIME", "PERCENT", "ORDINAL"},
+)
+
+def parse_document(line: bytes) -> Document:
+    para = json.loads(line)
+
+    # mentions: 이 문서가 참조하는 다른 문서들의 ID
+    mentioned_ids = [
+        ref_id
+        for mention in para["mentions"]
+        for ref_id in (mention["ref_ids"] or [])
+    ]
+
+    return Document(
+        id=para["id"],
+        page_content=" ".join(para["sentences"]),
+        metadata={
+            "mentions": mentioned_ids,
+            "title": para["title"],
+        },
+    )
+
+def prepare_batch(lines):
+    docs = [parse_document(line) for line in lines]
+    # SpacyNER로 entities 메타데이터 추가
+    docs = NER_TRANSFORMER.transform_documents(docs)
+    return docs
+
+# 결과 문서 구조
+# doc.metadata = {
+#     "mentions": ["bermuda_rig_id", "caribbean_id"],  # 참조 문서
+#     "entities": [                                     # 추출된 엔티티
+#         {"label": "GPE",  "text": "Bermuda"},
+#         {"label": "NORP", "text": "British"},
+#     ],
+#     "title": "Bermuda sloop",
+# }
+```
+
+## GraphRetriever: mentions + entities 엣지
+
+```python
+from langchain_astradb import AstraDBVectorStore
+from langchain_openai import OpenAIEmbeddings
+from langchain_graph_retriever import GraphRetriever
+from graph_retriever.strategies import Eager
+
+store = AstraDBVectorStore(
+    embedding=OpenAIEmbeddings(),
+    collection_name="wikipedia_multihop",
+)
+
+retriever = GraphRetriever(
+    store=store,
+    edges=[
+        ("mentions", "$id"),       # A 문서의 mentions → B 문서의 ID
+        ("entities", "entities"),  # 같은 엔티티 공유 문서 연결
+    ],
+    strategy=Eager(
+        select_k=20,
+        start_k=5,
+        adjacent_k=10,
+        max_depth=3,             # 3-hop까지 탐색
+    ),
+)
+```
+
+## 탐색 과정 시각화
+
+**질문: "버뮤다 슬루프 선박이 왜 높이 평가되나?"**
+
+```
+depth=0: 벡터 검색
+  → [Bermuda sloop] (유사도 높음)
+    mentions: ["bermuda_rig_id", "bermuda_cedar_id", ...]
+    entities: [{"label": "GPE", "text": "Bermuda"}, ...]
+
+depth=1: mentions 엣지 탐색
+  → [Bermuda rig]     ← bermuda_rig_id
+    mentions: ["triangular_sail_id", ...]
+    entities: [{"label": "GPE", "text": "Caribbean"}, ...]
+  → [Bermuda cedar]   ← bermuda_cedar_id
+    entities: [{"label": "GPE", "text": "Bermuda"}, ...]
+
+depth=2: 연결된 문서들의 엣지 탐색
+  → [Triangular sail] ← triangular_sail_id
+    mentions 엔티티로 추가 연결...
+
+최종: 슬루프의 장점을 설명하는 다양한 관련 문서들 수집
+```
+
+## 기본 RAG와 비교
+
+```python
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_openai import ChatOpenAI
+
+MODEL = ChatOpenAI(model="gpt-4o", temperature=0)
+
+ANSWER_PROMPT = PromptTemplate.from_template("""
+아래 문서들을 바탕으로 질문에 답하세요.
+문서의 정보만 사용하고 추측은 하지 마세요.
+
+질문: {question}
+
+문서:
+{documents}
+""")
+
+def format_docs(docs):
+    return "\n\n".join(
+        f"[{doc.metadata.get('title', doc.id)}]\n{doc.page_content}"
+        for doc in docs
+    )
+
+# GraphRAG 체인
+graph_chain = (
+    {
+        "question": RunnablePassthrough(),
+        "documents": retriever | format_docs,
+    }
+    | ANSWER_PROMPT
+    | MODEL
+)
+
+# 일반 Vector RAG 체인
+vector_chain = (
+    {
+        "question": RunnablePassthrough(),
+        "documents": store.as_retriever() | format_docs,
+    }
+    | ANSWER_PROMPT
+    | MODEL
+)
+
+question = "Why are Bermudan sloop ships widely prized compared to other ships?"
+
+print("=== GraphRAG ===")
+print(graph_chain.invoke(question).content)
+
+print("\n=== Vector RAG ===")
+print(vector_chain.invoke(question).content)
+```
+
+**GraphRAG 답변 (상세):**
+```
+버뮤다 슬루프가 높이 평가되는 이유는 다음과 같습니다:
+
+1. 버뮤다 리그: 적은 선원으로 항해 가능하고, 비용이 저렴하며,
+   바람을 맞받아 항해(windward sailing)할 때 성능이 뛰어납니다.
+   (출처: Bermuda rig 문서)
+
+2. 버뮤다 삼나무 사용: 내구성이 뛰어나고 부식에 강한 버뮤다 삼나무로
+   제작되어 선박의 수명과 성능이 향상됩니다.
+   (출처: Bermuda cedar 문서)
+```
+
+**Vector RAG 답변 (불완전):**
+```
+제공된 문서는 버뮤다 슬루프의 특성을 설명하지만,
+다른 선박과 비교하여 왜 특별히 높이 평가되는지에 대한
+구체적인 이유는 명시되어 있지 않습니다.
+```
+
+## Multi-hop 추론이 필요한 질문 유형
+
+GraphRAG가 특히 효과적인 질문 패턴:
+
+**브릿지 질문 (Bridge Question):**
+```
+Q: "A가 설립한 기관의 현재 수장은?"
+경로: A 문서 → 설립 기관 문서 → 현재 수장 정보
+```
+
+**비교 질문 (Comparison Question):**
+```
+Q: "X와 Y 중 누가 먼저 태어났나?"
+경로: X 문서 (생년) + Y 문서 (생년) → 비교
+```
+
+**관계 체인 질문 (Relation Chain):**
+```
+Q: "A의 감독이 연출한 다른 영화는?"
+경로: A 문서 → 감독 문서 → 감독의 다른 작품 목록
+```
+
+## 성능 최적화 팁
+
+```python
+# 1. start_k 조정: 시작점을 넓게 잡으면 더 많은 문서 커버
+retriever = GraphRetriever(
+    store=store,
+    edges=[("mentions", "$id"), ("entities", "entities")],
+    strategy=Eager(select_k=50, start_k=10, max_depth=2),  # start_k 증가
+)
+
+# 2. max_depth 조정: 깊을수록 관련성 낮아지지만 multi-hop 커버
+# 일반적으로 2~3이 적합, 4 이상은 노이즈 증가
+
+# 3. entities 엣지의 한계: 너무 일반적인 엔티티("the", "United States" 등)는
+#    거의 모든 문서를 연결하여 그래프가 너무 조밀해질 수 있음
+# → SpacyNERTransformer의 exclude_labels로 제외
+NER_TRANSFORMER = SpacyNERTransformer(
+    exclude_labels={"CARDINAL", "MONEY", "QUANTITY", "TIME", "PERCENT", "ORDINAL", "DATE"},
+)
+```
+
+## 정리
+
+| 항목 | Vector RAG | GraphRAG (Multi-hop) |
+|------|-----------|---------------------|
+| **탐색 방식** | 단일 쿼리 유사도 검색 | 문서 연결 따라 다단계 탐색 |
+| **Multi-hop** | 불가 | 가능 (max_depth 설정) |
+| **관련 문서 발견** | 직접 관련만 | 간접 관련도 발견 |
+| **비용** | 낮음 | 중간 (여러 문서 검색) |
+
+**핵심 엣지 패턴:**
+```python
+edges=[
+    ("mentions", "$id"),      # 명시적 참조 (하이퍼링크)
+    ("entities", "entities"), # 공통 엔티티 (암묵적 연결)
+]
+```
+
+다음 파일에서는 비구조화 문서를 그래프로 변환하는 방법을 살펴본다.

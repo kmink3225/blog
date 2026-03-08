@@ -1,0 +1,311 @@
+---
+title: "하이브리드 검색: 벡터 + Cypher 탐색"
+subtitle: "의미적 유사도 검색과 그래프 구조 탐색을 결합한 Neo4j GraphRAG"
+description: |
+  Neo4j의 벡터 유사도 검색과 Cypher 그래프 탐색을 결합하여
+  더 정확하고 풍부한 컨텍스트를 검색하는 하이브리드 방식을 구현한다.
+  VectorCypherRetriever, GraphCypherQAChain, Neo4jVector의 retrieval_query를 활용한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+  - Neo4j
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# 하이브리드 검색: 벡터 + Cypher 탐색
+
+## 두 검색 방식의 한계와 보완
+
+**벡터 검색만:**
+```
+질의: "Tesla 설립자"
+→ "Elon Musk founded Tesla" 문서 발견 (좋음)
+→ Tesla의 현재 CEO, 본사 위치 등은 별도 검색 필요
+```
+
+**Cypher만:**
+```
+MATCH (c:Company {name: 'Tesla'})-[r]->(n) RETURN n
+→ Tesla와 직접 연결된 모든 것 반환 (정확하지만 질의 의도 반영 어려움)
+```
+
+**하이브리드:**
+```
+1. 벡터 검색으로 관련 노드 찾기 (Tesla, Elon Musk)
+2. 찾은 노드에서 Cypher로 관련 그래프 탐색 (설립자, CEO, 위치 등)
+3. 풍부한 컨텍스트 반환
+```
+
+---
+
+## 방법 1: VectorCypherRetriever (neo4j-graphrag)
+
+벡터 검색으로 초기 노드를 찾고, 각 노드에서 Cypher로 추가 정보를 수집한다.
+
+```python
+import neo4j
+from neo4j_graphrag.retrievers import VectorCypherRetriever
+from neo4j_graphrag.embeddings import OpenAIEmbeddings
+
+driver = neo4j.GraphDatabase.driver(
+    "bolt://localhost:7687", auth=("neo4j", "password")
+)
+embedder = OpenAIEmbeddings(model="text-embedding-3-small")
+
+# Cypher 쿼리: 벡터 검색으로 찾은 노드(node)에서 추가 탐색
+# $node 는 벡터 검색으로 발견된 각 노드를 나타냄
+retrieval_query = """
+MATCH (node)-[:FOUNDED|WORKS_AT|LOCATED_IN]-(related)
+RETURN
+    node.text AS text,
+    node.id AS entity,
+    collect(related.id) AS related_entities,
+    score
+ORDER BY score DESC
+"""
+
+retriever = VectorCypherRetriever(
+    driver=driver,
+    index_name="document_embeddings",
+    retrieval_query=retrieval_query,
+    embedder=embedder,
+)
+
+results = retriever.search(
+    query_text="Who founded Tesla and where is it located?",
+    top_k=5,
+)
+
+for item in results.items:
+    print(item.content)
+```
+
+---
+
+## 방법 2: Neo4jVector의 retrieval_query
+
+LangChain의 `Neo4jVector`에서 벡터 검색 결과를 확장하는 Cypher를 지정한다.
+
+```python
+from langchain_neo4j import Neo4jVector
+from langchain_openai import OpenAIEmbeddings
+
+# retrieval_query: 벡터 검색으로 찾은 node에 대해 추가 그래프 탐색
+# node: 벡터 검색으로 발견된 노드
+# score: 코사인 유사도 점수
+retrieval_query = """
+MATCH (node)-[:FOUNDED|WORKS_AT]->(company:Company)
+OPTIONAL MATCH (company)-[:LOCATED_IN]->(location:Location)
+RETURN
+    node.text AS text,
+    {
+        company: company.name,
+        location: location.name,
+        score: score
+    } AS metadata
+"""
+
+vector_store = Neo4jVector.from_existing_index(
+    embedding=OpenAIEmbeddings(model="text-embedding-3-small"),
+    url="bolt://localhost:7687",
+    username="neo4j",
+    password="password",
+    index_name="document_embeddings",
+    retrieval_query=retrieval_query,  # 핵심: 벡터 검색 후 추가 탐색
+)
+
+results = vector_store.similarity_search("Tesla headquarters", k=5)
+for doc in results:
+    print(doc.page_content)
+    print(doc.metadata)
+```
+
+---
+
+## 방법 3: GraphCypherQAChain (Text2Cypher)
+
+자연어 질의를 Cypher로 자동 변환하여 Neo4j에서 실행한다.
+
+```python
+from langchain_neo4j import Neo4jGraph, GraphCypherQAChain
+from langchain_openai import ChatOpenAI
+
+graph = Neo4jGraph(
+    url="bolt://localhost:7687",
+    username="neo4j",
+    password="password",
+)
+graph.refresh_schema()
+
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+chain = GraphCypherQAChain.from_llm(
+    llm=llm,
+    graph=graph,
+    verbose=True,          # 생성된 Cypher 쿼리 출력
+    validate_cypher=True,  # 실행 전 문법 검증
+    top_k=10,              # 반환할 최대 결과 수
+)
+
+result = chain.invoke("Who founded Tesla and what year?")
+print(result["result"])
+```
+
+**실행 로그 (verbose=True):**
+```
+Generated Cypher:
+MATCH (p:Person)-[r:FOUNDED]->(c:Company {name: 'Tesla'})
+RETURN p.name AS founder, r.year AS year
+
+Full Context:
+[{'founder': 'Elon Musk', 'year': 2003}]
+
+Final answer:
+Tesla was founded by Elon Musk in 2003.
+```
+
+---
+
+## 방법 4: 수동 하이브리드 파이프라인
+
+벡터 검색과 Cypher 탐색을 명시적으로 결합한 파이프라인.
+
+```python
+from langchain_neo4j import Neo4jVector, Neo4jGraph
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+
+embedder = OpenAIEmbeddings(model="text-embedding-3-small")
+graph = Neo4jGraph(...)
+vector_store = Neo4jVector.from_existing_index(
+    embedding=embedder,
+    index_name="document_embeddings",
+)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+def hybrid_search(query: str, k: int = 5) -> str:
+    """벡터 검색 결과를 Cypher로 확장하여 컨텍스트 구성."""
+
+    # Step 1: 벡터 검색으로 초기 관련 문서 탐색
+    vector_results = vector_store.similarity_search(query, k=k)
+    entity_ids = [
+        doc.metadata.get("id")
+        for doc in vector_results
+        if doc.metadata.get("id")
+    ]
+
+    # Step 2: 발견된 엔티티들의 관계 Cypher로 탐색
+    context_parts = []
+
+    for entity_id in entity_ids[:3]:  # 상위 3개만
+        graph_context = graph.query("""
+        MATCH (n {id: $id})-[r]-(related)
+        RETURN n.id AS entity,
+               type(r) AS relation,
+               related.id AS related,
+               related.description AS description
+        LIMIT 10
+        """, params={"id": entity_id})
+
+        for row in graph_context:
+            context_parts.append(
+                f"{row['entity']} -[{row['relation']}]-> {row['related']}"
+                + (f" ({row['description']})" if row.get('description') else "")
+            )
+
+    # Step 3: 벡터 검색 텍스트 + 그래프 컨텍스트 결합
+    vector_texts = "\n".join(doc.page_content for doc in vector_results)
+    graph_text = "\n".join(context_parts)
+
+    return f"""
+=== 관련 문서 ===
+{vector_texts}
+
+=== 그래프 관계 ===
+{graph_text}
+"""
+
+PROMPT = PromptTemplate.from_template("""
+다음 컨텍스트를 바탕으로 질문에 답하세요.
+
+질문: {question}
+
+컨텍스트:
+{context}
+""")
+
+chain = (
+    {
+        "question": RunnablePassthrough(),
+        "context": lambda q: hybrid_search(q),
+    }
+    | PROMPT
+    | llm
+)
+
+result = chain.invoke("Where is Tesla headquartered and who founded it?")
+print(result.content)
+```
+
+---
+
+## 하이브리드 검색 방식 비교
+
+| 방식 | 구현 난이도 | 유연성 | 적합한 경우 |
+|------|:---------:|:-----:|------------|
+| **VectorCypherRetriever** | 낮음 | 중간 | neo4j-graphrag 생태계 사용 시 |
+| **retrieval_query** | 중간 | 높음 | LangChain 기반, Cypher 커스텀 필요 |
+| **GraphCypherQAChain** | 낮음 | 낮음 | 간단한 자연어 → Cypher 변환 |
+| **수동 파이프라인** | 높음 | 최고 | 완전한 제어 필요 시 |
+
+---
+
+## 실전 팁: 좋은 retrieval_query 작성법
+
+```python
+# 나쁜 예: 탐색 범위 무제한
+retrieval_query = """
+MATCH (node)-[*1..5]-(related)
+RETURN node.text, collect(related) AS context, score
+"""
+# → 너무 많은 데이터, 느림
+
+# 좋은 예: 관련성 높은 관계만, 깊이 제한
+retrieval_query = """
+MATCH (node)
+OPTIONAL MATCH (node)-[:FOUNDED|WORKS_AT]->(company:Company)
+OPTIONAL MATCH (company)-[:LOCATED_IN]->(location:Location)
+RETURN
+    node.text AS text,
+    company.name AS company,
+    location.name AS location,
+    score
+LIMIT 10
+"""
+# → 필요한 관계만, 빠름
+```
+
+---
+
+## 정리
+
+```
+하이브리드 검색 = 벡터 유사도(의미) + Cypher(구조)
+
+선택지:
+  VectorCypherRetriever  ← neo4j-graphrag 표준 방식
+  retrieval_query        ← LangChain 커스텀 탐색
+  GraphCypherQAChain     ← 자연어 → Cypher 자동 변환
+  수동 파이프라인        ← 완전한 제어
+
+핵심 아이디어:
+  벡터 검색으로 "어디서 시작할지" 결정
+  Cypher로 "어디까지 탐색할지" 결정
+```
+
+다음 파일에서는 GDS를 사용해 전체 그래프에서 커뮤니티를 감지한다.

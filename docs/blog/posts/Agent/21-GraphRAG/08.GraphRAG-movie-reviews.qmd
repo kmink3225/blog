@@ -1,0 +1,300 @@
+---
+title: "실전 예제 1: Movie Reviews GraphRAG"
+subtitle: "리뷰-영화 메타데이터 연결로 더 풍부한 RAG 구현하기"
+description: |
+  Rotten Tomatoes 영화 리뷰 데이터를 활용한 GraphRAG 실전 예제.
+  리뷰 문서와 영화 정보 문서를 `reviewed_movie_id → movie_id` 엣지로 연결하여,
+  리뷰 검색 시 자동으로 영화 상세 정보도 함께 가져오는 시스템을 구축한다.
+  서로 다른 타입의 문서를 하나의 그래프로 연결하는 Heterogeneous Graph 패턴을 배운다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# 실전 예제 1: Movie Reviews GraphRAG
+
+## 문제 정의
+
+**상황**: Rotten Tomatoes 영화 리뷰 데이터를 RAG로 검색하고 싶다.
+
+**기존 Vector RAG의 한계:**
+- "좋은 가족 영화 추천해줘"로 리뷰를 검색하면 리뷰 텍스트만 나옴
+- 해당 영화의 상세 정보(감독, 장르, 박스오피스, 런타임 등)는 별도로 조회해야 함
+- 리뷰와 영화 정보가 분리되어 있어 컨텍스트 조합이 어려움
+
+**GraphRAG로 해결:**
+- 리뷰 문서의 `reviewed_movie_id`와 영화 문서의 `movie_id`를 엣지로 연결
+- 리뷰 검색 → 자동으로 해당 영화 정보도 함께 반환
+- 리뷰 + 영화 정보를 통합하여 LLM에 제공 → 더 풍부한 답변
+
+## 데이터 구조
+
+두 종류의 문서가 있다.
+
+**리뷰 문서 (`doc_type: "movie_review"`)**:
+```python
+Document(
+    page_content="captures the family's droll humor with just the right mixture...",
+    metadata={
+        "doc_type": "movie_review",
+        "reviewed_movie_id": "addams_family",  # ← 이 필드가 엣지 출발점
+        "reviewId": "2644238",
+        "criticName": "James Kendrick",
+        "isTopCritic": "False",
+        "scoreSentiment": "POSITIVE",
+        "publicatioName": "Q Network Film Desk",
+    }
+)
+```
+
+**영화 문서 (`doc_type: "movie_info"`)**:
+```python
+Document(
+    id="addams_family",          # ← 이 ID가 엣지 도착점
+    page_content="The Addams Family",
+    metadata={
+        "doc_type": "movie_info",
+        "movie_id": "addams_family",  # ← 이 필드가 엣지 도착점
+        "title": "The Addams Family",
+        "director": "Barry Sonnenfeld",
+        "genre": "Comedy",
+        "boxOffice": "$111.3M",
+        "runtimeMinutes": "99",
+        "tomatoMeter": "67",
+        "audienceScore": "66",
+    }
+)
+```
+
+## 데이터 준비
+
+```python
+import pandas as pd
+from io import StringIO
+from langchain_core.documents import Document
+
+# CSV 데이터 로드 (실제로는 파일에서 로드)
+reviews_data = pd.read_csv("rotten_tomatoes_movie_reviews.csv")
+movies_data = pd.read_csv("rotten_tomatoes_movies.csv")
+
+# 컬럼 이름 정리 (엣지 연결에 사용할 필드명 명확화)
+reviews_data = reviews_data.rename(columns={"id": "reviewed_movie_id"})
+movies_data = movies_data.rename(columns={"id": "movie_id"})
+
+# Document 객체로 변환
+documents = []
+
+# 영화 정보 문서
+for _, row in movies_data.iterrows():
+    doc = Document(
+        id=row["movie_id"],                    # movie_id를 문서 ID로 사용
+        page_content=str(row["title"]),
+        metadata={
+            **row.fillna("").astype(str).to_dict(),
+            "doc_type": "movie_info",
+        }
+    )
+    documents.append(doc)
+
+# 리뷰 문서
+for _, row in reviews_data.iterrows():
+    review_text = str(row["reviewText"])
+    doc = Document(
+        page_content=review_text,
+        metadata={
+            **row.drop("reviewText").fillna("").astype(str).to_dict(),
+            "doc_type": "movie_review",
+        }
+    )
+    documents.append(doc)
+
+print(f"총 {len(documents)}개 문서 ({len(movies_data)}개 영화 + {len(reviews_data)}개 리뷰)")
+```
+
+## GraphRetriever 구성
+
+핵심 엣지: `reviewed_movie_id → movie_id`
+
+```python
+from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_openai import OpenAIEmbeddings
+from graph_retriever.strategies import Eager
+from langchain_graph_retriever import GraphRetriever
+
+# 벡터 스토어 구성
+vectorstore = InMemoryVectorStore(OpenAIEmbeddings())
+vectorstore.add_documents(documents)
+
+retriever = GraphRetriever(
+    store=vectorstore,
+    edges=[("reviewed_movie_id", "movie_id")],  # 리뷰 → 영화 연결
+    strategy=Eager(
+        start_k=10,    # 벡터 검색으로 리뷰 10개 찾기
+        adjacent_k=10, # 각 리뷰에서 1개 영화 연결
+        select_k=100,  # 최대 100개 문서 반환
+        max_depth=1,   # 리뷰(depth=0) → 영화(depth=1)로 1단계만
+    ),
+)
+```
+
+**왜 `max_depth=1`인가?**
+- depth=0: 벡터 검색으로 찾은 리뷰
+- depth=1: 리뷰의 `reviewed_movie_id`로 찾은 영화 정보
+- 영화 정보 문서에는 outgoing 엣지가 없으므로 depth=2는 의미 없음
+
+## 쿼리 실행
+
+```python
+query = "What are some good family movies?"
+
+results = retriever.invoke(query)
+
+# 결과를 타입별로 분리
+reviews = [r for r in results if r.metadata.get("doc_type") == "movie_review"]
+movies = [r for r in results if r.metadata.get("doc_type") == "movie_info"]
+
+print(f"찾은 리뷰: {len(reviews)}개")
+print(f"연결된 영화: {len(movies)}개")
+print()
+
+for r in reviews[:3]:
+    print(f"[리뷰] {r.metadata['reviewed_movie_id']}")
+    print(f"  {r.page_content[:100]}...")
+    print()
+
+for m in movies[:3]:
+    print(f"[영화] {m.metadata['title']}")
+    print(f"  감독: {m.metadata.get('director', 'N/A')}")
+    print(f"  장르: {m.metadata.get('genre', 'N/A')}")
+    print(f"  Tomatometer: {m.metadata.get('tomatoMeter', 'N/A')}%")
+    print()
+```
+
+## 결과 컴파일 및 LLM 답변 생성
+
+```python
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+
+MODEL = ChatOpenAI(model="gpt-4o", temperature=0)
+
+# 영화별로 리뷰를 정리
+compiled = {}
+
+for doc in results:
+    if doc.metadata.get("doc_type") == "movie_info":
+        mid = doc.metadata["movie_id"]
+        compiled[mid] = {
+            "title": doc.metadata["title"],
+            "genre": doc.metadata.get("genre", ""),
+            "director": doc.metadata.get("director", ""),
+            "tomatoMeter": doc.metadata.get("tomatoMeter", ""),
+            "reviews": [],
+        }
+
+for doc in results:
+    if doc.metadata.get("doc_type") == "movie_review":
+        mid = doc.metadata["reviewed_movie_id"]
+        if mid in compiled:
+            compiled[mid]["reviews"].append(doc.page_content)
+
+# LLM용 텍스트 포맷
+context = ""
+for mid, info in compiled.items():
+    context += f"\n\n**{info['title']}** (장르: {info['genre']}, 감독: {info['director']})\n"
+    context += f"Tomatometer: {info['tomatoMeter']}%\n"
+    for review in info["reviews"][:2]:  # 리뷰 최대 2개
+        context += f"- {review[:200]}\n"
+
+PROMPT = PromptTemplate.from_template("""
+아래 영화 정보와 리뷰를 바탕으로 질문에 답하세요.
+
+질문: {question}
+
+영화 정보와 리뷰:
+{context}
+""")
+
+response = MODEL.invoke(
+    PROMPT.format(question=query, context=context)
+)
+print(response.content)
+```
+
+## 그래프 시각화
+
+```python
+import networkx as nx
+import matplotlib.pyplot as plt
+from langchain_graph_retriever.document_graph import create_graph
+
+# 탐색된 문서들의 관계 그래프 생성
+doc_graph = create_graph(
+    documents=results,
+    edges=retriever.edges,
+)
+
+# 노드 색상: 리뷰=파란색, 영화=주황색
+colors = []
+for node_id in doc_graph.nodes():
+    node_data = doc_graph.nodes[node_id]
+    if node_data.get("doc_type") == "movie_info":
+        colors.append("orange")
+    else:
+        colors.append("lightblue")
+
+plt.figure(figsize=(16, 10))
+pos = nx.spring_layout(doc_graph, k=2)
+nx.draw(
+    doc_graph,
+    pos=pos,
+    node_color=colors,
+    with_labels=True,
+    font_size=7,
+    node_size=1500,
+)
+plt.title("Movie Reviews GraphRAG: 리뷰(파란색) → 영화(주황색)")
+plt.show()
+```
+
+## 핵심 패턴: Heterogeneous Graph
+
+이 예제의 핵심 설계 패턴은 **서로 다른 타입의 문서를 하나의 그래프로 연결**하는 것이다.
+
+```
+[리뷰 문서] ──reviewed_movie_id → movie_id──→ [영화 문서]
+ 타입: movie_review                              타입: movie_info
+ 내용: 리뷰 텍스트                               내용: 영화 제목
+ 엣지 출발: reviewed_movie_id                    엣지 도착: movie_id
+```
+
+이 패턴은 실무에서 매우 자주 쓰인다:
+
+| 도메인 | 문서 타입 A | 문서 타입 B | 연결 필드 |
+|--------|-----------|-----------|----------|
+| **영화 리뷰** | 리뷰 | 영화 정보 | `reviewed_movie_id → movie_id` |
+| **뉴스** | 기사 | 인물/기관 프로필 | `mentioned_entity → entity_id` |
+| **법률** | 판례 | 법조항 | `references_law → law_id` |
+| **제품** | 리뷰 | 제품 스펙 | `product_id → product_id` |
+| **코드** | 함수 설명 | API 레퍼런스 | `api_ref → api_id` |
+
+## 정리
+
+```python
+# 핵심 코드 요약
+retriever = GraphRetriever(
+    store=vectorstore,
+    edges=[("reviewed_movie_id", "movie_id")],  # 다른 필드 간 연결 가능
+    strategy=Eager(start_k=10, select_k=100, max_depth=1),
+)
+
+results = retriever.invoke("좋은 가족 영화 추천해줘")
+# → 리뷰 문서(벡터 검색) + 영화 정보(메타데이터 연결) 함께 반환
+```
+
+다음 파일에서는 문서 크로스레퍼런스를 활용한 코드 생성 개선 예제를 살펴본다.

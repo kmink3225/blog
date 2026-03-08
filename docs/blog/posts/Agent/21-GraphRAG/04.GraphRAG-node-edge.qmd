@@ -1,0 +1,262 @@
+---
+title: "Node & Edge 완전 이해"
+subtitle: "GraphRAG 탐색의 기본 단위: 노드 구조와 엣지 타입 심층 분석"
+description: |
+  langchain-graph-retriever의 핵심 자료구조인 Node와 Edge를 깊이 이해한다.
+  Node는 탐색 중인 문서를 나타내며, depth/similarity_score/incoming&outgoing_edges를 추적한다.
+  Edge는 MetadataEdge(메타데이터 값으로 연결)와 IdEdge(ID로 직접 연결) 두 가지 타입이 있다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Node & Edge 완전 이해
+
+## Node: 탐색 중인 문서의 표현
+
+LangChain의 `Document`가 단순히 텍스트+메타데이터를 담는다면,
+`Node`는 **그래프 탐색 중의 상태 정보**를 추가로 담는다.
+
+### Node 구조
+
+```python
+@dataclass
+class Node:
+    id: str                        # 문서 고유 ID
+    content: str                   # 문서 텍스트 (page_content)
+    depth: int                     # 탐색 깊이 (시작점=0, 1hop=1, ...)
+    similarity_score: float        # 질의와의 코사인 유사도
+    embedding: list[float]         # 문서 임베딩 벡터
+    metadata: dict[str, Any]       # 원본 메타데이터 (읽기 전용)
+    incoming_edges: set[Edge]      # 이 노드로 들어오는 엣지
+    outgoing_edges: set[Edge]      # 이 노드에서 나가는 엣지
+    extra_metadata: dict[str, Any] # 탐색 중 추가되는 메타데이터 (MMR 스코어 등)
+```
+
+### depth로 탐색 경로 파악
+
+```python
+results = retriever.invoke("카피바라 주변 포유류")
+
+for doc in results:
+    depth = doc.metadata.get("_depth", 0)  # 탐색 결과에 depth 정보 포함
+    print(f"depth={depth} | {doc.id}")
+
+# 출력:
+# depth=0 | capybara       ← 벡터 검색으로 찾은 시작점
+# depth=1 | alpaca         ← capybara의 origin 엣지로 연결
+# depth=1 | llama          ← capybara의 origin 엣지로 연결
+# depth=2 | vicuna         ← alpaca의 origin 엣지로 연결
+```
+
+### similarity_score로 관련성 파악
+
+```python
+for doc in results:
+    score = doc.metadata.get("_similarity_score", 0)
+    print(f"score={score:.3f} | {doc.id}")
+
+# depth=0인 capybara가 가장 높은 유사도를 가짐
+# depth가 깊어질수록 유사도가 낮아지는 경향
+```
+
+## Edge: 노드 간 연결 방식
+
+엣지는 "어떤 조건으로 두 노드를 연결할 것인가"를 정의한다.
+두 가지 타입이 있다.
+
+### MetadataEdge: 메타데이터 값으로 연결
+
+가장 흔하게 사용하는 엣지 타입이다.
+
+```python
+@dataclass(frozen=True)
+class MetadataEdge(Edge):
+    incoming_field: str  # 연결 대상 노드에서 찾을 필드명
+    value: Any           # 매칭할 값
+```
+
+**동작 원리:**
+
+```python
+# capybara 노드의 메타데이터
+capybara.metadata = {
+    "origin": "south america",
+    "habitat": "wetland",
+    "keywords": ["largest rodent", "semi-aquatic"],
+}
+
+# edges 설정: [("origin", "origin"), ("habitat", "habitat")]
+# → capybara에서 생성되는 outgoing MetadataEdge:
+outgoing_edges = {
+    MetadataEdge(incoming_field="origin", value="south america"),
+    MetadataEdge(incoming_field="habitat", value="wetland"),
+}
+
+# 이 엣지로 탐색: metadata["origin"] == "south america"인 문서 검색
+# → alpaca, llama, jaguar 등 발견
+```
+
+**edges 파라미터의 두 가지 표현법:**
+
+```python
+# 방법 1: 간단한 튜플 (같은 필드명끼리 연결)
+edges = [("origin", "origin"), ("habitat", "habitat")]
+
+# 방법 2: MetadataEdgeFunction 직접 사용 (다른 필드명 연결 시)
+from graph_retriever.edges import MetadataEdgeFunction
+
+# "mentions" 필드의 값이 다른 문서의 "id"와 일치하면 연결
+edges = [MetadataEdgeFunction(outgoing_field="mentions", incoming_field="id")]
+```
+
+### IdEdge: ID로 직접 연결
+
+문서 메타데이터에 다른 문서의 ID가 명시적으로 기록된 경우 사용한다.
+
+```python
+@dataclass(frozen=True)
+class IdEdge(Edge):
+    id: str  # 연결할 문서의 ID
+```
+
+**사용 예시: Wikipedia 문서 상호 참조**
+
+```python
+# Wikipedia 문서 예시
+{
+    "id": "python_language",
+    "text": "Python is a high-level programming language...",
+    "metadata": {
+        "mentions": ["guido_van_rossum", "cpython", "pypy"]
+        # 이 문서가 참조하는 다른 문서의 ID
+    }
+}
+
+# edges 설정: mentions 필드의 값을 IdEdge로 변환
+from graph_retriever.edges import MetadataEdgeFunction, IdEdge
+
+def mentions_to_id_edges(content):
+    mentions = content.metadata.get("mentions", [])
+    outgoing = {IdEdge(id=mentioned_id) for mentioned_id in mentions}
+    return Edges(incoming=set(), outgoing=outgoing)
+```
+
+### MetadataEdge vs IdEdge: 언제 무엇을 쓸까
+
+| 기준 | MetadataEdge | IdEdge |
+|------|-------------|--------|
+| **연결 방식** | 메타데이터 값 일치 | 문서 ID 직접 참조 |
+| **방향성** | 양방향 (같은 값이면 서로 연결) | 단방향 (A→B 명시) |
+| **설계 방식** | 공통 속성으로 자동 연결 | 명시적 참조로 연결 |
+| **적합한 데이터** | 카테고리, 태그, 원산지 등 | 인용, 링크, 부모-자식 관계 |
+| **예시** | 같은 habitat의 동물들 | Wikipedia 문서 간 링크 |
+
+## Edges 컨테이너
+
+`Edges`는 하나의 노드에서 나가고 들어오는 모든 엣지를 담는다.
+
+```python
+@dataclass
+class Edges:
+    incoming: set[Edge]  # 이 노드로 들어오는 엣지 (다른 노드가 이 노드를 참조)
+    outgoing: set[Edge]  # 이 노드에서 나가는 엣지 (이 노드가 다른 노드를 참조)
+```
+
+**방향 이해:**
+
+```python
+# alpaca 노드의 Edges
+Edges(
+    incoming={
+        MetadataEdge("origin", "south america"),  # capybara가 origin="south america"로 alpaca를 가리킴
+        MetadataEdge("type", "mammal"),            # 다른 포유류들이 이 노드를 가리킴
+    },
+    outgoing={
+        MetadataEdge("origin", "south america"),  # alpaca가 origin="south america"로 다른 노드를 가리킴
+        MetadataEdge("habitat", "grassland"),      # alpaca가 habitat="grassland"로 다른 노드를 가리킴
+        MetadataEdge("keywords", "wool"),          # keywords 매칭으로 연결
+    }
+)
+```
+
+## 실제 엣지 설계 예시
+
+### 예시 1: 영화-리뷰 데이터
+
+```python
+# 리뷰 문서
+{
+    "id": "review_001",
+    "text": "이 영화는 정말 감동적이었다...",
+    "metadata": {
+        "movie_id": "the_godfather",   # 어떤 영화의 리뷰인가?
+        "sentiment": "positive",
+        "genre": "drama",
+    }
+}
+
+# 영화 문서
+{
+    "id": "the_godfather",
+    "text": "대부는 1972년 개봉한 갱스터 영화...",
+    "metadata": {
+        "genre": "drama",
+        "director": "francis_coppola",
+    }
+}
+
+# 엣지 설계:
+# - 리뷰의 movie_id → 영화의 id (IdEdge 활용)
+# - 같은 genre 문서끼리 연결 (MetadataEdge 활용)
+edges = [
+    MetadataEdgeFunction(outgoing_field="movie_id", incoming_field="id"),
+    ("genre", "genre"),
+]
+```
+
+### 예시 2: 코드-문서 데이터
+
+```python
+# 코드 문서
+{
+    "id": "langchain_llm_docs",
+    "text": "LangChain LLM 사용법...",
+    "metadata": {
+        "library": "langchain",
+        "related_docs": ["langchain_chain_docs", "langchain_prompt_docs"],
+    }
+}
+
+# 엣지: related_docs에 있는 ID를 직접 참조
+edges = [
+    MetadataEdgeFunction(outgoing_field="related_docs", incoming_field="id"),
+    ("library", "library"),  # 같은 라이브러리 문서끼리 연결
+]
+```
+
+## 정리
+
+```
+Node = LangChain Document + 탐색 상태 정보
+  - depth: 시작점에서 몇 hop 떨어졌는가
+  - similarity_score: 질의와 얼마나 유사한가
+  - incoming/outgoing_edges: 어떤 엣지로 연결되었는가
+
+Edge 타입:
+  MetadataEdge("habitat", "wetland")
+    → metadata["habitat"] == "wetland"인 노드 연결
+  IdEdge("article_001")
+    → id == "article_001"인 노드 직접 연결
+
+edges 파라미터:
+  [("field", "field")]          ← 같은 필드 값으로 연결 (단순)
+  [MetadataEdgeFunction(...)]   ← 다른 필드 간 연결 (유연)
+```
+
+다음 파일에서는 탐색 전략(Eager, MMR, Scored)을 비교한다.

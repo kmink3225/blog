@@ -1,0 +1,267 @@
+---
+title: "Traversal Strategies: Eager, MMR, Scored"
+subtitle: "그래프 탐색 전략 비교와 파라미터 완전 가이드"
+description: |
+  langchain-graph-retriever의 세 가지 traversal strategy를 비교한다.
+  Eager(BFS)는 발견된 모든 노드를 즉시 탐색, MMR은 관련성+다양성 균형,
+  Scored는 커스텀 스코어 기반 선택이다. 각 전략의 파라미터와 적합한 사용 시나리오를 정리한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Traversal Strategies: Eager, MMR, Scored
+
+## Strategy란
+
+Strategy는 탐색 중 "어떤 노드를 선택하고, 어떤 노드를 다음 탐색으로 넘길 것인가"를 제어한다.
+
+### 공통 파라미터 (모든 Strategy에서 사용)
+
+```python
+Strategy(
+    select_k    = 5,    # 최종 반환할 문서 수 (기본: 5)
+    start_k     = 4,    # 벡터 검색으로 시작할 문서 수 (기본: 4)
+    adjacent_k  = 10,   # 각 엣지당 인접 문서 검색 수 (기본: 10)
+    max_depth   = None, # 최대 탐색 깊이 (None = 제한 없음)
+    max_traverse= None, # 최대 traversal 횟수 (None = 제한 없음)
+)
+```
+
+**파라미터 간 관계:**
+
+```
+start_k = 1이면:
+  벡터 검색 → 1개 시작 노드
+  → depth=1에서 adjacent_k=10개씩 엣지별 탐색
+  → depth=2에서 또 adjacent_k=10개씩 탐색
+  → select_k=10이 채워지면 중단
+```
+
+---
+
+## Eager: 발견 즉시 모두 탐색 (BFS)
+
+```python
+from graph_retriever.strategies import Eager
+
+strategy = Eager(
+    select_k=10,
+    start_k=1,
+    max_depth=2,
+)
+```
+
+### 동작 방식
+
+발견된 노드를 즉시 **선택(select)** 하고 **다음 탐색(traverse)** 대상으로 추가한다.
+
+```python
+# Eager의 핵심 로직
+def iteration(self, nodes, tracker):
+    tracker.select_and_traverse(nodes)  # 선택 + 탐색 동시에
+```
+
+### 탐색 과정 시각화
+
+```
+질의 → [capybara] (depth=0, score=0.92)
+
+depth=1 탐색:
+  capybara.origin="south america" → [alpaca, llama, jaguar, anaconda]
+  capybara.habitat="wetland"      → [hippo, crocodile]
+  → 모두 즉시 선택 + 다음 탐색 대상 추가
+
+depth=2 탐색:
+  alpaca.origin="south america" → [vicuna, guanaco]  (이미 방문한 건 제외)
+  llama.habitat="grassland"     → [bison, pronghorn]
+  → select_k=10이 되면 중단
+
+최종: [capybara, alpaca, llama, jaguar, anaconda, hippo, crocodile, vicuna, bison, pronghorn]
+```
+
+### 특징
+
+- **장점**: 구현 단순, 탐색 경로가 예측 가능, 모든 관련 노드를 빠짐없이 탐색
+- **단점**: 비슷한 노드가 많이 선택될 수 있음 (다양성 부족)
+- **적합한 경우**: 특정 엔티티 주변의 문서를 빠짐없이 수집할 때
+
+---
+
+## MMR: 관련성 + 다양성 균형
+
+```python
+from graph_retriever.strategies import Mmr
+
+strategy = Mmr(
+    select_k=10,
+    start_k=4,
+    max_depth=2,
+    lambda_mult=0.5,      # 0~1 (0=다양성, 1=관련성)
+    min_mmr_score=0.0,    # 이 스코어 이하 노드는 제외
+)
+```
+
+### MMR 스코어 공식
+
+$$\text{MMR score} = \lambda \cdot \text{similarity}(q, d) - (1-\lambda) \cdot \max_{d_i \in S} \text{similarity}(d, d_i)$$
+
+- $\lambda$ (`lambda_mult`): 0에 가까울수록 다양성 중시, 1에 가까울수록 관련성 중시
+- $\text{similarity}(q, d)$: 질의와 문서의 코사인 유사도
+- $\max_{d_i \in S} \text{similarity}(d, d_i)$: 이미 선택된 문서들과의 최대 유사도 (중복도)
+
+### 동작 과정
+
+```
+후보 노드 풀: [alpaca, llama, jaguar, capybara, anaconda, ...]
+
+1단계: capybara 선택 (가장 높은 MMR 스코어)
+  selected = {capybara}
+
+2단계: alpaca vs llama
+  alpaca:  MMR = 0.5 * sim(q, alpaca)  - 0.5 * sim(alpaca, capybara)
+  llama:   MMR = 0.5 * sim(q, llama)   - 0.5 * sim(llama,  capybara)
+  jaguar:  MMR = 0.5 * sim(q, jaguar)  - 0.5 * sim(jaguar, capybara)
+  → alpaca와 llama는 capybara와 비슷해서 중복도 높음
+  → jaguar가 더 다양해서 선택될 수 있음
+
+3단계: 이미 선택된 {capybara, jaguar} 기준으로 중복도 재계산
+  → alpaca, llama, anaconda 중 가장 다양한 것 선택
+```
+
+### lambda_mult 값별 동작
+
+```python
+# 관련성 우선 (Eager와 유사한 결과)
+strategy = Mmr(lambda_mult=0.9, select_k=10)
+
+# 균형 (기본)
+strategy = Mmr(lambda_mult=0.5, select_k=10)
+
+# 다양성 우선 (서로 다른 주제의 문서들 선택)
+strategy = Mmr(lambda_mult=0.1, select_k=10)
+```
+
+### 특징
+
+- **장점**: 비슷한 내용의 문서 중복 최소화, 다양한 관점 수집
+- **단점**: 계산 비용 높음 (매 선택마다 모든 후보와 코사인 유사도 계산)
+- **적합한 경우**: 요약, 보고서 생성 등 다양한 시각을 원할 때
+
+---
+
+## Scored: 커스텀 스코어 기반
+
+```python
+from graph_retriever.strategies import Scored
+
+strategy = Scored(
+    select_k=10,
+    start_k=4,
+    max_depth=2,
+)
+```
+
+Eager의 변형으로, 탐색된 노드를 `similarity_score`로 정렬하여 상위 노드만 선택한다.
+
+---
+
+## 세 Strategy 비교
+
+| 항목 | Eager | MMR | Scored |
+|------|-------|-----|--------|
+| **선택 기준** | 발견 순서 (BFS) | 관련성 + 다양성 | 유사도 스코어 |
+| **다양성** | 낮음 | 높음 | 중간 |
+| **계산 비용** | 낮음 | 높음 | 중간 |
+| **탐색 방식** | 너비 우선 | 점진적 선택 | 스코어 기반 |
+| **예측 가능성** | 높음 | 낮음 | 중간 |
+| **적합한 경우** | 완전 수집 | 요약/보고서 | 유사도 기반 랭킹 |
+
+---
+
+## 파라미터 튜닝 가이드
+
+### start_k: 시작점 수
+
+```python
+# 좁은 탐색: 가장 관련 있는 문서 1개에서 시작
+Eager(start_k=1, max_depth=3)
+
+# 넓은 탐색: 여러 시작점에서 동시에 탐색
+Eager(start_k=5, max_depth=1)
+```
+
+시작점이 적고 depth가 깊을수록 → 한 주제 깊이 탐색
+시작점이 많고 depth가 얕을수록 → 넓은 범위 탐색
+
+### max_depth: 탐색 깊이
+
+```python
+# 직접 연결된 문서만 (1 hop)
+Eager(max_depth=1)   # A → B
+
+# 친구의 친구까지 (2 hop)
+Eager(max_depth=2)   # A → B → C
+
+# 제한 없음 (select_k에 도달할 때까지)
+Eager(max_depth=None)
+```
+
+**일반적인 권장값**: `max_depth=2`
+(3 이상부터는 관련성이 급격히 낮아지고, 탐색 시간 증가)
+
+### adjacent_k: 엣지당 인접 문서 수
+
+```python
+# 각 엣지를 통해 검색할 후보 문서 수
+Eager(adjacent_k=5)   # 적은 후보 → 빠름
+Eager(adjacent_k=20)  # 많은 후보 → 느리지만 더 많은 옵션
+```
+
+### 런타임에 Strategy 변경
+
+```python
+# GraphRetriever 초기화 시 기본 strategy 설정
+retriever = GraphRetriever(
+    store=store,
+    edges=[("habitat", "habitat")],
+    strategy=Eager(select_k=10),
+)
+
+# invoke 시 override 가능
+results = retriever.invoke(
+    "카피바라 주변 동물",
+    config={"configurable": {"strategy": Mmr(select_k=5, lambda_mult=0.7)}}
+)
+```
+
+---
+
+## 시나리오별 추천 설정
+
+**시나리오 1: 특정 엔티티 완전 수집 (보험 상품 전체 조회)**
+```python
+Eager(select_k=50, start_k=1, max_depth=3)
+```
+
+**시나리오 2: 다양한 관점의 요약 (뉴스 기사 요약)**
+```python
+Mmr(select_k=10, start_k=3, max_depth=2, lambda_mult=0.5)
+```
+
+**시나리오 3: 빠른 프로토타이핑**
+```python
+Eager(select_k=5, start_k=1, max_depth=1)
+```
+
+**시나리오 4: Multi-hop 추론 (Wikipedia)**
+```python
+Eager(select_k=20, start_k=1, max_depth=4, adjacent_k=5)
+```
+
+다음 파일에서는 실제 벡터 스토어와 연결하는 Adapter를 살펴본다.

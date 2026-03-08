@@ -1,0 +1,366 @@
+---
+title: "GraphRAG 평가 방법론"
+subtitle: "Vector RAG와 GraphRAG 성능 비교 및 측정 전략"
+description: |
+  GraphRAG 시스템을 어떻게 평가할 것인가? Multi-hop QA 메트릭, 검색 품질 측정,
+  Vector RAG와의 성능 비교 방법을 다룬다. RAGAS 프레임워크 활용법과
+  GraphRAG 특화 평가 포인트(그래프 탐색 깊이, 연결 문서 수 등)를 정리한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# GraphRAG 평가 방법론
+
+## 왜 평가가 어려운가
+
+GraphRAG는 일반 Vector RAG보다 평가하기 어렵다.
+
+**Vector RAG 평가:**
+```
+질의 → 검색된 문서들 → LLM 답변 → 정답과 비교
+```
+
+**GraphRAG 평가의 추가 고려 사항:**
+```
+질의 → 그래프 탐색 → 검색된 문서들(다양한 타입) → LLM 답변
+       ↑ 탐색 경로도 평가 대상              ↑ 단순 정확도 이상의 메트릭 필요
+```
+
+## 평가 레이어
+
+GraphRAG 평가는 세 레이어로 나뉜다.
+
+```
+Layer 3: 최종 답변 품질    ← LLM 생성 답변의 정확도, 관련성
+Layer 2: 검색 품질         ← 올바른 문서를 찾았는가?
+Layer 1: 그래프 탐색 품질  ← 올바른 엣지로 연결됐는가?
+```
+
+---
+
+## Layer 1: 그래프 탐색 품질
+
+### 탐색 커버리지 측정
+
+```python
+results = retriever.invoke("질의")
+
+# 탐색 깊이별 문서 수
+depth_counts = {}
+for doc in results:
+    depth = doc.metadata.get("_depth", 0)
+    depth_counts[depth] = depth_counts.get(depth, 0) + 1
+
+print("depth별 문서 분포:")
+for depth, count in sorted(depth_counts.items()):
+    print(f"  depth={depth}: {count}개")
+
+# 출력:
+# depth=0: 3개  (벡터 검색 시작점)
+# depth=1: 8개  (엣지로 연결된 문서)
+# depth=2: 5개  (2-hop 탐색)
+```
+
+### 엣지 활용률 측정
+
+```python
+# 어떤 엣지가 실제로 사용됐는가?
+from langchain_graph_retriever.document_graph import create_graph
+import networkx as nx
+
+doc_graph = create_graph(results, edges=retriever.edges)
+
+print(f"노드 수: {doc_graph.number_of_nodes()}")
+print(f"엣지 수: {doc_graph.number_of_edges()}")
+print(f"평균 연결도: {nx.average_node_connectivity(doc_graph):.2f}")
+
+# 연결되지 않은 고립 노드 확인 (엣지 설계 문제 신호)
+isolated = list(nx.isolates(doc_graph))
+print(f"고립 노드: {len(isolated)}개")
+```
+
+---
+
+## Layer 2: 검색 품질
+
+### Precision & Recall (정답 문서 세트 필요)
+
+```python
+def evaluate_retrieval(retriever, test_cases):
+    """
+    test_cases = [
+        {
+            "query": "질의",
+            "relevant_doc_ids": ["doc_a", "doc_b", "doc_c"],  # 정답 문서 ID
+        },
+        ...
+    ]
+    """
+    results = []
+    for case in test_cases:
+        retrieved = retriever.invoke(case["query"])
+        retrieved_ids = {doc.id for doc in retrieved if doc.id}
+        relevant_ids = set(case["relevant_doc_ids"])
+
+        # Precision: 검색된 문서 중 관련 있는 비율
+        precision = len(retrieved_ids & relevant_ids) / len(retrieved_ids) if retrieved_ids else 0
+
+        # Recall: 관련 문서 중 검색된 비율
+        recall = len(retrieved_ids & relevant_ids) / len(relevant_ids) if relevant_ids else 0
+
+        # F1
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+
+        results.append({
+            "query": case["query"],
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        })
+
+    avg_precision = sum(r["precision"] for r in results) / len(results)
+    avg_recall = sum(r["recall"] for r in results) / len(results)
+    avg_f1 = sum(r["f1"] for r in results) / len(results)
+
+    print(f"평균 Precision: {avg_precision:.3f}")
+    print(f"평균 Recall:    {avg_recall:.3f}")
+    print(f"평균 F1:        {avg_f1:.3f}")
+
+    return results
+```
+
+### Multi-hop 특화 메트릭
+
+Multi-hop 질문에서는 탐색 경로가 올바른지도 중요하다.
+
+```python
+def evaluate_multihop(retriever, multihop_test_cases):
+    """
+    multihop_test_cases = [
+        {
+            "query": "A의 부모 회사는 어디인가?",
+            "hop1_ids": ["company_a_doc"],         # 1-hop 필수 문서
+            "hop2_ids": ["parent_company_doc"],    # 2-hop 필수 문서
+        },
+    ]
+    """
+    for case in multihop_test_cases:
+        retrieved = retriever.invoke(case["query"])
+
+        # depth별 문서 분리
+        by_depth = {}
+        for doc in retrieved:
+            d = doc.metadata.get("_depth", 0)
+            by_depth.setdefault(d, []).append(doc.id)
+
+        # hop1 문서가 depth=0에서 발견됐는가?
+        hop1_found = any(
+            doc_id in by_depth.get(0, [])
+            for doc_id in case.get("hop1_ids", [])
+        )
+
+        # hop2 문서가 depth=1 또는 depth=2에서 발견됐는가?
+        hop2_found = any(
+            doc_id in (by_depth.get(1, []) + by_depth.get(2, []))
+            for doc_id in case.get("hop2_ids", [])
+        )
+
+        print(f"Query: {case['query'][:50]}...")
+        print(f"  Hop1 문서 발견: {hop1_found}")
+        print(f"  Hop2 문서 발견: {hop2_found}")
+```
+
+---
+
+## Layer 3: 최종 답변 품질
+
+### RAGAS 프레임워크 활용
+
+```python
+from ragas import evaluate
+from ragas.metrics import (
+    faithfulness,       # 답변이 컨텍스트에 충실한가
+    answer_relevancy,   # 답변이 질문과 관련 있는가
+    context_precision,  # 검색된 컨텍스트의 정밀도
+    context_recall,     # 검색된 컨텍스트의 재현율
+)
+from datasets import Dataset
+
+def build_ragas_dataset(retriever, llm_chain, test_cases):
+    data = []
+    for case in test_cases:
+        retrieved = retriever.invoke(case["query"])
+        contexts = [doc.page_content for doc in retrieved]
+        answer = llm_chain.invoke({
+            "question": case["query"],
+            "context": "\n\n".join(contexts),
+        })
+
+        data.append({
+            "question": case["query"],
+            "answer": answer,
+            "contexts": contexts,
+            "ground_truth": case["ground_truth"],
+        })
+
+    return Dataset.from_list(data)
+
+dataset = build_ragas_dataset(retriever, chain, test_cases)
+scores = evaluate(dataset, metrics=[faithfulness, answer_relevancy,
+                                     context_precision, context_recall])
+print(scores)
+```
+
+### LLM-as-Judge
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+
+JUDGE_PROMPT = ChatPromptTemplate.from_template("""
+다음 답변을 평가하세요. 1~5점으로 점수를 매기세요.
+
+질문: {question}
+정답: {ground_truth}
+생성된 답변: {answer}
+
+평가 기준:
+- 5: 정답과 완전히 일치, 모든 정보 포함
+- 4: 대부분 정확, 사소한 정보 누락
+- 3: 부분적으로 정확
+- 2: 관련 있지만 중요한 오류 있음
+- 1: 완전히 틀리거나 무관한 답변
+
+점수만 출력하세요 (숫자 1개):
+""")
+
+judge = ChatOpenAI(model="gpt-4o", temperature=0)
+
+def judge_answer(question, ground_truth, answer):
+    response = judge.invoke(
+        JUDGE_PROMPT.format(
+            question=question,
+            ground_truth=ground_truth,
+            answer=answer,
+        )
+    )
+    return int(response.content.strip())
+```
+
+---
+
+## Vector RAG vs GraphRAG 비교 실험
+
+```python
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.prompts import PromptTemplate
+
+ANSWER_PROMPT = PromptTemplate.from_template("""
+다음 컨텍스트를 바탕으로 답변하세요.
+
+질문: {question}
+컨텍스트: {context}
+""")
+
+# Vector RAG 체인
+vector_chain = (
+    {
+        "question": RunnablePassthrough(),
+        "context": store.as_retriever(k=10) | (lambda docs: "\n\n".join(d.page_content for d in docs)),
+    }
+    | ANSWER_PROMPT
+    | model
+)
+
+# GraphRAG 체인
+graph_chain = (
+    {
+        "question": RunnablePassthrough(),
+        "context": retriever | (lambda docs: "\n\n".join(d.page_content for d in docs)),
+    }
+    | ANSWER_PROMPT
+    | model
+)
+
+# 비교 실험
+test_questions = [
+    {
+        "query": "버뮤다 슬루프가 높이 평가되는 이유는?",
+        "ground_truth": "버뮤다 리그로 적은 선원으로도 항해 가능하고 버뮤다 삼나무의 내구성이 뛰어남",
+        "type": "multi_hop",
+    },
+    {
+        "query": "가족 영화로 좋은 작품은?",
+        "ground_truth": "The Addams Family 등 가족 코미디 영화들",
+        "type": "single_hop",
+    },
+]
+
+print("=" * 60)
+for case in test_questions:
+    query = case["query"]
+    ground_truth = case["ground_truth"]
+
+    vector_answer = vector_chain.invoke(query).content
+    graph_answer = graph_chain.invoke(query).content
+
+    vector_score = judge_answer(query, ground_truth, vector_answer)
+    graph_score = judge_answer(query, ground_truth, graph_answer)
+
+    print(f"\n질문: {query}")
+    print(f"  Vector RAG 점수: {vector_score}/5")
+    print(f"  GraphRAG 점수:   {graph_score}/5")
+    print(f"  유형: {case['type']}")
+```
+
+---
+
+## 평가 결과 해석
+
+### 일반적인 패턴
+
+| 질문 유형 | Vector RAG | GraphRAG |
+|----------|-----------|---------|
+| **단순 검색 (1-hop)** | ≈ 동등 | 약간 나쁠 수도 있음 (비용 대비) |
+| **Multi-hop 추론** | 낮음 | 높음 |
+| **관계 기반 질문** | 낮음 | 높음 |
+| **요약/비교** | 중간 | 높음 (MMR 전략 활용 시) |
+
+### GraphRAG가 더 나빠지는 경우
+
+```
+- 엣지 설계가 잘못된 경우: 관련 없는 문서들이 연결됨
+- max_depth가 너무 깊은 경우: 노이즈 문서가 많아짐
+- 단순한 키워드 검색 질문: Vector RAG가 더 빠르고 정확
+- 데이터에 메타데이터가 없는 경우: 그래프 탐색 불가
+```
+
+---
+
+## 실무 평가 체크리스트
+
+```
+검색 품질:
+  [ ] 관련 문서의 Precision >= 0.7
+  [ ] 핵심 문서의 Recall >= 0.8
+  [ ] Multi-hop 문서 발견율 >= 0.6
+
+탐색 품질:
+  [ ] 고립 노드 비율 < 20%
+  [ ] 평균 탐색 깊이 > 1 (실제 그래프 탐색이 일어나는가?)
+  [ ] 엣지별 활용 문서 수 분석
+
+답변 품질:
+  [ ] RAGAS faithfulness >= 0.8
+  [ ] RAGAS answer_relevancy >= 0.7
+  [ ] LLM Judge 평균 점수 >= 3.5/5.0
+  [ ] Vector RAG 대비 Multi-hop 질문 점수 개선 확인
+```
+
+다음 파일에서는 프로덕션 배포 전략을 살펴본다.

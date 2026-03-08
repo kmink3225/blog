@@ -1,0 +1,295 @@
+---
+title: "평가: Neo4j GraphRAG vs 메타데이터 기반 GraphRAG"
+subtitle: "두 방식의 성능, 비용, 구축 난이도를 정량적으로 비교"
+description: |
+  Neo4j 기반 Full GraphRAG와 langchain-graph-retriever(메타데이터 기반)를
+  Multi-hop QA 성능, 구축 비용, 운영 복잡도 측면에서 비교한다.
+  어떤 상황에서 어느 방식이 적합한지 의사결정 가이드를 제시한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+  - Neo4j
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# 평가: Neo4j GraphRAG vs 메타데이터 기반 GraphRAG
+
+## 두 방식 요약
+
+| 항목 | 메타데이터 기반 | Neo4j GraphRAG |
+|------|:-----------:|:--------------:|
+| **핵심** | 벡터 스토어 메타데이터 = 엣지 | LLM 추출 → 명시적 KG → Neo4j |
+| **그래프 DB** | 불필요 | Neo4j 필수 |
+| **KG 구축 비용** | 없음 | LLM 호출 비용 발생 |
+| **관계 표현력** | 단순 (동일 값 연결) | 풍부 (타입, 속성, 방향) |
+| **쿼리 방식** | BFS 탐색 | Cypher |
+| **전체 그래프 분석** | 불가 | GDS (PageRank, Louvain 등) |
+| **구축 시간** | 수 분 | 수 시간 ~ 수 일 |
+
+---
+
+## 정량적 비교 실험
+
+동일한 테스트 세트로 두 방식을 비교한다.
+
+```python
+from langchain_graph_retriever import GraphRetriever
+from langchain_neo4j import Neo4jGraph, GraphCypherQAChain
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+
+# 공통 설정
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+ANSWER_PROMPT = PromptTemplate.from_template("""
+다음 정보를 바탕으로 질문에 답하세요. 정보에 없는 내용은 "모름"으로 답하세요.
+
+질문: {question}
+정보: {context}
+
+답변:
+""")
+
+# 테스트 케이스
+test_cases = [
+    # 1-hop (단순 조회)
+    {
+        "question": "Tesla는 어디에 본사가 있는가?",
+        "ground_truth": "Austin, Texas",
+        "type": "1-hop",
+    },
+    # 2-hop (관계 연결)
+    {
+        "question": "일론 머스크가 설립한 회사들이 위치한 도시는?",
+        "ground_truth": "Austin (Tesla), Hawthorne (SpaceX)",
+        "type": "2-hop",
+    },
+    # 3-hop (복잡한 추론)
+    {
+        "question": "Tesla를 설립한 인물이 공동 창업한 다른 회사는?",
+        "ground_truth": "PayPal (공동 창업: Peter Thiel과)",
+        "type": "3-hop",
+    },
+    # 집계 (전체 패턴)
+    {
+        "question": "AI 업계에서 가장 많은 회사를 설립한 인물은?",
+        "ground_truth": "Elon Musk",
+        "type": "aggregation",
+    },
+]
+```
+
+### 메타데이터 기반 평가
+
+```python
+from langchain_graph_retriever import GraphRetriever
+from graph_retriever.strategies import Eager
+
+metadata_retriever = GraphRetriever(
+    store=metadata_vector_store,  # 사전 구축된 메타데이터 벡터 스토어
+    edges=[("origin", "origin"), ("category", "category")],
+    strategy=Eager(select_k=10, start_k=3, max_depth=2),
+)
+
+def metadata_rag_answer(question: str) -> str:
+    docs = metadata_retriever.invoke(question)
+    context = "\n".join(doc.page_content for doc in docs)
+    return llm.invoke(
+        ANSWER_PROMPT.format(question=question, context=context)
+    ).content
+
+metadata_answers = {
+    case["question"]: metadata_rag_answer(case["question"])
+    for case in test_cases
+}
+```
+
+### Neo4j GraphRAG 평가
+
+```python
+# 방법 1: Text2Cypher
+graph = Neo4jGraph(url="bolt://localhost:7687",
+                   username="neo4j", password="password")
+
+cypher_chain = GraphCypherQAChain.from_llm(
+    llm=llm, graph=graph, verbose=False, validate_cypher=True
+)
+
+def neo4j_cypher_answer(question: str) -> str:
+    try:
+        return cypher_chain.invoke(question)["result"]
+    except Exception as e:
+        return f"오류: {e}"
+
+# 방법 2: Hybrid (벡터 + Cypher)
+def neo4j_hybrid_answer(question: str) -> str:
+    vector_results = neo4j_vector_store.similarity_search(question, k=5)
+    vector_context = "\n".join(doc.page_content for doc in vector_results)
+
+    entity_ids = [doc.metadata.get("id") for doc in vector_results if doc.metadata.get("id")]
+    graph_contexts = []
+    for eid in entity_ids[:2]:
+        rows = graph.query("""
+        MATCH (n {id: $id})-[r*1..2]-(m)
+        RETURN n.id, [rel IN r | type(rel)] AS rels, m.id
+        LIMIT 10
+        """, params={"id": eid})
+        graph_contexts.extend([f"{r['n.id']} → {r['rels']} → {r['m.id']}" for r in rows])
+
+    context = f"문서:\n{vector_context}\n\n그래프:\n" + "\n".join(graph_contexts)
+    return llm.invoke(ANSWER_PROMPT.format(question=question, context=context)).content
+```
+
+### LLM-as-Judge 평가
+
+```python
+JUDGE_PROMPT = PromptTemplate.from_template("""
+질문에 대한 답변을 1~5점으로 평가하세요.
+
+5: 정답과 완전히 일치
+4: 대부분 정확, 사소한 누락
+3: 부분적으로 정확
+2: 관련 있지만 중요한 오류
+1: 완전히 틀리거나 무관
+
+질문: {question}
+정답: {ground_truth}
+답변: {answer}
+
+점수만 출력 (숫자 1개):
+""")
+
+def judge(question, ground_truth, answer) -> int:
+    response = llm.invoke(
+        JUDGE_PROMPT.format(question=question, ground_truth=ground_truth, answer=answer)
+    )
+    try:
+        return int(response.content.strip())
+    except ValueError:
+        return 1
+
+# 비교 실험
+results = []
+for case in test_cases:
+    q, gt = case["question"], case["ground_truth"]
+
+    m_ans = metadata_rag_answer(q)
+    c_ans = neo4j_cypher_answer(q)
+    h_ans = neo4j_hybrid_answer(q)
+
+    results.append({
+        "question": q,
+        "type": case["type"],
+        "metadata_score": judge(q, gt, m_ans),
+        "cypher_score":   judge(q, gt, c_ans),
+        "hybrid_score":   judge(q, gt, h_ans),
+    })
+
+# 결과 출력
+print(f"{'질문유형':<12} {'메타데이터':>10} {'Text2Cypher':>12} {'하이브리드':>10}")
+print("-" * 50)
+for r in results:
+    print(f"{r['type']:<12} {r['metadata_score']:>10} {r['cypher_score']:>12} {r['hybrid_score']:>10}")
+
+# 평균
+avg_meta = sum(r['metadata_score'] for r in results) / len(results)
+avg_cypher = sum(r['cypher_score'] for r in results) / len(results)
+avg_hybrid = sum(r['hybrid_score'] for r in results) / len(results)
+print("-" * 50)
+print(f"{'평균':<12} {avg_meta:>10.2f} {avg_cypher:>12.2f} {avg_hybrid:>10.2f}")
+```
+
+---
+
+## 예상 결과 패턴
+
+```
+질문유형       메타데이터  Text2Cypher  하이브리드
+─────────────────────────────────────────────
+1-hop              4.2         4.8          4.5
+2-hop              3.1         4.5          4.6
+3-hop              2.0         4.2          4.4
+aggregation        1.5         4.7          4.3
+─────────────────────────────────────────────
+평균               2.7         4.6          4.5
+```
+
+**해석:**
+- **1-hop**: 메타데이터 방식도 준수. Neo4j 큰 이점 없음
+- **2~3-hop**: Neo4j 명확한 우위. 메타데이터 방식 급격히 떨어짐
+- **집계**: 메타데이터 방식 거의 불가. Cypher 집계 함수 강점 발휘
+
+---
+
+## 구축 비용 비교
+
+```python
+cost_comparison = {
+    "메타데이터 기반": {
+        "구축 비용 (LLM)": "$0",
+        "구축 시간": "수 분",
+        "인프라": "기존 벡터 스토어만",
+        "운영 복잡도": "낮음",
+        "100만 문서 처리": "$0 (임베딩 비용만)",
+    },
+    "Neo4j GraphRAG": {
+        "구축 비용 (LLM)": "문서당 $0.01~0.05",
+        "구축 시간": "수 시간~수 일",
+        "인프라": "Neo4j + 벡터 스토어",
+        "운영 복잡도": "높음",
+        "100만 문서 처리": "$10,000~50,000",
+    },
+}
+```
+
+---
+
+## 의사결정 가이드
+
+```
+데이터에 이미 메타데이터가 있는가?
+  YES → 메타데이터 기반으로 먼저 시도
+  NO  → 텍스트에서 관계 추출 필요 → Neo4j 검토
+
+질문 유형이 주로 무엇인가?
+  단순 검색/유사도 → Vector RAG 충분
+  1~2 hop 관계     → 메타데이터 기반 충분
+  3+ hop, 집계     → Neo4j GraphRAG 필요
+
+예산이 있는가?
+  제한적 → 메타데이터 기반 (구축 비용 없음)
+  충분   → Neo4j GraphRAG (더 높은 품질)
+
+운영 팀 역량?
+  Cypher 모름 → 메타데이터 기반
+  Neo4j 경험  → Neo4j GraphRAG
+
+결론:
+  프로토타입/소규모 → 메타데이터 기반
+  프로덕션/복잡한 질문 → Neo4j GraphRAG
+```
+
+---
+
+## 이 시리즈를 마치며
+
+```
+GraphRAG 스펙트럼:
+
+Vector RAG            메타데이터 기반 GraphRAG    Neo4j GraphRAG
+(가장 단순)          (중간)                      (가장 복잡)
+   │                      │                           │
+비용 낮음              비용 낮음                  비용 높음
+구현 쉬움              구현 쉬움                  구현 어려움
+단순 질문에 강함        관계 있는 데이터에 강함     복잡한 추론에 강함
+```
+
+이 두 시리즈(메타데이터 기반 + Neo4j 기반)를 통해
+GraphRAG의 전체 스펙트럼을 이해했다.
+
+실무에서는 **항상 단순한 것부터 시작**하고,
+충분한 이유가 생겼을 때 복잡한 방식으로 전환하는 것이 권장된다.

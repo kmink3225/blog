@@ -1,0 +1,335 @@
+---
+title: "실전 예제 2: Code Generation GraphRAG"
+subtitle: "문서 크로스레퍼런스 탐색으로 동작하는 코드 생성하기"
+description: |
+  AstraPy 라이브러리 문서를 GraphRAG로 탐색하여 코드 생성 품질을 향상시키는 예제.
+  일반 Vector RAG와 GraphRAG의 코드 생성 품질 차이를 직접 비교하고,
+  커스텀 Strategy(CodeExamples)로 예제 코드가 있는 문서를 우선 선택하는 방법을 배운다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# 실전 예제 2: Code Generation GraphRAG
+
+## 문제 정의
+
+**질의:**
+```
+AstraPy 라이브러리로 AstraDB 클러스터에 연결하고 컬렉션에서
+지정한 개수의 행을 가져오는 함수를 작성하세요.
+토큰 인증을 사용하고, 필요한 import도 포함하세요.
+```
+
+**세 가지 접근 비교:**
+
+| 방법 | 결과 | 이유 |
+|------|------|------|
+| LLM 단독 | ❌ 동작 안 함 | `astra.AstraClient` 같은 존재하지 않는 클래스 사용 |
+| Vector RAG | ❌ 동작 안 함 | 유사도 높은 단편적 문서만 검색, 실제 예제 코드 미포함 |
+| **GraphRAG** | ✅ 동작함 | 문서 간 크로스레퍼런스 탐색으로 실제 예제 코드 있는 문서 수집 |
+
+## 데이터 구조
+
+AstraPy 문서의 각 항목(모듈, 클래스, 속성, 함수)이 하나의 Document가 된다.
+
+**예제 코드가 있는 문서 (핵심):**
+```yaml
+id: astrapy.client.DataAPIClient
+
+page_content: |
+  A client for using the Data API. This is the main entry point...
+
+metadata:
+  name: DataAPIClient
+  kind: class
+  path: astrapy.client.DataAPIClient
+  parameters:
+    token: str | TokenProvider | None = None
+    environment: str | None = None
+  example: |                         ← 이게 핵심! 실제 사용 예제
+    >>> from astrapy import DataAPIClient
+    >>> my_client = DataAPIClient("AstraCS:...")
+    >>> my_db = my_client.get_database("https://...")
+  references:                        ← 관련 문서 ID 목록
+    - astrapy.client.DataAPIClient
+  gathered_types:                    ← 파라미터 타입 관련 문서
+    - astrapy.authentication.TokenProvider
+  parent: astrapy.client            ← 부모 모듈
+```
+
+**예제 코드가 없는 문서 (단순 속성):**
+```yaml
+id: astrapy.admin.AstraDBAdmin.callers
+page_content: ""
+metadata:
+  kind: attribute
+  parent: astrapy.admin.AstraDBAdmin  ← 부모 클래스로 연결
+```
+
+## 엣지 설계: 문서 크로스레퍼런스
+
+```python
+edges = [
+    ("gathered_types", "$id"),    # 파라미터 타입 → 해당 클래스 문서
+    ("references", "$id"),         # 참조 → 참조된 문서
+    ("parent", "$id"),             # 자식 → 부모 문서
+    ("implemented_by", "$id"),     # 인터페이스 → 구현체
+    ("bases", "$id"),              # 상속 → 부모 클래스
+]
+```
+
+`"$id"` = 문서의 ID 필드 (특수 키워드)
+
+**탐색 예시:**
+```
+질의: "AstraDB 연결 함수 작성"
+  │
+  ▼ 벡터 검색 (start_k=3)
+[astrapy.core.db.AstraDB.collection]  (유사도 높지만 예제 없음)
+  │
+  ▼ parent 엣지 → astrapy.core.db.AstraDB (부모 클래스)
+  │
+  ▼ gathered_types 엣지 → astrapy.client.DataAPIClient (예제 있음!)
+  │
+  ▼ references 엣지 → astrapy.database.Database (예제 있음!)
+```
+
+## 데이터 로드
+
+```python
+from graph_rag_example_helpers.datasets.astrapy import fetch_documents
+from langchain_graph_retriever.transformers import ParentTransformer
+from langchain_astradb import AstraDBVectorStore
+from langchain_openai import OpenAIEmbeddings
+
+# 벡터 스토어 준비
+store = AstraDBVectorStore(
+    embedding=OpenAIEmbeddings(),
+    collection_name="code_generation",
+)
+
+# ParentTransformer: 자식 문서에 부모 ID 추가
+# "astrapy.client.DataAPIClient.get_database" → parent = "astrapy.client.DataAPIClient"
+transformer = ParentTransformer(path_delimiter=".")
+
+documents = fetch_documents()  # AstraPy 문서 로드
+transformed = list(transformer.transform_documents(documents))
+store.add_documents(transformed)
+```
+
+## 기본 Eager 전략 (비교용)
+
+```python
+from langchain_graph_retriever import GraphRetriever
+from graph_retriever.strategies import Eager
+
+default_retriever = GraphRetriever(store=store, edges=edges)
+
+results = default_retriever.invoke(query, select_k=6, start_k=3, max_depth=2)
+
+# 예제 코드 포함 문서 수 확인
+has_example = sum(1 for doc in results if "example" in doc.metadata)
+print(f"예제 있는 문서: {has_example}개 / 전체: {len(results)}개")
+# 예제 있는 문서: 2개 / 전체: 6개  ← 부족함
+```
+
+## 커스텀 Strategy: CodeExamples
+
+예제 코드가 있는 문서를 **우선 선택**하는 커스텀 전략을 만든다.
+
+```python
+import dataclasses
+from collections.abc import Iterable
+
+from graph_retriever.strategies import Strategy, NodeTracker
+from graph_retriever.types import Node
+
+
+@dataclasses.dataclass
+class CodeExamples(Strategy):
+    # 탐색 중 발견된 모든 노드를 누적 저장
+    _nodes: dict[str, Node] = dataclasses.field(default_factory=dict)
+
+    def iteration(self, *, nodes: Iterable[Node], tracker: NodeTracker) -> None:
+        # 새로 발견된 노드 저장
+        self._nodes.update({n.id: n for n in nodes})
+
+        # 발견된 노드 → 다음 탐색 대상으로 추가
+        new_count = tracker.traverse(nodes=nodes)
+
+        # 더 이상 새 노드가 없으면 탐색 종료 → 최종 선택
+        if new_count == 0:
+            example_nodes = []
+            description_nodes = []
+
+            for node in self._nodes.values():
+                if "example" in node.metadata:
+                    # 예제 코드 있는 문서 우선 선택
+                    example_nodes.append(node)
+                elif node.content != "":
+                    # 설명 텍스트라도 있는 문서 다음 선택
+                    description_nodes.append(node)
+
+            # 예제 → 설명 순으로 선택 (select_k 초과 시 자동으로 잘림)
+            tracker.select(example_nodes)
+            tracker.select(description_nodes)
+```
+
+**핵심 동작 차이:**
+
+| 전략 | 선택 시점 | 선택 기준 |
+|------|----------|----------|
+| **Eager** | 발견 즉시 | 발견 순서 (BFS) |
+| **CodeExamples** | 탐색 완료 후 | 예제 코드 유무 → 설명 유무 |
+
+```python
+custom_retriever = GraphRetriever(
+    store=store,
+    edges=edges,
+    strategy=CodeExamples(),
+)
+
+results = custom_retriever.invoke(query, select_k=6, start_k=3, max_depth=2)
+
+has_example = sum(1 for doc in results if "example" in doc.metadata)
+print(f"예제 있는 문서: {has_example}개 / 전체: {len(results)}개")
+# 예제 있는 문서: 6개 / 전체: 6개  ← 모두 예제 있음!
+```
+
+## 코드 생성 파이프라인
+
+```python
+from langchain.chat_models import init_chat_model
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from graph_rag_example_helpers.examples.code_generation import format_docs
+
+llm = init_chat_model("gpt-4o-mini", model_provider="openai")
+
+prompt = ChatPromptTemplate.from_template("""
+관련 문서를 참고하여 동작하는 Python 코드를 작성하세요.
+코드만 반환하고, 사용 예시는 포함하지 마세요.
+
+각 문서는 세 개의 대시(---)로 구분됩니다.
+유용하지 않은 문서는 무시해도 됩니다.
+
+질문: {question}
+
+관련 문서:
+{context}
+""")
+
+graph_chain = (
+    {"context": custom_retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+print(graph_chain.invoke(query))
+```
+
+**GraphRAG 결과 (동작하는 코드):**
+```python
+import os
+from astrapy.client import DataAPIClient
+from astrapy.collection import Collection
+
+def connect_and_retrieve_rows(num_rows):
+    api_endpoint = os.getenv('ASTRA_DB_API_ENDPOINT')
+    application_token = os.getenv('ASTRA_DB_APPLICATION_TOKEN')
+    keyspace = os.getenv('ASTRA_DB_KEYSPACE')
+    collection_name = os.getenv('ASTRA_DB_COLLECTION')
+
+    client = DataAPIClient(token=application_token)
+    database = client.get_database(api_endpoint)
+    collection = Collection(database=database, name=collection_name, keyspace=keyspace)
+
+    rows = collection.find(limit=num_rows)
+    return list(rows)
+```
+
+## LLM 단독 vs Vector RAG vs GraphRAG 비교
+
+**LLM 단독 (실패):**
+```python
+from astra import AstraClient  # ← 존재하지 않는 패키지!
+
+def fetch_rows(num_rows):
+    client = AstraClient(api_endpoint, application_token)
+    query = f'SELECT * FROM {keyspace}.{collection} LIMIT {num_rows}'
+    return client.execute_statement(query)['rows']  # ← 잘못된 API
+```
+
+**Vector RAG (실패):**
+```python
+from astra import AstraClient  # ← 여전히 존재하지 않는 패키지!
+
+def fetch_rows_from_astradb(num_rows):
+    client = AstraClient(endpoint=endpoint, token=token)
+    query = f'SELECT * FROM {keyspace}.{collection} LIMIT {num_rows}'
+    return client.execute(query)['data']  # ← 잘못된 API
+```
+
+**GraphRAG (성공):**
+```python
+from astrapy.client import DataAPIClient  # ← 실제 패키지와 클래스
+from astrapy.collection import Collection
+
+def connect_and_retrieve_rows(num_rows):
+    client = DataAPIClient(token=application_token)
+    database = client.get_database(api_endpoint)
+    collection = Collection(database=database, name=collection_name, keyspace=keyspace)
+    return list(collection.find(limit=num_rows))  # ← 실제 API
+```
+
+## 왜 GraphRAG가 우수한가
+
+```
+Vector RAG의 한계:
+  질의: "AstraDB 연결 함수"
+  → 유사도 기반으로 "connection", "database" 단어가 많은 단편적 문서 선택
+  → 예제 코드 없는 속성 정의 문서들만 선택됨
+  → LLM이 실제 API 패턴을 알 수 없음 → 잘못된 코드 생성
+
+GraphRAG의 장점:
+  질의: "AstraDB 연결 함수"
+  → 초기 문서에서 references/gathered_types 엣지로 관련 클래스 탐색
+  → parent 엣지로 부모 클래스까지 탐색
+  → 실제 예제 코드가 있는 DataAPIClient, Database 문서 발견
+  → LLM이 실제 API 패턴 학습 → 동작하는 코드 생성
+```
+
+## 커스텀 Strategy 설계 원칙
+
+이 예제에서 배울 수 있는 커스텀 Strategy 설계 패턴:
+
+```python
+@dataclasses.dataclass
+class MyStrategy(Strategy):
+    _accumulated: dict = dataclasses.field(default_factory=dict)
+
+    def iteration(self, *, nodes, tracker):
+        # 1. 새 노드 누적
+        self._accumulated.update({n.id: n for n in nodes})
+
+        # 2. 탐색 계속 (traverse)
+        new_count = tracker.traverse(nodes=nodes)
+
+        # 3. 종료 조건: 새 노드 없을 때 최종 선택
+        if new_count == 0:
+            # 4. 커스텀 우선순위로 노드 선택
+            priority_nodes = [n for n in self._accumulated.values() if 조건(n)]
+            fallback_nodes = [n for n in self._accumulated.values() if not 조건(n)]
+            tracker.select(priority_nodes)
+            tracker.select(fallback_nodes)
+```
+
+다음 파일에서는 Wikipedia Multi-hop 추론 예제를 살펴본다.

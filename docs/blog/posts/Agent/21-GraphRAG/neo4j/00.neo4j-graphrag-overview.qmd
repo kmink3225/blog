@@ -1,0 +1,174 @@
+---
+title: "Neo4j GraphRAG: 왜 진짜 그래프 DB가 필요한가"
+subtitle: "메타데이터 BFS vs 명시적 지식 그래프: Neo4j GraphRAG의 위치와 아키텍처"
+description: |
+  langchain-graph-retriever(메타데이터 기반)와 Neo4j GraphRAG(명시적 KG 기반)의 차이를 비교한다.
+  Neo4j는 노드-관계-속성으로 구성된 Property Graph DB로,
+  LLM이 문서에서 추출한 엔티티와 관계를 저장하고 Cypher로 정밀하게 탐색한다.
+  이 시리즈는 Neo4j 기반 Full GraphRAG 파이프라인을 단계별로 구축한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+  - Neo4j
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Neo4j GraphRAG: 왜 진짜 그래프 DB가 필요한가
+
+## 이전 시리즈와 무엇이 다른가
+
+이전 시리즈(`langchain-graph-retriever`)에서 배운 것:
+
+```
+벡터 스토어 메타데이터 → 엣지로 활용 → BFS 탐색
+```
+
+이것은 편리하지만, 관계가 **이미 메타데이터에 존재해야만** 동작한다.
+텍스트에 숨어 있는 관계는 추출하지 못한다.
+
+Neo4j GraphRAG가 추가하는 것:
+
+```
+문서 텍스트 → LLM 분석 → 엔티티/관계 추출 → Neo4j 저장 → Cypher 탐색
+```
+
+**텍스트에서 관계를 직접 추출**하여 명시적 지식 그래프를 구축한다.
+
+---
+
+## 핵심 차이 비교
+
+```
+[langchain-graph-retriever]          [Neo4j GraphRAG]
+───────────────────────────          ──────────────────────
+문서 메타데이터 활용                  LLM으로 엔티티/관계 추출
+                                     → Neo4j에 명시적 저장
+
+edges=[("origin","origin")]          (Elon_Musk)-[:FOUNDED]->(Tesla)
+                                     (Tesla)-[:LOCATED_IN]->(Austin)
+
+BFS 메타데이터 탐색                  Cypher 쿼리
+                                     MATCH (p:Person)-[:FOUNDED]->(c:Company)
+
+관계 속성 불가                       관계에 속성 가능
+                                     [:FOUNDED {year: 2003}]
+
+전체 그래프 알고리즘 불가            GDS: PageRank, Louvain, 중심성 분석
+```
+
+---
+
+## Neo4j Property Graph 모델
+
+Neo4j는 **Property Graph**를 저장한다.
+
+```
+노드 (Node)
+  - 레이블(Label): 타입 구분  예) :Person, :Company, :Location
+  - 속성(Property): key-value  예) {name: "Elon Musk", born: 1971}
+
+관계 (Relationship)
+  - 타입(Type): 의미 구분  예) :FOUNDED, :WORKS_AT, :LOCATED_IN
+  - 방향성: 단방향         예) (A)-[:FOUNDED]->(B)
+  - 속성(Property)         예) {year: 2003, role: "CEO"}
+```
+
+**예시:**
+```cypher
+(Elon_Musk:Person {name: "Elon Musk", born: 1971})
+  -[:FOUNDED {year: 2003}]->
+(Tesla:Company {name: "Tesla", sector: "EV"})
+  -[:LOCATED_IN]->
+(Austin:Location {name: "Austin", state: "Texas"})
+```
+
+이 구조 덕분에:
+- "일론 머스크가 설립한 회사들의 본사 위치는?" → 한 번의 Cypher 쿼리로 해결
+- 관계 자체에 연도, 역할 등의 속성 부여 가능
+- 역방향 탐색도 동일하게 간단
+
+---
+
+## Neo4j GraphRAG 전체 파이프라인
+
+```
+[1. 문서 수집]
+  원본 텍스트, PDF, HTML 등
+
+[2. Knowledge Graph 구축]
+  LLMGraphTransformer
+  → 엔티티(노드) + 관계(엣지) 추출
+  → Neo4j에 저장
+  → 벡터 임베딩도 함께 저장 (Neo4j Vector Index)
+
+[3. 검색]
+  Vector Search     → 의미적 유사 노드 탐색
+  Cypher Traversal  → 관계를 따라 정밀 탐색
+  Hybrid            → 두 방식 결합
+
+[4. GDS 분석 (선택)]
+  Louvain   → 커뮤니티 감지
+  PageRank  → 중요 노드 식별
+  → Microsoft GraphRAG의 Global Search 구현에 활용
+
+[5. 답변 생성]
+  검색 결과 → LLM → 최종 답변
+```
+
+---
+
+## 주요 패키지
+
+```bash
+# Neo4j 공식 GraphRAG 패키지
+pip install neo4j-graphrag
+
+# LangChain Neo4j 통합
+pip install langchain-neo4j
+
+# LLMGraphTransformer (엔티티/관계 추출)
+pip install langchain-experimental
+
+# GDS (Graph Data Science) Python 클라이언트
+pip install graphdatascience
+
+# Neo4j Python 드라이버
+pip install neo4j
+```
+
+---
+
+## 이 시리즈 구성
+
+| 파일 | 주제 |
+|------|------|
+| 01 | Neo4j 설치 & 첫 연결 |
+| 02 | Cypher 기초 (그래프 쿼리 언어) |
+| 03 | LLMGraphTransformer: 문서 → 지식 그래프 |
+| 04 | Neo4j 벡터 인덱스 |
+| 05 | 하이브리드 검색 (벡터 + Cypher) |
+| 06 | GDS: 커뮤니티 감지 |
+| 07 | GDS: PageRank & 중심성 |
+| 08 | Microsoft GraphRAG 방식 구현 |
+| 09 | Text2Cypher QA 시스템 |
+| 10 | 평가: Neo4j vs 메타데이터 방식 |
+
+---
+
+## 언제 Neo4j GraphRAG를 선택해야 하는가
+
+| 상황 | langchain-graph-retriever | Neo4j GraphRAG |
+|------|:------------------------:|:--------------:|
+| 이미 벡터 스토어 있음 | ✅ 적합 | 과함 |
+| 메타데이터 잘 구조화됨 | ✅ 적합 | 과함 |
+| 텍스트에서 관계 추출 필요 | ❌ 불가 | ✅ 적합 |
+| 복잡한 관계 패턴 탐색 | ❌ 불가 | ✅ 적합 |
+| 전체 그래프 분석 필요 | ❌ 불가 | ✅ 적합 |
+| 빠른 프로토타이핑 | ✅ 적합 | 느림 |
+| 엔터프라이즈 규모 | 한계 있음 | ✅ 적합 |
+
+다음 파일에서는 Neo4j를 설치하고 첫 연결을 해본다.

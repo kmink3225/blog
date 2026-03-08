@@ -1,0 +1,259 @@
+---
+title: "비구조화 문서 → 그래프 변환"
+subtitle: "HTML, PDF, 긴 문서를 청크+엔티티+키워드로 그래프화하기"
+description: |
+  비구조화 문서(HTML, PDF, 텍스트)를 GraphRAG용 문서 그래프로 변환하는 전체 파이프라인을 구축한다.
+  HtmlTransformer로 파싱, RecursiveCharacterTextSplitter로 청크 분할,
+  ParentTransformer로 부모-자식 관계 생성, KeybertTransformer로 키워드 추출,
+  GlinerTransformer로 엔티티 추출 후 ShreddingTransformer로 최종 변환한다.
+categories:
+  - AI
+  - RAG
+  - GraphRAG
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# 비구조화 문서 → 그래프 변환
+
+## 문제: 일반 문서를 어떻게 그래프로 만드는가
+
+표 데이터나 API 문서는 구조가 명확해 메타데이터 엣지 설계가 쉽다.
+그러나 HTML, PDF, 뉴스 기사 같은 **비구조화 문서**는:
+
+- 카테고리나 태그 같은 구조화된 메타데이터가 없는 경우가 많음
+- 긴 문서는 청크로 분할해야 하므로 청크 간 연결 관리 필요
+- 문서 간 관계를 텍스트 분석으로 추출해야 함
+
+## 전체 파이프라인
+
+```
+원본 HTML/PDF/텍스트 문서
+  │
+  ▼ [HtmlTransformer]
+  HTML 태그 제거, 텍스트 정제
+  │
+  ▼ [RecursiveCharacterTextSplitter]
+  청크 분할 (chunk_size=500)
+  │
+  ▼ [ParentTransformer]
+  각 청크에 parent_id 추가 (원본 문서 ID)
+  │
+  ▼ [KeybertTransformer]
+  각 청크에서 keywords 추출
+  │
+  ▼ [GlinerTransformer or SpacyNERTransformer]
+  각 청크에서 entities 추출 (인물, 장소, 조직 등)
+  │
+  ▼ [ShreddingTransformer]
+  리스트 메타데이터 분해 (Chroma/PGVector 사용 시)
+  │
+  ▼
+  벡터 스토어 저장
+```
+
+## Step 1: HTML 파싱
+
+```python
+from langchain_core.documents import Document
+from langchain_graph_retriever.transformers.html import HtmlTransformer
+
+raw_docs = [
+    Document(
+        id="python_intro",
+        page_content="""
+        <h1>Python 프로그래밍 언어</h1>
+        <p>Python은 <b>귀도 반 로썸</b>이 1991년에 만든 고수준 프로그래밍 언어입니다.</p>
+        <p>Python은 <a href="/django">Django</a>, <a href="/flask">Flask</a> 등의
+        웹 프레임워크를 지원합니다.</p>
+        """,
+        metadata={"url": "https://example.com/python", "category": "programming"},
+    ),
+]
+
+html_transformer = HtmlTransformer()
+clean_docs = list(html_transformer.transform_documents(raw_docs))
+
+# clean_docs[0].page_content =
+# "Python 프로그래밍 언어 Python은 귀도 반 로썸이 1991년에..."
+print(clean_docs[0].page_content[:200])
+```
+
+## Step 2: 청크 분할
+
+```python
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50,
+    separators=["\n\n", "\n", ". ", " "],
+)
+
+chunked_docs = splitter.split_documents(clean_docs)
+print(f"총 {len(chunked_docs)}개 청크 생성")
+```
+
+## Step 3: ParentTransformer - 부모-자식 관계
+
+청크에 원본 문서 ID를 `parent_id` 메타데이터로 추가한다.
+
+```python
+from langchain_graph_retriever.transformers import ParentTransformer
+
+# path_delimiter: ID를 ".\"로 분리하여 부모 찾기
+# 예: "python_intro.chunk_0" → parent = "python_intro"
+parent_transformer = ParentTransformer(path_delimiter=".")
+
+# 단순 parent_id 추가 방식:
+# 각 청크에 metadata["parent_id"] = 원본 문서의 id 추가
+
+# 수동으로 parent_id 추가하는 방식
+for i, chunk in enumerate(chunked_docs):
+    original_doc_id = chunk.metadata.get("source") or "unknown"
+    chunk.id = f"{original_doc_id}.chunk_{i}"
+    chunk.metadata["parent_id"] = original_doc_id
+
+# 엣지로 같은 부모를 공유하는 청크들 연결 가능
+# edges=[("parent_id", "parent_id")]
+```
+
+## Step 4: 키워드 추출 (KeyBERT)
+
+```python
+from langchain_graph_retriever.transformers.keybert import KeybertTransformer
+
+keybert = KeybertTransformer(
+    top_n=5,               # 청크당 최대 5개 키워드
+    metadata_key="keywords",
+)
+
+docs_with_keywords = list(keybert.transform_documents(chunked_docs))
+
+# 결과 예시
+# doc.metadata["keywords"] = ["python", "programming", "귀도 반 로썸", "웹 프레임워크", "django"]
+print(docs_with_keywords[0].metadata["keywords"])
+```
+
+## Step 5: 엔티티 추출 (GLiNER 또는 Spacy)
+
+```python
+# 방법 1: GLiNER (더 정확, 느림)
+from langchain_graph_retriever.transformers.gliner import GlinerTransformer
+
+gliner = GlinerTransformer(
+    labels=["person", "organization", "location", "technology"],
+    metadata_key="entities",
+)
+docs_with_entities = list(gliner.transform_documents(docs_with_keywords))
+
+# 결과 예시
+# doc.metadata["entities"] = [
+#     {"type": "person",       "entity": "귀도 반 로썸"},
+#     {"type": "technology",   "entity": "Django"},
+#     {"type": "technology",   "entity": "Flask"},
+# ]
+
+# 방법 2: SpacyNER (빠름, 영어 최적화)
+from langchain_graph_retriever.transformers.spacy import SpacyNERTransformer
+
+spacy = SpacyNERTransformer(
+    exclude_labels={"CARDINAL", "MONEY", "QUANTITY", "TIME"},
+    metadata_key="entities",
+)
+docs_with_entities = list(spacy.transform_documents(docs_with_keywords))
+```
+
+## Step 6: ShreddingTransformer (Chroma 사용 시)
+
+```python
+from langchain_graph_retriever.transformers import ShreddingTransformer
+
+# keywords와 entities 모두 리스트이므로 Shredding 필요
+shredder = ShreddingTransformer(keys={"keywords", "entities"})
+final_docs = list(shredder.transform_documents(docs_with_entities))
+
+# keywords: ["python", "django"] →
+# 'keywords→"python"': '§', 'keywords→"django"': '§'
+```
+
+## 전체 파이프라인 통합
+
+```python
+from langchain_chroma import Chroma
+from langchain_openai import OpenAIEmbeddings
+from langchain_graph_retriever.adapters.chroma import ChromaAdapter
+from langchain_graph_retriever import GraphRetriever
+from graph_retriever.strategies import Eager
+
+# -- 파이프라인 --
+html_transformer = HtmlTransformer()
+splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+keybert = KeybertTransformer(top_n=5, metadata_key="keywords")
+gliner = GlinerTransformer(
+    labels=["person", "organization", "location", "technology"],
+    metadata_key="entities",
+)
+shredder = ShreddingTransformer(keys={"keywords", "entities"})
+
+# 단계별 처리
+clean = list(html_transformer.transform_documents(raw_docs))
+chunks = splitter.split_documents(clean)
+
+# parent_id 추가
+for i, chunk in enumerate(chunks):
+    src = chunk.metadata.get("source", "doc")
+    chunk.id = f"{src}.{i}"
+    chunk.metadata["parent_id"] = src
+
+with_kw = list(keybert.transform_documents(chunks))
+with_ent = list(gliner.transform_documents(with_kw))
+shredded = list(shredder.transform_documents(with_ent))
+
+# 저장
+vector_store = Chroma.from_documents(
+    documents=shredded,
+    embedding=OpenAIEmbeddings(),
+    collection_name="documents",
+)
+adapter = ChromaAdapter(vector_store, shredder, {"keywords", "entities"})
+
+# GraphRetriever 구성
+retriever = GraphRetriever(
+    store=adapter,
+    edges=[
+        ("keywords", "keywords"),   # 공통 키워드로 연결
+        ("entities", "entities"),   # 공통 엔티티로 연결
+        ("parent_id", "parent_id"), # 같은 문서의 청크들 연결
+        ("category", "category"),   # 같은 카테고리 문서 연결
+    ],
+    strategy=Eager(select_k=15, start_k=3, max_depth=2),
+)
+```
+
+## 엣지 설계 원칙
+
+비구조화 문서에서 사용할 수 있는 엣지 유형:
+
+| 엣지 타입 | 연결 의미 | 소스 |
+|-----------|----------|------|
+| `("keywords", "keywords")` | 공통 키워드 | KeyBERT 추출 |
+| `("entities", "entities")` | 공통 엔티티 | GLiNER/Spacy 추출 |
+| `("parent_id", "parent_id")` | 같은 문서의 청크 | ParentTransformer |
+| `("category", "category")` | 같은 카테고리 | 원본 메타데이터 |
+| `("mentions", "$id")` | 명시적 참조 | HTML 링크 파싱 |
+
+## 실무 체크리스트
+
+```
+[ ] 문서 길이 확인 → 긴 문서는 청크 분할 필수
+[ ] HTML/PDF 파싱 품질 확인 → 불필요한 태그, 공백 제거됐는지
+[ ] 키워드 품질 확인 → 너무 일반적인 키워드는 노이즈
+[ ] 엔티티 타입 선택 → 도메인에 맞는 레이블만 사용
+[ ] Shredding 여부 확인 → Chroma/PGVector 사용 시 필수
+[ ] 엣지 연결 밀도 확인 → 너무 조밀하면 관련 없는 문서까지 연결됨
+```
+
+다음 파일에서는 GraphRAG 시스템을 어떻게 평가할지 살펴본다.
