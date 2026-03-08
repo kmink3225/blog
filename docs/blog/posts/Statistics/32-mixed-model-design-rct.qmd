@@ -1,0 +1,659 @@
+---
+title: "RCT와 A/B 테스트의 설계 원칙"
+subtitle: "무작위 배정, 블라인딩, 검정력 분석, ITT — 임상시험에서 IT로"
+description: |
+  무작위 대조 시험(RCT)의 역사적 기원부터 현대 IT A/B 테스트까지의 설계 원칙을 다룬다.
+  Fisher의 무작위 배정, 층화 배정, 검정력 분석, ITT/Per-Protocol/LATE,
+  그리고 Sequential Testing까지 — 임상시험 방법론이 IT 실험에 어떻게 이식되었는지를 정리한다.
+categories:
+  - Statistics
+  - Epidemiology
+  - Experimentation
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# RCT와 A/B 테스트의 설계 원칙
+
+> 이 파일은 [20번 연구 설계 대분류](./20-mixed-model-study-design.qmd)의 **RCT/A/B Test** 섹션을 확장한 것이다.
+
+---
+
+## 1. RCT의 역사
+
+### Fisher와 무작위 배정의 탄생
+
+1920년대 Ronald Fisher는 Rothamsted 농업 실험소에서 **무작위 배정(Randomization)**의 개념을 정립했다.
+
+핵심 통찰:
+
+- 처치(treatment)와 결과(outcome)의 인과관계를 밝히려면, **알려진 교란 변수뿐 아니라 알려지지 않은 교란 변수**까지 통제해야 한다.
+- 무작위 배정은 모든 교란 변수를 **평균적으로** 균형 잡히게 만드는 유일한 방법이다.
+
+Fisher의 기여:
+
+| 개념 | 설명 |
+|------|------|
+| Randomization | 처치 배정을 확률 과정으로 |
+| Replication | 충분한 반복으로 변동 추정 |
+| Blocking | 알려진 변이원을 층화로 통제 |
+
+### Streptomycin Trial (1948)
+
+현대적 RCT의 원형. Austin Bradford Hill이 설계한 **스트렙토마이신 결핵 치료 시험**.
+
+- 최초의 **무작위 배정** 임상시험으로 공식 인정
+- 환자를 봉인된 봉투로 처치군/대조군에 배정
+- 결핵 사망률: 처치군 7% vs 대조군 27%
+- **블라인딩 없이** 진행 (의사가 배정을 알고 있었음)
+
+이후 발전:
+
+```
+1948  Streptomycin Trial (최초의 현대 RCT)
+1962  Kefauver-Harris Amendment (FDA가 RCT 요구)
+1996  CONSORT 성명서 (RCT 보고 표준)
+2000s IT 기업이 RCT 방법론을 A/B 테스트로 도입
+2010s Sequential Testing, Bayesian A/B 확산
+```
+
+---
+
+## 2. 핵심 원칙
+
+### 2.1 무작위 배정 (Randomization)
+
+**왜 필요한가?**
+
+교란 변수(confounder)는 처치와 결과 모두에 영향을 주는 제3의 변수다.
+
+```
+교란 변수 C
+    ↙     ↘
+처치 T  →  결과 Y
+
+C를 통제하지 않으면 T → Y 효과가 편향됨
+```
+
+무작위 배정의 효과:
+
+$$T \perp\!\!\!\perp C \quad \text{(처치가 교란 변수와 독립)}$$
+
+이는 **측정된 교란 변수와 측정되지 않은 교란 변수 모두**에 대해 성립한다 (대수의 법칙에 의해 근사적으로).
+
+### 2.2 대조군 (Control Group)
+
+| 의학 | IT |
+|------|-----|
+| 위약 (Placebo) | 기존 버전 (Holdout) |
+| 표준 치료 (Standard of Care) | 현재 프로덕션 버전 |
+| 무처치 (No Treatment) | 기능 미노출 |
+
+**위약 효과(Placebo Effect)와 IT:**
+
+- 의학: 환자가 "약을 먹었다"는 사실만으로 증상이 호전
+- IT: **노벨티 효과(Novelty Effect)** — 새 UI라서 일시적으로 클릭 상승
+- 대응: 장기 실험(burn-in period 포함)으로 일시 효과 분리
+
+### 2.3 블라인딩 (Blinding)
+
+```
+단일 맹검 (Single-blind):
+  환자(사용자)가 처치 여부를 모름
+  → IT: 사용자는 어느 버전인지 모름 (대부분 자동)
+
+이중 맹검 (Double-blind):
+  환자 + 의사 모두 모름
+  → IT: 사용자 + 분석가 모두 중간 결과를 모름
+
+삼중 맹검 (Triple-blind):
+  환자 + 의사 + 결과 평가자 모두 모름
+  → IT: 사용자 + 분석가 + 의사결정자 모두 실험 종료 전 결과 미열람
+```
+
+IT에서 블라인딩이 깨지는 경우:
+
+- 분석가가 실험 중간에 대시보드를 확인 → **p-hacking 유발**
+- PM이 "좋아 보이니 일찍 런칭하자" → **조기 종료 편향**
+- 해결: 사전 등록(pre-registration), 자동 의사결정 규칙
+
+---
+
+## 3. 의학 → IT 대응표 (확장)
+
+| 의학 RCT 개념 | IT A/B Test 등가 | 비고 |
+|--------------|-----------------|------|
+| Patient | User | 분석 단위 |
+| Drug / Intervention | Feature / UI 변경 | 처치 |
+| Placebo | Control (기존 버전) | 반사실 |
+| Dose | Exposure intensity | 노출 강도 |
+| Adverse Event (부작용) | Guardrail Metric | 방어 지표 |
+| Primary Endpoint | Primary Metric (OEC) | 핵심 결과 변수 |
+| Secondary Endpoint | Secondary Metrics | 보조 지표 |
+| Inclusion/Exclusion Criteria | Targeting / Eligibility | 실험 대상자 정의 |
+| CONSORT Flow Diagram | Experiment Documentation | 실험 문서화 |
+| IRB (윤리 심의) | Experiment Review Board | 실험 승인 절차 |
+| Informed Consent | 약관 동의 / Privacy Policy | 동의 |
+| Follow-up Period | Observation Window | 관찰 기간 |
+| ITT (Intention-to-Treat) | 배정 기준 분석 | 보수적 |
+| Per-Protocol | 실제 사용 기준 분석 | 선택 편향 주의 |
+| Crossover Design | Switchback Experiment | 시간 단위 교차 |
+| Cluster RCT | Cluster Randomization | 집단 단위 배정 |
+
+---
+
+## 4. 층화 무작위 배정 (Stratified Randomization)
+
+### 개념
+
+단순 무작위 배정은 대수의 법칙에 의해 **평균적으로** 균형을 보장하지만, 표본이 작으면 불균형이 생길 수 있다.
+
+층화 배정은 **사전에 알려진 중요 공변량**에 대해 각 층(stratum) 내에서 독립적으로 배정한다.
+
+```
+전체 표본
+├── 세그먼트 A (파워 유저)  → 50:50 배정
+├── 세그먼트 B (일반 유저)  → 50:50 배정
+└── 세그먼트 C (신규 유저)  → 50:50 배정
+
+→ 각 세그먼트 내에서 처치/대조 비율 보장
+```
+
+### 해시 기반 배정 (Python 코드)
+
+```python
+import hashlib
+import pandas as pd
+import numpy as np
+
+def assign_treatment_stratified(user_id, strata_key, salt="exp_2026_v1", ratio=0.5):
+    """
+    층화 무작위 배정: strata 내에서 독립적으로 해시 배정.
+
+    Parameters
+    ----------
+    user_id : str or int
+        사용자 고유 ID
+    strata_key : str
+        층화 키 (예: segment, country, device)
+    salt : str
+        실험 고유 salt (실험 간 독립성 보장)
+    ratio : float
+        처치군 비율 (기본 50%)
+
+    Returns
+    -------
+    str : "treatment" or "control"
+    """
+    hash_input = f"{user_id}_{strata_key}_{salt}"
+    hash_val = int(hashlib.sha256(hash_input.encode()).hexdigest(), 16)
+    # 0~9999 범위로 변환 → 세밀한 비율 조정 가능
+    bucket = hash_val % 10000
+    return "treatment" if bucket < ratio * 10000 else "control"
+
+
+# --- 예시: 배정 및 균형 확인 ---
+np.random.seed(42)
+users = pd.DataFrame({
+    "user_id": range(10000),
+    "segment": np.random.choice(["power", "normal", "new"], 10000, p=[0.2, 0.5, 0.3]),
+    "country": np.random.choice(["US", "KR", "JP"], 10000, p=[0.4, 0.35, 0.25])
+})
+
+users["treatment"] = users.apply(
+    lambda r: assign_treatment_stratified(r["user_id"], r["segment"]), axis=1
+)
+
+# 공변량 균형 확인
+balance = users.groupby(["segment", "treatment"]).size().unstack(fill_value=0)
+print("=== 세그먼트별 배정 균형 ===")
+print(balance)
+print(f"\n전체 처치군 비율: {(users['treatment']=='treatment').mean():.3f}")
+```
+
+### R 코드
+
+```r
+library(dplyr)
+library(digest)
+
+assign_treatment <- function(user_id, strata_key, salt = "exp_2026_v1", ratio = 0.5) {
+  hash_input <- paste(user_id, strata_key, salt, sep = "_")
+  hash_val <- strtoi(substr(digest(hash_input, algo = "sha256"), 1, 8), base = 16L)
+  bucket <- hash_val %% 10000
+  ifelse(bucket < ratio * 10000, "treatment", "control")
+}
+
+# 배정 균형 확인
+users <- tibble(
+  user_id = 1:10000,
+  segment = sample(c("power", "normal", "new"), 10000, replace = TRUE, prob = c(0.2, 0.5, 0.3))
+) %>%
+  mutate(treatment = assign_treatment(user_id, segment))
+
+users %>% count(segment, treatment) %>% tidyr::pivot_wider(names_from = treatment, values_from = n)
+```
+
+### 공변량 균형 검증
+
+배정 후 반드시 확인해야 할 것:
+
+```python
+from scipy.stats import chi2_contingency
+
+# 카이제곱 검정으로 세그먼트별 균형 확인
+contingency = pd.crosstab(users["segment"], users["treatment"])
+chi2, p_value, dof, expected = chi2_contingency(contingency)
+print(f"Chi-squared = {chi2:.4f}, p-value = {p_value:.4f}")
+# p > 0.05이면 균형이 잡혀 있음
+
+# 연속형 공변량 균형: Standardized Mean Difference (SMD)
+def smd(treat, control):
+    """Standardized Mean Difference"""
+    return (treat.mean() - control.mean()) / np.sqrt((treat.var() + control.var()) / 2)
+
+# SMD < 0.1이면 균형 양호
+```
+
+---
+
+## 5. 검정력 분석 (Power Analysis)
+
+### 개념
+
+실험 전에 **필요한 샘플 크기**를 결정하는 과정.
+
+네 가지 요소 중 세 가지를 알면 나머지 하나를 계산:
+
+| 요소 | 기호 | 설명 | 일반적 값 |
+|------|------|------|----------|
+| 유의수준 | $\alpha$ | Type I Error (False Positive) | 0.05 |
+| 검정력 | $1-\beta$ | Type II Error의 보수 | 0.80 |
+| 효과 크기 | $\delta$ | 처치 효과의 크기 | MDE |
+| 표본 크기 | $n$ | 그룹당 필요 인원 | **구하려는 값** |
+
+### 두 비율 비교 (전환율)의 검정력 수식
+
+$$n = \frac{(z_{\alpha/2} + z_\beta)^2 \left[ p_1(1-p_1) + p_2(1-p_2) \right]}{(p_1 - p_2)^2}$$
+
+여기서:
+
+- $p_1$: 처치군 기대 전환율
+- $p_2$: 대조군 기대 전환율 (기저율)
+- $z_{\alpha/2}$: 유의수준에 대응하는 z값 (양측, $\alpha=0.05$이면 1.96)
+- $z_\beta$: 검정력에 대응하는 z값 ($\beta=0.20$이면 0.84)
+
+### MDE (Minimum Detectable Effect)
+
+$$\text{MDE} = (z_{\alpha/2} + z_\beta) \sqrt{\frac{p(1-p)}{n/2} + \frac{p(1-p)}{n/2}}$$
+
+MDE는 "주어진 샘플 크기로 탐지할 수 있는 최소 효과 크기"이다.
+
+- 트래픽이 많은 서비스 → 작은 MDE 탐지 가능
+- 트래픽이 적은 서비스 → 큰 MDE만 탐지 가능
+- **실무적 의미**: MDE가 비즈니스적으로 유의미한 수준보다 작은지 확인
+
+### Python 코드
+
+```python
+import numpy as np
+from statsmodels.stats.power import NormalIndPower
+from statsmodels.stats.proportion import proportion_effectsize
+
+# --- 시나리오: AI Agent 개인화 실험 ---
+p_control   = 0.10   # 대조군 전환율 (기저율 10%)
+p_treatment = 0.12   # 처치군 기대 전환율 (2%p 개선)
+alpha       = 0.05
+power       = 0.80
+
+# Cohen's h로 변환
+effect_size = proportion_effectsize(p_treatment, p_control)
+print(f"Cohen's h = {effect_size:.4f}")
+
+# 필요 표본 크기 계산
+analysis = NormalIndPower()
+n_per_group = analysis.solve_power(
+    effect_size=effect_size,
+    alpha=alpha,
+    power=power,
+    alternative="two-sided"
+)
+
+n_per_group = int(np.ceil(n_per_group))
+print(f"그룹당 필요 표본: {n_per_group:,}")
+print(f"총 필요 표본:     {n_per_group * 2:,}")
+
+# 일일 트래픽으로 실험 기간 산정
+daily_users = 5000
+experiment_days = int(np.ceil(n_per_group * 2 / daily_users))
+print(f"예상 실험 기간:   {experiment_days}일")
+
+# --- MDE 역산 ---
+n_available = 10000  # 사용 가능한 총 표본
+mde_effect = analysis.solve_power(
+    effect_size=None,
+    nobs1=n_available / 2,
+    alpha=alpha,
+    power=power,
+    alternative="two-sided"
+)
+# Cohen's h를 전환율 차이로 변환 (근사)
+mde_pct = 2 * np.arcsin(np.sqrt(p_control)) + mde_effect
+mde_p = np.sin(mde_pct / 2) ** 2
+print(f"\n{n_available:,}명으로 탐지 가능한 MDE: {(mde_p - p_control)*100:.2f}%p")
+```
+
+### R 코드
+
+```r
+library(pwr)
+
+# 두 비율 비교
+p1 <- 0.12  # 처치군
+p2 <- 0.10  # 대조군
+h <- ES.h(p1, p2)  # Cohen's h
+
+result <- pwr.2p.test(h = h, sig.level = 0.05, power = 0.80, alternative = "two.sided")
+cat("그룹당 필요 표본:", ceiling(result$n), "\n")
+cat("총 필요 표본:", ceiling(result$n) * 2, "\n")
+```
+
+---
+
+## 6. ITT vs Per-Protocol vs LATE
+
+### 각각의 추정 대상
+
+| 분석 방법 | 추정하는 효과 | 수식 | 특징 |
+|----------|-------------|------|------|
+| **ITT** | ATE (Average Treatment Effect) | $E[Y(1) - Y(0)]$ | 배정 기준, 보수적 |
+| **Per-Protocol** | ATT에 가까움 | $E[Y(1) - Y(0) \mid \text{complied}]$ | 선택 편향 위험 |
+| **LATE** | LATE (Local ATE) | $E[Y(1) - Y(0) \mid \text{compliers}]$ | 순응자에게만 효과 |
+
+### ITT (Intention-to-Treat)
+
+```
+배정: 10,000명 → 처치군
+실제 노출: 6,000명만 새 기능 사용
+분석: 10,000명 전체를 처치군으로 분석
+
+→ 처치 효과가 희석됨 (diluted)
+→ 하지만 선택 편향 없음
+→ "배포(deployment)의 효과"를 측정
+```
+
+### Per-Protocol
+
+```
+분석: 6,000명 (실제 사용자)만 처치군으로 분석
+4,000명 (미사용자)은 제외 또는 대조군으로 이동
+
+→ 처치 효과가 더 크게 추정됨
+→ 하지만: "새 기능을 사용한 사람"은 자기 선택 → 편향
+→ 능동적 사용자 ≠ 무작위 표본
+```
+
+### LATE와 도구 변수 접근
+
+배정(assignment) $Z$를 **도구 변수**로 사용하여 순응자(complier)의 효과를 추정:
+
+$$\text{LATE} = \frac{E[Y | Z=1] - E[Y | Z=0]}{E[D | Z=1] - E[D | Z=0]}$$
+
+- 분자: ITT 효과 (reduced form)
+- 분모: 순응률 (first stage)
+- LATE = ITT / 순응률
+
+```python
+# LATE 추정 (2SLS)
+from linearmodels.iv import IV2SLS
+import pandas as pd
+
+# Z: 배정 (instrument)
+# D: 실제 노출 (endogenous treatment)
+# Y: 결과
+
+# 2SLS: Z → D → Y
+model = IV2SLS.from_formula("Y ~ 1 + [D ~ Z]", data=df)
+result = model.fit(cov_type="robust")
+print(result.summary)
+```
+
+```r
+# R: ivreg
+library(ivreg)
+model <- ivreg(Y ~ D | Z, data = df)
+summary(model)
+```
+
+---
+
+## 7. 중간 분석과 Sequential Testing
+
+### 문제: Peeking Problem
+
+매일 p-value를 확인하면 **전체 false positive rate**가 명목 $\alpha$를 크게 초과한다.
+
+```
+검정 횟수     실제 False Positive Rate (α=0.05)
+1             5.0%
+5             14.0%
+10            19.3%
+50            37.1%
+100           48.3%
+
+→ 매일 확인하는 A/B 테스트는 사실상 α >> 5%
+```
+
+### O'Brien-Fleming 경계값
+
+중간 분석 시점마다 다른 기각 기준을 적용:
+
+$$z_k^* = z_{\alpha/2} \cdot \sqrt{\frac{K}{k}}$$
+
+여기서 $k$는 현재 분석 시점, $K$는 총 분석 횟수.
+
+```python
+import numpy as np
+from scipy.stats import norm
+
+def obrien_fleming_boundary(K, alpha=0.05):
+    """
+    O'Brien-Fleming 경계값 계산.
+    초반에 매우 엄격하고 후반에 완화됨.
+    """
+    z_alpha = norm.ppf(1 - alpha / 2)
+    boundaries = []
+    for k in range(1, K + 1):
+        z_boundary = z_alpha * np.sqrt(K / k)
+        p_boundary = 2 * (1 - norm.cdf(z_boundary))
+        boundaries.append({
+            "analysis": f"{k}/{K}",
+            "information_fraction": k / K,
+            "z_boundary": z_boundary,
+            "p_boundary": p_boundary
+        })
+    return boundaries
+
+# 4회 중간 분석
+results = obrien_fleming_boundary(K=4)
+for r in results:
+    print(f"분석 {r['analysis']}: "
+          f"정보 분율 = {r['information_fraction']:.0%}, "
+          f"z > {r['z_boundary']:.3f}, "
+          f"p < {r['p_boundary']:.5f}")
+```
+
+```
+분석 1/4: 정보 분율 = 25%, z > 3.920, p < 0.00009
+분석 2/4: 정보 분율 = 50%, z > 2.772, p < 0.00557
+분석 3/4: 정보 분율 = 75%, z > 2.263, p < 0.02362
+분석 4/4: 정보 분율 = 100%, z > 1.960, p < 0.05000
+```
+
+초반은 극도로 보수적이고 최종 분석은 일반 검정과 동일한 수준.
+
+### Always-Valid p-value (mSPRT)
+
+**Mixture Sequential Probability Ratio Test**는 어느 시점에서든 멈추어도 Type I Error를 통제한다.
+
+$$\Lambda_n = \frac{1}{H} \int_0^H \prod_{i=1}^{n} \frac{f(x_i; \theta)}{f(x_i; 0)} \, d\theta$$
+
+여기서 mixing distribution $H$를 적분하여 항상 유효한 검정 통계량을 구성한다.
+
+```python
+import numpy as np
+
+def msprt_stat(x_treat, x_control, tau_squared=1.0):
+    """
+    Simplified mSPRT for normal data.
+    H0: mu_treat = mu_control
+    H1: mu_treat != mu_control (normal mixture prior with variance tau^2)
+    """
+    n_t = len(x_treat)
+    n_c = len(x_control)
+
+    # pooled variance estimate
+    s2 = ((x_treat.var() * (n_t - 1) + x_control.var() * (n_c - 1))
+          / (n_t + n_c - 2))
+
+    # effective sample size
+    n_eff = (n_t * n_c) / (n_t + n_c)
+
+    # observed difference
+    delta_hat = x_treat.mean() - x_control.mean()
+
+    # mSPRT likelihood ratio
+    V = s2 / n_eff  # variance of delta_hat
+    lambda_stat = np.sqrt(V / (V + tau_squared)) * np.exp(
+        delta_hat**2 * tau_squared / (2 * V * (V + tau_squared))
+    )
+
+    return lambda_stat
+
+# 사용: lambda_stat > 1/alpha 이면 기각
+# np.random.seed(0)
+# x_t = np.random.normal(0.05, 1, 1000)  # 처치군 (약간의 효과)
+# x_c = np.random.normal(0.00, 1, 1000)  # 대조군
+# stat = msprt_stat(x_t, x_c)
+# print(f"mSPRT statistic: {stat:.4f}, reject H0: {stat > 1/0.05}")
+```
+
+### R 코드: Sequential Testing
+
+```r
+library(gsDesign)
+
+# Group sequential design (O'Brien-Fleming)
+design <- gsDesign(
+  k = 4,              # 4번 중간 분석
+  test.type = 2,      # 양측 검정
+  alpha = 0.025,      # 단측 alpha (양측 0.05)
+  beta = 0.20,        # 검정력 80%
+  sfu = sfOF          # O'Brien-Fleming spending function
+)
+
+# 경계값 출력
+print(design)
+plot(design)
+```
+
+---
+
+## 8. 실무 예시: AI Agent A/B 테스트 설계 체크리스트
+
+### 실험 설계 체크리스트
+
+```
+□ 1. 가설 정의
+  - H0: 새 추천 알고리즘은 만족도에 영향을 주지 않는다
+  - H1: 새 추천 알고리즘은 만족도를 향상시킨다
+  - Primary metric: 세션 만족도 (1-5 Likert)
+  - Guardrail metrics: 에러율, 세션 이탈률, 응답 지연시간
+
+□ 2. 검정력 분석
+  - 기저율: 평균 만족도 3.2 (SD 1.1)
+  - MDE: 0.1점 개선 (실질적으로 의미 있는 최소 크기)
+  - α = 0.05, Power = 0.80
+  - 필요 표본: 그룹당 ~1,900명
+  - 예상 실험 기간: 8일 (일일 500명 기준)
+
+□ 3. 무작위 배정
+  - 배정 단위: 사용자 (user-level)
+  - 층화: 세그먼트 (power/normal/new) × 기기 (mobile/desktop)
+  - 해시 기반 배정 (salt: "rec_algo_v2_2026")
+  - 배정 후 공변량 균형 검증 (SRM check)
+
+□ 4. 블라인딩
+  - 사용자: 처치 인지 불가 (백엔드 알고리즘 변경)
+  - 분석가: 실험 종료 전 결과 확인 금지
+  - 의사결정: 사전 정의된 기준에 따라 자동 판정
+
+□ 5. 분석 계획
+  - 분석 방법: ITT (배정 기준)
+  - 보조 분석: Per-Protocol, 세그먼트별 이질적 효과
+  - Sequential testing: O'Brien-Fleming, 주 1회 중간 분석
+  - 다중 비교: Bonferroni 보정 (guardrail metrics)
+
+□ 6. 문서화
+  - 실험 설계 문서 (pre-registration)
+  - 분석 코드 사전 작성
+  - 의사결정 기준 사전 합의
+```
+
+### Python: 전체 파이프라인 스케치
+
+```python
+import pandas as pd
+import numpy as np
+from scipy.stats import ttest_ind, chi2_contingency
+
+# --- Step 1: 배정 ---
+users = load_eligible_users()
+users["treatment"] = users.apply(
+    lambda r: assign_treatment_stratified(r["user_id"], r["segment"]), axis=1
+)
+
+# --- Step 2: SRM Check (Sample Ratio Mismatch) ---
+observed = users["treatment"].value_counts()
+chi2, p_srm = chi2_contingency(
+    pd.DataFrame({"obs": observed, "exp": [len(users)/2]*2}).values
+)[:2]
+assert p_srm > 0.001, f"SRM detected! p = {p_srm:.6f}"
+
+# --- Step 3: 결과 수집 후 분석 ---
+results = users.merge(outcomes, on="user_id")
+
+treat = results.loc[results["treatment"] == "treatment", "satisfaction"]
+control = results.loc[results["treatment"] == "control", "satisfaction"]
+
+# ITT 분석
+t_stat, p_value = ttest_ind(treat, control)
+effect = treat.mean() - control.mean()
+print(f"Effect: {effect:.4f}, p-value: {p_value:.4f}")
+
+# Guardrail check
+error_treat = results.loc[results["treatment"]=="treatment", "error_rate"].mean()
+error_control = results.loc[results["treatment"]=="control", "error_rate"].mean()
+print(f"Error rate: treat={error_treat:.4f}, control={error_control:.4f}")
+```
+
+---
+
+## 9. 요약
+
+| 원칙 | 의학 기원 | IT 적용 |
+|------|---------|---------|
+| 무작위 배정 | Fisher (1920s) | 해시 기반 A/B 배정 |
+| 대조군 | 위약 대조 | 기존 버전 Holdout |
+| 블라인딩 | 이중 맹검 | 분석가/PM 결과 비공개 |
+| 검정력 분석 | 임상 프로토콜 필수 | MDE 기반 실험 기간 산정 |
+| ITT | 배정 기준 분석 | 노출 무관 전체 분석 |
+| Sequential Testing | DSMB 중간 분석 | Always-Valid p-value |
+
+**핵심**: A/B 테스트는 "코드 한 줄 짜면 끝"이 아니라, 100년 이상의 임상시험 방법론이 응축된 과학적 절차다.
+
+---
+
+**다음 파일**: [33 — 관찰 연구 설계: 코호트, 케이스-컨트롤, 단면 연구](./33-mixed-model-design-observational.qmd)

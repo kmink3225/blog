@@ -1,0 +1,804 @@
+---
+title: "XGBoost + 시간 피처 공학 (Temporal Feature Engineering)"
+subtitle: "종단 데이터를 테이블 형태로 변환하여 Gradient Boosting 적용"
+description: |
+  반복 측정 데이터를 XGBoost에 적용하려면 시간적 의존성을 명시적 피처로 변환해야 한다.
+  Lag, Rolling, Trend, Cumulative 피처 공학을 상세히 다루고,
+  데이터 누출 방지(GroupShuffleSplit, Walk-forward), SHAP 해석,
+  LMM+XGBoost 앙상블까지 Python과 R 코드로 구현한다.
+categories:
+  - Statistics
+  - Machine Learning
+  - Feature Engineering
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# XGBoost + 시간 피처 공학
+
+## 핵심 아이디어: 종단 데이터 → Tabular 변환
+
+### 왜 변환이 필요한가
+
+XGBoost는 **독립 행(i.i.d.)** 가정의 테이블 데이터를 입력으로 받는다. 종단 데이터는 같은 개체의 반복 측정이므로 시간적 의존성이 존재한다. 이를 무시하고 그냥 넣으면:
+
+1. **정보 손실**: 시간 추세, 변동 패턴이 반영 안 됨
+2. **데이터 누출**: 같은 사용자의 미래 값이 훈련에 섞임
+3. **독립성 위반**: 같은 사용자의 관측치가 상관됨
+
+**해결**: 시간적 의존성을 **명시적 피처**로 인코딩한다.
+
+```
+원본 종단 데이터:
+user_id | week | satisfaction | personalized | segment
+   1    |  1   |     3.5      |      0       |   SI
+   1    |  2   |     3.8      |      0       |   SI
+   1    |  3   |     4.1      |      1       |   SI
+   1    |  4   |     3.9      |      1       |   SI
+   ...
+
+변환 후 (XGBoost 입력):
+user_id | week | sat | sat_lag1 | sat_lag2 | sat_roll3_mean | sat_trend2 | cum_pers | session_num
+   1    |  4   | 3.9 |   4.1    |   3.8    |      3.8       |   +0.3     |   0.50   |     4
+```
+
+---
+
+## 시간 피처 공학 상세
+
+### 1. Lag Features (이전 시점 값)
+
+가장 기본적인 시간 피처. 과거 $k$ 시점의 값을 현재 행에 복사한다.
+
+$$\text{lag}_k(y_{it}) = y_{i,t-k}$$
+
+```python
+import pandas as pd
+import numpy as np
+
+def add_lag_features(df, target, lags, group_col="user_id"):
+    """과거 k 시점의 값을 피처로 추가"""
+    df = df.sort_values([group_col, "week"])
+    for lag in lags:
+        df[f"{target}_lag{lag}"] = (
+            df.groupby(group_col)[target].shift(lag)
+        )
+    return df
+
+# 사용
+df = add_lag_features(df, "satisfaction", lags=[1, 2, 3])
+```
+
+**직관**: "이 사용자는 지난주 만족도가 3.8이었다" → 이번 주 이탈 여부를 예측하는 데 강력한 신호
+
+**주의**: lag=1은 "직전 시점"이므로 가장 강력하지만, lag가 커질수록 NaN이 많아진다.
+
+### 2. Rolling Statistics (이동 통계량)
+
+최근 $w$ 시점의 통계량. 단기 추세와 변동성을 포착한다.
+
+$$\text{roll\_mean}_w(y_{it}) = \frac{1}{w} \sum_{k=1}^{w} y_{i,t-k}$$
+
+$$\text{roll\_std}_w(y_{it}) = \sqrt{\frac{1}{w-1} \sum_{k=1}^{w} (y_{i,t-k} - \overline{y})^2}$$
+
+```python
+def add_rolling_features(df, target, windows, group_col="user_id"):
+    """이동 평균, 표준편차, 최솟값, 최댓값"""
+    df = df.sort_values([group_col, "week"])
+    for w in windows:
+        # shift(1): 현재 시점 제외 (미래 정보 사용 방지)
+        rolled = df.groupby(group_col)[target].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1)
+        )
+        # rolling 객체에서 통계량 추출
+        df[f"{target}_roll{w}_mean"] = (
+            df.groupby(group_col)[target]
+            .transform(lambda x: x.shift(1).rolling(w, min_periods=1).mean())
+        )
+        df[f"{target}_roll{w}_std"] = (
+            df.groupby(group_col)[target]
+            .transform(lambda x: x.shift(1).rolling(w, min_periods=1).std())
+        )
+        df[f"{target}_roll{w}_min"] = (
+            df.groupby(group_col)[target]
+            .transform(lambda x: x.shift(1).rolling(w, min_periods=1).min())
+        )
+        df[f"{target}_roll{w}_max"] = (
+            df.groupby(group_col)[target]
+            .transform(lambda x: x.shift(1).rolling(w, min_periods=1).max())
+        )
+    return df
+
+df = add_rolling_features(df, "satisfaction", windows=[3, 5])
+```
+
+**직관**:
+
+- `roll3_mean`: "최근 3주 평균 만족도" — 단기 수준
+- `roll3_std`: "최근 3주 만족도 변동" — 불안정하면 이탈 위험
+- `roll5_min`: "최근 5주 최저 만족도" — 한 번이라도 크게 떨어졌는가
+
+### 3. Trend Features (추세)
+
+값의 변화 방향과 속도를 포착한다.
+
+$$\text{diff}_k(y_{it}) = y_{i,t-1} - y_{i,t-1-k}$$
+
+$$\text{slope}(y_{it}) = \frac{\sum_{k=1}^{w}(k - \bar{k})(y_{i,t-k} - \bar{y})}{\sum_{k=1}^{w}(k - \bar{k})^2}$$
+
+```python
+def add_trend_features(df, target, group_col="user_id"):
+    """변화량과 기울기"""
+    df = df.sort_values([group_col, "week"])
+
+    # 1차 차분: 직전 대비 변화
+    df[f"{target}_diff1"] = (
+        df.groupby(group_col)[target].diff(1)
+    )
+
+    # 2차 차분: 변화의 변화 (가속도)
+    df[f"{target}_diff2"] = (
+        df.groupby(group_col)[f"{target}_diff1"].diff(1)
+    )
+
+    # 최근 3시점 기울기 (선형 회귀 slope)
+    def rolling_slope(series, w=3):
+        def slope(arr):
+            if len(arr) < 2 or arr.isna().any():
+                return np.nan
+            x = np.arange(len(arr))
+            return np.polyfit(x, arr, 1)[0]
+        return series.shift(1).rolling(w, min_periods=2).apply(slope)
+
+    df[f"{target}_slope3"] = (
+        df.groupby(group_col)[target].transform(lambda x: rolling_slope(x, 3))
+    )
+
+    return df
+
+df = add_trend_features(df, "satisfaction")
+```
+
+**직관**:
+
+- `diff1 < 0`: 만족도가 하락 중 → 이탈 신호
+- `diff2 < 0`: 하락이 가속되고 있음 → 더 강한 이탈 신호
+- `slope3`: 최근 3주의 전반적 추세 기울기
+
+### 4. Cumulative Features (누적 통계)
+
+개체의 전체 이력을 요약한다. 시간이 흐를수록 더 안정적인 추정값이 된다.
+
+$$\text{expanding\_mean}(y_{it}) = \frac{1}{t-1} \sum_{s=1}^{t-1} y_{is}$$
+
+```python
+def add_cumulative_features(df, target, group_col="user_id"):
+    """누적 평균, 누적 최솟값, 누적 최댓값"""
+    df = df.sort_values([group_col, "week"])
+
+    # 누적 평균 (현재 시점 제외)
+    df[f"{target}_cum_mean"] = (
+        df.groupby(group_col)[target]
+        .transform(lambda x: x.shift(1).expanding().mean())
+    )
+
+    # 누적 최솟값
+    df[f"{target}_cum_min"] = (
+        df.groupby(group_col)[target]
+        .transform(lambda x: x.shift(1).expanding().min())
+    )
+
+    # 누적 표준편차
+    df[f"{target}_cum_std"] = (
+        df.groupby(group_col)[target]
+        .transform(lambda x: x.shift(1).expanding().std())
+    )
+
+    return df
+
+df = add_cumulative_features(df, "satisfaction")
+```
+
+### 5. Session-level Features (세션 수준)
+
+시간 자체에 대한 메타 정보:
+
+```python
+def add_session_features(df, group_col="user_id", time_col="week"):
+    """세션 번호, 경과 시간, 간격"""
+    df = df.sort_values([group_col, time_col])
+
+    # 세션 번호 (1부터 시작)
+    df["session_num"] = df.groupby(group_col).cumcount() + 1
+
+    # 첫 세션으로부터의 경과 시간
+    df["time_since_first"] = (
+        df.groupby(group_col)[time_col]
+        .transform(lambda x: x - x.iloc[0])
+    )
+
+    # 세션 간 간격 (불규칙 측정 시 유용)
+    df["time_gap"] = df.groupby(group_col)[time_col].diff()
+
+    # 전체 관찰 기간 대비 현재 위치 (0~1)
+    df["time_ratio"] = (
+        df.groupby(group_col)[time_col]
+        .transform(lambda x: (x - x.min()) / max(x.max() - x.min(), 1))
+    )
+
+    return df
+
+df = add_session_features(df)
+```
+
+### 피처 공학 전체 파이프라인
+
+```python
+def create_all_temporal_features(df, target="satisfaction"):
+    """모든 시간 피처를 한 번에 생성"""
+    df = df.sort_values(["user_id", "week"])
+
+    # 1. Lag
+    df = add_lag_features(df, target, lags=[1, 2, 3])
+
+    # 2. Rolling
+    df = add_rolling_features(df, target, windows=[3, 5])
+
+    # 3. Trend
+    df = add_trend_features(df, target)
+
+    # 4. Cumulative
+    df = add_cumulative_features(df, target)
+
+    # 5. Session-level
+    df = add_session_features(df)
+
+    # 6. 누적 개인화 비율
+    df["cumulative_personalized"] = (
+        df.groupby("user_id")["personalized"]
+        .transform(lambda x: x.shift(1).expanding().mean())
+    )
+
+    # NaN 제거 (lag로 인한 초기 행)
+    df = df.dropna()
+
+    return df
+
+df_feat = create_all_temporal_features(df)
+print(f"원본: {df.shape} → 변환 후: {df_feat.shape}")
+# 예: (5000, 8) → (4200, 28) — 행 감소(NaN 제거), 열 증가(피처 추가)
+```
+
+---
+
+## 데이터 누출 방지
+
+종단 데이터에서 train/test 분리를 잘못하면 **미래 정보가 훈련에 유입**된다. 이는 평가 지표를 과대 추정하는 심각한 문제다.
+
+### 잘못된 방법: Random Split
+
+```
+❌ 문제:
+User 1의 week 3 → train
+User 1의 week 5 → test
+
+week 5 예측 시 week 3의 lag 피처가 사용됨
+→ 모델이 "같은 사용자의 과거"를 이미 알고 있음
+→ 실제 배포에서는 이 사용자가 처음 보는 사용자일 수도 있음
+```
+
+### 방법 1: GroupShuffleSplit (사용자 단위 분리)
+
+**사용자 전체를** train 또는 test에 배정. 같은 사용자의 관측치가 양쪽에 섞이지 않는다.
+
+```python
+from sklearn.model_selection import GroupShuffleSplit
+
+gss = GroupShuffleSplit(n_splits=5, test_size=0.2, random_state=42)
+
+for fold, (train_idx, test_idx) in enumerate(
+    gss.split(df_feat, groups=df_feat["user_id"])
+):
+    X_train = df_feat.iloc[train_idx][feature_cols]
+    X_test  = df_feat.iloc[test_idx][feature_cols]
+    y_train = df_feat.iloc[train_idx][target]
+    y_test  = df_feat.iloc[test_idx][target]
+    # 학습 및 평가...
+```
+
+**적합한 상황**: 새로운 사용자에 대한 예측 성능 평가 (cold start 시나리오)
+
+### 방법 2: TimeSeriesSplit (시간 기반 분리)
+
+과거 데이터로 학습하고 미래 데이터로 평가한다.
+
+```python
+# 전체 시간 범위를 기준으로 분할
+cutoff_week = df_feat["week"].quantile(0.8)
+
+train_mask = df_feat["week"] <= cutoff_week
+test_mask  = df_feat["week"] > cutoff_week
+
+X_train = df_feat[train_mask][feature_cols]
+X_test  = df_feat[test_mask][feature_cols]
+y_train = df_feat[train_mask][target]
+y_test  = df_feat[test_mask][target]
+
+print(f"Train weeks: 1~{int(cutoff_week)}, Test weeks: {int(cutoff_week)+1}~")
+```
+
+**적합한 상황**: 시간 경과에 따른 모델 성능 평가 (temporal generalization)
+
+### 방법 3: Walk-forward Validation
+
+가장 현실적인 평가. 매 시점마다 재학습하며 다음 시점을 예측한다.
+
+```python
+def walk_forward_cv(df_feat, feature_cols, target, weeks):
+    """Walk-forward cross-validation"""
+    results = []
+    for t in weeks[4:]:  # 최소 4주의 학습 데이터 필요
+        train_mask = df_feat["week"] < t
+        test_mask  = df_feat["week"] == t
+
+        X_tr = df_feat[train_mask][feature_cols]
+        y_tr = df_feat[train_mask][target]
+        X_te = df_feat[test_mask][feature_cols]
+        y_te = df_feat[test_mask][target]
+
+        if len(X_te) == 0:
+            continue
+
+        model = xgb.XGBClassifier(
+            n_estimators=100, max_depth=4,
+            learning_rate=0.1, random_state=42
+        )
+        model.fit(X_tr, y_tr, verbose=False)
+
+        prob = model.predict_proba(X_te)[:, 1]
+        auc = roc_auc_score(y_te, prob) if y_te.nunique() > 1 else np.nan
+        results.append({"week": t, "auc": auc, "n_test": len(y_te)})
+
+    return pd.DataFrame(results)
+
+results = walk_forward_cv(df_feat, feature_cols, "will_churn_next_week",
+                          sorted(df_feat["week"].unique()))
+print(f"평균 AUC: {results['auc'].mean():.3f}")
+```
+
+**적합한 상황**: 실제 운영 환경의 성능을 가장 정확하게 반영
+
+### 분리 전략 비교
+
+| 전략 | 누출 방지 | 현실 반영 | 데이터 효율 | 적합 상황 |
+|------|-----------|-----------|-------------|-----------|
+| Random Split | ❌ | ❌ | ✅ | **사용 금지** |
+| GroupShuffleSplit | ✅ | △ | ✅ | 새 사용자 예측 |
+| TimeSeriesSplit | ✅ | ✅ | △ | 시간 일반화 |
+| Walk-forward | ✅ | ✅✅ | ❌ | 실제 운영 시뮬레이션 |
+
+---
+
+## XGBoost 하이퍼파라미터 가이드
+
+### 핵심 파라미터
+
+| 파라미터 | 역할 | 종단 데이터 권장값 | 설명 |
+|---------|------|-------------------|------|
+| `n_estimators` | 트리 수 | 200~500 | early_stopping과 함께 사용 |
+| `max_depth` | 트리 깊이 | 3~6 | 깊으면 과적합, 종단 데이터는 4~5 |
+| `learning_rate` | 학습률 | 0.01~0.1 | 낮을수록 더 많은 트리 필요 |
+| `subsample` | 행 샘플링 비율 | 0.7~0.9 | 과적합 방지 |
+| `colsample_bytree` | 열 샘플링 비율 | 0.6~0.8 | 시간 피처가 상관되므로 낮게 |
+| `min_child_weight` | leaf 최소 가중치 | 5~20 | 소그룹 과적합 방지 |
+| `reg_alpha` | L1 정규화 | 0~1 | 피처 선택 효과 |
+| `reg_lambda` | L2 정규화 | 1~5 | 계수 축소 |
+| `scale_pos_weight` | 클래스 불균형 | `n_neg / n_pos` | 이탈이 드문 경우 |
+
+### 종단 데이터에서의 특수 고려사항
+
+```python
+# 시간 피처는 서로 상관이 높으므로 colsample을 낮게
+# 사용자 수가 변수 수보다 적으면 정규화 강화
+
+model = xgb.XGBClassifier(
+    n_estimators=500,
+    max_depth=4,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.7,     # 시간 피처 간 상관 고려
+    min_child_weight=10,       # 소그룹 안정성
+    reg_alpha=0.5,             # L1 — 불필요 피처 제거
+    reg_lambda=2.0,            # L2 — 계수 축소
+    scale_pos_weight=3.0,      # 이탈 비율이 25%일 때
+    random_state=42,
+    eval_metric="auc",
+    early_stopping_rounds=30,
+)
+```
+
+### Optuna를 활용한 자동 튜닝
+
+```python
+import optuna
+
+def objective(trial):
+    params = {
+        "n_estimators": trial.suggest_int("n_estimators", 100, 500),
+        "max_depth": trial.suggest_int("max_depth", 3, 7),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+        "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "min_child_weight": trial.suggest_int("min_child_weight", 3, 20),
+        "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
+        "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+    }
+
+    model = xgb.XGBClassifier(**params, random_state=42, eval_metric="auc")
+
+    # GroupShuffleSplit으로 CV
+    scores = []
+    gss = GroupShuffleSplit(n_splits=3, test_size=0.2, random_state=42)
+    for tr_idx, te_idx in gss.split(X, groups=df_feat["user_id"].iloc[X.index]):
+        model.fit(X.iloc[tr_idx], y.iloc[tr_idx], verbose=False)
+        prob = model.predict_proba(X.iloc[te_idx])[:, 1]
+        scores.append(roc_auc_score(y.iloc[te_idx], prob))
+
+    return np.mean(scores)
+
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=50)
+print(f"Best AUC: {study.best_value:.3f}")
+print(f"Best params: {study.best_params}")
+```
+
+---
+
+## 실무 예시: AI Agent 이탈 예측
+
+### 전체 파이프라인
+
+```python
+import xgboost as xgb
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.metrics import roc_auc_score, classification_report
+
+# 1. 데이터 생성 (실제로는 DB에서 추출)
+np.random.seed(42)
+n_users = 200
+n_weeks = 8
+
+records = []
+for uid in range(n_users):
+    base_sat = np.random.normal(3.5, 0.5)
+    segment = np.random.choice(["SI", "MIEP", "N"], p=[0.5, 0.3, 0.2])
+    personalized = 1 if segment == "MIEP" else 0
+    for w in range(1, n_weeks + 1):
+        sat = base_sat + np.random.normal(0, 0.3) + 0.05 * w * personalized
+        records.append({
+            "user_id": uid,
+            "week": w,
+            "satisfaction": np.clip(sat, 1, 5),
+            "personalized": personalized,
+            "segment": segment,
+            "turn_count": np.random.poisson(8),
+            "emotion_score": np.random.normal(0.1, 0.3),
+        })
+
+df = pd.DataFrame(records)
+
+# 이탈 레이블: 마지막 주 만족도가 3.0 미만이면 이탈
+last_week = df.groupby("user_id").tail(1)
+churn_map = (last_week.set_index("user_id")["satisfaction"] < 3.0).astype(int)
+df["will_churn"] = df["user_id"].map(churn_map)
+
+# 2. 시간 피처 생성
+df_feat = create_all_temporal_features(df)
+
+# 3. 피처 정의
+feature_cols = [
+    "satisfaction_lag1", "satisfaction_lag2", "satisfaction_lag3",
+    "satisfaction_roll3_mean", "satisfaction_roll3_std",
+    "satisfaction_roll5_mean", "satisfaction_roll5_max",
+    "satisfaction_diff1", "satisfaction_slope3",
+    "satisfaction_cum_mean", "satisfaction_cum_std",
+    "cumulative_personalized", "session_num", "time_ratio",
+    "turn_count", "emotion_score", "week"
+]
+target = "will_churn"
+
+# 4. 사용자 단위 분리
+gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+train_idx, test_idx = next(gss.split(df_feat, groups=df_feat["user_id"]))
+
+X_train = df_feat.iloc[train_idx][feature_cols]
+X_test  = df_feat.iloc[test_idx][feature_cols]
+y_train = df_feat.iloc[train_idx][target]
+y_test  = df_feat.iloc[test_idx][target]
+
+# 5. XGBoost 학습
+model = xgb.XGBClassifier(
+    n_estimators=300,
+    max_depth=4,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.7,
+    min_child_weight=10,
+    random_state=42,
+    eval_metric="auc",
+)
+model.fit(
+    X_train, y_train,
+    eval_set=[(X_test, y_test)],
+    verbose=50,
+)
+
+# 6. 평가
+auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
+print(f"\nAUC: {auc:.3f}")
+print(classification_report(y_test, model.predict(X_test)))
+```
+
+---
+
+## R 코드: xgboost + recipes
+
+```r
+library(xgboost)
+library(recipes)
+library(dplyr)
+library(tidyr)
+library(rsample)
+library(yardstick)
+
+# 데이터 준비 (tidyverse 스타일 피처 공학)
+set.seed(42)
+
+# recipe로 시간 피처 생성
+df_r <- df %>%
+  arrange(user_id, week) %>%
+  group_by(user_id) %>%
+  mutate(
+    # Lag 피처
+    sat_lag1 = lag(satisfaction, 1),
+    sat_lag2 = lag(satisfaction, 2),
+    sat_lag3 = lag(satisfaction, 3),
+
+    # Rolling 평균 (최근 3주, 현재 제외)
+    sat_roll3_mean = zoo::rollmeanr(lag(satisfaction), k = 3, fill = NA),
+    sat_roll3_sd   = zoo::rollapplyr(lag(satisfaction), width = 3,
+                                      FUN = sd, fill = NA),
+
+    # 추세
+    sat_diff1 = satisfaction - lag(satisfaction),
+    sat_diff2 = sat_diff1 - lag(sat_diff1),
+
+    # 누적
+    sat_cum_mean = cummean(lag(satisfaction)),
+
+    # 세션
+    session_num = row_number(),
+    cum_personalized = cummean(lag(personalized))
+  ) %>%
+  ungroup() %>%
+  drop_na()
+
+# 사용자 단위 분할
+user_ids <- unique(df_r$user_id)
+train_users <- sample(user_ids, 0.8 * length(user_ids))
+
+train_data <- df_r %>% filter(user_id %in% train_users)
+test_data  <- df_r %>% filter(!user_id %in% train_users)
+
+# XGBoost 입력 변환
+features <- c("sat_lag1", "sat_lag2", "sat_lag3",
+              "sat_roll3_mean", "sat_roll3_sd",
+              "sat_diff1", "sat_cum_mean",
+              "session_num", "cum_personalized",
+              "turn_count", "emotion_score", "week")
+
+dtrain <- xgb.DMatrix(
+  data = as.matrix(train_data[, features]),
+  label = train_data$will_churn
+)
+dtest <- xgb.DMatrix(
+  data = as.matrix(test_data[, features]),
+  label = test_data$will_churn
+)
+
+# XGBoost 학습
+params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  max_depth = 4,
+  eta = 0.05,
+  subsample = 0.8,
+  colsample_bytree = 0.7,
+  min_child_weight = 10
+)
+
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 300,
+  watchlist = list(test = dtest),
+  print_every_n = 50
+)
+
+# 평가
+pred_prob <- predict(xgb_model, dtest)
+cat(sprintf("AUC: %.3f\n",
+    yardstick::roc_auc_vec(
+      factor(test_data$will_churn),
+      pred_prob
+    )))
+```
+
+---
+
+## SHAP 해석: 시간 피처의 기여도
+
+### 전역 SHAP
+
+```python
+import shap
+
+explainer = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(X_test)
+
+# Summary plot — 어떤 피처가 전반적으로 중요한가
+shap.summary_plot(shap_values, X_test, feature_names=feature_cols)
+```
+
+```
+SHAP 변수 중요도 (예시):
+satisfaction_lag1       |████████████████  ← 직전 만족도가 가장 중요
+satisfaction_roll3_std  |██████████        ← 최근 변동성
+satisfaction_slope3     |████████          ← 추세 기울기
+satisfaction_cum_mean   |██████            ← 장기 평균
+cumulative_personalized |█████             ← 누적 개인화 경험
+session_num             |████              ← 얼마나 오래 사용했는가
+emotion_score           |███
+...
+```
+
+### 개별 예측 해석
+
+```python
+# 특정 사용자 (이탈 직전)의 예측 해석
+idx = 0  # 첫 번째 테스트 사용자
+shap.waterfall_plot(shap.Explanation(
+    values=shap_values[idx],
+    base_values=explainer.expected_value,
+    data=X_test.iloc[idx],
+    feature_names=feature_cols
+))
+```
+
+```
+예시 해석:
+Base value (평균 이탈 확률): 0.25
++ satisfaction_lag1 = 2.1  → +0.18 (매우 낮은 직전 만족도)
++ satisfaction_slope3 = -0.4 → +0.12 (하락 추세)
++ satisfaction_roll3_std = 0.8 → +0.08 (불안정)
+- cumulative_personalized = 0.6 → -0.05 (개인화 경험이 보호 효과)
+= 최종 예측: 0.58 (이탈 확률 58%)
+```
+
+### 시간에 따른 SHAP 변화
+
+```python
+# 특정 사용자의 주차별 SHAP 변화 추적
+def track_shap_over_time(user_id, df_feat, model, feature_cols):
+    """한 사용자의 시간에 따른 SHAP 값 변화"""
+    user_data = df_feat[df_feat["user_id"] == user_id].sort_values("week")
+    X_user = user_data[feature_cols]
+
+    explainer = shap.TreeExplainer(model)
+    shap_vals = explainer.shap_values(X_user)
+
+    # 주요 피처의 SHAP 값 시계열
+    for feat_idx, feat_name in enumerate(feature_cols[:5]):
+        plt.plot(user_data["week"], shap_vals[:, feat_idx], label=feat_name)
+
+    plt.xlabel("Week")
+    plt.ylabel("SHAP Value")
+    plt.title(f"User {user_id} — 주차별 피처 기여도 변화")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    plt.show()
+```
+
+---
+
+## LMM과 XGBoost 앙상블: 통계 + ML 결합
+
+### 왜 앙상블인가
+
+| LMM | XGBoost |
+|-----|---------|
+| 개인 랜덤 효과 추정 (shrinkage) | 비선형 패턴 포착 |
+| 신뢰구간 제공 | 변수 교호작용 자동 포착 |
+| 소표본에 강건 | 대규모 데이터에 강함 |
+| **구조적 지식** | **데이터 기반 패턴** |
+
+두 모델의 강점을 결합하면 **개인 효과 + 비선형 패턴**을 동시에 포착할 수 있다.
+
+### 방법 1: LMM 잔차를 XGBoost로 모델링 (Stacking)
+
+```python
+import statsmodels.formula.api as smf
+
+# Step 1: LMM 적합 — 개인 랜덤 효과 + 선형 고정 효과
+lmm = smf.mixedlm(
+    "satisfaction ~ week + personalized + C(segment)",
+    data=df,
+    groups=df["user_id"],
+    re_formula="~week"
+)
+lmm_result = lmm.fit(reml=True)
+
+# Step 2: LMM 잔차 계산
+df["lmm_predicted"] = lmm_result.fittedvalues
+df["lmm_residual"] = df["satisfaction"] - df["lmm_predicted"]
+
+# Step 3: 잔차에 시간 피처 적용 후 XGBoost로 모델링
+df_res = create_all_temporal_features(df.rename(
+    columns={"lmm_residual": "satisfaction"}  # 파이프라인 재사용
+))
+# XGBoost가 LMM이 놓친 비선형 패턴을 학습
+
+# Step 4: 최종 예측 = LMM 예측 + XGBoost 잔차 예측
+```
+
+### 방법 2: LMM 출력을 XGBoost 피처로 추가
+
+```python
+# LMM에서 추출한 피처
+# 1. 개인 랜덤 효과 (Random Intercept, Slope)
+random_effects = lmm_result.random_effects
+df["re_intercept"] = df["user_id"].map(
+    lambda uid: random_effects[uid][0]  # random intercept
+)
+df["re_slope"] = df["user_id"].map(
+    lambda uid: random_effects[uid][1]  # random slope
+)
+
+# 2. LMM 예측값
+df["lmm_pred"] = lmm_result.fittedvalues
+
+# 3. 이들을 XGBoost 피처에 추가
+extended_features = feature_cols + ["re_intercept", "re_slope", "lmm_pred"]
+
+# XGBoost에 확장된 피처로 학습
+model_ensemble = xgb.XGBClassifier(...)
+model_ensemble.fit(X_train[extended_features], y_train)
+```
+
+### 앙상블 효과
+
+```
+모델               AUC
+────────────────────────
+LMM only           0.72
+XGBoost only       0.84
+LMM + XGBoost      0.87  ← 개선
+```
+
+---
+
+## 요약
+
+| 핵심 | 내용 |
+|------|------|
+| **시간 피처 공학** | Lag, Rolling, Trend, Cumulative, Session-level로 시간 의존성을 명시적 피처로 변환 |
+| **데이터 누출** | GroupShuffleSplit (사용자 단위) 또는 Walk-forward (시간 단위)로 방지 |
+| **XGBoost 튜닝** | colsample_bytree를 낮게 (시간 피처 상관), early_stopping 필수 |
+| **SHAP 해석** | 시간 피처 기여도를 전역/개별/시계열로 해석 |
+| **앙상블** | LMM (구조) + XGBoost (비선형) 결합으로 성능 향상 |
+
+**다음**: [23 — Hidden Markov Model for Longitudinal Data](./23-mixed-model-ml-hmm.qmd) — 관측 불가능한 잠재 상태 전환의 발견
