@@ -1926,3 +1926,239 @@ p8105 같은 공중보건 과목맥락에서는 **웨어러블 기기 데이터*
 ## 결론
 
 > FDA는 전통 통계의 수학적 언어(회귀, 분산, 검정)를 **함수 공간으로 일반화**한 것으로, 전통 통계도 ML도 아닌 **독립적 패러다임**입니다. 단, 전통 통계에 더 가깝고, R의 `fda`, `refund` 패키지로 구현합니다.
+
+---
+
+# GLM 통합 프레임워크 (제목에서 약속한 핵심 내용)
+
+위 P8105 HTML에서 lm → glm으로 자연스럽게 흘렀지만, **왜 이것들이 모두 같은 프레임워크인가**를 명시적으로 설명한다.
+
+## GLM의 세 구성 요소
+
+모든 GLM은 세 요소로 정의된다:
+
+| 구성 요소 | 역할 | 예시 |
+|---|---|---|
+| **Random component** | 결과 변수의 분포 | Normal, Binomial, Poisson |
+| **Systematic component** | 선형 예측자 $\eta = X\beta$ | 설계 행렬 × 계수 |
+| **Link function** | $\mu$와 $\eta$를 연결 | identity, logit, log |
+
+$$g(\mu) = \eta = X\beta$$
+
+- $\mu = E[Y]$: 기댓값
+- $g(\cdot)$: link function
+- $\eta$: linear predictor
+
+---
+
+## t-test부터 포아송까지 모두 GLM
+
+| 분석 방법 | 분포 | Link | 코드 |
+|---|---|---|---|
+| t-test / 선형 회귀 | Gaussian | identity ($\mu = X\beta$) | `lm()` 또는 `glm(family=gaussian)` |
+| 로지스틱 회귀 | Binomial | logit ($\log\frac{\mu}{1-\mu} = X\beta$) | `glm(family=binomial)` |
+| 포아송 회귀 | Poisson | log ($\log\mu = X\beta$) | `glm(family=poisson)` |
+| 감마 회귀 | Gamma | inverse 또는 log | `glm(family=Gamma)` |
+
+**직관**: 결과 변수의 분포만 바꾸면 같은 `glm()` 함수로 모두 처리된다. 프레임워크가 같다.
+
+---
+
+## 설계 행렬 (Design Matrix)
+
+`price ~ stars + borough`를 R에서 실행하면 내부적으로 다음 행렬이 생성된다:
+
+$$X = \begin{bmatrix}
+1 & \text{stars}_1 & \mathbb{1}[\text{Brooklyn}]_1 & \mathbb{1}[\text{Queens}]_1 & \mathbb{1}[\text{Bronx}]_1 \\
+1 & \text{stars}_2 & \mathbb{1}[\text{Brooklyn}]_2 & \mathbb{1}[\text{Queens}]_2 & \mathbb{1}[\text{Bronx}]_2 \\
+\vdots & \vdots & \vdots & \vdots & \vdots
+\end{bmatrix}$$
+
+핵심:
+- **절편 열 ($\mathbf{1}$)** 자동 포함
+- **범주형 변수**는 dummy coding으로 자동 변환 (기준 범주 = Manhattan)
+- 기준 범주를 바꿔도 모델 fit은 동일, 해석의 편의만 달라짐
+
+```r
+# R: 내부 설계 행렬 확인
+model.matrix(~ stars + borough, data = nyc_airbnb) |> head(3)
+```
+
+```python
+# Python: pandas로 동일한 설계 행렬 생성
+import pandas as pd
+X = pd.get_dummies(df[['stars', 'borough']], drop_first=True)
+X.insert(0, 'intercept', 1)
+```
+
+---
+
+## Link Function 직관
+
+| Link | 수식 | 언제 쓰나 |
+|---|---|---|
+| identity | $\mu = X\beta$ | 결과가 실수 전체 범위 (연속형) |
+| logit | $\log\frac{\mu}{1-\mu} = X\beta$ | 결과가 0~1 확률 (이진) |
+| log | $\log\mu = X\beta$ | 결과가 양수 (카운트, 비율) |
+| inverse | $1/\mu = X\beta$ | 결과가 양수 + 우측 꼬리 (생존 시간 등) |
+
+**logit link 직관**: 확률 $p \in (0,1)$를 실수 전체로 늘려준다.
+$$\text{log-odds} = \log\frac{p}{1-p} \in (-\infty, +\infty)$$
+그래서 $X\beta$가 어떤 값이어도 확률로 역변환하면 항상 $(0,1)$ 안에 들어온다.
+
+---
+
+## Python statsmodels 코드
+
+R의 `lm` / `glm`에 해당하는 Python 구현:
+
+```python
+import statsmodels.formula.api as smf
+import statsmodels.api as sm
+import pandas as pd
+
+# 데이터 (NYC Airbnb)
+# df = pd.read_csv(...)
+
+# 1. 선형 회귀 (Gaussian + identity link)
+fit_lm = smf.ols('price ~ stars + C(borough)', data=df).fit()
+print(fit_lm.summary())
+
+# 2. 로지스틱 회귀 (Binomial + logit link)
+fit_logistic = smf.glm(
+    'resolved ~ victim_age + C(victim_race) + C(victim_sex)',
+    data=baltimore_df,
+    family=sm.families.Binomial()
+).fit()
+
+# OR 계산
+import numpy as np
+OR = np.exp(fit_logistic.params)
+print(OR)
+
+# 3. 포아송 회귀 (Poisson + log link)
+fit_poisson = smf.glm(
+    'count ~ stars + C(borough)',
+    data=df,
+    family=sm.families.Poisson()
+).fit()
+
+# 4. broom::tidy() 상당 — params + conf_int
+summary_df = pd.DataFrame({
+    'estimate': fit_lm.params,
+    'std_error': fit_lm.bse,
+    'p_value': fit_lm.pvalues
+})
+print(summary_df)
+```
+
+---
+
+## AI Agent 실무 예시
+
+**시나리오**: AI Agent 개인화 실험 — 개인화 여부가 사용자 만족도(5점 척도)에 미치는 효과
+
+```python
+import statsmodels.formula.api as smf
+import pandas as pd
+
+# 데이터 구조: user_id, session_id, personalized(0/1), segment, satisfaction(1-5)
+# df = pd.read_csv('agent_experiment.csv')
+
+# GLM: 만족도 ~ 개인화 + 세그먼트 (단순 독립 관측치 가정)
+fit_glm = smf.glm(
+    'satisfaction ~ personalized + C(segment)',
+    data=df,
+    family=smf.families.Gaussian()  # 연속형 → Gaussian
+).fit()
+
+print(fit_glm.summary())
+
+# 해석: personalized 계수 = 개인화 시 평균 만족도 변화
+# 예: β = 0.42 → 개인화 시 만족도 0.42점 상승 (5점 척도)
+```
+
+```r
+# R 버전
+library(tidyverse)
+
+fit_glm <- glm(
+  satisfaction ~ personalized + segment,
+  data = agent_df,
+  family = gaussian()
+)
+
+broom::tidy(fit_glm)
+# term          estimate std.error statistic p.value
+# personalized  0.42     0.08      5.25      <0.001
+# segmentMIEP   0.31     0.10      3.10       0.002
+```
+
+**왜 GLM을 쓰는가**: 만족도가 5점 척도라면 사실 순서형(ordinal)이지만, 연속형으로 근사하는 것이 실용적이며 해석이 쉽다. 더 정확하게는 ordinal logistic regression을 써야 한다.
+
+---
+
+## GLM → Mixed Model로의 자연스러운 확장
+
+위 AI Agent 예시에서 같은 사용자가 여러 세션에 걸쳐 반복 측정된다면:
+
+```
+문제: 같은 user_id의 데이터는 독립이 아님 → GLM 가정 위반
+해결: Random effect로 사용자별 기준선 차이를 모델에 포함
+```
+
+```python
+# statsmodels MixedLM (선형 혼합 모델)
+import statsmodels.formula.api as smf
+
+fit_lmm = smf.mixedlm(
+    'satisfaction ~ personalized + C(segment)',
+    data=df,
+    groups=df['user_id']  # user_id별 random intercept
+).fit()
+
+print(fit_lmm.summary())
+```
+
+```r
+library(lme4)
+
+fit_lmm <- lmer(
+  satisfaction ~ personalized + segment + (1 | user_id),
+  data = agent_df
+)
+
+broom.mixed::tidy(fit_lmm)
+```
+
+| 모델 | 가정 | 적합 상황 |
+|---|---|---|
+| GLM | 모든 관측치 독립 | 횡단면 데이터 (1인 1회 측정) |
+| LMM | 같은 user 내 관측치는 상관 | 반복 측정 / 종단 데이터 |
+
+---
+
+## 전체 흐름 요약
+
+```
+t-test
+  ↓ (회귀로 일반화)
+선형 회귀 (lm)
+  ↓ (비정규 결과 변수)
+GLM (glm: logistic, Poisson, Gamma)
+  ↓ (반복 측정, 군집 데이터)
+Mixed Model / GEE
+  ↓ (비선형 공변량 관계)
+GAM / GAMM
+  ↓ (결과 변수 자체가 함수)
+FDA
+```
+
+**핵심 원리**: 분포만 바꾸면 같은 프레임워크(`glm()`)로 처리 가능. 독립성 가정이 깨지면 Mixed Model / GEE로 넘어간다.
+
+| 단계 | 새로운 복잡성 | 해결책 |
+|---|---|---|
+| 비정규 분포 | Gaussian 가정 위반 | GLM (link function 선택) |
+| 반복 측정 | 독립성 가정 위반 | LMM / GEE (random effect / working correlation) |
+| 비선형 관계 | 선형 가정 위반 | GAM (spline) |
+| 함수형 데이터 | 벡터 → 함수 공간 | FDA |
