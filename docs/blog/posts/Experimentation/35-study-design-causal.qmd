@@ -1,0 +1,1113 @@
+---
+title: "인과 추론 프레임워크 총정리"
+subtitle: "Potential Outcomes, DAG, Matching, IV — 관찰 데이터에서 인과를 추론하는 무기들"
+description: |
+  인과 추론의 두 대 프레임워크(Rubin Causal Model과 Pearl의 Structural Causal Model),
+  핵심 도구(Matching, Propensity Score, Instrumental Variables, Mediation Analysis),
+  그리고 종단 데이터 맥락의 인과 추론(G-methods, Marginal Structural Model)을
+  Python과 R 코드로 정리한다.
+categories:
+  - Statistics
+  - Causal Inference
+  - Study Design
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+## 1. 왜 인과 추론인가
+
+### Correlation $\neq$ Causation
+
+통계 분석의 궁극적 목표 중 하나는 **"X가 Y를 일으키는가?"**에 답하는 것이다. 그러나 관찰 데이터에서 발견한 상관관계는 인과가 아닐 수 있다.
+
+**아이스크림 판매량과 익사 사고 수**는 강한 양의 상관을 보인다. 아이스크림이 익사를 유발하는가? 아니다 --- 공통 원인(confounder)인 **기온**이 둘 다 올린다.
+
+### Simpson's Paradox
+
+| | 치료 성공 | 치료 실패 | 성공률 |
+|---|---|---|---|
+| 전체: 약물 A | 200/350 | 150/350 | 57% |
+| 전체: 약물 B | 180/350 | 170/350 | 51% |
+
+약물 A가 더 좋아 보인다. 그런데 **중증도별**로 나누면:
+
+| 중증도 | 약물 A 성공률 | 약물 B 성공률 |
+|--------|--------------|--------------|
+| 경증 | 80/100 = 80% | 230/270 = **85%** |
+| 중증 | 120/250 = 48% | 50/80 = **63%** |
+
+모든 하위 그룹에서 B가 우월하다. A가 전체적으로 좋아 보인 이유는 A가 중증 환자에게 더 많이 처방되었기 때문이다. 이것이 **Simpson's Paradox**이며, 교란 변수(중증도)를 통제하지 않으면 잘못된 결론에 도달한다.
+
+### 교란(Confounding)과 선택 편향(Selection Bias)
+
+| 위협 | 정의 | 예시 |
+|------|------|------|
+| **Confounding** | 처리와 결과에 모두 영향을 주는 제3변수 | 교육 수준 → (수입, 건강) |
+| **Selection Bias** | 처리 할당이 결과와 관련된 특성에 의존 | 건강한 사람이 자발적으로 운동 프로그램 참여 |
+| **Reverse Causation** | Y → X 방향이 실제 인과 | 부유한 나라가 민주주의? 민주주의가 부유? |
+
+### RCT는 Gold Standard이지만...
+
+Randomized Controlled Trial(RCT)은 무작위 배정으로 confounding을 제거하는 최강의 설계다 ([32편 참조](./32-study-design-rct.qmd)). 그러나:
+
+- **윤리적 불가**: 흡연의 폐암 효과를 실험할 수 없다
+- **비용/시간**: 대규모 장기 RCT는 수십억 원
+- **외적 타당도**: 실험실 조건 $\neq$ 현실
+- **이미 수집된 관찰 데이터**: EHR, 로그 데이터, 행정 데이터
+
+따라서 **관찰 데이터에서 인과를 추론하는 체계적 프레임워크**가 필수다.
+
+---
+
+## 2. Rubin Causal Model (Potential Outcomes)
+
+### 잠재 결과 프레임워크
+
+Donald Rubin이 체계화한 **Potential Outcomes Framework** (Neyman-Rubin Causal Model)은 인과를 **반사실(counterfactual)**로 정의한다.
+
+개체 $i$에 대해:
+
+- $T_i \in \{0, 1\}$: 처리 여부 (treatment indicator)
+- $Y_i(1)$: 처리를 **받았을 때**의 잠재 결과
+- $Y_i(0)$: 처리를 **받지 않았을 때**의 잠재 결과
+
+**개체 수준 인과 효과 (Individual Causal Effect)**:
+
+$$
+\tau_i = Y_i(1) - Y_i(0)
+$$
+
+### 인과 추론의 근본 문제 (Fundamental Problem)
+
+각 개체는 $Y_i(1)$ 또는 $Y_i(0)$ 중 **하나만 관찰**할 수 있다.
+
+$$
+Y_i^{obs} = T_i \cdot Y_i(1) + (1 - T_i) \cdot Y_i(0)
+$$
+
+관찰되지 않는 잠재 결과를 **counterfactual**이라 한다. $\tau_i$는 직접 계산할 수 없으므로 **집단 수준의 인과 효과**를 추정한다.
+
+### 인과 효과의 종류
+
+| 추정량 | 정의 | 해석 |
+|--------|------|------|
+| **ATE** (Average Treatment Effect) | $E[Y(1) - Y(0)]$ | 전체 집단에서 평균적 처리 효과 |
+| **ATT** (ATE on the Treated) | $E[Y(1) - Y(0) \mid T=1]$ | 실제 처리받은 집단의 평균 효과 |
+| **ATC** (ATE on the Control) | $E[Y(1) - Y(0) \mid T=0]$ | 비처리 집단이 처리받았다면? |
+| **CATE** (Conditional ATE) | $E[Y(1) - Y(0) \mid X=x]$ | 특정 특성을 가진 하위 집단의 효과 |
+| **SATE** | $\frac{1}{n}\sum_i [Y_i(1) - Y_i(0)]$ | 표본 내 평균 효과 |
+| **PATE** | $E_{pop}[Y(1) - Y(0)]$ | 모집단 평균 효과 |
+
+### 식별 가정 (Identification Assumptions)
+
+ATE를 관찰 데이터에서 식별하려면 다음 가정이 필요하다:
+
+**1. 무시가능성 (Ignorability / Unconfoundedness)**
+
+$$
+\{Y(1), Y(0)\} \perp\!\!\!\perp T \mid X
+$$
+
+공변량 $X$를 조건부로 하면, 처리 할당이 잠재 결과와 독립이다. 즉, 관측된 $X$로 모든 교란을 설명할 수 있다.
+
+**2. 양의 확률 (Positivity / Overlap)**
+
+$$
+0 < P(T=1 \mid X=x) < 1 \quad \forall x
+$$
+
+모든 공변량 수준에서 처리/비처리 모두 가능해야 한다.
+
+**3. SUTVA (Stable Unit Treatment Value Assumption)**
+
+- **No interference**: $i$의 결과가 $j$의 처리에 영향받지 않음
+- **No hidden variations**: 처리의 버전이 하나임
+
+SUTVA 하에서, 무시가능성과 양의 확률이 성립하면:
+
+$$
+\text{ATE} = E_X \big[ E[Y \mid T=1, X] - E[Y \mid T=0, X] \big]
+$$
+
+---
+
+## 3. Pearl의 Structural Causal Model (SCM)
+
+### DAG (Directed Acyclic Graph)
+
+Judea Pearl이 제안한 **Structural Causal Model**은 변수 간 인과 구조를 **DAG**로 표현한다.
+
+```
+    U
+   / \
+  v   v
+  T --> Y
+  ^   /
+  |  /
+  X
+```
+
+- **Node**: 변수
+- **Edge (→)**: 직접 인과 관계
+- **Acyclic**: 순환 없음
+
+### 구조 방정식 (Structural Equations)
+
+SCM은 각 변수를 부모 변수와 외생 변수(noise)의 함수로 표현한다:
+
+$$
+\begin{aligned}
+X &= f_X(U_X) \\
+T &= f_T(X, U_T) \\
+Y &= f_Y(T, X, U_Y)
+\end{aligned}
+$$
+
+여기서 $U_X, U_T, U_Y$는 서로 독립인 외생 변수(exogenous noise)다.
+
+### do-calculus와 개입
+
+Pearl의 핵심 통찰: **관찰(seeing)**과 **개입(doing)**은 다르다.
+
+- **관찰**: $P(Y \mid T=1)$ — "T=1인 사람의 Y"
+- **개입**: $P(Y \mid do(T=1))$ — "T를 1로 강제 설정했을 때 Y"
+
+$do(T=t)$는 DAG에서 $T$로 들어오는 모든 화살표를 **절단**하고 $T=t$로 고정한다. 이를 **mutilated graph**라 한다.
+
+$$
+\text{ATE} = E[Y \mid do(T=1)] - E[Y \mid do(T=0)]
+$$
+
+### d-Separation
+
+DAG에서 두 변수 사이의 **조건부 독립**을 판별하는 규칙이다.
+
+세 가지 기본 구조:
+
+| 구조 | 패턴 | $X$ 조건부 | 경로 차단? |
+|------|------|-----------|-----------|
+| **Chain** (매개) | $A \to B \to C$ | $B$를 조건부 | 차단 |
+| **Fork** (교란) | $A \leftarrow B \to C$ | $B$를 조건부 | 차단 |
+| **Collider** (충돌) | $A \to B \leftarrow C$ | 조건부 안 함 | 이미 차단 |
+| | | $B$를 조건부 | **열림!** |
+
+Collider에서 조건부를 걸면 경로가 **열리는** 것이 핵심이다. 이것이 **collider bias** (selection bias)의 원인이다.
+
+**Collider Bias의 직관적 이해:**
+
+Collider($B$)는 두 원인($A$, $C$)이 동시에 영향을 주는 결과 변수다. $B$를 조건부로 고정하면, 본래 무관한 $A$와 $C$ 사이에 가짜 상관이 생긴다.
+
+```
+IT 예시: 채용 편향
+
+  코딩 실력(A) ──→ 합격(B) ←── 의사소통 능력(C)
+
+  A와 C는 원래 독립이다 (코딩과 소통은 무관).
+  그런데 "합격자(B=1)"만 분석하면?
+  → 합격자 중에서는 코딩이 약한 사람은 소통이 뛰어난 덕에 합격한 것
+  → 코딩 ↑ 이면 소통 ↓ 인 것처럼 보이는 음의 상관이 생김
+  → 이것은 실제 인과가 아니라 collider bias
+
+IT A/B 테스트에서의 collider bias:
+
+  처치(T) ──→ 체류시간(M) ←── 관심도(U)
+
+  "체류시간이 긴 사용자"만 분석하면?
+  → M을 조건부하면 T와 U 사이에 가짜 경로가 열림
+  → 처치의 효과가 왜곡됨
+  → 해결: M(체류시간)으로 서브그룹 분석하지 말 것!
+
+일반 규칙: 결과 변수(또는 결과의 후손)를 조건부/통제하면 collider bias 발생
+           → 분석 시 "어떤 변수를 통제해야 하는가"는 DAG를 그려야만 판단 가능
+```
+
+### Backdoor Criterion
+
+변수 집합 $Z$가 $(T, Y)$에 대해 **backdoor criterion**을 만족하면:
+
+1. $Z$의 어떤 변수도 $T$의 후손(descendant)이 아니다
+2. $Z$가 $T$와 $Y$ 사이의 모든 **backdoor path**를 차단한다
+
+이때:
+
+$$
+P(Y \mid do(T=t)) = \sum_z P(Y \mid T=t, Z=z) \cdot P(Z=z)
+$$
+
+이를 **backdoor adjustment** (또는 adjustment formula)라 한다.
+
+**Backdoor의 직관:**
+
+"Backdoor path"란 처치($T$)에서 결과($Y$)로 가는 경로 중, $T$로 **들어오는** 화살표를 타고 역방향으로 거슬러 올라가는 경로다. 이 경로가 열려 있으면 교란이 발생한다. Backdoor criterion을 만족하는 $Z$를 조건부로 하면 이 뒷문 경로를 차단하여 $T \to Y$ 직접 효과만 남긴다.
+
+```
+예: IT 서비스에서 새 기능(T)이 구매(Y)에 미치는 효과
+
+     사용자 세그먼트(Z)
+        ↙        ↘
+  새 기능 사용(T) → 구매(Y)
+
+  파워 유저(Z=power)는 새 기능을 더 많이 쓰고(T↑),
+  동시에 원래 구매도 더 많이 한다(Y↑).
+  Z를 통제하지 않으면 T → Y 효과에 Z의 영향이 섞임.
+
+  Backdoor path: T ← Z → Y
+  Z를 조건부로 하면 이 경로가 차단됨
+  → 세그먼트별로 T의 Y 효과를 추정한 뒤 가중 평균
+```
+
+### Frontdoor Criterion
+
+$T \to M \to Y$ 구조에서 $T \leftarrow U \to Y$의 미관측 교란이 있을 때, 매개변수 $M$을 통한 식별:
+
+$$
+P(Y \mid do(T=t)) = \sum_m P(M=m \mid T=t) \sum_{t'} P(Y \mid M=m, T=t') P(T=t')
+$$
+
+Frontdoor criterion은 미관측 교란이 있어도 인과 효과를 식별할 수 있는 강력한 도구다. 단, $T \to M$ 경로에 교란이 없어야 한다.
+
+**Frontdoor Criterion의 직관:**
+
+Backdoor criterion은 "교란 변수를 직접 관측하여 통제"하는 방식이다. 하지만 교란 변수가 미관측이면 backdoor는 쓸 수 없다. Frontdoor는 이 상황에서 **매개변수($M$)를 경유**하여 우회적으로 인과 효과를 식별한다.
+
+```
+상황: 흡연(T) → 타르 축적(M) → 폐암(Y)
+      흡연(T) ←── 유전적 성향(U) ──→ 폐암(Y)
+      U는 미관측이므로 backdoor 조정 불가
+
+Frontdoor 전략 (2단계):
+  1단계: T → M 효과 추정
+    흡연 → 타르 축적은 U와 무관하게 추정 가능
+    (유전적 성향은 타르 축적량에 직접 영향 없음)
+
+  2단계: M → Y 효과 추정
+    타르 → 폐암 효과는 T를 조건부로 하면 U의 교란이 차단됨
+    (T를 통제하면 T ← U → Y 경로가 차단)
+
+  결합: T → M → Y 전체 효과 = (T→M 효과) × (M→Y 효과)
+```
+
+IT 적용 가능 시나리오:
+```
+광고 노출(T) → 앱 설치(M) → 구매(Y)
+광고 노출(T) ←── 사용자 관심도(U) ──→ 구매(Y)
+
+U(관심도)는 직접 측정이 어렵지만,
+"광고 → 앱 설치" 경로와 "앱 설치 → 구매" 경로를
+각각 식별할 수 있다면 frontdoor로 광고의 구매 효과를 추정 가능
+
+단, 실무적 제약: "M에 영향을 주는 것이 오직 T뿐"이라는
+가정이 성립하기 어려운 경우가 많아, 적용 범위는 제한적
+```
+
+---
+
+## 4. RCM vs SCM 비교
+
+| 차원 | Rubin Causal Model (RCM) | Pearl's Structural Causal Model (SCM) |
+|------|--------------------------|---------------------------------------|
+| **핵심 개념** | 잠재 결과 $Y(1), Y(0)$ | 구조 방정식 + DAG |
+| **인과 정의** | $Y_i(1) - Y_i(0)$ | $P(Y \mid do(T))$ |
+| **가정 표현** | 수학적 조건 (ignorability) | 그래프 (DAG) |
+| **장점** | 추정량 정의가 명확, 통계적 | 가정을 시각적으로 인코딩, 직관적 |
+| **약점** | 가정의 타당성 판단이 어려움 | 비모수적 식별에 머무를 수 있음 |
+| **주 사용 분야** | 역학, 경제학, 사회과학 | CS, AI, 역학 |
+| **Mediation** | 최근에 통합 (VanderWeele) | 자연스럽게 표현 |
+| **Time-varying** | Robins의 G-methods로 확장 | 동적 DAG로 확장 |
+
+**실무적 결론**: 두 프레임워크는 **상호 보완적**이다.
+
+- DAG로 **가정을 명시**하고, 어떤 변수를 통제해야 하는지 판단
+- Potential outcomes로 **추정량을 정의**하고, 통계적 추론 수행
+
+---
+
+## 5. Matching & Propensity Score
+
+### 매칭의 직관
+
+RCT에서 처리/대조군은 모든 공변량에서 균형(balance)을 이룬다. 관찰 데이터에서 이 균형을 **사후적으로** 만드는 것이 매칭이다.
+
+### Exact Matching
+
+공변량 $X$의 값이 **정확히 같은** 처리군-대조군 쌍을 매칭한다.
+
+- 장점: 완벽한 균형
+- 단점: **차원의 저주** — 공변량이 많으면 매칭 불가능한 개체 증가
+
+### Coarsened Exact Matching (CEM)
+
+공변량을 구간(bin)으로 나눈 뒤 exact matching. 차원의 저주를 완화한다.
+
+### Nearest Neighbor Matching
+
+거리(Mahalanobis, Euclidean)가 가장 가까운 쌍을 매칭한다.
+
+$$
+d(i,j) = (X_i - X_j)^T \Sigma^{-1} (X_i - X_j) \quad \text{(Mahalanobis)}
+$$
+
+### Propensity Score: 정의
+
+**Propensity Score**는 공변량이 주어졌을 때 처리를 받을 확률이다:
+
+$$
+e(X) = P(T = 1 \mid X)
+$$
+
+Rosenbaum & Rubin (1983)의 핵심 정리:
+
+> $\{Y(1), Y(0)\} \perp\!\!\!\perp T \mid X$ 이면 $\{Y(1), Y(0)\} \perp\!\!\!\perp T \mid e(X)$
+
+즉, 다차원 $X$ 대신 **1차원 스칼라** $e(X)$로 조건부를 대체할 수 있다.
+
+### Propensity Score 추정
+
+가장 일반적인 방법은 **로지스틱 회귀**:
+
+$$
+\log \frac{e(X)}{1 - e(X)} = \beta_0 + \beta_1 X_1 + \cdots + \beta_p X_p
+$$
+
+GBM, Random Forest 등 ML 방법도 사용 가능하다.
+
+### PSM (Propensity Score Matching)
+
+추정된 $\hat{e}(X)$를 기준으로 nearest neighbor matching을 수행한다.
+
+$$
+\widehat{\text{ATT}} = \frac{1}{n_1} \sum_{i: T_i=1} \left[ Y_i - Y_{j(i)} \right]
+$$
+
+여기서 $j(i)$는 $i$에 매칭된 대조군이다.
+
+### IPTW (Inverse Probability of Treatment Weighting)
+
+매칭 대신, 각 개체에 **가중치**를 부여하여 pseudo-population을 만든다:
+
+$$
+w_i = \frac{T_i}{\hat{e}(X_i)} + \frac{1 - T_i}{1 - \hat{e}(X_i)}
+$$
+
+ATE 추정:
+
+$$
+\widehat{\text{ATE}}_{IPTW} = \frac{\sum_i T_i Y_i / \hat{e}(X_i)}{\sum_i T_i / \hat{e}(X_i)} - \frac{\sum_i (1-T_i) Y_i / (1 - \hat{e}(X_i))}{\sum_i (1-T_i) / (1 - \hat{e}(X_i))}
+$$
+
+### Stratification
+
+$\hat{e}(X)$를 5~10개 구간으로 나누고, 각 구간 내에서 처리 효과를 추정한 뒤 가중 평균한다.
+
+### Doubly Robust Estimator
+
+**결과 모델**(outcome regression)과 **처리 모델**(propensity score)을 **동시에** 사용한다:
+
+$$
+\widehat{\text{ATE}}_{DR} = \frac{1}{n} \sum_{i=1}^{n} \left[ \hat{\mu}_1(X_i) - \hat{\mu}_0(X_i) + \frac{T_i (Y_i - \hat{\mu}_1(X_i))}{\hat{e}(X_i)} - \frac{(1-T_i)(Y_i - \hat{\mu}_0(X_i))}{1-\hat{e}(X_i)} \right]
+$$
+
+여기서 $\hat{\mu}_t(X) = \hat{E}[Y \mid T=t, X]$. **두 모델 중 하나만 맞아도** ATE가 일치 추정량이 된다.
+
+### Balance Diagnostics
+
+매칭/가중 후 공변량 균형을 반드시 확인해야 한다:
+
+- **Standardized Mean Difference (SMD)**: $|SMD| < 0.1$ 이면 양호
+- **Variance Ratio**: 0.5 ~ 2.0 범위
+- **Love Plot**: SMD를 시각화
+
+$$
+\text{SMD} = \frac{\bar{X}_{T=1} - \bar{X}_{T=0}}{\sqrt{(s_{T=1}^2 + s_{T=0}^2)/2}}
+$$
+
+---
+
+## 6. Instrumental Variables (IV)
+
+### 왜 IV가 필요한가
+
+Ignorability가 성립하지 않는 경우 --- 즉, **미관측 교란(unmeasured confounding)**이 있을 때 --- matching이나 propensity score는 편향된다. 이때 **Instrumental Variable**이 대안이다.
+
+### IV의 정의
+
+변수 $Z$가 $T$에 대한 도구변수이려면 세 가지 조건을 만족해야 한다:
+
+1. **Relevance**: $Z$와 $T$가 상관 — $\text{Cov}(Z, T) \neq 0$
+2. **Exclusion Restriction**: $Z$는 $T$를 통해서만 $Y$에 영향 — $Z \to T \to Y$ (직접 경로 $Z \to Y$ 없음)
+3. **Independence**: $Z$와 미관측 교란 $U$가 독립 — $Z \perp\!\!\!\perp U$
+
+DAG로 표현하면:
+
+```
+Z ----> T ----> Y
+          ^    ^
+          |    |
+          U ---+
+```
+
+$Z$는 $T$에 영향을 주지만, $Y$에는 $T$를 통해서만 영향을 준다.
+
+### 2SLS (Two-Stage Least Squares)
+
+**1단계**: $T$를 $Z$에 회귀하여 예측값 $\hat{T}$ 계산
+
+$$
+T_i = \alpha_0 + \alpha_1 Z_i + \epsilon_i \quad \Rightarrow \quad \hat{T}_i = \hat{\alpha}_0 + \hat{\alpha}_1 Z_i
+$$
+
+**2단계**: $Y$를 $\hat{T}$에 회귀
+
+$$
+Y_i = \beta_0 + \beta_1 \hat{T}_i + \eta_i
+$$
+
+$\hat{\beta}_1$이 인과 효과의 일치 추정량이다.
+
+### 간단한 IV 추정량 (Wald Estimator)
+
+$Z$가 이진변수일 때:
+
+$$
+\hat{\beta}_{IV} = \frac{\bar{Y}_{Z=1} - \bar{Y}_{Z=0}}{\bar{T}_{Z=1} - \bar{T}_{Z=0}} = \frac{\text{Reduced Form}}{\text{First Stage}}
+$$
+
+### Weak Instruments Problem
+
+$Z$와 $T$의 상관이 약하면 ($F$-statistic < 10), 2SLS 추정량은 심한 편향과 큰 분산을 가진다. **1단계 F-통계량 > 10**이 전통적 기준이다 (Stock & Yogo).
+
+### LATE 해석
+
+IV가 추정하는 것은 ATE가 아니라 **LATE (Local Average Treatment Effect)**:
+
+$$
+\text{LATE} = E[Y(1) - Y(0) \mid \text{Compliers}]
+$$
+
+**Compliers**: 도구변수 $Z$의 값에 따라 처리 여부가 바뀌는 하위 집단. Always-takers나 Never-takers의 효과는 식별되지 않는다.
+
+### 예시: 병원까지 거리
+
+- $Y$: 건강 결과
+- $T$: 특정 시술 수행 여부
+- $U$: 환자 중증도 (미관측)
+- $Z$: 병원까지 거리
+
+병원이 가까울수록 시술을 받을 가능성이 높지만, 거리 자체는 건강에 직접 영향을 주지 않는다고 가정.
+
+---
+
+## 7. Mediation Analysis
+
+### 직접 효과 vs 간접 효과
+
+$T$가 $Y$에 미치는 효과를 분해:
+
+$$
+T \xrightarrow{\text{direct}} Y \quad \text{vs} \quad T \to M \to Y \quad \text{(indirect, through mediator M)}
+$$
+
+**예시**: AI Agent의 새로운 UX 디자인($T$)이 사용자 만족도($Y$)에 미치는 효과.
+
+- 직접 효과: UX 디자인 자체의 만족도 변화
+- 간접 효과: UX → 체류 시간($M$) 증가 → 만족도 향상
+
+### Baron-Kenny Approach (전통적)
+
+세 개의 회귀를 순차적으로 수행:
+
+1. $Y = c_0 + cT + \epsilon_1$ — Total effect
+2. $M = a_0 + aT + \epsilon_2$ — $T \to M$ 경로
+3. $Y = c_0' + c'T + bM + \epsilon_3$ — Direct effect ($c'$)
+
+간접 효과 = $a \times b$ 또는 $c - c'$.
+
+**한계**: 선형성 가정, 상호작용 무시, M에 대한 교란 미처리.
+
+### 인과적 매개분석 (Causal Mediation)
+
+Pearl의 프레임워크에서 정의하는 **Natural Direct Effect (NDE)**와 **Natural Indirect Effect (NIE)**:
+
+$$
+\text{NDE} = E[Y(1, M(0)) - Y(0, M(0))]
+$$
+
+$$
+\text{NIE} = E[Y(1, M(1)) - Y(1, M(0))]
+$$
+
+여기서 $Y(t, m)$은 $T=t, M=m$일 때의 잠재 결과이고, $M(t)$는 $T=t$일 때의 잠재 매개변수다.
+
+**Total Effect = NDE + NIE**:
+
+$$
+E[Y(1) - Y(0)] = \underbrace{E[Y(1,M(1)) - Y(1,M(0))]}_{\text{NIE}} + \underbrace{E[Y(1,M(0)) - Y(0,M(0))]}_{\text{NDE}}
+$$
+
+### 식별 조건
+
+NDE와 NIE를 식별하려면:
+
+1. $T \to Y$ 교란 없음 (given $X$)
+2. $M \to Y$ 교란 없음 (given $T, X$)
+3. $T \to M$ 교란 없음 (given $X$)
+4. **$T$에 의해 영향받는 $M \to Y$ 교란이 없음** (sequential ignorability)
+
+조건 4가 가장 강하고 검증이 어렵다.
+
+### 매개분석이 의미 있는 경우
+
+- **메커니즘 이해**: 처리가 "어떻게" 효과를 내는지
+- **개입 대상 식별**: 간접 효과가 크면 매개변수에 개입
+- **설계 최적화**: AI Agent에서 어떤 경로가 engagement를 높이는지
+
+---
+
+## 8. 종단 데이터의 인과 추론
+
+### 시간 변동 교란 (Time-Varying Confounding)
+
+종단 데이터에서는 교란 변수 $L_t$가 시간에 따라 변하고, 이전 처리 $T_{t-1}$에 의해 영향받을 수 있다:
+
+```
+L_0 --> T_0 --> L_1 --> T_1 --> Y
+ \       \      ^  \     ^
+  \       +-----+   +----+
+   +----------------------------> Y
+```
+
+$L_1$은 $T_0$의 결과이면서 $T_1$의 교란이다. 이런 변수를 **time-varying confounder affected by prior treatment**라 한다.
+
+### 왜 표준 회귀가 실패하는가
+
+- $L_1$을 **통제하면**: $T_0 \to L_1 \to Y$ 경로가 차단되어 $T_0$의 효과 일부가 손실 (overcontrol)
+- $L_1$을 **통제하지 않으면**: $L_1 \to T_1$, $L_1 \to Y$ 교란이 남아 편향
+
+$L_1$은 **매개변수이자 교란변수**이므로, 통제해도 안 하고 안 해도 안 된다. 이것이 **time-varying confounding의 딜레마**이며, 표준 회귀로는 해결 불가능하다.
+
+**IT 구체 예시: 프로모션의 누적 효과**
+
+```
+상황: 매월 프로모션(T)을 할지 결정, 6개월 후 고객 LTV(Y) 추정
+
+  L₀(1월 engagement) → T₀(1월 프로모) → L₁(2월 engagement) → T₁(2월 프로모) → Y
+
+문제:
+  L₁(2월 engagement)은 T₀(1월 프로모션)의 결과이면서
+  동시에 T₁(2월 프로모션 여부)를 결정하는 교란 변수
+
+  - L₁을 통제하면: T₀ → L₁ → Y 경로가 차단됨
+    → 1월 프로모션이 engagement를 높여 LTV를 올린 효과가 사라짐
+    → T₀의 효과 과소 추정 (overcontrol bias)
+
+  - L₁을 통제 안 하면: L₁ → T₁ + L₁ → Y 교란이 남음
+    → engagement가 높은 사용자에게 더 프로모션을 줬는데,
+       engagement 자체가 LTV를 높이는 것인지 프로모가 높이는 것인지 구분 불가
+    → T₁의 효과 과대 추정
+
+  → 어느 쪽이든 편향! 표준 회귀(OLS/로지스틱)로는 해결 불가능
+  → G-methods(아래)가 필요한 이유
+```
+
+### G-Methods: 해결책
+
+James Robins가 제안한 **G-methods**는 이 딜레마를 해결한다. 핵심 아이디어는 "통제할지 말지"의 이분법을 넘어, **가상의 개입 세계(interventional world)**를 시뮬레이션하거나 가중치로 만들어내는 것이다.
+
+세 가지 G-methods의 직관:
+
+```
+1. G-Computation: "만약 모든 사용자에게 매월 프로모션을 줬다면?"이라는
+   반사실 시나리오를 데이터의 조건부 분포로부터 시뮬레이션한다.
+   → 시간 순서대로 L₁, L₂, ... 의 분포를 순차 생성하며
+     각 시점에서 처치를 강제 고정한 궤적을 만들어 비교
+
+2. IPTW (역확률 가중): 각 사용자가 "실제로 받은 처치 이력"의 확률의
+   역수를 가중치로 부여하여, 마치 무작위 배정된 것처럼 보이는
+   가상 모집단(pseudo-population)을 생성한다.
+   → 가중 후에는 L₁이 더 이상 T₁의 교란이 아니게 됨
+
+3. G-Estimation: 각 시점에서 "이 시점의 처치가 없었다면 결과가
+   얼마나 달랐을까"(blip function)를 역순으로 추정한다.
+   → 마지막 시점부터 거슬러 올라가며 각 시점의 인과 효과를 분리
+```
+
+#### G-Computation (G-formula)
+
+순차적으로 조건부 기대값을 계산:
+
+$$
+E[Y(\bar{t})] = \sum_{\bar{l}} E[Y \mid \bar{T}=\bar{t}, \bar{L}=\bar{l}] \prod_{k=0}^{K} P(L_k \mid \bar{T}_{k-1}=\bar{t}_{k-1}, \bar{L}_{k-1}=\bar{l}_{k-1})
+$$
+
+여기서 $\bar{t} = (t_0, t_1, \ldots, t_K)$는 처리 이력(treatment history)이다.
+
+- **장점**: 모수적 모델로 구현 가능
+- **단점**: 모든 모델을 올바르게 지정해야 함 (모델 의존적)
+
+#### IPTW for Time-Varying Treatments
+
+각 시점에서 처리 확률의 역수를 가중치로 사용:
+
+$$
+w_i = \prod_{t=0}^{K} \frac{1}{P(T_{it} \mid \bar{T}_{i,t-1}, \bar{L}_{it})}
+$$
+
+이 가중치는 처리 할당과 시간 변동 교란의 연결을 끊어 **pseudo-population**을 생성한다.
+
+#### G-Estimation
+
+Structural Nested Mean Model (SNMM)을 통해 각 시점에서의 **blip function** (해당 시점 처리의 인과 효과)을 추정한다:
+
+$$
+E[Y(\bar{t}_{k}, \mathbf{0}_{k+1:K}) - Y(\bar{t}_{k-1}, \mathbf{0}_{k:K}) \mid \bar{T}_k = \bar{t}_k, \bar{L}_k] = \gamma(t_k, \bar{h}_k; \psi)
+$$
+
+### Marginal Structural Model (MSM)
+
+IPTW를 사용하여 **가중치가 부여된 결과 모델**을 적합:
+
+$$
+E[Y(\bar{t})] = \beta_0 + \beta_1 \cdot \text{cum}(\bar{t})
+$$
+
+여기서 $\text{cum}(\bar{t}) = \sum_{k=0}^K t_k$는 누적 처리량이다.
+
+### Stabilized Weights
+
+표준 IPTW 가중치는 분산이 매우 클 수 있다. **Stabilized weights**를 사용하면:
+
+$$
+sw_i = \prod_{t=0}^{K} \frac{P(T_{it} \mid \bar{T}_{i,t-1})}{P(T_{it} \mid \bar{T}_{i,t-1}, \bar{L}_{it})}
+$$
+
+분자에 이전 처리 이력만의 조건부 확률을 넣어 가중치의 분산을 줄인다.
+
+**가중치 진단**:
+
+- 평균이 1에 가까워야 함
+- 극단값(> 10~20) 확인 → truncation 또는 trimming 적용
+- 가중 후 공변량 균형 확인
+
+---
+
+## 9. Python 실무 예시
+
+### 시나리오: AI Agent A/B 테스트의 교란
+
+AI Agent의 새로운 추천 알고리즘($T$)이 사용자 engagement($Y$)에 미치는 효과를 추정하고 싶다. 그러나 파워 유저일수록 새 기능을 자발적으로 활성화하므로, **사용자 활동 수준**($X$)이 교란 변수다.
+
+### DoWhy를 활용한 인과 추론
+
+```{python}
+import numpy as np
+import pandas as pd
+import dowhy
+from dowhy import CausalModel
+
+# --- 시뮬레이션 데이터 생성 ---
+np.random.seed(42)
+n = 1000
+
+# 교란 변수: 사용자 활동 수준
+activity = np.random.normal(50, 10, n)
+
+# 처리: 활동 수준이 높을수록 새 기능 활성화 확률 증가 (교란!)
+prob_treat = 1 / (1 + np.exp(-(activity - 50) / 5))
+treatment = np.random.binomial(1, prob_treat)
+
+# 결과: 활동 수준과 처리 모두 engagement에 영향
+# 진정한 처리 효과 = 5
+engagement = 20 + 0.3 * activity + 5 * treatment + np.random.normal(0, 5, n)
+
+df = pd.DataFrame({
+    'activity': activity,
+    'treatment': treatment,
+    'engagement': engagement
+})
+
+# --- Naive comparison (편향됨) ---
+naive_effect = df[df.treatment == 1].engagement.mean() - df[df.treatment == 0].engagement.mean()
+print(f"Naive estimate (biased): {naive_effect:.2f}")
+# 진정한 효과는 5이지만, naive는 ~8 정도 (교란 때문)
+
+# --- DoWhy로 인과 추론 ---
+model = CausalModel(
+    data=df,
+    treatment='treatment',
+    outcome='engagement',
+    common_causes=['activity']   # DAG에서 교란 변수 지정
+)
+
+# DAG 확인
+model.view_model()
+
+# 식별: Backdoor criterion 적용
+identified_estimand = model.identify_effect()
+print(identified_estimand)
+
+# 추정: Propensity Score Matching
+estimate_psm = model.estimate_effect(
+    identified_estimand,
+    method_name="backdoor.propensity_score_matching"
+)
+print(f"PSM estimate: {estimate_psm.value:.2f}")
+
+# 추정: IPTW
+estimate_iptw = model.estimate_effect(
+    identified_estimand,
+    method_name="backdoor.propensity_score_weighting"
+)
+print(f"IPTW estimate: {estimate_iptw.value:.2f}")
+
+# 추정: Doubly Robust (Linear Regression)
+estimate_lr = model.estimate_effect(
+    identified_estimand,
+    method_name="backdoor.linear_regression"
+)
+print(f"Linear Regression estimate: {estimate_lr.value:.2f}")
+
+# --- 반박 테스트 (Refutation) ---
+# 랜덤 공통 원인 추가
+refute_random = model.refute_estimate(
+    identified_estimand,
+    estimate_iptw,
+    method_name="random_common_cause"
+)
+print(refute_random)
+
+# Placebo treatment (처리를 랜덤으로 대체)
+refute_placebo = model.refute_estimate(
+    identified_estimand,
+    estimate_iptw,
+    method_name="placebo_treatment_refuter",
+    placebo_type="permute"
+)
+print(refute_placebo)
+```
+
+### EconML을 활용한 CATE 추정
+
+```{python}
+from econml.dml import LinearDML
+from econml.dr import DRLearner
+from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
+
+# --- Double Machine Learning ---
+dml = LinearDML(
+    model_y=GradientBoostingRegressor(n_estimators=100),
+    model_t=GradientBoostingClassifier(n_estimators=100),
+    random_state=42
+)
+
+dml.fit(
+    Y=df['engagement'].values,
+    T=df['treatment'].values,
+    X=df[['activity']].values,   # effect modifiers
+    W=None                        # additional controls
+)
+
+# ATE
+ate = dml.ate(X=df[['activity']].values)
+print(f"DML ATE: {ate:.2f}")
+
+# CATE: 활동 수준별 처리 효과
+cate = dml.effect(X=df[['activity']].values)
+print(f"CATE range: [{cate.min():.2f}, {cate.max():.2f}]")
+
+# 신뢰구간
+ate_inference = dml.ate_inference(X=df[['activity']].values)
+print(f"ATE 95% CI: [{ate_inference.conf_int()[0][0]:.2f}, {ate_inference.conf_int()[0][1]:.2f}]")
+
+# --- Doubly Robust Learner ---
+dr = DRLearner(
+    model_regression=GradientBoostingRegressor(n_estimators=100),
+    model_propensity=GradientBoostingClassifier(n_estimators=100),
+    model_final=GradientBoostingRegressor(n_estimators=50),
+    random_state=42
+)
+
+dr.fit(
+    Y=df['engagement'].values,
+    T=df['treatment'].values,
+    X=df[['activity']].values
+)
+
+dr_ate = dr.ate(X=df[['activity']].values)
+print(f"DR Learner ATE: {dr_ate:.2f}")
+```
+
+### Propensity Score 수동 구현
+
+```{python}
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import NearestNeighbors
+
+# --- Propensity Score 추정 ---
+ps_model = LogisticRegression()
+ps_model.fit(df[['activity']], df['treatment'])
+df['ps'] = ps_model.predict_proba(df[['activity']])[:, 1]
+
+# --- IPTW 수동 구현 ---
+df['weight'] = np.where(
+    df['treatment'] == 1,
+    1 / df['ps'],
+    1 / (1 - df['ps'])
+)
+
+# Weighted means
+y1_weighted = np.average(
+    df.loc[df.treatment == 1, 'engagement'],
+    weights=df.loc[df.treatment == 1, 'weight']
+)
+y0_weighted = np.average(
+    df.loc[df.treatment == 0, 'engagement'],
+    weights=df.loc[df.treatment == 0, 'weight']
+)
+
+ate_iptw_manual = y1_weighted - y0_weighted
+print(f"Manual IPTW ATE: {ate_iptw_manual:.2f}")
+
+# --- Balance check: Standardized Mean Difference ---
+def smd(x, t, w=None):
+    if w is None:
+        w = np.ones(len(x))
+    x1 = np.average(x[t == 1], weights=w[t == 1])
+    x0 = np.average(x[t == 0], weights=w[t == 0])
+    s = np.sqrt((x[t == 1].var() + x[t == 0].var()) / 2)
+    return (x1 - x0) / s
+
+smd_before = smd(df['activity'].values, df['treatment'].values)
+smd_after = smd(df['activity'].values, df['treatment'].values, df['weight'].values)
+print(f"SMD before weighting: {smd_before:.3f}")
+print(f"SMD after weighting:  {smd_after:.3f}")
+```
+
+---
+
+## 10. R 실무 예시
+
+### MatchIt을 이용한 매칭
+
+```{r}
+library(MatchIt)
+library(cobalt)
+library(marginaleffects)
+
+# --- 시뮬레이션 데이터 ---
+set.seed(42)
+n <- 1000
+activity <- rnorm(n, 50, 10)
+prob_treat <- plogis((activity - 50) / 5)
+treatment <- rbinom(n, 1, prob_treat)
+engagement <- 20 + 0.3 * activity + 5 * treatment + rnorm(n, 0, 5)
+
+df <- data.frame(activity, treatment, engagement)
+
+# --- Naive estimate ---
+naive <- mean(df$engagement[df$treatment == 1]) -
+         mean(df$engagement[df$treatment == 0])
+cat("Naive estimate:", round(naive, 2), "\n")
+
+# --- Propensity Score Matching ---
+m_out <- matchit(
+  treatment ~ activity,
+  data = df,
+  method = "nearest",         # nearest neighbor
+  distance = "glm",           # logistic regression for PS
+  ratio = 1,                  # 1:1 matching
+  caliper = 0.2               # caliper = 0.2 SD of PS
+)
+
+summary(m_out)
+
+# Balance plot
+love.plot(m_out, thresholds = 0.1)
+
+# 매칭 데이터에서 효과 추정
+m_data <- match.data(m_out)
+fit <- lm(engagement ~ treatment, data = m_data, weights = weights)
+avg_comparisons(fit, variables = "treatment", newdata = m_data, wts = "weights")
+```
+
+### WeightIt을 이용한 IPTW
+
+```{r}
+library(WeightIt)
+library(survey)
+
+# --- IPTW ---
+w_out <- weightit(
+  treatment ~ activity,
+  data = df,
+  method = "ps",           # propensity score
+  estimand = "ATE"
+)
+
+summary(w_out)
+bal.tab(w_out, thresholds = 0.1)
+
+# 가중 회귀
+d_w <- svydesign(~1, weights = w_out$weights, data = df)
+fit_w <- svyglm(engagement ~ treatment, design = d_w)
+summary(fit_w)
+# treatment coefficient ≈ 5 (true effect)
+
+# --- Doubly Robust ---
+w_out_dr <- weightit(
+  treatment ~ activity,
+  data = df,
+  method = "ps",
+  estimand = "ATE"
+)
+
+df$weights_dr <- w_out_dr$weights
+fit_dr <- lm(engagement ~ treatment + activity, data = df, weights = weights_dr)
+summary(fit_dr)
+```
+
+### mediation 패키지를 이용한 매개분석
+
+```{r}
+library(mediation)
+
+set.seed(42)
+n <- 500
+treatment <- rbinom(n, 1, 0.5)
+# 매개변수: 체류시간 (treatment → mediator)
+dwell_time <- 10 + 3 * treatment + rnorm(n, 0, 2)
+# 결과: 만족도 (treatment → outcome, mediator → outcome)
+satisfaction <- 50 + 2 * treatment + 1.5 * dwell_time + rnorm(n, 0, 3)
+df_med <- data.frame(treatment, dwell_time, satisfaction)
+
+# Step 1: Mediator model
+med_fit <- lm(dwell_time ~ treatment, data = df_med)
+
+# Step 2: Outcome model
+out_fit <- lm(satisfaction ~ treatment + dwell_time, data = df_med)
+
+# Step 3: Causal mediation analysis
+med_result <- mediate(
+  med_fit,                   # mediator model
+  out_fit,                   # outcome model
+  treat = "treatment",
+  mediator = "dwell_time",
+  boot = TRUE,
+  sims = 1000
+)
+
+summary(med_result)
+# ACME (Average Causal Mediation Effect) ≈ 3 * 1.5 = 4.5
+# ADE (Average Direct Effect) ≈ 2
+# Total Effect ≈ 6.5
+# Proportion Mediated ≈ 4.5 / 6.5 ≈ 0.69
+```
+
+### IV 분석 (AER 패키지)
+
+```{r}
+library(AER)
+
+set.seed(42)
+n <- 1000
+U <- rnorm(n)                             # unmeasured confounder
+Z <- rbinom(n, 1, 0.5)                    # instrument (random encouragement)
+T_star <- 0.5 * Z + 0.3 * U + rnorm(n)   # treatment influenced by Z and U
+T_binary <- as.integer(T_star > 0)
+Y <- 3 * T_binary + 2 * U + rnorm(n)     # true effect = 3, confounded by U
+
+df_iv <- data.frame(Y, T_binary, Z, U)
+
+# Naive OLS (biased due to U)
+ols <- lm(Y ~ T_binary, data = df_iv)
+cat("OLS estimate:", round(coef(ols)["T_binary"], 2), "\n")
+
+# 2SLS with IV
+iv <- ivreg(Y ~ T_binary | Z, data = df_iv)
+summary(iv)
+cat("IV estimate:", round(coef(iv)["T_binary"], 2), "\n")
+
+# First-stage F-statistic
+first_stage <- lm(T_binary ~ Z, data = df_iv)
+cat("First-stage F:", round(summary(first_stage)$fstatistic[1], 1), "\n")
+```
+
+---
+
+## 11. 인과 추론 도구 선택 가이드
+
+아래 의사결정 흐름을 따라 적절한 방법을 선택한다:
+
+```
+처리가 무작위 배정되었는가?
+├── YES → RCT 분석 (t-test, 회귀, ANCOVA) → [32편 참조]
+└── NO → 관찰 데이터
+    │
+    ├── 미관측 교란이 있는가?
+    │   ├── YES → Instrument 있는가?
+    │   │   ├── YES → IV / 2SLS
+    │   │   └── NO → Sensitivity Analysis, Bounds
+    │   │
+    │   └── NO (ignorability 가정 가능)
+    │       │
+    │       ├── 처리가 시간에 따라 변하는가?
+    │       │   ├── YES → G-methods (MSM, G-computation)
+    │       │   └── NO (단일 시점 처리)
+    │       │       │
+    │       │       ├── 처리 할당에 불연속이 있는가?
+    │       │       │   ├── YES → RDD [34편 참조]
+    │       │       │   └── NO
+    │       │       │
+    │       │       ├── 정책 도입 시점이 있는가?
+    │       │       │   ├── YES → DiD / ITS [19편, 34편 참조]
+    │       │       │   └── NO
+    │       │       │
+    │       │       └── Matching / IPTW / Doubly Robust
+    │       │
+    │       └── 메커니즘을 분해하고 싶은가?
+    │           └── YES → Mediation Analysis
+    │
+    └── 효과 이질성(CATE)이 궁금한가?
+        └── YES → Causal Forest, DML, DR Learner
+```
+
+### 방법별 요약 비교
+
+| 방법 | 미관측 교란 허용 | 시간 변동 | 핵심 가정 | Python | R |
+|------|:---:|:---:|------|------|------|
+| Matching/PSM | X | X | Ignorability | DoWhy | MatchIt |
+| IPTW | X | O | Positivity, correct PS | DoWhy | WeightIt |
+| Doubly Robust | X | O | 둘 중 하나 맞으면 됨 | EconML | AIPW |
+| IV/2SLS | **O** | X | Exclusion restriction | statsmodels | AER |
+| G-computation | X | **O** | Sequential ignorability | zEpid | gfoRmula |
+| MSM | X | **O** | Correct weight model | zEpid | ipw |
+| DML/Causal Forest | X | X | Ignorability | EconML | grf |
+| Mediation | X | X | Sequential ignorability | — | mediation |
+
+---
+
+## 12. 핵심 요약
+
+### 기억할 핵심 원칙
+
+1. **인과는 가정에서 나온다**: 어떤 방법도 "가정 없이" 인과를 증명하지 못한다. DAG로 가정을 명시하고, sensitivity analysis로 가정의 견고성을 확인하라.
+
+2. **프레임워크는 도구**: RCM과 SCM은 경쟁이 아니라 보완이다. DAG로 구조를 그리고, potential outcomes로 추정량을 정의하라.
+
+3. **이중 견고성을 추구하라**: Doubly Robust Estimator는 처리 모델과 결과 모델 중 하나만 맞아도 일치 추정량이다. 가능하면 항상 사용하라.
+
+4. **시간 변동 교란은 특별하다**: 표준 회귀로 해결되지 않는다. 종단 데이터에서 인과 추론이 필요하면 G-methods(G-computation, MSM, G-estimation)를 사용하라.
+
+5. **진단을 생략하지 마라**: Balance check(SMD), weight 분포, overlap 확인은 필수다.
+
+### 시리즈 내 관련 파일
+
+| 파일 | 주제 | 연결 포인트 |
+|------|------|------------|
+| [20 — 연구 설계 Overview](./20-study-design-overview.qmd) | 전체 연구 설계 계보 | 인과 추론의 위치 |
+| [32 — RCT & A/B Test](./32-study-design-rct.qmd) | 무작위 배정의 원칙 | 인과 추론이 불필요한 이상적 경우 |
+| [33 — 관찰 연구](./33-study-design-observational.qmd) | 코호트, 케이스-컨트롤 | 인과 추론 도구가 필요한 이유 |
+| [34 — 준실험적 설계](./34-study-design-quasi.qmd) | ITS, RDD, Stepped Wedge | 자연 실험 기반 인과 추론 |
+| [19 — DiD](./19-mixed-model-panel-did.qmd) | Difference-in-Differences | 패널 데이터의 인과 추론 |
+| [08 — GEE](./08-mixed-model-gee-intro.qmd) | Marginal 효과 | MSM과의 관계 |
