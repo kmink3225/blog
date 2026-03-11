@@ -1,0 +1,396 @@
+---
+title: "Poetry 트러블슈팅"
+subtitle: "자주 발생하는 오류와 해결 방법 모음"
+description: |
+  Poetry 사용 중 자주 만나는 오류와 해결 방법을 정리한다.
+  의존성 충돌, 가상환경 문제, Lock 파일 오류, 빌드 실패,
+  인증 문제 등 실무에서 겪는 문제들의 원인과 해결책을 다룬다.
+categories:
+  - Engineering
+  - Python
+  - DevOps
+author: Kwangmin Kim
+date: 10/10/2025
+---
+
+# 의존성 관련 문제
+
+## SolverProblemError: 의존성 충돌
+
+가장 흔한 오류. 패키지 간 버전 요구사항이 충돌할 때 발생한다.
+
+```
+SolverProblemError
+
+Because package-a (1.0.0) depends on numpy (>=1.24,<2.0)
+ and package-b (2.0.0) depends on numpy (>=2.0,<3.0),
+ package-a (1.0.0) is incompatible with package-b (2.0.0).
+```
+
+**해결 방법:**
+
+```bash
+# 1. 충돌 원인 파악
+poetry show --tree | grep numpy
+
+# 2. 호환 가능한 버전 조합 찾기
+poetry add "package-a@^0.9"  # 다른 버전 시도
+
+# 3. 버전 제약 완화
+# pyproject.toml에서 직접 수정
+# numpy = ">=1.24"  →  numpy = ">=1.24,<3.0"
+
+# 4. lock 파일 재생성
+poetry lock
+```
+
+## poetry add가 오래 걸림
+
+의존성 해결(resolution)에 시간이 걸리는 경우.
+
+```bash
+# 1. 상세 로그로 진행 상황 확인
+poetry add requests -vvv
+
+# 2. 캐시 정리 후 재시도
+poetry cache clear --all pypi
+poetry add requests
+
+# 3. 버전을 명시적으로 지정하면 해결 속도 향상
+poetry add "requests==2.31.0"  # 정확한 버전
+```
+
+## poetry.lock과 pyproject.toml 불일치
+
+```
+Warning: poetry.lock is not consistent with pyproject.toml.
+You may be getting improper dependencies.
+Run `poetry lock [--no-update]` to fix it.
+```
+
+**원인:** `pyproject.toml`을 직접 수정했지만 `poetry lock`을 실행하지 않은 경우.
+
+```bash
+# lock 파일 재생성 (최신 버전으로)
+poetry lock
+
+# 또는 기존 버전 유지하면서 lock만 갱신
+poetry lock --no-update
+```
+
+# 가상환경 관련 문제
+
+## 가상환경을 찾을 수 없음
+
+```
+The currently activated Python version X.X is not supported
+by the project (~3.11).
+```
+
+```bash
+# 1. 현재 환경 확인
+poetry env info
+
+# 2. 올바른 Python 버전으로 환경 재생성
+poetry env use python3.11
+
+# 3. 완전히 새로 시작
+poetry env remove --all
+poetry install
+```
+
+## .venv가 프로젝트 밖에 생성됨
+
+```bash
+# 프로젝트 내부에 생성되도록 설정
+poetry config virtualenvs.in-project true
+
+# 기존 외부 환경 삭제
+poetry env remove python
+
+# 새로 설치
+poetry install
+# → .venv/ 가 프로젝트 루트에 생성됨
+```
+
+## 이미 활성화된 가상환경과 충돌
+
+Conda 환경이 활성화된 상태에서 Poetry를 사용하면 문제가 생길 수 있다.
+
+```bash
+# Conda 비활성화 후 Poetry 사용
+conda deactivate
+poetry install
+
+# 또는 Conda 환경 내에서 Poetry를 사용하려면
+poetry config virtualenvs.create false
+```
+
+# 설치 관련 문제
+
+## pip 호환 패키지인데 설치 실패
+
+```
+Unable to find installation candidates for package-name
+```
+
+```bash
+# 1. 패키지 이름 확인 (대소문자, 하이픈/언더스코어)
+# PyPI에서 정확한 이름 확인
+
+# 2. 소스 확인
+poetry source show
+
+# 3. 인덱스에서 직접 검색
+pip index versions package-name
+```
+
+## 빌드 의존성 누락 (C 확장 패키지)
+
+```
+error: Microsoft Visual C++ 14.0 or greater is required
+# 또는
+error: command 'gcc' failed
+```
+
+C 확장을 포함한 패키지(numpy, pandas 등)의 빌드 실패.
+
+**해결 방법:**
+
+```bash
+# Windows: Visual C++ Build Tools 설치
+# https://visualstudio.microsoft.com/visual-cpp-build-tools/
+
+# Linux (Ubuntu/Debian)
+sudo apt-get install build-essential python3-dev
+
+# macOS
+xcode-select --install
+
+# 또는 wheel이 있는 버전 사용 (빌드 불필요)
+poetry add "numpy==1.24.3"  # wheel이 있는 특정 버전
+```
+
+## Hash mismatch 에러
+
+```
+Hash mismatch for package-name
+```
+
+```bash
+# 캐시 삭제 후 재설치
+poetry cache clear pypi --all
+poetry install
+```
+
+# Lock 파일 관련 문제
+
+## poetry lock이 실패
+
+```bash
+# 1. 상세 로그 확인
+poetry lock -vvv
+
+# 2. pyproject.toml 유효성 검사
+poetry check
+
+# 3. lock 파일 삭제 후 재생성
+rm poetry.lock
+poetry lock
+```
+
+## 팀원 간 Lock 파일 충돌 (Git merge conflict)
+
+```bash
+# lock 파일의 merge conflict 해결
+# → 수동 편집 금지! lock 파일은 자동 생성해야 함
+
+# 1. pyproject.toml의 충돌만 수동 해결
+# 2. lock 파일 재생성
+git checkout --theirs poetry.lock  # 또는 --ours
+poetry lock --no-update
+git add poetry.lock
+git commit
+```
+
+::: {.callout-important}
+`poetry.lock`은 절대 수동으로 편집하면 안 된다. 항상 `poetry lock` 명령으로 재생성해야 한다.
+:::
+
+# 빌드/배포 관련 문제
+
+## poetry build 실패
+
+```bash
+# 1. pyproject.toml 검증
+poetry check
+
+# 2. 필수 필드 확인
+# name, version, description, authors가 있는지 확인
+
+# 3. packages 설정 확인
+# [tool.poetry]
+# packages = [{include = "my_project", from = "src"}]
+# → src/my_project/ 디렉토리와 __init__.py가 존재하는지 확인
+```
+
+## poetry publish 인증 실패
+
+```
+HTTP Error 403: Invalid or non-existent authentication information
+```
+
+```bash
+# 1. 토큰 재설정
+poetry config pypi-token.pypi pypi-XXXXXXXXXXXXXX
+
+# 2. 환경변수로 설정 (CI/CD)
+export POETRY_PYPI_TOKEN_PYPI=pypi-XXXXXXXXXXXXXX
+
+# 3. 토큰 범위 확인
+# PyPI에서 토큰의 scope가 해당 패키지에 맞는지 확인
+```
+
+## 버전 중복 (이미 배포된 버전)
+
+```
+HTTP Error 400: File already exists
+```
+
+PyPI는 같은 버전을 다시 업로드할 수 없다.
+
+```bash
+# 버전 업데이트 후 재배포
+poetry version patch  # 0.1.0 → 0.1.1
+poetry publish --build
+```
+
+# 성능 관련 문제
+
+## poetry install이 느림
+
+```bash
+# 1. 병렬 설치 확인 (기본 활성)
+poetry config installer.parallel
+
+# 2. 워커 수 조정
+poetry config installer.max-workers 8
+
+# 3. 불필요한 그룹 제외
+poetry install --without dev,docs,test
+
+# 4. pip 기반 인스톨러 사용 (Poetry 1.4+에서 기본 변경됨)
+poetry config installer.modern-installation true
+```
+
+## Python 버전 해결이 느림
+
+```bash
+# pyenv가 설치되어 있다면
+poetry config virtualenvs.prefer-active-python true
+
+# Python 경로를 직접 지정
+poetry env use /usr/bin/python3.11
+```
+
+# 디버깅 팁
+
+## 상세 로그 출력
+
+```bash
+# -v: 약간 상세
+# -vv: 상세
+# -vvv: 매우 상세 (디버그)
+poetry install -vvv
+poetry add requests -vvv
+poetry lock -vvv
+```
+
+## 환경 정보 수집
+
+문제를 보고하거나 도움을 요청할 때 필요한 정보:
+
+```bash
+# Poetry 버전
+poetry --version
+
+# Python 버전 및 환경 정보
+poetry env info
+
+# 설정 확인
+poetry config --list
+
+# 설치된 패키지 목록
+poetry show
+
+# pyproject.toml 검증
+poetry check
+```
+
+## 깨끗한 상태에서 재시작
+
+모든 방법이 실패했을 때:
+
+```bash
+# 1. 가상환경 완전 삭제
+poetry env remove --all
+# 또는 .venv 직접 삭제
+rm -rf .venv
+
+# 2. 캐시 삭제
+poetry cache clear --all pypi
+
+# 3. lock 파일 재생성
+rm poetry.lock
+poetry lock
+
+# 4. 새로 설치
+poetry install
+```
+
+# 자주 묻는 질문
+
+## poetry.lock을 .gitignore에 넣어야 하나?
+
+**아니요.** 반드시 Git에 커밋해야 한다. Lock 파일이 없으면 팀원마다 다른 버전이 설치될 수 있다.
+
+- **애플리케이션** (웹 서버, CLI 등): `poetry.lock` 커밋 (필수)
+- **라이브러리** (PyPI 배포): `poetry.lock` 커밋 (권장, 개발 환경 재현용)
+
+## poetry add vs pyproject.toml 직접 수정?
+
+가능하면 `poetry add`를 사용하는 것이 좋다. 직접 수정하면 `poetry lock`을 따로 실행해야 한다.
+
+```bash
+# 권장
+poetry add requests
+
+# 직접 수정 시 반드시 lock 갱신
+# (pyproject.toml 수정 후)
+poetry lock
+poetry install
+```
+
+## Poetry 1.x와 2.x의 차이?
+
+| 항목 | Poetry 1.x | Poetry 2.x |
+|------|-----------|-----------|
+| 메타데이터 위치 | `[tool.poetry]` | `[project]` (PEP 621) |
+| 의존성 위치 | `[tool.poetry.dependencies]` | `[project.dependencies]` |
+| poetry-core 버전 | `>=1.0.0` | `>=2.0.0` |
+| 하위 호환성 | - | 1.x 형식도 지원 |
+
+::: {.callout-warning}
+Poetry 2.x에서 `[project]`와 `[tool.poetry]`를 혼용할 때, 의존성은 `[project.dependencies]`에 넣어야 `poetry.lock`에 반영된다.
+:::
+
+# 요약
+
+| 문제 유형 | 첫 번째 시도 | 최후의 수단 |
+|----------|-------------|------------|
+| 의존성 충돌 | `poetry show --tree`로 원인 파악 | 버전 제약 완화 |
+| 가상환경 문제 | `poetry env use python3.x` | `poetry env remove --all` + 재설치 |
+| Lock 파일 오류 | `poetry lock --no-update` | `rm poetry.lock && poetry lock` |
+| 설치 실패 | `poetry install -vvv`로 로그 확인 | 캐시 삭제 후 재시도 |
+| 빌드 실패 | `poetry check` | `pyproject.toml` 필드 점검 |
+| 인증 실패 | 토큰 재설정 | 환경변수로 설정 |
