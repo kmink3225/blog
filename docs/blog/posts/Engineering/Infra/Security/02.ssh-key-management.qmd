@@ -1,0 +1,335 @@
+---
+title: "SSH 키 생성과 관리"
+subtitle: "키 생성, 서버 등록, 권한 설정, ssh-agent, 다중 키 관리"
+description: |
+  SSH 키 쌍(공개키/개인키)의 생성, 서버에 공개키 등록, 파일 권한 설정,
+  ssh-agent를 이용한 패스프레이즈 관리, 용도별 다중 키 운용 전략을 다룬다.
+categories:
+  - Engineering
+  - Infrastructure
+  - Security
+author: Kwangmin Kim
+date: 11/25/2025
+---
+
+# 기본 SSH 키를 만들어야 하는 이유
+
+기본 SSH 키(`id_ed25519`)는 개발 환경 구축의 첫 단계다.
+
+- GitHub, GitLab 등 코드 저장소에서 별도 설정 없이 자동 인식된다
+- `ssh-agent`에서 자동으로 로드되어 패스프레이즈 입력을 최소화한다
+- 여러 서비스에서 재사용할 수 있어 매번 새로 만들 필요가 없다
+
+별도의 `IdentityFile`이나 별칭을 지정하지 않은 모든 SSH 접속은 기본 키를 자동으로 사용한다.
+
+# SSH 키 생성
+
+## 기본 명령어
+
+```bash
+# Ed25519 알고리즘 (권장)
+ssh-keygen -t ed25519 -C "your@email.com"
+```
+
+| 옵션 | 설명 |
+|------|------|
+| `-t ed25519` | EdDSA 알고리즘 기반 키 타입 (RSA보다 짧고 보안성 높음) |
+| `-C "이메일"` | 키를 식별하기 위한 주석 |
+
+## 생성 과정
+
+```bash
+Generating public/private ed25519 key pair.
+Enter file in which to save the key (/home/user/.ssh/id_ed25519):
+→ Enter (기본 경로 사용) 또는 커스텀 경로 입력
+
+Enter passphrase (empty for no passphrase):
+→ 보안을 위해 패스프레이즈 설정 권장 (Enter만 치면 비밀번호 없음)
+
+Enter same passphrase again:
+→ 패스프레이즈 재입력
+```
+
+## 용도별 키 생성
+
+특정 용도(회사, 프로젝트)에 전용 키가 필요한 경우:
+
+```bash
+# 회사 GitHub 조직용
+ssh-keygen -t ed25519 -C "work@company.com" -f ~/.ssh/id_company
+
+# Azure VM 접속용
+ssh-keygen -t ed25519 -C "azure-vm" -f ~/.ssh/azure_vm_key
+
+# RSA 4096 (구형 시스템 호환)
+ssh-keygen -t rsa -b 4096 -C "legacy@email.com"
+```
+
+`-f` 옵션으로 파일 경로를 지정하면 기본 키와 별도로 관리할 수 있다.
+
+## 생성 결과 확인
+
+```bash
+ls -la ~/.ssh/
+```
+
+```
+~/.ssh/
+├── id_ed25519        # 개인키 (절대 유출 금지)
+├── id_ed25519.pub    # 공개키 (서버에 등록)
+├── known_hosts       # 접속한 서버들의 호스트 키 기록
+└── config            # SSH 접속 설정
+```
+
+# 공개키 서버 등록
+
+## GitHub / GitLab
+
+```bash
+# 공개키 내용 출력
+cat ~/.ssh/id_ed25519.pub
+# 출력: ssh-ed25519 AAAAC3NzaC1lZDI1... your@email.com
+```
+
+출력된 내용을 복사하여:
+
+- **GitHub**: Settings → SSH and GPG keys → New SSH key
+- **GitLab**: Preferences → SSH Keys → Add new key
+
+등록 후 접속 테스트:
+
+```bash
+ssh -T git@github.com
+Enter passphrase for key 'C:/Users/kmkim/.ssh/id_ed25519_github': ****
+# Hi kmink3225! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+### 만약 password를 잊어버렸다면?
+
+**복구 방법이 없다.** 새 키를 만들어야 한다.
+
+#### 이유
+
+passphrase는 개인키 파일을 암호화하는 데 사용된다. 서버 어딘가에 저장되는 게 아니라 **오직 본인 머릿속에만** 있는 정보다. 리셋이나 복구 기능 자체가 없다.
+
+#### 대처 방법
+
+```
+1. 새 키 쌍 생성
+   ssh-keygen -t ed25519 -C "email" -f ~/.ssh/id_ed25519_github_new
+
+2. 새 공개키를 GitHub에 등록
+   GitHub → Settings → SSH Keys → 새 키 추가
+
+3. 기존 키 GitHub에서 삭제
+
+4. 기존 키 파일 삭제
+   rm ~/.ssh/id_ed25519_github
+   rm ~/.ssh/id_ed25519_github.pub
+```
+
+#### 예방책
+
+| 방법 | 설명 |
+|------|------|
+| passphrase 설정 안 함 | 키 생성 시 Enter만 누름, 분실 걱정 없음 |
+| 비밀번호 관리자에 저장 | 1Password, Bitwarden 등에 보관 |
+| ssh-agent 사용 | 자주 입력할 일 자체를 없앰 |
+
+개인 개발용이라면 **passphrase를 아예 안 거는 것**도 합리적인 선택이다. 회사 서버나 중요한 키라면 비밀번호 관리자에 저장하는 걸 권장한다.
+
+## 원격 서버
+
+```bash
+# 방법 1: ssh-copy-id (권장 — 자동으로 권한까지 설정)
+ssh-copy-id -i ~/.ssh/id_ed25519.pub user@server-ip
+
+# 특정 포트
+ssh-copy-id -i ~/.ssh/id_ed25519.pub -p 2222 user@server-ip
+```
+
+```bash
+# 방법 2: 수동 등록
+ssh user@server-ip
+
+# 서버에서:
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+echo "ssh-ed25519 AAAAC3Nza... your@email.com" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
+## 클라우드 VM
+
+클라우드 서비스는 VM 생성 시 SSH 키를 등록하는 메뉴를 제공한다.
+
+- **Azure**: VM 생성 시 키 쌍 자동 생성 → `.pem` 파일 다운로드, 또는 기존 공개키 직접 붙여넣기
+- **AWS**: EC2 Key Pairs 메뉴에서 `.pem` 파일 다운로드
+- **GCP**: Compute Engine Metadata → SSH Keys
+
+::: {.callout-note}
+AWS EC2는 키 쌍을 `.pem` 파일로 발급한다. `.pem`은 Privacy Enhanced Mail의 약자로, 텍스트 형식의 개인키 파일이다. SSH 접속 시 `ssh -i key.pem user@server` 형태로 사용한다.
+:::
+
+# 파일 권한 설정
+
+SSH는 보안상 키 파일 권한이 엄격하게 제한되지 않으면 동작을 **거부**한다.
+
+```bash
+chmod 700 ~/.ssh                   # .ssh 디렉터리
+chmod 600 ~/.ssh/id_ed25519        # 개인키: 소유자만 읽기/쓰기
+chmod 644 ~/.ssh/id_ed25519.pub    # 공개키: 모두 읽기 가능
+chmod 600 ~/.ssh/authorized_keys   # 서버의 authorized_keys
+chmod 600 ~/.ssh/config            # SSH 설정 파일
+```
+
+권한이 너무 넓으면 다음 오류가 발생한다:
+
+```
+WARNING: UNPROTECTED PRIVATE KEY FILE!
+Permissions 0644 for '/home/user/.ssh/id_ed25519' are too open.
+```
+
+::: {.callout-important}
+개인키(Private Key)는 소유자만 읽을 수 있어야 한다 (`chmod 600`). 이는 SSH가 강제하는 보안 요구사항이다.
+:::
+
+# ssh-agent: 패스프레이즈 관리
+
+패스프레이즈를 설정한 키는 사용할 때마다 비밀번호를 입력해야 한다. `ssh-agent`는 키를 메모리에 캐시하여 세션 동안 **자동 인증**을 제공한다.
+
+## 기본 사용법
+
+```bash
+# agent 시작
+eval "$(ssh-agent -s)"
+# Agent pid 12345
+
+# 키 등록 (패스프레이즈 1회 입력)
+ssh-add ~/.ssh/id_ed25519
+# Identity added: /home/user/.ssh/id_ed25519
+
+# 등록된 키 확인
+ssh-add -l
+
+# 모든 키 제거
+ssh-add -D
+```
+
+## Windows PowerShell
+
+```powershell
+# ssh-agent 서비스 시작 (관리자 권한)
+Start-Service ssh-agent
+Set-Service ssh-agent -StartupType Automatic
+
+# 키 등록
+ssh-add $env:USERPROFILE\.ssh\id_ed25519
+```
+
+## Git Bash (Windows)
+
+```bash
+eval $(ssh-agent -s)
+ssh-add ~/.ssh/id_ed25519
+```
+
+::: {.callout-warning}
+`ssh-agent`는 현재 셸 세션에서만 유효하다. 새 터미널을 열면 다시 `eval $(ssh-agent -s)` + `ssh-add`를 실행해야 한다.
+:::
+
+## Config에서 자동 등록
+
+`~/.ssh/config`에 다음을 추가하면 접속 시 자동으로 agent에 키를 등록한다:
+
+```
+Host *
+    AddKeysToAgent yes
+```
+
+# 다중 키 관리
+
+개인/업무/클라우드 환경을 분리하는 경우 여러 키를 사용한다.
+
+## 디렉터리 구조
+
+```
+~/.ssh/
+├── id_ed25519          # 개인용 기본 키 (GitHub 개인계정)
+├── id_ed25519.pub
+├── id_company          # 회사 서버용 키
+├── id_company.pub
+├── azure_vm_key        # Azure VM 접속용 키
+├── azure_vm_key.pem
+├── aws_key.pem         # AWS EC2 접속용 키 (PEM 형식)
+├── config              # 모든 키를 관리하는 설정 파일
+└── known_hosts         # 서버 호스트 키 기록
+```
+
+## Config에서 키 매핑
+
+```bash
+# ~/.ssh/config
+
+# 개인 GitHub
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519
+
+# 회사 GitHub (별도 키)
+Host github-work
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_company
+
+# Azure VM
+Host azure-dev
+    HostName 20.82.xxx.xxx
+    User azureuser
+    IdentityFile ~/.ssh/azure_vm_key.pem
+```
+
+같은 `github.com`이라도 별칭을 사용하면 **용도별로 다른 키**를 사용할 수 있다.
+
+```bash
+# 개인 계정
+git clone git@github.com:myuser/repo.git
+
+# 회사 계정 (별칭 사용)
+git clone git@github-work:company/repo.git
+```
+
+# .pem 파일 관리
+
+AWS, Azure 등에서 발급하는 `.pem` 파일은 개인키(Private Key)이다.
+
+```bash
+# 다운로드 폴더에서 .ssh로 이동
+mv ~/Downloads/my-key.pem ~/.ssh/
+
+# 권한 설정 (필수)
+chmod 600 ~/.ssh/my-key.pem
+```
+
+::: {.callout-important}
+`.pem` 파일은 비밀번호와 같다. 유출되면 누구나 서버에 접속할 수 있다.
+
+- 반드시 `~/.ssh/` 폴더에 보관한다
+- 다운로드 폴더, 클라우드 동기화 폴더에 두지 않는다
+- 이메일, 메신저로 공유하지 않는다
+- Git 저장소에 커밋하지 않는다
+:::
+
+# 요약
+
+| 작업 | 명령어 |
+|------|--------|
+| 키 생성 (Ed25519) | `ssh-keygen -t ed25519 -C "email"` |
+| 용도별 키 생성 | `ssh-keygen -t ed25519 -f ~/.ssh/키이름` |
+| 공개키 서버 등록 | `ssh-copy-id -i ~/.ssh/키.pub user@server` |
+| 접속 테스트 | `ssh -T git@github.com` |
+| 권한 설정 (개인키) | `chmod 600 ~/.ssh/id_ed25519` |
+| agent 시작 | `eval "$(ssh-agent -s)"` |
+| agent에 키 등록 | `ssh-add ~/.ssh/id_ed25519` |
+| 등록된 키 확인 | `ssh-add -l` |

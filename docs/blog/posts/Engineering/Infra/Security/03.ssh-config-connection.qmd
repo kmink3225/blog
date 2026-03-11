@@ -1,0 +1,301 @@
+---
+title: "SSH Config와 접속"
+subtitle: "Config 파일로 접속 간소화, SCP/SFTP 파일 전송, rsync 동기화"
+description: |
+  SSH Config 파일의 구조와 주요 옵션을 다룬다.
+  접속 명령을 별칭으로 간소화하는 방법, 와일드카드 매칭, 연결 유지 설정,
+  SCP/SFTP를 이용한 파일 전송, rsync를 이용한 디렉터리 동기화까지 정리한다.
+categories:
+  - Engineering
+  - Infrastructure
+  - Security
+author: Kwangmin Kim
+date: 11/26/2025
+---
+
+# SSH Config 파일
+
+## 필요성
+
+Config 없이 매번 전체 옵션을 입력하는 것은 불편하고 실수하기 쉽다.
+
+```bash
+# Config 없이
+ssh -i ~/.ssh/azure-vm.pem -p 22 azureuser@20.196.144.16
+
+# Config 사용
+ssh azure-dev
+```
+
+Config 파일로 접속 정보를 저장하면:
+
+- 긴 명령어를 짧은 별칭으로 대체
+- 여러 서버를 체계적으로 관리
+- VS Code Remote SSH가 자동으로 인식
+- 포트 포워딩, 프록시 설정 등 고급 옵션 적용 가능
+
+## 파일 위치
+
+| OS | 경로 |
+|------|------|
+| Linux/macOS | `~/.ssh/config` |
+| Windows | `C:\Users\사용자명\.ssh\config` |
+
+파일이 없으면 새로 생성한다. 권한은 `chmod 600`으로 설정한다.
+
+# Config 파일 구조
+
+## 기본 형식
+
+```bash
+Host 별칭
+    HostName IP주소_또는_도메인
+    User 사용자명
+    Port 포트번호
+    IdentityFile 키_파일_경로
+```
+
+| 항목 | 설명 |
+|------|------|
+| `Host` | 접속 시 사용할 별칭 (임의 지정) |
+| `HostName` | 실제 IP 주소 또는 도메인 |
+| `User` | 서버 사용자 계정 |
+| `Port` | SSH 포트 (기본값 22, 생략 가능) |
+| `IdentityFile` | 개인키 파일 경로 |
+
+## 실전 예시
+
+```bash
+# ~/.ssh/config
+
+# Azure 개발 VM
+Host azure-dev
+    HostName 20.196.144.16
+    User azureuser
+    IdentityFile ~/.ssh/azure_vm_key
+
+# AWS EC2 서버
+Host aws-prod
+    HostName ec2-1-2-3-4.compute-1.amazonaws.com
+    User ec2-user
+    IdentityFile ~/.ssh/aws_key.pem
+
+# 사내 서버 (비표준 포트)
+Host office-server
+    HostName 192.168.10.50
+    User admin
+    IdentityFile ~/.ssh/office_key
+    Port 2222
+
+# GitHub
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+사용:
+
+```bash
+ssh azure-dev        # azureuser@20.196.144.16에 키 인증으로 접속
+ssh office-server    # admin@192.168.10.50:2222에 접속
+```
+
+# 고급 옵션
+
+## 연결 유지 (Keep Alive)
+
+네트워크 방화벽이 유휴 SSH 연결을 끊는 경우 keepalive 패킷을 전송하여 유지한다.
+
+```bash
+Host *
+    ServerAliveInterval 60    # 60초마다 keepalive 전송
+    ServerAliveCountMax 3     # 3회 무응답 시 연결 종료
+```
+
+`Host *`은 모든 호스트에 적용되는 전역 설정이다.
+
+## 와일드카드 매칭
+
+```bash
+# dev-로 시작하는 모든 호스트에 같은 사용자/키 적용
+Host dev-*
+    User developer
+    IdentityFile ~/.ssh/dev_key
+
+# 특정 도메인의 모든 호스트
+Host *.company.com
+    User admin
+    Port 2222
+```
+
+## 연결 재사용 (ControlMaster)
+
+같은 서버에 여러 SSH 세션을 열 때, 첫 번째 연결을 재사용하여 인증을 생략한다.
+
+```bash
+Host *
+    ControlMaster auto
+    ControlPath ~/.ssh/sockets/%r@%h-%p
+    ControlPersist 600    # 10분간 유지
+```
+
+## ssh-agent 자동 등록
+
+```bash
+Host *
+    AddKeysToAgent yes    # 접속 시 자동으로 agent에 키 등록
+```
+
+## Jump Server (ProxyJump)
+
+내부 네트워크에 직접 접근이 불가능할 때, 중간 서버(Bastion Host)를 경유한다.
+
+```bash
+Host bastion
+    HostName 40.100.50.20
+    User bastion-user
+    IdentityFile ~/.ssh/bastion_key
+
+Host internal-server
+    HostName 10.0.1.100
+    User engineer
+    IdentityFile ~/.ssh/internal_key
+    ProxyJump bastion
+```
+
+```bash
+ssh internal-server
+# 자동으로 bastion → internal-server 순으로 연결
+```
+
+# SCP: 파일 전송
+
+SCP(Secure Copy Protocol)는 SSH를 통해 파일을 복사한다.
+
+## 기본 문법
+
+```bash
+scp [옵션] 출발지 목적지
+```
+
+## 로컬 → 서버
+
+```bash
+# 파일 복사
+scp file.txt user@server:/home/user/
+
+# 디렉터리 복사
+scp -r folder/ user@server:/home/user/
+
+# Config 별칭 사용
+scp file.txt azure-dev:/home/azureuser/
+
+# 특정 키 사용
+scp -i ~/.ssh/custom_key file.txt user@server:/path/
+```
+
+## 서버 → 로컬
+
+```bash
+# 파일 다운로드
+scp user@server:/home/user/file.txt ./
+
+# 디렉터리 다운로드
+scp -r user@server:/home/user/folder/ ./
+
+# 여러 파일
+scp user@server:"/path/*.txt" ./
+```
+
+## 주요 옵션
+
+| 옵션 | 설명 |
+|------|------|
+| `-r` | 디렉터리 재귀 복사 |
+| `-P` | 포트 지정 (대문자 P) |
+| `-i` | 개인키 파일 지정 |
+| `-C` | 압축 전송 (대용량 파일) |
+| `-p` | 원본 파일의 권한/시간 보존 |
+
+# SFTP: 대화형 파일 전송
+
+SFTP(SSH File Transfer Protocol)는 FTP와 유사한 대화형 파일 전송을 제공한다.
+
+```bash
+sftp user@server
+# 또는 Config 별칭
+sftp azure-dev
+```
+
+## SFTP 명령어
+
+```bash
+sftp> pwd                    # 원격 현재 경로
+sftp> lpwd                   # 로컬 현재 경로
+sftp> ls                     # 원격 파일 목록
+sftp> lls                    # 로컬 파일 목록
+sftp> cd /path               # 원격 경로 이동
+sftp> lcd /path              # 로컬 경로 이동
+
+sftp> get remote_file.txt    # 다운로드
+sftp> get -r remote_folder/  # 디렉터리 다운로드
+sftp> put local_file.txt     # 업로드
+sftp> put -r local_folder/   # 디렉터리 업로드
+
+sftp> exit                   # 종료
+```
+
+# rsync: 디렉터리 동기화
+
+rsync는 SSH를 통해 **변경된 파일만** 전송하여 효율적으로 동기화한다. SCP보다 대량 파일 작업에 적합하다.
+
+```bash
+# 기본 동기화
+rsync -avz -e ssh /local/data/ user@server:/remote/backup/
+
+# 진행 상황 표시
+rsync -avzP -e ssh /local/data/ user@server:/remote/backup/
+
+# 삭제된 파일도 동기화 (원본에서 삭제된 파일을 대상에서도 삭제)
+rsync -avz --delete -e ssh /local/data/ user@server:/remote/backup/
+
+# 특정 패턴 제외
+rsync -avz --exclude '*.log' --exclude '.git' -e ssh /local/ user@server:/remote/
+```
+
+| 옵션 | 설명 |
+|------|------|
+| `-a` | 아카이브 모드 (권한, 소유자, 시간 보존) |
+| `-v` | 상세 출력 |
+| `-z` | 압축 전송 |
+| `-P` | 진행 상황 표시 + 중단 시 이어받기 |
+| `--delete` | 대상에서 원본에 없는 파일 삭제 |
+| `--exclude` | 제외 패턴 |
+
+# 원격 명령 실행
+
+SSH로 서버에 접속하지 않고 **단일 명령만 실행**할 수 있다.
+
+```bash
+# 명령 실행 후 종료
+ssh azure-dev "ls -la /var/log"
+
+# 여러 명령 (세미콜론)
+ssh azure-dev "cd /var/www; git pull; sudo systemctl restart nginx"
+
+# 로컬 스크립트를 원격에서 실행
+ssh azure-dev 'bash -s' < local_script.sh
+```
+
+# 요약
+
+| 작업 | 명령어 |
+|------|--------|
+| Config로 접속 | `ssh 별칭` |
+| 파일 업로드 | `scp file.txt 별칭:/path/` |
+| 디렉터리 업로드 | `scp -r dir/ 별칭:/path/` |
+| 대화형 전송 | `sftp 별칭` |
+| 디렉터리 동기화 | `rsync -avzP -e ssh dir/ 별칭:/path/` |
+| 원격 명령 실행 | `ssh 별칭 "명령"` |
+| Jump Server 접속 | `ProxyJump bastion` (config) |

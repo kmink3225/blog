@@ -1,0 +1,283 @@
+---
+title: "SSH 포트 포워딩과 터널링"
+subtitle: "Local/Remote/Dynamic 포트 포워딩, Bastion Host, SSH 터널 활용"
+description: |
+  SSH 포트 포워딩의 세 가지 유형을 다룬다.
+  로컬 포트 포워딩으로 원격 DB 접속, 리모트 포트 포워딩으로 로컬 서버 공개,
+  다이나믹 포트 포워딩(SOCKS 프록시), Bastion Host 아키텍처까지 정리한다.
+categories:
+  - Engineering
+  - Infrastructure
+  - Security
+author: Kwangmin Kim
+date: 11/27/2025
+---
+
+# 포트 포워딩이란
+
+SSH 포트 포워딩은 **암호화된 SSH 터널**을 통해 네트워크 트래픽을 전달하는 기법이다. 방화벽으로 막힌 서비스에 접근하거나, 보안이 필요한 통신을 암호화할 때 사용한다.
+
+세 가지 유형이 있다:
+
+| 유형 | 방향 | 주요 용도 |
+|------|------|----------|
+| **로컬 포트 포워딩** | 로컬 → 원격 | 원격 DB, 웹 서비스를 로컬에서 접근 |
+| **리모트 포트 포워딩** | 원격 → 로컬 | 로컬 개발 서버를 외부에 공개 |
+| **다이나믹 포트 포워딩** | SOCKS 프록시 | 전체 트래픽 프록시 |
+
+# 로컬 포트 포워딩 (Local Forward)
+
+로컬 PC의 포트를 원격 서버의 포트로 연결한다. 가장 많이 사용하는 유형이다.
+
+```bash
+ssh -L [로컬포트]:[목적지호스트]:[목적지포트] user@server
+```
+
+## 원격 데이터베이스 접속
+
+원격 서버의 MySQL(3306)에 로컬에서 접근:
+
+```bash
+ssh -L 3306:localhost:3306 admin@db.company.com
+```
+
+- 로컬의 `localhost:3306`으로 접속하면 원격 서버의 MySQL에 연결된다
+- MySQL Workbench, DBeaver 등에서 `localhost:3306`으로 접속하면 된다
+
+```bash
+# 터널 열린 상태에서 별도 터미널에서:
+mysql -h localhost -P 3306 -u dbuser -p
+```
+
+## Jupyter Notebook 원격 접속
+
+```bash
+ssh -L 8888:localhost:8888 user@ml-server
+# 브라우저: http://localhost:8888
+```
+
+## 원격 웹 서버 접속 (방화벽 우회)
+
+```bash
+ssh -L 8080:localhost:80 user@web-server
+# 브라우저: http://localhost:8080
+```
+
+## 백그라운드 실행
+
+포트 포워딩만 유지하고 셸은 사용하지 않는 경우:
+
+```bash
+ssh -f -N -L 3306:localhost:3306 user@db-server
+```
+
+| 옵션 | 설명 |
+|------|------|
+| `-f` | 백그라운드 실행 |
+| `-N` | 명령 실행 안 함 (포워딩만) |
+
+# 리모트 포트 포워딩 (Remote Forward)
+
+원격 서버의 포트를 로컬 PC로 연결한다. **로컬 개발 서버를 외부에서 접근 가능**하게 만들 때 사용한다.
+
+```bash
+ssh -R [원격포트]:[목적지호스트]:[목적지포트] user@server
+```
+
+## 로컬 웹서버 외부 공개
+
+```bash
+ssh -R 8080:localhost:3000 user@public-server
+```
+
+- `public-server:8080`으로 접속하면 로컬 PC의 `localhost:3000`에 연결된다
+- 데모, 테스트 시 로컬 개발 서버를 팀원에게 공유할 때 유용하다
+
+::: {.callout-note}
+리모트 포트 포워딩을 사용하려면 서버의 `/etc/ssh/sshd_config`에 `GatewayPorts yes`가 설정되어 있어야 외부에서 접근 가능하다.
+:::
+
+# 다이나믹 포트 포워딩 (SOCKS 프록시)
+
+로컬에 SOCKS 프록시 서버를 생성하여 **모든 트래픽**을 SSH 터널을 통해 전달한다.
+
+```bash
+ssh -D [로컬포트] user@server
+```
+
+```bash
+# SOCKS 프록시 생성
+ssh -D 1080 user@proxy-server
+```
+
+- 브라우저 SOCKS 프록시 설정: `localhost:1080`
+- 모든 웹 트래픽이 `proxy-server`를 경유한다
+- 회사 내부망 접근, 지역 제한 우회에 활용
+
+## 브라우저 설정
+
+Firefox: Settings → Network Settings → Manual Proxy → SOCKS Host: `localhost`, Port: `1080`
+
+# SSH Config에서 포트 포워딩
+
+자주 사용하는 포트 포워딩을 Config에 미리 저장한다.
+
+```bash
+# ~/.ssh/config
+
+# DB 터널
+Host db-tunnel
+    HostName db-server.company.com
+    User dbadmin
+    LocalForward 3306 localhost:3306
+
+# Jupyter 터널
+Host jupyter-tunnel
+    HostName ml-server.company.com
+    User researcher
+    LocalForward 8888 localhost:8888
+
+# SOCKS 프록시
+Host proxy
+    HostName proxy.company.com
+    User proxyuser
+    DynamicForward 1080
+```
+
+```bash
+ssh db-tunnel      # 접속만 하면 3306 포워딩 자동 설정
+ssh proxy          # 접속만 하면 SOCKS 프록시 자동 생성
+```
+
+# Bastion Host (Jump Server)
+
+## 아키텍처
+
+Bastion Host는 외부에서 내부 네트워크에 접근하기 위한 **유일한 진입점** 역할을 한다.
+
+```
+인터넷                    방화벽              내부 네트워크
+   │                          │                      │
+   │                     ┌────────┐                  │
+   │──── SSH (22) ─────> │ Bastion│                  │
+   │                     │ Host   │                  │
+   │                     └────┬───┘                  │
+   │                          │   SSH                │
+   │                          ├──────────> Server 1  │
+   │                          ├──────────> Server 2  │
+   │                          └──────────> Server 3  │
+```
+
+- 외부에서 내부 서버에 직접 접속 불가
+- 모든 접속은 Bastion Host를 경유
+- 접속 로그를 Bastion에서 중앙 관리
+
+## ProxyJump 설정
+
+```bash
+# ~/.ssh/config
+
+Host bastion
+    HostName bastion.company.com
+    User bastion-user
+    IdentityFile ~/.ssh/bastion_key
+
+# 내부 서버 (Private IP만 있음)
+Host internal-db
+    HostName 10.0.5.10
+    User dbadmin
+    IdentityFile ~/.ssh/internal_key
+    ProxyJump bastion
+
+Host internal-web
+    HostName 10.0.5.20
+    User webadmin
+    IdentityFile ~/.ssh/internal_key
+    ProxyJump bastion
+```
+
+```bash
+ssh internal-db    # bastion 경유하여 자동 접속
+```
+
+## 다단계 접속 (멀티홉)
+
+```bash
+Host bastion
+    HostName 40.100.50.20
+    User bastion-user
+
+Host jump-server
+    HostName 10.0.1.100
+    User jump-user
+    ProxyJump bastion
+
+Host target-vm
+    HostName 10.0.2.50
+    User vmuser
+    ProxyJump jump-server
+```
+
+```bash
+ssh target-vm
+# bastion → jump-server → target-vm 순으로 자동 연결
+```
+
+## 명령줄에서 직접 사용
+
+```bash
+# -J 옵션 (SSH 7.3+)
+ssh -J bastion-user@bastion.company.com internal-user@10.0.1.100
+
+# 여러 점프 서버
+ssh -J jump1@host1,jump2@host2 user@final-server
+```
+
+# Agent Forwarding
+
+로컬의 SSH 키를 원격 서버에서도 사용할 수 있게 한다. 키 파일을 서버에 복사하지 않아도 된다.
+
+```bash
+# 명령줄
+ssh -A user@server
+
+# Config
+Host dev-server
+    HostName 20.196.144.16
+    User ubuntu
+    ForwardAgent yes
+```
+
+활용 사례: VM에 SSH 접속 후, VM에서 GitHub에 `git push`할 때 로컬의 GitHub SSH 키를 사용한다.
+
+::: {.callout-warning}
+Agent Forwarding은 신뢰할 수 없는 서버에서는 사용하지 않는다. 서버의 root 사용자가 agent 소켓에 접근하여 키를 악용할 수 있다.
+:::
+
+# X11 포워딩
+
+원격 서버의 GUI 애플리케이션을 로컬에서 표시한다.
+
+```bash
+ssh -X user@server
+# 접속 후
+firefox &          # 원격 서버의 Firefox가 로컬 화면에 표시
+```
+
+서버 설정 (`/etc/ssh/sshd_config`):
+
+```
+X11Forwarding yes
+```
+
+# 요약
+
+| 유형 | 명령어 | 용도 |
+|------|--------|------|
+| 로컬 포워딩 | `ssh -L 3306:localhost:3306 user@db` | 원격 DB를 로컬에서 접근 |
+| 리모트 포워딩 | `ssh -R 8080:localhost:3000 user@server` | 로컬 서버를 외부에 공개 |
+| 다이나믹 포워딩 | `ssh -D 1080 user@proxy` | SOCKS 프록시 |
+| 백그라운드 터널 | `ssh -f -N -L ...` | 셸 없이 포워딩만 유지 |
+| Jump Server | `ssh -J bastion user@internal` | Bastion 경유 접속 |
+| Agent 포워딩 | `ssh -A user@server` | 로컬 키를 원격에서 사용 |
+| X11 포워딩 | `ssh -X user@server` | 원격 GUI 표시 |

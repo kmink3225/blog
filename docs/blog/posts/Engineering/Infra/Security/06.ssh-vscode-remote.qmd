@@ -1,0 +1,280 @@
+---
+title: "VS Code Remote SSH 원격 개발"
+subtitle: "VS Code Server 아키텍처, 설정, 실무 시나리오, 트러블슈팅"
+description: |
+  VS Code Remote SSH를 이용한 원격 개발 환경 구축을 다룬다.
+  VS Code Server의 작동 원리, 설정 단계, Git 동기화 방식과의 비교,
+  ML 학습/데이터 처리/팀 서버 등 실무 시나리오, 트러블슈팅까지 정리한다.
+categories:
+  - Engineering
+  - Infrastructure
+  - Security
+  - DevOps
+author: Kwangmin Kim
+date: 12/11/2025
+---
+
+# 왜 Remote SSH인가
+
+## 기존 Git 동기화 방식의 한계
+
+```
+로컬 PC에서 코드 편집
+    ↓
+Git commit & push
+    ↓
+서버에서 git pull
+    ↓
+서버에서 실행/테스트
+```
+
+이 방식의 문제:
+
+- 코드 수정 → 동기화 → 실행의 반복이 비효율적
+- 로컬과 서버의 환경 차이로 "내 컴퓨터에서는 되는데..." 발생
+- 대용량 데이터셋을 로컬로 다운로드할 수 없음
+- 로컬 PC에 GPU가 없으면 ML 모델 학습 불가
+
+## Remote SSH 방식
+
+```
+로컬 VS Code (UI만) ←── SSH 터널 ──→ 서버의 VS Code Server
+                                          ↓
+                                    서버 파일시스템에서
+                                    즉시 편집/실행/디버깅
+```
+
+코드 저장 즉시 서버에 반영된다. Git push/pull 없이 직접 서버 환경에서 작업한다.
+
+## 비교표
+
+| 항목 | Git 동기화 | Remote SSH |
+|------|-----------|------------|
+| 작업 위치 | 로컬 파일시스템 | 서버 파일시스템 |
+| 실행 환경 | 로컬 PC | 서버 (프로덕션과 동일) |
+| 동기화 | 수동 (git push/pull) | 자동 (저장 즉시 반영) |
+| 컴퓨팅 리소스 | 로컬 PC 한계 | 서버 GPU/메모리 활용 |
+| 네트워크 | Push/Pull 시에만 | 상시 연결 필요 |
+| 대용량 데이터 | 로컬 다운로드 필요 | 서버에서 직접 접근 |
+
+# VS Code Server 아키텍처
+
+Remote SSH는 단순한 터미널 에뮬레이션이 아니다.
+
+```
+[로컬 PC]                          [원격 서버]
+┌─────────────────────┐            ┌──────────────────────┐
+│  VS Code (UI)       │            │  VS Code Server      │
+│  - 화면 렌더링       │◄─ SSH ────►│  - 파일 I/O          │
+│  - 키보드/마우스     │  암호화     │  - 언어 서버 (LSP)   │
+│  - 로컬 확장 일부    │  터널      │  - 디버거            │
+└─────────────────────┘            │  - 터미널            │
+                                   │  - Git 연산          │
+                                   └──────────────────────┘
+```
+
+- 첫 접속 시 VS Code가 서버에 VS Code Server를 **자동 설치** (`~/.vscode-server/`)
+- 로컬 VS Code는 UI 렌더링만 담당
+- 실제 코드 분석, 파일 접근, 디버깅은 **서버에서 실행**
+- 결과적으로 서버의 파일과 리소스를 로컬처럼 사용
+
+# 설정 단계
+
+## 1단계: VS Code 확장 설치
+
+Extensions에서 `Remote - SSH` (Microsoft) 설치.
+패키지 ID: `ms-vscode-remote.remote-ssh`
+
+함께 설치하면 좋은 확장:
+
+- Remote - SSH: Editing Configuration Files
+- Remote Development (SSH + Containers + WSL 통합)
+
+## 2단계: SSH Config 설정
+
+[03편 SSH Config](03.ssh-config-connection.qmd)에서 다룬 대로 `~/.ssh/config`에 서버 정보를 등록한다.
+
+```bash
+# ~/.ssh/config
+Host azure-dev
+    HostName 20.196.144.16
+    User azureuser
+    IdentityFile ~/.ssh/azure_vm_key
+
+Host aws-ml
+    HostName ec2-xxx.compute.amazonaws.com
+    User ubuntu
+    IdentityFile ~/.ssh/aws_key.pem
+```
+
+## 3단계: 접속
+
+1. `Ctrl+Shift+P` → `Remote-SSH: Connect to Host` 선택
+2. Config에 등록한 호스트 선택 (예: `azure-dev`)
+3. 첫 접속 시 OS 선택 (Linux) → VS Code Server 자동 설치 (1-2분)
+4. 접속 완료: 좌측 하단에 `SSH: azure-dev` 표시
+
+또는 왼쪽 사이드바의 **Remote Explorer** 아이콘에서 호스트를 클릭해도 된다.
+
+## 4단계: 폴더 열기
+
+접속 후 `File > Open Folder`로 서버의 디렉터리를 연다.
+
+```bash
+# 예: /home/azureuser/projects/ml-pipeline
+```
+
+이후 VS Code Explorer에서 서버의 파일을 로컬처럼 탐색, 편집, 검색할 수 있다.
+
+## 5단계: 원격 확장 설치
+
+Remote SSH 상태에서 설치하는 확장은 **서버 측에 설치**된다.
+
+- **Python**, **Pylance**: Python 개발
+- **Jupyter**: Notebook 지원
+- **GitLens**: Git 기능 강화
+- **Docker**: 컨테이너 관리
+
+Extensions 패널에서 `Install in SSH: 호스트명` 버튼을 클릭한다.
+
+# 실무 시나리오
+
+## ML/DL 모델 학습
+
+```
+[로컬 PC (GPU 없음)]  ──→  [GPU 서버]
+VS Code UI                  - 대용량 데이터셋
+                             - GPU로 모델 훈련
+                             - conda/venv 환경
+```
+
+1. Remote SSH로 GPU 서버 접속
+2. `/data/` 경로의 대용량 데이터셋에 직접 접근
+3. Jupyter Notebook을 VS Code에서 실행 (서버 커널)
+4. 포트 포워딩으로 TensorBoard 로컬 모니터링
+
+## 팀 공유 개발 서버
+
+```
+/home/
+├── developer1/   # 팀원 A (Remote SSH 접속)
+├── developer2/   # 팀원 B (Remote SSH 접속)
+└── shared/       # 공유 데이터/모델
+```
+
+각자 Remote SSH로 접속하여 독립적으로 개발하면서 공유 데이터에 접근한다.
+
+## 다중 VM 관리
+
+VS Code 창을 여러 개 열어 각각 다른 서버에 접속한다.
+
+```bash
+# ~/.ssh/config
+Host api-server
+    HostName 20.100.10.10
+    User ubuntu
+    IdentityFile ~/.ssh/api_key
+
+Host db-server
+    HostName 20.100.10.20
+    User ubuntu
+    IdentityFile ~/.ssh/db_key
+```
+
+각 창의 터미널에서 서비스 실행, 로그 모니터링, 디버깅을 동시에 수행한다.
+
+## 웹 개발 (포트 포워딩)
+
+1. Remote SSH로 서버 접속
+2. VS Code 터미널에서 `python app.py` 또는 `npm run dev`
+3. VS Code가 포트 포워딩을 자동 감지 (또는 `Ctrl+Shift+P` → `Forward a Port`)
+4. 로컬 브라우저에서 `http://localhost:5000` 접속
+
+# 트러블슈팅
+
+## "Could not establish connection"
+
+**원인 1: VM이 중지 상태**
+
+클라우드 콘솔에서 VM 상태 확인 후 시작.
+
+**원인 2: 방화벽에서 포트 22 차단**
+
+보안 그룹/NSG에서 SSH 포트 인바운드 허용 확인.
+
+**원인 3: SSH 키 파일 권한**
+
+```bash
+chmod 600 ~/.ssh/my_key.pem
+```
+
+**원인 4: 잘못된 사용자명 또는 IP**
+
+클라우드 콘솔에서 Public IP와 사용자명 재확인.
+
+## VS Code Server 설치 실패
+
+**원인: 디스크 공간 부족**
+
+```bash
+df -h                            # 디스크 확인
+rm -rf ~/.vscode-server/bin/*    # 이전 서버 삭제
+rm -rf ~/.cache/*                # 캐시 삭제
+```
+
+**원인: 서버 인터넷 연결 불가**
+
+프록시 설정 또는 오프라인 설치 사용.
+
+## 연결 끊김
+
+```bash
+# ~/.ssh/config에 keepalive 추가
+Host *
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+```
+
+## 호스트 키 변경 경고
+
+```
+WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!
+```
+
+서버 재생성 등으로 호스트 키가 변경된 경우:
+
+```bash
+ssh-keygen -R 서버IP
+```
+
+## 파일 탐색이 느림
+
+`.vscode/settings.json`에 불필요한 파일 감시 제외:
+
+```json
+{
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/node_modules/**": true,
+        "**/.venv/**": true,
+        "**/data/**": true
+    }
+}
+```
+
+# 요약
+
+| 단계 | 작업 |
+|------|------|
+| 1 | `Remote - SSH` 확장 설치 |
+| 2 | `~/.ssh/config`에 서버 등록 |
+| 3 | `Ctrl+Shift+P` → `Remote-SSH: Connect to Host` |
+| 4 | 서버 폴더 열기 (`File > Open Folder`) |
+| 5 | 서버에 필요한 확장 설치 (Python 등) |
+
+Remote SSH가 유리한 경우:
+
+- GPU 서버에서 ML/DL 모델 학습
+- 대용량 데이터가 서버에 있을 때
+- 팀 공유 서버에서 동일 환경 개발
+- 프로덕션과 동일한 환경에서 테스트

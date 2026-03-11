@@ -1,0 +1,391 @@
+---
+title: "SSH로 Private Git 패키지 설치"
+subtitle: "Poetry + SSH 인증으로 사내 비공개 Python 패키지 관리하기"
+description: |
+  조직 내부의 비공개 Git 저장소에 있는 Python 패키지를 SSH 인증으로 설치하는
+  전체 과정을 다룬다. SSH Config에 호스트 별칭 등록, ssh-agent 설정,
+  Poetry의 Git dependency 설정, 설치/업데이트 과정을 단계별로 정리한다.
+categories:
+  - Engineering
+  - Infrastructure
+  - Security
+  - Python
+  - DevOps
+author: Kwangmin Kim
+date: 03/11/2026
+---
+
+# 배경
+
+## 상황
+
+VS Code Remote SSH로 Azure VM에 접속하여 프로젝트를 개발하고 있었다. `pyproject.toml`에 사내 비공개 패키지(`sg-data-standardization`)가 의존성으로 선언되어 있었지만, `poetry install`을 실행하면 SSH 인증 문제로 설치가 실패했다.
+
+```toml
+# pyproject.toml
+[project]
+dependencies = [
+    "sg-data-standardization @ git+ssh://git@company_org/OrgName/data_standardization.git@main"
+]
+```
+
+## Private Git 패키지란
+
+조직 내부에서 공통으로 사용하는 Python 라이브러리를 PyPI에 공개하지 않고, **GitHub 비공개 저장소**에서 직접 설치하는 방식이다. SSH 인증을 통해 비공개 저장소에 접근하므로, SSH 설정이 올바르게 되어 있어야 한다.
+
+위 URL이 동작하려면 다음이 모두 설정되어 있어야 한다:
+
+1. SSH 키가 생성되어 있고
+2. 공개키가 GitHub 조직에 등록되어 있고
+3. SSH Config에 호스트 별칭(`company_org`)이 등록되어 있고
+4. ssh-agent에 키가 로드되어 있어야 한다
+
+이 글에서는 전체 과정을 단계별로 정리하고, 실제 작업 중 겪었던 실수와 해결 과정도 함께 다룬다.
+
+# 전체 흐름 한눈에 보기
+
+```
+[1. SSH 키 확인/생성]
+        ↓
+[2. GitHub에 공개키 등록]
+        ↓
+[3. SSH Config에 호스트 별칭 등록]     ← 한 번만 설정
+        ↓
+[4. ssh-agent에 키 등록]              ← 세션마다 필요
+        ↓
+[5. SSH 연결 테스트]
+        ↓
+[6. poetry install]                   ← 실제 패키지 설치
+```
+
+1~3단계는 **최초 1회**만 수행한다. 4단계는 새 터미널 세션을 열 때마다 필요하다.
+
+# 1단계: SSH 키 확인
+
+먼저 사용할 SSH 키가 있는지 확인한다.
+
+```bash
+ls -la ~/.ssh/
+```
+
+조직용 키가 별도로 있다면 확인한다:
+
+```
+~/.ssh/
+├── company_org         # 조직용 개인키
+├── company_org.pub     # 조직용 공개키
+├── id_ed25519          # 기본 개인키
+├── id_ed25519.pub      # 기본 공개키
+├── config              # SSH 호스트 설정
+└── known_hosts         # 접속 이력
+```
+
+키가 없으면 생성한다:
+
+```bash
+# 조직 전용 키 생성
+ssh-keygen -t ed25519 -C "your@company.com" -f ~/.ssh/company_org
+```
+
+`-f` 옵션으로 기본 키(`id_ed25519`)와 분리하여 **조직 전용 키**를 만든다. 개인 GitHub 계정과 회사 계정을 동시에 사용할 때 키가 섞이지 않도록 하기 위함이다.
+
+# 2단계: GitHub에 공개키 등록
+
+생성된 공개키를 GitHub 조직 계정에 등록한다.
+
+```bash
+cat ~/.ssh/company_org.pub
+# 출력: ssh-ed25519 AAAAC3NzaC1lZDI1... your@company.com
+```
+
+출력된 내용을 복사하여:
+
+1. GitHub → Settings → SSH and GPG keys → New SSH key
+2. Title: "Work Machine" 등 식별 가능한 이름
+3. Key: 복사한 공개키 붙여넣기
+
+::: {.callout-important}
+조직의 비공개 저장소에 접근하려면, 해당 **조직에 대한 SSO 승인**이 필요할 수 있다. SSH key 등록 후 `Configure SSO` 버튼이 보이면 해당 조직에 대해 승인(Authorize)해야 한다.
+:::
+
+# 3단계: SSH Config에 호스트 별칭 등록
+
+`~/.ssh/config`에 호스트 별칭을 추가한다.
+
+```bash
+# ~/.ssh/config
+
+# 개인 GitHub (기본 키)
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519
+
+# 회사 조직 GitHub (별도 키)
+Host company_org
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/company_org
+```
+
+## 왜 별칭을 사용하는가
+
+같은 `github.com`이라도 **용도별로 다른 SSH 키**를 사용해야 할 때가 있다.
+
+- 개인 GitHub 계정: `id_ed25519` 사용
+- 회사 조직 GitHub: `company_org` 사용
+
+별칭 없이 `github.com`으로만 접속하면 SSH는 기본 키를 사용한다. 회사 조직에 접근할 때 회사 키를 사용하려면 별칭으로 분리해야 한다.
+
+이 별칭이 `pyproject.toml`의 URL에서 사용된다:
+
+```
+git+ssh://git@company_org/OrgName/repo.git
+                 ↑
+          SSH Config의 Host 별칭
+```
+
+SSH가 `company_org`를 보면 Config에서 매핑된 `github.com`에 `company_org` 키로 접속한다.
+
+# 4단계: ssh-agent에 키 등록
+
+SSH 키에 패스프레이즈가 설정되어 있으면 `ssh-agent`에 등록하여 세션 동안 자동 인증되게 한다.
+
+```bash
+# ssh-agent 시작
+eval $(ssh-agent -s)
+# Agent pid 12345
+
+# 키 등록 (패스프레이즈 1회 입력)
+ssh-add ~/.ssh/company_org
+# Identity added: /home/user/.ssh/company_org
+
+# 등록 확인
+ssh-add -l
+```
+
+**Windows PowerShell:**
+
+```powershell
+Start-Service ssh-agent
+ssh-add $env:USERPROFILE\.ssh\company_org
+```
+
+::: {.callout-warning}
+`ssh-agent`는 현재 셸 세션에서만 유효하다. 새 터미널을 열면 다시 실행해야 한다. Poetry가 `read_passphrase: can't open /dev/tty` 에러를 내면 ssh-agent에 키가 등록되지 않은 것이다.
+:::
+
+# 5단계: SSH 연결 테스트
+
+패키지 설치 전에 SSH 연결이 정상인지 확인한다.
+
+```bash
+ssh -T git@company_org
+```
+
+성공:
+
+```
+Hi username! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+실패 시 `-v` 옵션으로 디버그:
+
+```bash
+ssh -vT git@company_org
+```
+
+## 흔한 실패 원인
+
+| 에러 | 원인 | 해결 |
+|------|------|------|
+| `Permission denied (publickey)` | 공개키가 GitHub에 미등록 | SSH Keys에 등록, SSO 승인 확인 |
+| `read_passphrase: can't open /dev/tty` | ssh-agent에 키 미등록 | `ssh-add` 실행 |
+| `Could not resolve hostname` | Config에 호스트 미등록 | `~/.ssh/config` 확인 |
+
+# 6단계: Poetry로 패키지 설치
+
+## pyproject.toml 설정
+
+```toml
+[project]
+dependencies = [
+    "sg-data-standardization @ git+ssh://git@company_org/OrgName/data_standardization.git@main"
+]
+```
+
+URL 구조 해석:
+
+```
+git+ssh://          SSH 프로토콜 사용
+git@company_org     SSH Config의 호스트 별칭 (→ github.com + company_org 키)
+/OrgName            GitHub 조직명
+/data_standardization.git   저장소명
+@main               브랜치 (태그, 커밋 해시도 가능)
+```
+
+## 설치
+
+```bash
+cd ~/projects/my-project
+poetry install
+```
+
+Poetry가 `pyproject.toml`의 의존성을 읽고, SSH를 통해 비공개 저장소에서 패키지를 가져와 설치한다.
+
+## 설치 확인
+
+```bash
+poetry show sg-data-standardization
+```
+
+```
+name         : sg-data-standardization
+version      : 1.0.0
+description  : 데이터 표준화 패키지
+
+dependencies
+ - openpyxl >=3.0.0
+ - pandas >=1.5.0
+```
+
+# 패키지 업데이트
+
+원격 저장소의 코드가 업데이트되었을 때:
+
+```bash
+poetry update sg-data-standardization
+```
+
+Poetry가 `poetry.lock`을 갱신하고 최신 코드를 다시 가져온다.
+
+# 특정 버전 고정
+
+브랜치 대신 태그나 커밋 해시를 지정하면 버전을 고정할 수 있다:
+
+```toml
+# 태그로 고정
+"sg-data-standardization @ git+ssh://git@company_org/OrgName/data_standardization.git@v1.2.0"
+
+# 커밋 해시로 고정
+"sg-data-standardization @ git+ssh://git@company_org/OrgName/data_standardization.git@abc1234"
+```
+
+`@main`은 항상 최신 코드를 가져오므로, 안정적인 환경이 필요하면 태그를 사용하는 것이 좋다.
+
+# 실전에서 겪은 문제들
+
+아래는 실제로 이 작업을 수행하면서 겪은 실수와 해결 과정이다. 설정 가이드만 보면 간단해 보이지만, 실제로는 여러 함정이 있다.
+
+## 문제 1: 로컬 Windows에서 먼저 시도 → 실패
+
+처음에는 로컬 Windows PC에서 직접 `poetry install`을 실행했다. SSH Config에 `company_org` 별칭도 추가하고 키 파일 경로도 지정했다.
+
+```bash
+# 로컬 ~/.ssh/config에 추가한 설정
+Host company_org
+    HostName github.com
+    User git
+    IdentityFile C:/Users/username/.ssh/id_ed25519_github
+```
+
+그런데 설치 과정에서 에러 발생:
+
+```
+read_passphrase: can't open /dev/tty: No such device or address
+```
+
+**원인**: SSH 키에 패스프레이즈가 설정되어 있는데, Poetry는 비대화식(non-interactive)으로 SSH를 호출하므로 패스프레이즈 입력 프롬프트를 열 수 없다.
+
+**해결**: `ssh-agent`에 키를 등록해야 한다. 그런데 Windows PowerShell에서는 `eval $(ssh-agent -s)`가 동작하지 않는다.
+
+```powershell
+# PowerShell에서는 이렇게 사용한다:
+Start-Service ssh-agent
+ssh-add $env:USERPROFILE\.ssh\id_ed25519_github
+```
+
+::: {.callout-tip}
+로컬 Windows 환경에서 SSH 인증 문제가 복잡하면, VS Code Remote SSH로 접속한 VM에서 작업하는 것이 훨씬 간단하다. VM은 Linux 환경이므로 `eval $(ssh-agent -s)`가 바로 동작한다.
+:::
+
+## 문제 2: pip과 poetry 혼용
+
+`poetry install`이 실패하자 급한 마음에 `pip install -e .`로 설치해버렸다. 패키지는 설치됐지만, Poetry가 관리하는 `poetry.lock`과 실제 설치 상태가 불일치하게 되었다.
+
+**`pip install`과 `poetry install`을 섞어 사용하면 안 되는 이유:**
+
+- `poetry.lock`과 실제 설치 상태가 불일치
+- 의존성 충돌 가능
+- 환경 재현 불가능 (다른 팀원이 `poetry install`하면 다른 결과)
+
+**해결**: pip으로 설치한 것을 제거하고 poetry로 재설치했다.
+
+```bash
+pip uninstall sg-data-standardization -y
+poetry install
+```
+
+## 문제 3: Poetry가 잘못된 Python 인터프리터를 참조
+
+VM에서 `poetry install`을 실행하니 이상한 에러가 발생했다:
+
+```
+'C:\Users\username\AppData\Local\miniconda3\envs\nblog' could not be resolved
+```
+
+**원인**: VS Code Remote SSH로 VM에 접속해서 작업하는데, Poetry가 **로컬 Windows PC의 Python 경로**를 참조하고 있었다. VS Code가 로컬 설정을 원격에 동기화하면서 Poetry 환경 설정이 꼬인 것이다.
+
+**해결**: VM의 올바른 Python 경로를 명시적으로 지정했다.
+
+```bash
+# VM의 Python 경로 확인
+which python3
+
+# Poetry에 올바른 인터프리터 지정
+poetry env use /home/azureuser/projects/my-project/.venv/bin/python3
+```
+
+## 최종 성공 과정
+
+VM에서 다음 순서로 실행하여 최종 성공했다:
+
+```bash
+# 1. ssh-agent 시작 + 키 등록
+eval $(ssh-agent -s)
+ssh-add ~/.ssh/company_org
+
+# 2. SSH 연결 테스트
+ssh -T git@company_org
+# Hi username! You've successfully authenticated, ...
+
+# 3. Poetry 인터프리터 수정 (필요한 경우만)
+poetry env use /home/azureuser/projects/my-project/.venv/bin/python3
+
+# 4. 설치
+poetry install
+
+# 5. 확인
+poetry show sg-data-standardization
+```
+
+# 교훈 요약
+
+| 실수 | 교훈 |
+|------|------|
+| 로컬 Windows에서 바로 시도 | SSH 인증이 복잡하면 VM(Linux)에서 작업하는 게 간단하다 |
+| `pip install`로 급하게 설치 | Poetry 프로젝트에서는 반드시 `poetry install`만 사용한다 |
+| Poetry 인터프리터 경로 오류 | Remote SSH 환경에서는 `poetry env use`로 VM의 Python을 명시한다 |
+| 패스프레이즈 입력 실패 | 비대화식 환경에서는 반드시 `ssh-agent`에 키를 미리 등록해야 한다 |
+
+# 요약
+
+| 단계 | 명령어 | 빈도 |
+|------|--------|------|
+| 키 생성 | `ssh-keygen -t ed25519 -f ~/.ssh/company_org` | 최초 1회 |
+| GitHub 공개키 등록 | GitHub Settings → SSH Keys | 최초 1회 |
+| SSH Config 등록 | `~/.ssh/config` 편집 | 최초 1회 |
+| ssh-agent 키 등록 | `eval $(ssh-agent -s)` + `ssh-add` | 세션마다 |
+| 연결 테스트 | `ssh -T git@company_org` | 필요 시 |
+| 패키지 설치 | `poetry install` | 최초 / 의존성 변경 시 |
+| 패키지 업데이트 | `poetry update 패키지명` | 코드 변경 시 |
