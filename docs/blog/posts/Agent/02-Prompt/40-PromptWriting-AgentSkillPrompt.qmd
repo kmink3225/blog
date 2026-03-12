@@ -1,0 +1,560 @@
+---
+title: "스킬 역분석: Agent용 시스템 프롬프트 작성 원리"
+subtitle: "LangChain Skills의 프롬프트 엔지니어링 패턴 분석"
+description: |
+  LangChain이 공개한 11개 스킬(SKILL.md)을 프롬프트 엔지니어링 관점에서 역분석한다.
+  실험과 검증을 거친 완성품에서 시스템 프롬프트 작성의 원리와 방법론을 추출한다.
+categories:
+  - Agent
+  - Architecture
+author: Kwangmin Kim
+date: 03/12/2026
+---
+
+## 전제
+
+LangChain이 공개한 스킬은 단순한 문서가 아니다. **25% → 95% 통과율**이라는 정량적 검증을 거친 프롬프트 엔지니어링의 산출물이다. 이 스킬들을 수동적으로 사용하는 데 그치지 않고, **왜 이렇게 작성했는지**를 분석하면 자체 Agent의 시스템 프롬프트 설계에 적용할 수 있는 원리를 추출할 수 있다.
+
+## 원리 1: 트리거 기반 description 설계
+
+### 관찰
+
+모든 LangChain이 공개한 SKILL.md의 YAML frontmatter에서 `description`은 **"이 스킬이 무엇인지"가 아니라 "언제 이 스킬을 호출해야 하는지"**를 기술한다.
+
+```yaml
+# 나쁜 예 (what 중심)
+description: "LangGraph의 상태 관리와 퍼시스턴스에 대한 문서"
+
+# 실제 스킬 (when 중심)
+description: "INVOKE THIS SKILL when your LangGraph needs to persist state,
+  remember conversations, travel through history, or configure subgraph
+  checkpointer scoping."
+```
+
+11개 스킬 전체에서 동일한 패턴이 반복된다:
+
+| 스킬 | description의 트리거 조건 |
+|------|--------------------------|
+| `framework-selection` | "at the START of any LangChain/LangGraph/Deep Agents project" |
+| `langchain-dependencies` | "when setting up a new project or when asked about package versions" |
+| `langchain-fundamentals` | "Create LangChain agents with create_agent, define tools" |
+| `langchain-middleware` | "when you need human-in-the-loop approval, custom middleware" |
+| `langchain-rag` | "when building ANY retrieval-augmented generation (RAG) system" |
+| `langgraph-fundamentals` | "when writing ANY LangGraph code" |
+| `langgraph-human-in-the-loop` | "when implementing human-in-the-loop patterns, pausing for approval" |
+| `langgraph-persistence` | "when your LangGraph needs to persist state, remember conversations" |
+| `deep-agents-core` | "when building ANY Deep Agents application" |
+| `deep-agents-memory` | "when your Deep Agent needs memory, persistence, or filesystem access" |
+| `deep-agents-orchestration` | "when using subagents, task planning, or human approval" |
+
+### 원리
+
+Agent가 스킬을 선택하는 과정은 **의도 분류(intent classification)**와 동일하다. description이 트리거 조건을 명확하게 기술하면, Agent는 사용자 요청과 description을 매칭하여 올바른 스킬을 선택할 수 있다.
+
+### 적용 방법
+
+자체 시스템 프롬프트를 작성할 때:
+
+```yaml
+# BAD: 모호한 설명
+description: "데이터베이스 관련 도구"
+
+# GOOD: 트리거 조건 명시
+description: "INVOKE when the user asks to query, insert, update, or delete
+  data from PostgreSQL. Also invoke when schema migration or index
+  optimization is needed."
+```
+
+::: {.callout-important}
+description은 **Agent의 라우터**다. 모호하게 쓰면 잘못된 스킬이 선택되고, 구체적으로 쓰면 정확한 스킬이 선택된다. 스킬 수가 많아질수록 description의 정밀도가 성능을 좌우한다.
+:::
+
+## 원리 2: 의미론적 XML 태그를 활용한 구조화
+
+### 관찰
+
+모든 스킬은 HTML/XML 스타일의 **의미론적 태그**로 섹션을 구분한다. 마크다운 헤딩(`##`)만으로는 불충분한 구조적 신호를 태그가 제공한다.
+
+```markdown
+<overview>전체 개요</overview>
+<when-to-use>사용 시점 비교 테이블</when-to-use>
+<ex-basic-agent>기본 예시</ex-basic-agent>
+<fix-missing-checkpointer>흔한 실수 교정</fix-missing-checkpointer>
+<boundaries>할 수 있는 것 / 없는 것</boundaries>
+```
+
+태그 네이밍에 일관된 접두사 규칙이 있다:
+
+| 접두사 | 용도 | 효과 |
+|--------|------|------|
+| `<ex-...>` | 코드 예시 | Agent가 "이건 복사할 수 있는 코드"로 인식 |
+| `<fix-...>` | 흔한 실수 교정 | Agent가 "이건 하지 말아야 할 것"으로 인식 |
+| `<overview>` | 개요 | 스킬의 핵심을 빠르게 파악 |
+| `<boundaries>` | 경계 | Agent가 시도하지 말아야 할 것을 명확히 인식 |
+| `<python>`, `<typescript>` | 언어별 분기 | 현재 컨텍스트에 맞는 코드만 참조 |
+
+### 원리
+
+LLM은 마크다운 헤딩보다 **XML 태그의 의미론적 구분을 더 정확하게 인식**한다. 태그 이름 자체가 "이 블록의 역할이 무엇인지"를 알려주기 때문이다.
+
+- `<ex-basic-agent>`: "이것은 basic-agent의 예시 코드다"
+- `<fix-missing-checkpointer>`: "이것은 checkpointer 누락 실수를 교정하는 내용이다"
+
+마크다운 헤딩(`### 기본 에이전트 예시`)은 사람에게는 충분하지만, LLM이 수천 토큰의 프롬프트에서 **특정 블록의 역할을 식별**하는 데는 태그가 더 효과적이다.
+
+### 적용 방법
+
+```markdown
+# 자체 Agent 시스템 프롬프트 예시
+
+<role>
+당신은 PostgreSQL 데이터베이스 관리 Agent이다.
+</role>
+
+<capabilities>
+- 테이블 생성/수정/삭제
+- 쿼리 최적화
+- 인덱스 관리
+</capabilities>
+
+<ex-create-table>
+```sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL
+);
+```
+</ex-create-table>
+
+<fix-missing-index>
+```sql
+-- WRONG: 인덱스 없이 대량 조회
+SELECT * FROM orders WHERE user_id = 123;
+
+-- CORRECT: 인덱스 추가
+CREATE INDEX idx_orders_user_id ON orders(user_id);
+SELECT * FROM orders WHERE user_id = 123;
+```
+</fix-missing-index>
+
+<boundaries>
+### 할 수 있는 것
+- DDL/DML 쿼리 생성
+- 실행 계획 분석
+
+### 할 수 없는 것
+- 프로덕션 DB에 직접 DROP TABLE 실행
+- 백업 없이 스키마 변경
+</boundaries>
+```
+
+## 원리 3: WRONG → CORRECT 대조 패턴
+
+### 관찰
+
+모든 `<fix-...>` 블록은 **반드시 잘못된 코드를 먼저 보여주고, 그 다음에 올바른 코드를 보여준다.**
+
+```python
+# WRONG: 이유 설명
+agent = create_agent(interrupt_on={"write_file": True})
+
+# CORRECT: 이유 설명
+agent = create_agent(
+    interrupt_on={"write_file": True},
+    checkpointer=MemorySaver()  # Required
+)
+```
+
+11개 스킬에서 이 패턴이 등장하는 횟수: **총 40회 이상**. 하나도 빠짐없이 WRONG → CORRECT 순서이다.
+
+### 원리
+
+LLM은 **"하지 말아야 할 것"을 명시적으로 보여줘야 회피한다.** "X를 하세요"만 말하면 LLM은 때때로 다른 방식으로 코드를 생성한다. 그러나 "X를 하지 마세요, 대신 Y를 하세요"라고 대조하면, LLM은 X 패턴을 인식하고 적극적으로 회피한다.
+
+이것은 few-shot prompting의 변형이다. 일반적인 few-shot이 **좋은 예시만** 보여주는 것과 달리, 이 패턴은 **나쁜 예시와 좋은 예시를 쌍으로** 보여준다.
+
+### 왜 WRONG이 먼저인가
+
+순서도 중요하다. WRONG을 먼저 보여주는 이유:
+
+1. Agent가 코드를 생성하려 할 때, **자신이 생성하려는 코드가 WRONG 패턴과 일치하는지** 먼저 확인한다
+2. 일치하면 CORRECT 패턴으로 전환한다
+3. CORRECT를 먼저 보여주면, Agent가 WRONG 패턴을 인식하지 못한 채 넘어갈 수 있다
+
+### 적용 방법
+
+자체 Agent의 시스템 프롬프트에 도메인별 흔한 실수를 미리 넣어둔다:
+
+```markdown
+<fix-sql-injection>
+'```python'
+# WRONG: SQL 인젝션 취약
+query = f"SELECT * FROM users WHERE name = '{user_input}'"
+
+# CORRECT: 파라미터 바인딩 사용
+query = "SELECT * FROM users WHERE name = %s"
+cursor.execute(query, (user_input,))
+'```'
+</fix-sql-injection>
+```
+
+::: {.callout-tip}
+자주 발생하는 실수를 3~5개 선별하여 WRONG → CORRECT 쌍으로 프롬프트에 포함하면, Agent의 코드 품질이 눈에 띄게 향상된다. 모든 실수를 넣을 필요는 없다. 가장 빈번하고 치명적인 것만 선별한다.
+:::
+
+## 원리 4: 의사결정 테이블로 분기 로직 제공
+
+### 관찰
+
+11개 스킬 전체에서 **비교 테이블**이 핵심 의사결정 도구로 사용된다.
+
+`framework-selection` 스킬의 예:
+
+| 질문 | Yes → | No → |
+|------|-------|------|
+| 서브태스크 분해, 파일 관리, 영구 메모리가 필요한가? | **Deep Agents** | 다음 질문 |
+| 루프, 동적 분기, 병렬 처리, HITL이 필요한가? | **LangGraph** | 다음 질문 |
+| 입력 → 도구 실행 → 결과 반환의 단순 Agent? | **LangChain** | 다음 질문 |
+
+`langgraph-persistence` 스킬의 예:
+
+| 체크포인터 | 용도 | 프로덕션 |
+|-----------|------|---------|
+| InMemorySaver | 테스트, 개발 | No |
+| SqliteSaver | 로컬 개발 | Partial |
+| PostgresSaver | 프로덕션 | Yes |
+
+### 원리
+
+LLM은 자연어 설명보다 **구조화된 테이블에서 의사결정을 더 정확하게 수행**한다.
+
+자연어로 "A 상황에서는 X를 사용하고, B 상황에서는 Y를 사용하며, C 상황에서는 Z를 사용하세요"라고 쓰면, LLM은 조건을 놓치거나 혼동할 수 있다. 그러나 테이블로 제공하면:
+
+- 조건과 결과가 1:1로 매핑됨
+- 모든 경우의 수가 한 눈에 보임
+- LLM이 현재 상황을 테이블의 행과 매칭하여 결정
+
+### 적용 방법
+
+Agent가 분기 판단을 해야 하는 모든 상황에 테이블을 사용한다:
+
+```markdown
+<error-handling-strategy>
+| 에러 유형 | 처리 주체 | 전략 |
+|-----------|-----------|------|
+| 네트워크 타임아웃 | 시스템 | 3회 재시도 |
+| 잘못된 사용자 입력 | 사용자 | 에러 메시지 반환 |
+| API 키 만료 | 관리자 | 알림 발송 |
+| 알 수 없는 에러 | 개발자 | 로그 기록 후 에스컬레이션 |
+</error-handling-strategy>
+```
+
+## 원리 5: boundaries로 Agent의 행동 범위 제한
+
+### 관찰
+
+모든 스킬의 마지막에 `<boundaries>` 섹션이 있다. **"할 수 있는 것"과 "할 수 없는 것"을 명시적으로 분리**한다.
+
+```markdown
+<boundaries>
+### What Agents CAN Configure
+- Model selection and parameters
+- Additional custom tools
+- System prompt customization
+
+### What Agents CANNOT Configure
+- Core middleware removal (TodoList, Filesystem, SubAgent always present)
+- The write_todos, task, or filesystem tool names
+- The SKILL.md frontmatter format
+</boundaries>
+```
+
+### 원리
+
+LLM은 **명시적으로 금지하지 않은 행동은 시도할 수 있다.** "X를 하세요"만 말하면, LLM은 X와 관련된 Y, Z도 시도할 수 있다. boundaries는 **Agent의 행동 공간을 명시적으로 제한**하여 예측 가능한 동작을 보장한다.
+
+이것은 프롬프트 엔지니어링에서 **네거티브 프롬프팅(negative prompting)**의 체계적 적용이다.
+
+### CAN과 CANNOT의 비대칭 효과
+
+| 구분 | 효과 |
+|------|------|
+| CAN만 명시 | Agent가 CAN 범위를 넘어서 시도할 수 있음 |
+| CANNOT만 명시 | Agent가 무엇을 해야 하는지 불명확 |
+| CAN + CANNOT 모두 명시 | Agent의 행동이 정확한 범위 내에서 작동 |
+
+### 적용 방법
+
+```markdown
+<boundaries>
+### 할 수 있는 것
+- SELECT, INSERT, UPDATE 쿼리 생성
+- 인덱스 추가 제안
+- 실행 계획 분석
+
+### 할 수 없는 것
+- DROP TABLE, DROP DATABASE 실행
+- 사용자 권한 변경
+- 백업 없이 ALTER TABLE 실행
+- 프로덕션 환경에서 DELETE without WHERE
+</boundaries>
+```
+
+## 원리 6: 프로그레시브 디스클로저의 계층 설계
+
+### 관찰
+
+스킬이 Agent에게 로드되는 과정은 3단계로 이루어진다:
+
+```
+Level 0: AGENTS.md (항상 로드)
+  → 전체 스킬 목록과 각 스킬의 한 줄 설명
+  → Agent는 여기서 "어떤 스킬이 존재하는지" 파악
+
+Level 1: SKILL.md의 description (스킬 선택 시)
+  → "INVOKE THIS SKILL when..." 트리거 조건
+  → Agent는 여기서 "이 스킬을 로드할지" 결정
+
+Level 2: SKILL.md의 본문 (스킬 로드 시)
+  → overview → 예시 → fix → boundaries
+  → Agent는 여기서 "실제 코드를 어떻게 작성할지" 참조
+```
+
+### 원리
+
+이 구조는 **인간의 도서관 탐색**과 동일하다:
+
+1. 서가 목록을 본다 (어떤 분야의 책이 있는지)
+2. 책 표지와 목차를 본다 (이 책이 지금 필요한지)
+3. 해당 챕터를 읽는다 (실제 내용 참조)
+
+모든 정보를 한꺼번에 주면 컨텍스트 윈도우를 낭비하고 노이즈가 증가한다. 계층별로 필요한 깊이만큼만 로드하면 **같은 컨텍스트 윈도우에서 더 정확한 결과**를 얻는다.
+
+### 적용 방법
+
+자체 Agent의 스킬 시스템을 설계할 때:
+
+```
+# Level 0: 메인 시스템 프롬프트 (항상 로드, 최소화)
+당신은 데이터 분석 Agent이다.
+사용 가능한 스킬:
+- data-cleaning: 데이터 전처리 및 결측값 처리
+- visualization: 차트 및 그래프 생성
+- statistical-test: 통계 검정 수행
+
+# Level 1: 스킬 description (라우팅용)
+data-cleaning: "INVOKE when the user asks to handle missing values,
+  remove duplicates, fix data types, or standardize formats"
+
+# Level 2: 스킬 본문 (실제 작업 지시)
+<overview>결측값 처리 전략</overview>
+<ex-fill-mean>평균값 대체 예시</ex-fill-mean>
+<fix-dropping-all-nulls>전체 삭제의 문제점</fix-dropping-all-nulls>
+<boundaries>...</boundaries>
+```
+
+## 원리 7: 최소 완전 예시 (Minimal Complete Example)
+
+### 관찰
+
+모든 `<ex-...>` 블록의 코드는 **최소한이면서도 실행 가능한 완전한 예시**이다. 설명을 위한 주석은 있지만, 불필요한 코드는 없다.
+
+```python
+# 실제 스킬의 예시 - 최소 완전
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+
+@tool
+def get_weather(location: str) -> str:
+    """Get current weather for a location.
+
+    Args:
+        location: City name
+    """
+    return f"Weather in {location}: Sunny, 72F"
+
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-5",
+    tools=[get_weather],
+    system_prompt="You are a helpful assistant."
+)
+
+result = agent.invoke({
+    "messages": [{"role": "user", "content": "What's the weather in Paris?"}]
+})
+```
+
+이 예시에는:
+
+- 불필요한 import가 없다
+- 에러 처리가 없다 (핵심 패턴에 집중)
+- 변수명이 자명하다
+- 실행하면 실제로 동작한다
+
+### 원리
+
+LLM은 예시 코드를 **템플릿으로 사용**한다. 예시에 불필요한 코드가 있으면, Agent가 생성하는 코드에도 불필요한 코드가 포함된다. 반대로 예시가 너무 간략하면(pseudo code), Agent가 실제 import나 함수 시그니처를 추측해야 한다.
+
+**최소 완전 예시**는 이 두 극단의 균형점이다:
+
+| 수준 | 문제 |
+|------|------|
+| 너무 간략 (pseudo code) | Agent가 import, 시그니처를 추측 → 오류 |
+| 최소 완전 (Minimal Complete) | Agent가 정확히 복사하고 확장 가능 |
+| 너무 상세 (production code) | Agent가 불필요한 부분까지 복사 → 과잉 |
+
+### 적용 방법
+
+```python
+# BAD: pseudo code - Agent가 추측해야 함
+# db 연결 후 쿼리 실행
+
+# BAD: 과잉 상세 - 핵심이 묻힘
+import logging
+import os
+from typing import Optional
+from contextlib import contextmanager
+import psycopg2
+from psycopg2.extras import RealDictCursor
+# ... 30줄의 설정 코드 ...
+
+# GOOD: 최소 완전 - 정확히 필요한 것만
+import psycopg2
+
+conn = psycopg2.connect("postgresql://user:pass@localhost/db")
+cursor = conn.cursor()
+cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+result = cursor.fetchone()
+conn.close()
+```
+
+## 원리 8: 언어/컨텍스트별 분기 태그
+
+### 관찰
+
+모든 예시가 `<python>`과 `<typescript>` 태그로 분리되어 있다. Agent는 현재 프로젝트의 언어에 맞는 블록만 참조한다.
+
+```markdown
+<ex-basic-agent>
+<python>
+```python
+from langchain.agents import create_agent
+# Python 예시
+```
+</python>
+<typescript>
+```typescript
+import { createAgent } from "langchain";
+// TypeScript 예시
+```
+</typescript>
+</ex-basic-agent>
+```
+
+### 원리
+
+이것은 **조건부 컨텍스트 로딩**이다. Python 프로젝트에서 작업 중인 Agent는 TypeScript 예시를 볼 필요가 없다. 불필요한 예시는 노이즈이며, 컨텍스트 윈도우를 낭비한다.
+
+### 적용 방법
+
+자체 Agent에서도 동일한 패턴을 적용할 수 있다:
+
+```markdown
+<ex-database-query>
+<postgresql>
+```sql
+SELECT * FROM users WHERE created_at > NOW() - INTERVAL '7 days';
+```
+</postgresql>
+<mysql>
+```sql
+SELECT * FROM users WHERE created_at > DATE_SUB(NOW(), INTERVAL 7 DAY);
+```
+</mysql>
+</ex-database-query>
+```
+
+단, Agent가 현재 컨텍스트(어떤 DB를 사용하는지)를 인식할 수 있어야 한다.
+
+## 종합: 스킬(시스템 프롬프트) 작성 체크리스트
+
+위 8개 원리를 종합한 체크리스트:
+
+### 구조 설계
+
+- [ ] **description**: "무엇"이 아닌 "언제" 중심으로 트리거 조건을 기술했는가
+- [ ] **XML 태그**: `<ex-...>`, `<fix-...>`, `<boundaries>` 등 의미론적 태그로 섹션을 구분했는가
+- [ ] **계층 구조**: Level 0(목록) → Level 1(설명) → Level 2(상세) 단계로 정보를 분리했는가
+
+### 내용 설계
+
+- [ ] **의사결정 테이블**: 분기 판단이 필요한 곳에 비교 테이블을 넣었는가
+- [ ] **WRONG → CORRECT**: 흔한 실수를 대조 쌍으로 3~5개 포함했는가
+- [ ] **최소 완전 예시**: 예시 코드가 실행 가능하면서도 불필요한 코드가 없는가
+- [ ] **boundaries**: CAN과 CANNOT을 모두 명시했는가
+
+### 최적화
+
+- [ ] **컨텍스트별 분기**: 불필요한 정보가 로드되지 않도록 조건부 태그를 사용했는가
+- [ ] **스킬 수 관리**: 전체 스킬이 ~12개 이내인가
+- [ ] **스킬 간 중복 최소화**: 유사한 스킬이 존재하여 선택 오류를 유발하지 않는가
+
+## 실전 템플릿
+
+위 원리를 모두 적용한 스킬 템플릿:
+
+```markdown
+---
+name: my-domain-skill
+description: "INVOKE THIS SKILL when [구체적 트리거 조건].
+  Covers [다루는 범위 1], [범위 2], and [범위 3]."
+---
+
+<overview>
+이 스킬의 목적과 핵심 개념을 2~3문장으로 요약한다.
+</overview>
+
+<when-to-use>
+| 이 스킬을 사용할 때 | 다른 방법을 사용할 때 |
+|---------------------|---------------------|
+| 조건 A | 조건 X |
+| 조건 B | 조건 Y |
+</when-to-use>
+
+<ex-basic-usage>
+최소 완전 예시 코드. 실행 가능하고 불필요한 코드가 없다.
+</ex-basic-usage>
+
+<ex-advanced-usage>
+심화 예시. 기본 예시를 확장한 실전 패턴.
+</ex-advanced-usage>
+
+<fix-common-mistake-1>
+```
+# WRONG: 왜 잘못된지 한 줄 설명
+잘못된 코드
+
+# CORRECT: 왜 올바른지 한 줄 설명
+올바른 코드
+```
+</fix-common-mistake-1>
+
+<fix-common-mistake-2>
+(동일 패턴 반복)
+</fix-common-mistake-2>
+
+<boundaries>
+### 할 수 있는 것
+- 항목 1
+- 항목 2
+
+### 할 수 없는 것
+- 항목 1
+- 항목 2
+</boundaries>
+```
+
+## 참고
+
+- [LangChain Skills GitHub](https://github.com/langchain-ai/langchain-skills) — 분석 대상 원본
+- [LangChain Blog - Evaluating Skills](https://blog.langchain.com/evaluating-skills/) — 성능 검증 방법론

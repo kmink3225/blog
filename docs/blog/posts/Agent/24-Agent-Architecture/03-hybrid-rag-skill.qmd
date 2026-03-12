@@ -1,0 +1,194 @@
+---
+title: "RAG + 스킬 하이브리드 Agent 설계"
+subtitle: "RAG와 스킬 기반 접근법을 결합한 Agent 아키텍처"
+description: |
+  RAG의 유연한 검색 능력과 스킬의 정확한 컨텍스트 제공을 결합한
+  하이브리드 Agent 아키텍처의 설계 원칙과 구현 방향을 정리한다.
+categories:
+  - Agent
+  - Architecture
+  - RAG
+author: Kwangmin Kim
+date: 03/12/2026
+---
+
+## RAG와 스킬의 특성 비교
+
+| 구분 | RAG | 스킬 기반 |
+|------|-----|-----------|
+| 정보 형태 | 비정형 문서 청크 | 구조화된 매뉴얼 + 스크립트 |
+| 검색 방식 | 임베딩 유사도 기반 | 태스크 유형 기반 선택 |
+| 장점 | 대규모 지식베이스 커버 | 높은 정확도, 재현성 |
+| 단점 | 검색 품질에 의존, 노이즈 | 사전 작성 필요, 커버리지 제한 |
+| 적합한 상황 | 탐색적 질의, 다양한 주제 | 반복적 정형 작업 |
+
+## 왜 하이브리드인가
+
+### RAG만 사용할 때의 한계
+
+- 자주 반복되는 정형 작업에도 매번 검색 수행 → 비효율
+- 검색 결과의 품질이 일정하지 않음
+- 절차적 지식(how-to)을 청크 단위로 분리하면 맥락이 깨짐
+
+### 스킬만 사용할 때의 한계
+
+- 사전에 정의되지 않은 질의에 대응 불가
+- 스킬 수가 늘어나면 선택 오류 증가
+- 새로운 도메인 추가 시 수작업 필요
+
+### 하이브리드의 이점
+
+- 정형 작업은 스킬로 **빠르고 정확하게** 처리
+- 비정형 질의는 RAG로 **유연하게** 대응
+- 스킬의 커버리지 한계를 RAG가 보완
+
+## 하이브리드 아키텍처 설계
+
+### 전체 흐름
+
+```
+[사용자 입력]
+    ↓
+[의도 분류기 (Intent Classifier)]
+    ├─ 높은 확신도 + 매칭 스킬 존재 → [스킬 기반 처리]
+    ├─ 낮은 확신도 또는 매칭 스킬 없음 → [RAG 기반 처리]
+    └─ 복합 태스크 → [스킬 + RAG 병합]
+    ↓
+[컨텍스트 조합]
+    ↓
+[LLM 실행]
+    ↓
+[응답 + 피드백 루프]
+```
+
+### 의도 분류기 설계
+
+의도 분류기는 사용자 입력을 분석하여 적절한 처리 경로를 결정한다.
+
+```python
+from enum import Enum
+
+class RouteType(Enum):
+    SKILL = "skill"
+    RAG = "rag"
+    HYBRID = "hybrid"
+
+class IntentClassifier:
+    def __init__(self, skill_registry, threshold: float = 0.8):
+        self.skill_registry = skill_registry
+        self.threshold = threshold
+
+    def classify(self, query: str) -> tuple[RouteType, str | None]:
+        """
+        질의를 분석하여 처리 경로와 스킬 이름을 반환한다.
+
+        Returns:
+            (RouteType, skill_name or None)
+        """
+        best_skill, confidence = self.skill_registry.match(query)
+
+        if confidence >= self.threshold and best_skill:
+            return RouteType.SKILL, best_skill.name
+        elif confidence >= 0.5 and best_skill:
+            return RouteType.HYBRID, best_skill.name
+        else:
+            return RouteType.RAG, None
+```
+
+### 스킬 레지스트리
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Skill:
+    name: str
+    description: str
+    instructions_path: str  # 마크다운 매뉴얼 경로
+    scripts: list[str]      # 실행 가능 스크립트 경로
+
+class SkillRegistry:
+    def __init__(self):
+        self.skills: dict[str, Skill] = {}
+
+    def register(self, skill: Skill):
+        self.skills[skill.name] = skill
+
+    def match(self, query: str) -> tuple[Skill | None, float]:
+        """질의와 가장 잘 맞는 스킬과 확신도를 반환한다."""
+        # 구현: 키워드 매칭, 임베딩 유사도, LLM 분류 등
+        ...
+```
+
+### 컨텍스트 조합기
+
+```python
+class ContextComposer:
+    def __init__(self, max_tokens: int = 8000):
+        self.max_tokens = max_tokens
+
+    def compose(
+        self,
+        route: RouteType,
+        skill_context: str | None = None,
+        rag_results: list[str] | None = None,
+    ) -> str:
+        """처리 경로에 따라 컨텍스트를 조합한다."""
+        if route == RouteType.SKILL:
+            return self._skill_only(skill_context)
+        elif route == RouteType.RAG:
+            return self._rag_only(rag_results)
+        else:
+            return self._hybrid(skill_context, rag_results)
+
+    def _hybrid(self, skill_context, rag_results):
+        """스킬 컨텍스트를 우선 배치하고, 남는 공간에 RAG 결과를 추가한다."""
+        budget = self.max_tokens
+        result = skill_context
+        budget -= self._count_tokens(skill_context)
+
+        for chunk in rag_results:
+            chunk_tokens = self._count_tokens(chunk)
+            if budget - chunk_tokens < 0:
+                break
+            result += f"\n\n---\n\n{chunk}"
+            budget -= chunk_tokens
+
+        return result
+```
+
+## 실전 적용 시 고려사항
+
+### 스킬 설계 가이드라인
+
+1. **하나의 스킬은 하나의 태스크 유형**을 담당한다
+2. 스킬 문서는 **구체적인 절차와 예시**를 포함한다
+3. 전체 스킬 수는 **~12개 이내**로 유지한다
+4. 스킬 간 **중복을 최소화**한다
+
+### RAG 폴백 설계
+
+1. 스킬로 처리되지 않는 모든 질의는 RAG로 폴백한다
+2. RAG 검색 결과의 **관련성 점수가 임계값 미만**이면 "모르겠다"고 응답한다
+3. 자주 RAG로 폴백되는 패턴을 분석하여 **새로운 스킬로 승격**한다
+
+::: {.callout-tip}
+RAG 폴백 로그를 분석하면 어떤 스킬이 부족한지 파악할 수 있다. 이를 통해 스킬 세트를 점진적으로 확장하는 것이 효과적이다.
+:::
+
+### 평가 방법
+
+| 평가 항목 | 측정 방법 |
+|-----------|-----------|
+| 라우팅 정확도 | 스킬/RAG 경로 선택이 올바른 비율 |
+| 태스크 통과율 | 전체 태스크 중 성공적으로 완료된 비율 |
+| 스킬 커버리지 | 전체 질의 중 스킬로 처리된 비율 |
+| RAG 폴백률 | 스킬 매칭 실패로 RAG로 넘어간 비율 |
+| 응답 품질 | 사람 평가 또는 LLM-as-Judge |
+
+## 정리
+
+- **스킬**: 반복적이고 명확한 작업에 높은 정확도 제공
+- **RAG**: 탐색적이고 다양한 질의에 유연하게 대응
+- **하이브리드**: 두 접근법의 장점을 결합하여 커버리지와 정확도를 동시에 확보
+- **핵심 원칙**: 스킬 우선, RAG 폴백, 로그 기반 스킬 확장
