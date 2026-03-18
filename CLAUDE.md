@@ -157,6 +157,24 @@ import pandas as pd
 - 10: 트러블슈팅
 - 11-17: 외부 Git 패키지 통합 실전 사례
 
+## Book Source (교재 레퍼런스)
+
+`docs/book/` 폴더에 교과서 md 파일이 있다. 블로그 포스트 작성 시 교과서 기반 근거로 참조한다.
+- 렌더링 대상 아님 (`_quarto.yml`에서 제외)
+- 상세 가이드: `docs/book/BOOK_SOURCE_GUIDE.md`
+- 소스 내용을 그대로 복붙하지 않고 블로그 스타일(한다 체)로 재작성한다
+- 인용 시 `(저자, 연도, Ch.N)` 형식 사용
+
+### 그룹 구조
+- `statistics/` — Casella & Berger (수리통계)
+- `linear_algebra/` — Strang, Magnus, Matrix Cookbook (선형대수, 행렬 미분)
+- `glm/` — McCullagh & Nelder, Faraway (GLM, 회귀)
+- `mixed_model/` — Hedeker & Gibbons (종단 데이터, 반복측정)
+- `survival/` — Kleinbaum, Klein, Hosmer, Collett (생존 분석)
+- `epidemiology/` — Hernan, Woodward, Schulz, Maxwell, Buisson (인과추론, 역학, 실험설계, AB test)
+- `bayesian/` — Gelman, Downey (베이지안)
+- `fda/` — Ramsay×2, Kokoszka (함수형 데이터 분석)
+
 ## Commands
 
 ```bash
