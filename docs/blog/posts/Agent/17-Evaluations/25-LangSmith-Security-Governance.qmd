@@ -1,0 +1,407 @@
+---
+title: "LangSmith 보안 및 거버넌스"
+subtitle: "데이터 주권, PII 마스킹, 배포 옵션별 보안 전략"
+description: |
+  LangSmith의 데이터 저장 위치, PII 마스킹, 암호화 메커니즘, 규제 준수(SOC2, HIPAA, GDPR) 현황을 분석한다.
+  SaaS, BYOC, Self-hosted 배포 옵션별 보안 수준과 트레이드오프를 비교하여 엔터프라이즈 도입 시 판단 기준을 제공한다.
+categories:
+  - AI
+  - LangChain
+  - LangSmith
+  - Security
+  - Governance
+author: Kwangmin Kim
+date: 03/18/2026
+---
+
+## 도입: LLM Observability 도구에 데이터 거버넌스가 중요한 이유
+
+LLM 기반 애플리케이션을 운영하면 필연적으로 사용자의 프롬프트, 모델 응답, 중간 추론 과정이 trace로 기록된다. 이 trace에는 다음과 같은 민감 정보가 포함될 수 있다.
+
+* 사용자가 입력한 **개인식별정보(PII)**: 이름, 이메일, 주민등록번호, 의료 기록
+* 기업의 **내부 기밀**: 비공개 문서, 재무 데이터, 전략 문서 내용이 RAG 컨텍스트로 주입된 경우
+* **모델 출력**: 민감 정보를 포함한 응답이 그대로 저장되는 경우
+
+LangSmith와 같은 LLM observability 플랫폼은 이 모든 데이터를 수집하고 저장한다. 따라서 "어디에, 어떻게, 얼마나 오래 저장되는가"는 기술적 선택이 아니라 **법적, 규제적 의무 사항**이다.
+
+특히 다음과 같은 규제 환경에서는 도입 전 반드시 보안 검토가 필요하다.
+
+* **GDPR** (EU 일반 데이터 보호 규정): EU 시민의 개인정보가 포함된 trace의 역외 전송 제한
+* **HIPAA** (미국 의료정보 보호법): 의료 데이터를 처리하는 LLM 시스템의 BAA 체결 의무
+* **개인정보보호법** (한국): 국외 이전 시 정보주체 동의 또는 보호위원회 인정 필요
+* **산업별 내부 규정**: 금융, 공공, 국방 등 해외 클라우드 사용 자체가 금지된 환경
+
+이 글에서는 LangSmith의 데이터 흐름, 보안 메커니즘, 규제 준수 현황, 배포 옵션별 비교, 그리고 프로덕션 도입 전 점검 사항을 체계적으로 정리한다.
+
+## 1. 데이터 흐름 및 저장 구조
+
+### 전송되는 데이터의 범위
+
+LangSmith SDK는 LLM 호출 시 다음 정보를 서버로 전송한다.
+
+| 데이터 항목 | 설명 | 민감도 |
+| :--- | :--- | :--- |
+| **Input (프롬프트)** | 사용자 질의, system prompt, few-shot 예시 포함 | 높음 |
+| **Output (응답)** | 모델이 생성한 전체 텍스트 | 높음 |
+| **Metadata** | 모델명, 토큰 수, latency, 비용, 태그 | 낮음 |
+| **중간 단계 (Intermediate Steps)** | Chain/Agent의 각 단계별 입출력 | 높음 |
+| **Retrieval 컨텍스트** | RAG에서 검색된 문서 chunk | 매우 높음 |
+| **Tool 호출 결과** | 외부 API 응답, DB 쿼리 결과 | 높음 |
+| **Error / Exception** | 에러 메시지, stack trace | 중간 |
+
+### 데이터 흐름 아키텍처
+
+```
++------------------+       HTTPS/TLS 1.2+       +---------------------+
+|   Application    | ───────────────────────→   |   LangSmith Server  |
+|                  |                            |                     |
+|  ┌────────────┐  |   전송 데이터:              |  ┌───────────────┐  |
+|  │ LangChain  │  |   - traces (입출력)        |  │  API Gateway  │  |
+|  │ / LangSmith│  |   - run metadata          |  │  (인증/인가)   │  |
+|  │   SDK      │  |   - feedback scores       |  └───────┬───────┘  |
+|  └─────┬──────┘  |                            |          │          |
+|        │         |                            |  ┌───────▼───────┐  |
+|  ┌─────▼──────┐  |                            |  │   Storage     │  |
+|  │ PII Filter │  |   마스킹 후 전송 가능       |  │  (AES-256)    │  |
+|  │ (선택적)    │  |                            |  │               │  |
+|  └────────────┘  |                            |  │  - PostgreSQL │  |
++------------------+                            |  │  - Blob Store │  |
+                                                |  └───────────────┘  |
+                                                +---------------------+
+```
+
+핵심 포인트는 **SDK가 애플리케이션 프로세스 내부에서 동작**한다는 것이다. 따라서 데이터가 네트워크를 통해 외부로 전송되기 전에 로컬에서 필터링할 수 있는 지점이 존재한다.
+
+### 데이터 저장 위치 옵션
+
+LangSmith는 사용자의 설정에 따라 데이터 저장 위치가 결정되는 **Shared Responsibility(공동 책임)** 모델을 따른다.
+
+| 옵션 | 저장 위치 | 엔드포인트 | 대상 규제 |
+| :--- | :--- | :--- | :--- |
+| **US SaaS** (기본) | 미국 아이오와 (GCP us-central-1) | `smith.langchain.com` | SOC 2 준수 |
+| **EU SaaS** | 네덜란드 (GCP europe-west4) | `eu.smith.langchain.com` | GDPR 대응 |
+| **BYOC** (Bring Your Own Cloud) | 사용자 VPC (AWS/GCP/Azure) | 사용자 정의 | 데이터 주권 확보 |
+| **Self-hosted** | 온프레미스 / 폐쇄망 | 내부 네트워크 | 완전 격리 필요 시 |
+
+EU SaaS를 사용하려면 SDK 초기화 시 엔드포인트를 변경해야 한다.
+
+```python
+import os
+os.environ["LANGCHAIN_ENDPOINT"] = "https://eu.smith.langchain.com"
+```
+
+## 2. 보안 메커니즘
+
+### 2.1 PII Redaction (개인정보 마스킹)
+
+SDK 레벨에서 데이터를 전송하기 전에 주민등록번호, 이메일 등 민감 정보(PII)를 로컬에서 먼저 마스킹하여 LangSmith 서버로 전송할 수 있다. 서버에는 전송하되 민감 정보는 제거한 상태로 보내는 전략이다.
+
+#### Python 코드 예시: `hide_inputs` / `hide_outputs` 활용
+
+```python
+import re
+from langsmith import Client, traceable
+
+# PII 패턴 정의
+PII_PATTERNS = {
+    "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+    "phone_kr": r"01[0-9]-\d{3,4}-\d{4}",
+    "rrn_kr": r"\d{6}-[1-4]\d{6}",  # 한국 주민등록번호
+    "credit_card": r"\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}",
+}
+
+
+def redact_pii(text: str) -> str:
+    """텍스트에서 PII를 마스킹한다."""
+    for pii_type, pattern in PII_PATTERNS.items():
+        text = re.sub(pattern, f"[REDACTED_{pii_type.upper()}]", text)
+    return text
+
+
+def hide_inputs(inputs: dict) -> dict:
+    """LangSmith에 전송되기 전에 입력 데이터를 마스킹한다."""
+    sanitized = {}
+    for key, value in inputs.items():
+        if isinstance(value, str):
+            sanitized[key] = redact_pii(value)
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+def hide_outputs(outputs: dict) -> dict:
+    """LangSmith에 전송되기 전에 출력 데이터를 마스킹한다."""
+    sanitized = {}
+    for key, value in outputs.items():
+        if isinstance(value, str):
+            sanitized[key] = redact_pii(value)
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+@traceable(
+    hide_inputs=hide_inputs,
+    hide_outputs=hide_outputs,
+)
+def process_user_query(query: str) -> str:
+    """사용자 질의를 처리한다. trace에는 마스킹된 데이터만 기록된다."""
+    # 실제 LLM 호출 로직
+    return f"처리 결과: {query}"
+
+
+# 사용 예시
+result = process_user_query("김철수(010-1234-5678)의 보험 내역을 조회해줘")
+# LangSmith에는 "김철수([REDACTED_PHONE_KR])의 보험 내역을 조회해줘"로 기록된다
+```
+
+전체 trace를 아예 전송하지 않으려면 환경 변수로 tracing 자체를 비활성화할 수도 있다.
+
+```bash
+export LANGCHAIN_TRACING_V2=false
+```
+
+::: {.callout-warning}
+`hide_inputs`/`hide_outputs`는 **정규식 기반 필터링**이므로 모든 PII를 완벽하게 잡아내지 못할 수 있다. 프로덕션에서는 Microsoft Presidio, AWS Comprehend 같은 전용 PII 탐지 라이브러리와 결합하는 것을 권장한다.
+:::
+
+### 2.2 데이터 암호화
+
+| 구분 | 방식 | 실무적 의미 |
+| :--- | :--- | :--- |
+| **At Rest (저장 시)** | AES-256 | 디스크에 저장된 데이터가 물리적으로 탈취되어도 복호화 불가능하다. GCP/AWS의 관리형 암호화 키(KMS)를 사용한다. |
+| **In Transit (전송 시)** | TLS 1.2+ | SDK와 서버 간 통신이 암호화된다. 중간자 공격(MITM)으로 trace 내용을 도청할 수 없다. |
+
+SaaS 환경에서는 LangChain이 암호화 키를 관리한다. BYOC/Self-hosted 환경에서는 고객이 자체 KMS 키를 사용할 수 있어 **암호화 키에 대한 완전한 통제권**을 확보할 수 있다.
+
+### 2.3 접근 제어 (Access Control)
+
+#### API Key 관리
+
+LangSmith는 **Workspace 단위의 API Key**를 발급한다. 키 관리 시 유의 사항은 다음과 같다.
+
+* API Key는 환경 변수(`LANGCHAIN_API_KEY`)로 관리하고, 코드에 하드코딩하지 않는다
+* 프로덕션과 개발 환경의 API Key를 분리한다
+* 정기적으로 키를 로테이션한다 (90일 주기 권장)
+* 불필요한 키는 즉시 비활성화한다
+
+```python
+# 환경별 API Key 분리 예시
+import os
+
+ENV = os.getenv("APP_ENV", "development")
+
+if ENV == "production":
+    os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_PROD_KEY")
+    os.environ["LANGCHAIN_PROJECT"] = "prod-llm-service"
+elif ENV == "staging":
+    os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_STAGING_KEY")
+    os.environ["LANGCHAIN_PROJECT"] = "staging-llm-service"
+else:
+    os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_DEV_KEY")
+    os.environ["LANGCHAIN_PROJECT"] = "dev-experiments"
+```
+
+#### RBAC (Role-Based Access Control)
+
+LangSmith는 조직 내 역할 기반 접근 제어를 지원한다.
+
+| 역할 | 권한 | 대상 |
+| :--- | :--- | :--- |
+| **Organization Owner** | 전체 관리 (결제, 멤버, 설정) | CTO, 보안 담당자 |
+| **Organization Admin** | 워크스페이스 생성/삭제, 멤버 관리 | 팀 리드 |
+| **Workspace Admin** | 해당 워크스페이스 내 전체 권한 | 프로젝트 매니저 |
+| **Editor** | 데이터셋, 프롬프트, 실험 생성/수정 | ML 엔지니어 |
+| **Viewer** | 읽기 전용 | 이해관계자, 감사자 |
+
+#### Workspace 격리
+
+민감도가 다른 프로젝트를 운영할 때는 **Workspace를 분리**하여 데이터 접근 범위를 제한한다.
+
+* `workspace-production`: 프로덕션 trace (접근 제한, Editor 이상만)
+* `workspace-experiments`: 실험용 trace (팀 전체 접근 가능)
+* `workspace-compliance`: 감사 로그 전용 (Viewer 권한만 부여)
+
+## 3. 규제 준수 (Compliance)
+
+### 3.1 SOC 2 Type II
+
+SOC 2 Type II는 미국공인회계사협회(AICPA)의 Trust Services Criteria에 기반한 보안 인증이다.
+
+* **Type I**: 특정 시점에 보안 통제가 "설계되어 있는지"만 평가한다
+* **Type II**: **일정 기간(통상 6-12개월) 동안** 보안 통제가 "실제로 운영되고 있는지"를 감사한다
+
+LangSmith의 SOC 2 Type II 인증이 실무적으로 의미하는 바는 다음과 같다.
+
+* 데이터 접근 로그가 기록되고 모니터링되고 있다
+* 보안 사고 대응 절차가 문서화되어 있고 실제로 테스트된다
+* 변경 관리(Change Management) 프로세스가 존재한다
+* 제3자 감사법인이 위 사항을 검증했다
+
+::: {.callout-note}
+SOC 2 Type II 보고서는 NDA 하에 요청할 수 있다. 엔터프라이즈 도입 검토 시 LangChain 영업팀에 보고서 사본을 요청하여 내부 보안팀의 검토를 받는 것이 일반적인 절차이다.
+:::
+
+### 3.2 HIPAA (Health Insurance Portability and Accountability Act)
+
+HIPAA는 미국의 의료정보 보호법으로, **PHI(Protected Health Information)**를 처리하는 모든 시스템에 적용된다. LLM 애플리케이션에서 PHI가 발생하는 시나리오는 다음과 같다.
+
+* 환자가 의료 챗봇에 증상, 병력을 입력하는 경우
+* RAG 시스템이 환자 의료 기록을 검색하여 컨텍스트로 주입하는 경우
+* 의료 문서 요약 시 환자 이름, 진단 코드가 출력에 포함되는 경우
+
+HIPAA 준수를 위해 필요한 사항은 다음과 같다.
+
+| 요구 사항 | 설명 |
+| :--- | :--- |
+| **BAA (Business Associate Agreement)** | LangChain과 BAA를 체결해야 한다. Enterprise 플랜에서 제공된다. |
+| **PHI 최소 수집** | 가능하면 PHI를 trace에서 제외한다 (`hide_inputs`/`hide_outputs` 활용). |
+| **접근 감사 로그** | 누가 언제 어떤 trace에 접근했는지 기록이 필요하다. |
+| **데이터 보존/삭제 정책** | 보존 기간이 지난 데이터의 자동 삭제 메커니즘이 필요하다. |
+
+::: {.callout-important}
+BAA 없이 PHI가 포함된 trace를 SaaS LangSmith에 전송하면 **HIPAA 위반**에 해당한다. 의료 분야에서는 반드시 Enterprise 플랜의 BAA 체결 또는 Self-hosted 배포를 선택해야 한다.
+:::
+
+### 3.3 GDPR (General Data Protection Regulation)
+
+GDPR은 EU 시민의 개인정보 처리에 관한 규정이다. LangSmith 사용 시 고려해야 할 GDPR 요구사항은 다음과 같다.
+
+| GDPR 원칙 | LangSmith 적용 |
+| :--- | :--- |
+| **데이터 최소화** | 필요한 trace만 수집한다. `hide_inputs`/`hide_outputs`로 불필요한 개인정보를 제거한다. |
+| **목적 제한** | trace 데이터를 디버깅/모니터링 외 목적(마케팅 등)으로 사용하지 않는다. |
+| **저장 제한** | trace 보존 기간을 설정하고 만료 시 자동 삭제한다. |
+| **정보주체의 권리** | 아래 상세 설명 참고. |
+| **역외 이전 제한** | EU SaaS 또는 EU 리전 BYOC를 사용하여 데이터가 EU 내에 머물도록 한다. |
+
+#### 정보주체의 권리 대응
+
+GDPR 하에서 EU 시민은 다음 권리를 행사할 수 있다. LLM observability 시스템에서 이를 충족하려면 사전 설계가 필요하다.
+
+* **접근권 (Right of Access)**: 특정 사용자의 trace 데이터를 조회하여 제공할 수 있어야 한다. 이를 위해 trace에 사용자 식별자를 메타데이터로 태깅하는 것이 필요하다.
+* **삭제권 (Right to Erasure)**: 특정 사용자의 모든 trace를 삭제할 수 있어야 한다. LangSmith API의 `delete_run` 엔드포인트를 활용한다.
+* **이동권 (Right to Portability)**: trace 데이터를 표준 형식(JSON 등)으로 내보내기할 수 있어야 한다.
+
+```python
+from langsmith import Client
+
+client = Client()
+
+# 특정 사용자의 trace 검색 (메타데이터 기반)
+runs = client.list_runs(
+    project_name="prod-llm-service",
+    filter='has(tags, "user_id:eu_user_123")',
+)
+
+# 삭제권 행사 시: 해당 사용자의 모든 trace 삭제
+for run in runs:
+    client.delete_run(run.id)
+```
+
+::: {.callout-tip}
+GDPR 삭제권 대응을 위해 trace 생성 시 사용자 식별자를 태그 또는 메타데이터로 반드시 포함시켜야 한다. 식별자 없이 저장된 trace는 특정 사용자의 데이터를 찾아 삭제하는 것이 사실상 불가능하다.
+:::
+
+## 4. 배포 옵션 비교 및 의사결정 프레임워크
+
+### 상세 비교표
+
+| 항목 | **SaaS (US/EU)** | **BYOC** | **Self-hosted** |
+| :--- | :--- | :--- | :--- |
+| **보안 수준** | 보통 (공유 인프라) | 높음 (전용 VPC) | 최상 (완전 격리) |
+| **데이터 주권** | 미국/유럽 저장 | 사용자 VPC 내 저장 | 완전 통제 |
+| **관리 부담** | 없음 (완전 관리형) | 중간 (인프라 운영 필요) | 높음 (전체 운영 책임) |
+| **플랜** | Developer(무료) / Plus / Enterprise | Enterprise 전용 | Enterprise 전용 |
+| **예상 비용** | 무료 ~ $39/user/month (Plus) | Enterprise 별도 협의 | Enterprise + 인프라 비용 |
+| **적합 팀 규모** | 1-20명 | 20-200명 | 100명+ 또는 규제 필수 |
+| **설정 소요 시간** | 수 분 | 수 일 | 수 주 |
+| **SOC 2 대응** | LangChain 인증 활용 | LangChain 인증 + 자체 VPC 통제 | 자체 인증 필요 |
+| **HIPAA 대응** | BAA 체결 (Enterprise) | BAA + VPC 격리 | 자체 통제 |
+| **GDPR 대응** | EU 리전 선택 | EU VPC 배포 | EU 온프레미스 |
+
+### 마이그레이션 경로: SaaS -> BYOC -> Self-hosted
+
+대부분의 조직은 단계적으로 보안 수준을 높여간다. 권장 마이그레이션 경로는 다음과 같다.
+
+```
+Phase 1: SaaS (PoC/프로토타입)
+  │  - 빠른 검증, 최소 비용
+  │  - PII 마스킹 적용하여 민감 데이터 보호
+  │  - 기간: 1-3개월
+  │
+  ▼
+Phase 2: BYOC (스테이징/초기 프로덕션)
+  │  - 데이터가 자사 VPC 내에 저장
+  │  - Enterprise 플랜 전환, BAA 체결
+  │  - 기존 SaaS 데이터는 마이그레이션 또는 삭제
+  │  - 기간: 3-6개월 (안정화 포함)
+  │
+  ▼
+Phase 3: Self-hosted (풀 프로덕션)
+    - 완전한 네트워크 격리
+    - 자체 모니터링, 백업, DR 체계 구축
+    - 내부 보안 감사 통과
+    - 기간: 지속 운영
+```
+
+::: {.callout-note}
+모든 조직이 Phase 3까지 갈 필요는 없다. 금융, 의료, 국방, 공공 분야처럼 **규제 요건으로 인해 해외 클라우드 사용이 원천 금지된 경우**에만 Self-hosted가 필수이다. 대부분의 경우 BYOC로 충분한 수준의 데이터 주권을 확보할 수 있다.
+:::
+
+## 5. 프로덕션 배포 전 체크리스트
+
+프로덕션 환경에 LangSmith를 도입하기 전 다음 항목을 점검해야 한다.
+
+### 데이터 분류 및 정책
+
+- [ ] trace에 포함될 수 있는 민감 데이터 유형을 식별했는가
+- [ ] 데이터 분류 체계(공개/내부/기밀/극비)에 따른 처리 방침을 수립했는가
+- [ ] trace 보존 기간 정책을 정의했는가
+- [ ] 데이터 삭제 절차(GDPR 삭제권 등)를 마련했는가
+
+### PII 보호
+
+- [ ] `hide_inputs`/`hide_outputs` 콜백을 구현하여 PII를 마스킹하고 있는가
+- [ ] PII 마스킹 로직을 테스트하여 누락되는 패턴이 없는지 확인했는가
+- [ ] 마스킹 로직의 false negative(미탐지) 비율을 측정했는가
+
+### 인증 및 접근 제어
+
+- [ ] API Key를 환경 변수 또는 시크릿 매니저(Vault, AWS Secrets Manager 등)로 관리하고 있는가
+- [ ] 프로덕션/스테이징/개발 환경의 API Key와 프로젝트를 분리했는가
+- [ ] RBAC 역할을 정의하고 최소 권한 원칙(Principle of Least Privilege)을 적용했는가
+- [ ] API Key 로테이션 주기를 정했는가 (권장: 90일)
+
+### 네트워크 및 인프라
+
+- [ ] (BYOC/Self-hosted) VPC 내 배포가 완료되었는가
+- [ ] (BYOC/Self-hosted) 방화벽 규칙에서 불필요한 외부 통신을 차단했는가
+- [ ] TLS 인증서가 유효한지 확인했는가
+- [ ] 백업 및 재해 복구(DR) 계획을 수립했는가
+
+### 규제 준수
+
+- [ ] 해당 산업/지역의 규제 요건을 식별했는가 (GDPR, HIPAA, 개인정보보호법 등)
+- [ ] (HIPAA 대상) BAA를 체결했는가
+- [ ] (GDPR 대상) 데이터 처리 계약(DPA)을 확인했는가
+- [ ] (GDPR 대상) 정보주체 권리 행사 대응 절차를 마련했는가
+- [ ] SOC 2 Type II 보고서를 요청하여 내부 보안팀 검토를 받았는가
+
+### 운영 모니터링
+
+- [ ] trace 수집량과 비용을 모니터링하는 대시보드가 있는가
+- [ ] 이상 탐지(비정상적 trace 급증, 미인가 접근 등) 알림을 설정했는가
+- [ ] 정기적인 보안 감사 일정을 수립했는가
+
+## 정리
+
+LangSmith의 보안 및 거버넌스는 "미국으로 데이터가 넘어가는가?"라는 단순한 질문으로 시작되지만, 실제로는 데이터 흐름 설계, PII 보호, 접근 제어, 규제 준수를 포괄하는 다층적 문제이다.
+
+핵심 판단 기준을 요약하면 다음과 같다.
+
+* **비민감 데이터 + 빠른 검증**: SaaS(US/EU)로 시작한다. PII 마스킹은 기본으로 적용한다.
+* **내부 데이터 + 데이터 주권 필요**: BYOC로 자사 VPC 내에 데이터를 보관한다. Enterprise 플랜에서 BAA 등 규제 대응이 가능하다.
+* **규제 필수 + 완전 격리**: Self-hosted로 폐쇄망 운영한다. 운영 부담이 크므로 전담 인프라 팀이 필요하다.
+
+어떤 배포 옵션을 선택하든 **SDK 레벨의 PII 마스킹은 첫 번째 방어선**이다. 서버 측 보안에만 의존하지 말고, 전송 전 단계에서 민감 데이터를 제거하는 것이 가장 확실한 보호 방법이다.

@@ -1,0 +1,513 @@
+---
+title: "Agent 기술 스택의 진화"
+subtitle: "Retrieval 중심에서 Agentic Workflow 중심으로"
+description: |
+  2026년 현재 에이전트 기술 생태계는 단순 검색(Retrieval)을 넘어 실행의 자율성과 시스템 제어권을 확보하는 방향으로 급격히 이동하고 있다.
+  Orchestrator, MCP, Evaluator 등 차세대 핵심 기술 도구를 분석한다.
+categories:
+  - AI
+  - Agent
+  - LangChain
+  - LangGraph
+author: Kwangmin Kim
+date: 03/18/2026
+---
+
+## 도입: 왜 기술 스택이 바뀌고 있는가
+
+2024년까지 LLM 기반 애플리케이션의 핵심 아키텍처는 **RAG(Retrieval-Augmented Generation)**이었다.
+벡터 DB에 문서를 색인하고, 사용자 질문과 유사한 청크를 검색하여 LLM에 전달하는 구조는
+"정보를 찾아서 답변하는" 문제에 대해 충분히 효과적이었다.
+
+그러나 실무에서 요구하는 과업은 단순 QA를 넘어서고 있다.
+
+- "이 데이터를 분석해서 보고서를 작성하고, Slack에 공유해줘"
+- "지난주 실험 결과를 가져와서 통계 검정을 수행하고, 유의미한 변화가 있으면 Jira 티켓을 생성해줘"
+- "코드 리뷰 결과를 바탕으로 테스트 코드를 생성하고, PR을 만들어줘"
+
+이런 과업은 **검색**이 아니라 **실행**이다.
+정보를 찾는 것에서 끝나지 않고, 여러 도구를 조합하고, 중간 결과를 판단하며, 반복적으로 행동해야 한다.
+이 전환이 바로 **RAG에서 Agentic Workflow로의 패러다임 이동**이며,
+이를 지탱하는 기술 스택 역시 근본적으로 달라지고 있다.
+
+### RAG vs Agentic Workflow: 무엇이 다른가
+
+| 측면 | RAG (Retrieval 중심) | Agentic Workflow (실행 중심) |
+| :--- | :--- | :--- |
+| **핵심 동작** | 검색 -> 생성 | 계획 -> 실행 -> 검증 -> 반복 |
+| **제어 흐름** | 단방향 파이프라인 | 순환 그래프 (루프, 분기, 재시도) |
+| **외부 연동** | 벡터 DB 중심 | SQL, API, 파일시스템, SaaS 전체 |
+| **실패 처리** | 재검색 또는 fallback | 자체 판단에 의한 재계획 |
+| **최적화 대상** | 임베딩, 청킹, 리랭킹 | 프롬프트, 워크플로우, 도구 선택 |
+
+이 변화를 지탱하는 3가지 핵심 기술 축이 있다.
+**Orchestrator**(워크플로우 제어), **MCP**(외부 시스템 연결), **Evaluator**(신뢰성 검증)이다.
+이 글에서는 각각의 개념, 작동 원리, 실무 적용 방법을 분석한다.
+
+## 1. Orchestrator: 에이전트 워크플로우의 설계와 제어
+
+### 왜 Orchestrator가 필요한가
+
+단순한 LLM 호출 체인(`prompt -> LLM -> output`)으로는 복잡한 과업을 처리할 수 없다.
+실제 업무에서는 다음과 같은 제어 흐름이 필수적이다.
+
+- **조건 분기**: 사용자 의도에 따라 다른 Sub-agent를 호출
+- **루프**: 결과가 불충분하면 재시도
+- **병렬 실행**: 독립적인 하위 과업을 동시에 처리
+- **상태 관리**: 이전 단계의 결과를 다음 단계에 전달
+
+이를 위해 에이전트의 사고 과정을 **그래프(Graph)**로 모델링하는 접근이 표준으로 자리잡았다.
+
+### LangGraph: 순환 그래프 기반 Orchestrator
+
+LangGraph는 LangChain 생태계의 핵심 오케스트레이션 프레임워크이다.
+에이전트의 워크플로우를 **노드(Node)**와 **엣지(Edge)**로 구성된 상태 머신(State Machine)으로 정의한다.
+핵심 차별점은 **순환 그래프(Cyclic Graph)**를 지원한다는 것이다.
+이전의 DAG(비순환 그래프) 기반 체인과 달리, 노드가 자기 자신이나 이전 노드로 돌아갈 수 있어
+"결과를 검토하고, 불충분하면 다시 시도"하는 자율적 루프가 가능하다.
+
+#### LangGraph 핵심 개념
+
+| 개념 | 설명 |
+| :--- | :--- |
+| **State** | 그래프 전체에서 공유되는 데이터 구조. `TypedDict`로 정의한다. |
+| **Node** | 상태를 입력받아 처리하고 변경된 상태를 반환하는 함수이다. |
+| **Edge** | 노드 간 전환 규칙. 조건부 분기(`conditional_edge`)를 지원한다. |
+| **Checkpointer** | 각 노드 실행 후 상태를 저장하여 재개(resume)와 되감기(rewind)를 가능하게 한다. |
+
+#### 아키텍처 흐름
+
+```
+[사용자 입력]
+     |
+     v
+ [Router Node] --판단--> [QA Agent Node]
+     |                        |
+     |                        v
+     |                  [검색 + 생성]
+     |                        |
+     |                        v
+     |                  [품질 검증 Node]
+     |                     /       \
+     |                통과/         \불충분
+     |                  /             \
+     |            [응답 반환]    [재시도 (루프)]
+     |
+     +--> [분석 Agent Node] --> [도구 호출] --> [결과 정리]
+```
+
+#### 코드 예시: LangGraph 기본 구조
+
+```python
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Literal
+
+# 1. 상태 정의
+class AgentState(TypedDict):
+    query: str
+    context: list[str]
+    answer: str
+    retry_count: int
+
+# 2. 노드 함수 정의
+def retrieve(state: AgentState) -> AgentState:
+    """외부 소스에서 관련 정보를 검색한다."""
+    docs = vector_store.similarity_search(state["query"])
+    return {"context": [doc.page_content for doc in docs]}
+
+def generate(state: AgentState) -> AgentState:
+    """검색된 컨텍스트를 기반으로 답변을 생성한다."""
+    answer = llm.invoke(
+        f"Context: {state['context']}\nQuestion: {state['query']}"
+    )
+    return {"answer": answer}
+
+def evaluate(state: AgentState) -> AgentState:
+    """답변의 품질을 평가한다."""
+    score = evaluator.score(state["answer"], state["context"])
+    return {"quality_score": score}
+
+# 3. 조건부 엣지: 품질에 따라 루프 또는 종료
+def should_retry(state: AgentState) -> Literal["retry", "end"]:
+    if state["quality_score"] < 0.7 and state["retry_count"] < 3:
+        return "retry"
+    return "end"
+
+# 4. 그래프 구성
+graph = StateGraph(AgentState)
+graph.add_node("retrieve", retrieve)
+graph.add_node("generate", generate)
+graph.add_node("evaluate", evaluate)
+
+graph.set_entry_point("retrieve")
+graph.add_edge("retrieve", "generate")
+graph.add_edge("generate", "evaluate")
+graph.add_conditional_edges("evaluate", should_retry, {
+    "retry": "retrieve",  # 품질 미달 시 재검색
+    "end": END,
+})
+
+app = graph.compile()
+```
+
+위 코드에서 핵심은 `add_conditional_edges`이다.
+평가 결과에 따라 `retrieve` 노드로 돌아가는 **순환 구조**가 자연스럽게 표현된다.
+이것이 단순한 체인(`LLMChain`)으로는 불가능했던 부분이다.
+
+### CrewAI / AutoGen: 역할 기반 멀티에이전트
+
+LangGraph가 **워크플로우의 구조**를 정의하는 데 강점이 있다면,
+CrewAI와 AutoGen은 **역할 분담**에 초점을 맞춘다.
+
+| 프레임워크 | 접근 방식 | 강점 | 약점 |
+| :--- | :--- | :--- | :--- |
+| **LangGraph** | 그래프 기반 상태 머신 | 세밀한 제어, 디버깅 용이 | 설계 복잡도 높음 |
+| **CrewAI** | 역할(Role) 기반 협업 | 직관적 설계, 빠른 프로토타이핑 | 세밀한 흐름 제어 어려움 |
+| **AutoGen** | 대화 기반 멀티에이전트 | 에이전트 간 자율 대화 | 예측 가능성 낮음 |
+
+CrewAI는 리서처, 라이터, 리뷰어 등 **페르소나**를 부여하여
+복합적인 과업을 자율적으로 분담 수행하게 한다.
+
+```python
+from crewai import Agent, Task, Crew
+
+researcher = Agent(
+    role="Senior Data Analyst",
+    goal="주어진 데이터셋에서 핵심 인사이트를 추출한다",
+    backstory="10년 경력의 데이터 분석가",
+    tools=[sql_tool, chart_tool],
+)
+
+writer = Agent(
+    role="Report Writer",
+    goal="분석 결과를 경영진 보고서로 작성한다",
+    backstory="데이터 기반 의사결정 보고서 전문가",
+)
+
+crew = Crew(
+    agents=[researcher, writer],
+    tasks=[analysis_task, report_task],
+    verbose=True,
+)
+result = crew.kickoff()
+```
+
+실무에서는 LangGraph로 전체 워크플로우의 뼈대를 잡고,
+개별 노드 내부에서 CrewAI 스타일의 역할 분담을 적용하는 **하이브리드 접근**도 유효하다.
+
+## 2. MCP (Model Context Protocol): 외부 시스템 연결의 표준화
+
+### 문제: 도구 연동의 파편화
+
+에이전트가 실제로 유용하려면 외부 시스템과 상호작용할 수 있어야 한다.
+그러나 기존 방식에서는 **각 도구마다 개별 연동 코드**를 작성해야 했다.
+
+```python
+# 기존 방식: 도구마다 커스텀 래퍼를 작성
+class SlackTool:
+    def send_message(self, channel, text):
+        requests.post("https://slack.com/api/chat.postMessage", ...)
+
+class JiraTool:
+    def create_issue(self, project, summary):
+        requests.post("https://jira.example.com/rest/api/2/issue", ...)
+
+class SQLTool:
+    def query(self, sql):
+        conn = psycopg2.connect(...)
+        return pd.read_sql(sql, conn)
+```
+
+이 접근의 문제점은 명확하다.
+
+- 도구가 추가될 때마다 연동 코드를 새로 작성해야 한다
+- 인증, 에러 처리, 스키마 정의가 도구마다 제각각이다
+- 에이전트가 새로운 도구를 "발견"하고 사용법을 이해하는 표준적인 방법이 없다
+
+### MCP란 무엇인가
+
+**MCP(Model Context Protocol)**는 Anthropic이 주도하여 개발한 개방형 표준 프로토콜이다.
+LLM 기반 애플리케이션이 외부 데이터 소스와 도구에 **표준화된 방식으로 연결**할 수 있게 해준다.
+USB가 다양한 주변기기를 하나의 표준으로 연결하듯,
+MCP는 다양한 외부 시스템을 하나의 프로토콜로 에이전트에 연결한다.
+
+### MCP 아키텍처
+
+```
+[LLM Application / Agent]
+         |
+    MCP Client
+         |
+    MCP Protocol (JSON-RPC 2.0)
+         |
+   +-----+-----+-----+
+   |           |           |
+MCP Server  MCP Server  MCP Server
+(GitHub)    (Slack)     (PostgreSQL)
+   |           |           |
+GitHub API  Slack API   Database
+```
+
+MCP는 3가지 핵심 개념으로 구성된다.
+
+| 개념 | 설명 | 예시 |
+| :--- | :--- | :--- |
+| **Resources** | 에이전트가 읽을 수 있는 데이터 | 파일 내용, DB 스키마, 문서 |
+| **Tools** | 에이전트가 실행할 수 있는 액션 | SQL 쿼리 실행, 메시지 전송 |
+| **Prompts** | 사전 정의된 프롬프트 템플릿 | 코드 리뷰 프롬프트, 분석 프롬프트 |
+
+### 기존 방식 vs MCP 비교
+
+| 측면 | 기존 커스텀 래퍼 | MCP 기반 연동 |
+| :--- | :--- | :--- |
+| **새 도구 추가** | 래퍼 클래스 작성 + 프롬프트에 도구 설명 수동 추가 | MCP 서버 연결만으로 자동 등록 |
+| **도구 스키마** | 개발자가 수동으로 JSON Schema 작성 | 서버가 자동으로 스키마 제공 |
+| **인증 관리** | 도구마다 개별 처리 | 프로토콜 레벨에서 통합 관리 |
+| **에이전트 호환** | 특정 프레임워크에 종속 | 프로토콜 준수 시 프레임워크 무관 |
+
+### MCP 서버 구현 예시
+
+```python
+from mcp.server import Server
+from mcp.types import Tool, TextContent
+import json
+
+server = Server("analytics-server")
+
+@server.tool()
+async def run_sql_query(query: str) -> list[TextContent]:
+    """데이터베이스에 SQL 쿼리를 실행하고 결과를 반환한다.
+
+    Args:
+        query: 실행할 SQL 쿼리 문자열
+    """
+    result = await db.execute(query)
+    return [TextContent(type="text", text=json.dumps(result, default=str))]
+
+@server.tool()
+async def get_table_schema(table_name: str) -> list[TextContent]:
+    """지정된 테이블의 스키마 정보를 반환한다.
+
+    Args:
+        table_name: 스키마를 조회할 테이블 이름
+    """
+    schema = await db.get_schema(table_name)
+    return [TextContent(type="text", text=json.dumps(schema))]
+```
+
+위와 같이 MCP 서버를 구현하면, 에이전트는 별도의 연동 코드 없이
+`run_sql_query`와 `get_table_schema`를 도구로 인식하고 호출할 수 있다.
+도구의 이름, 설명, 파라미터 스키마가 프로토콜을 통해 자동으로 전달되기 때문이다.
+
+### MCP의 실무적 의의
+
+MCP가 가져오는 가장 큰 변화는 **도구 생태계의 재사용성**이다.
+한번 구현된 MCP 서버는 Claude, GPT, LangGraph 기반 에이전트 등
+프로토콜을 지원하는 모든 클라이언트에서 재사용할 수 있다.
+이는 과거 REST API가 웹 서비스 간 통신을 표준화한 것과 같은 수준의 변화이다.
+
+## 3. Evaluator & Observability: 에이전트 신뢰성의 확보
+
+### 왜 평가가 핵심인가
+
+에이전트가 자율적으로 행동할수록, **그 행동이 올바른지 검증하는 메커니즘**의 중요성이 높아진다.
+RAG 시스템에서는 답변의 정확도만 평가하면 충분했지만,
+Agentic Workflow에서는 다음과 같은 다층적 평가가 필요하다.
+
+- 올바른 도구를 선택했는가
+- 도구에 전달한 인자가 정확한가
+- 중간 결과를 올바르게 해석했는가
+- 최종 출력이 사용자 의도에 부합하는가
+- 불필요한 루프나 과도한 도구 호출이 없었는가
+
+### LangSmith / Arize Phoenix: 실행 추적과 모니터링
+
+LangSmith는 LangChain/LangGraph 생태계의 관찰가능성(Observability) 플랫폼이다.
+에이전트의 전체 실행 과정을 **트레이스(Trace)**로 기록하고 시각화한다.
+
+#### LangSmith가 추적하는 정보
+
+| 추적 대상 | 설명 |
+| :--- | :--- |
+| **LLM 호출** | 입력 프롬프트, 출력, 토큰 수, 지연 시간 |
+| **도구 호출** | 어떤 도구를, 어떤 인자로 호출했는지 |
+| **체인/그래프 흐름** | 노드 간 전환 순서, 조건 분기 결과 |
+| **평가 지표** | Faithfulness, Relevance, Answer Correctness |
+
+Arize Phoenix는 오픈소스 대안으로, 자체 호스팅이 가능하며
+트레이스 시각화와 평가 기능을 제공한다.
+데이터 보안이 중요한 환경에서 유용하다.
+
+### DSPy: 프롬프트 최적화의 프로그래밍화
+
+DSPy는 Stanford NLP 그룹에서 개발한 프레임워크로,
+프롬프트 엔지니어링을 **수동 작업에서 프로그래밍의 영역**으로 전환한다.
+
+#### 기존 프롬프트 엔지니어링의 한계
+
+기존 방식에서는 프롬프트를 수동으로 작성하고, 결과를 눈으로 확인하며, 직관에 의존하여 개선했다.
+
+```python
+# 기존 방식: 수동 프롬프트 튜닝
+prompt = """
+당신은 데이터 분석 전문가입니다.
+다음 데이터를 분석하고 인사이트를 추출하세요.
+반드시 통계적 근거를 포함하세요.
+결과는 한국어로 작성하세요.
+...
+"""  # 이 프롬프트가 최적인지 검증할 방법이 없다
+```
+
+#### DSPy의 접근: 선언적 프로그래밍
+
+DSPy는 **무엇을 할 것인가**(입력/출력의 시그니처)만 선언하면,
+**어떻게 프롬프트를 구성할 것인가**는 프레임워크가 자동으로 최적화한다.
+
+```python
+import dspy
+
+# 1. 시그니처 정의: 입력과 출력의 구조만 선언
+class AnalyzeData(dspy.Signature):
+    """데이터셋을 분석하여 핵심 인사이트를 추출한다."""
+    dataset_description: str = dspy.InputField(desc="분석할 데이터셋의 설명")
+    columns: str = dspy.InputField(desc="주요 컬럼 목록")
+    insights: str = dspy.OutputField(desc="통계적 근거가 포함된 핵심 인사이트")
+
+# 2. 모듈 구성
+class DataAnalyst(dspy.Module):
+    def __init__(self):
+        self.analyze = dspy.ChainOfThought(AnalyzeData)
+
+    def forward(self, dataset_description, columns):
+        return self.analyze(
+            dataset_description=dataset_description,
+            columns=columns,
+        )
+
+# 3. 평가 지표 정의
+def quality_metric(example, prediction, trace=None):
+    """인사이트 품질을 평가하는 지표"""
+    has_statistics = "통계" in prediction.insights or "p-value" in prediction.insights
+    has_actionable = any(
+        keyword in prediction.insights
+        for keyword in ["추천", "제안", "개선"]
+    )
+    return has_statistics and has_actionable
+
+# 4. 자동 최적화: 학습 데이터와 지표를 기반으로 프롬프트를 자동 탐색
+optimizer = dspy.MIPROv2(metric=quality_metric, auto="medium")
+optimized_analyst = optimizer.compile(
+    DataAnalyst(),
+    trainset=training_examples,
+)
+```
+
+DSPy의 핵심 가치는 **프롬프트 최적화를 재현 가능하고 측정 가능한 과정**으로 만든다는 것이다.
+모델이 변경되거나 요구사항이 바뀌어도, 지표와 학습 데이터만 업데이트하면
+최적의 프롬프트를 자동으로 재탐색할 수 있다.
+
+#### 기존 방식 vs DSPy 비교
+
+| 측면 | 수동 프롬프트 엔지니어링 | DSPy |
+| :--- | :--- | :--- |
+| **최적화 방법** | 직관과 경험에 의존 | 지표 기반 자동 탐색 |
+| **재현 가능성** | 낮음 (암묵지에 의존) | 높음 (코드로 정의) |
+| **모델 변경 시** | 프롬프트 전면 재작성 | 자동 재최적화 |
+| **품질 보장** | 주관적 판단 | 정량적 지표로 검증 |
+
+## 3가지 기술의 관계: 에이전트 기술 스택의 구조
+
+Orchestrator, MCP, Evaluator는 독립적인 기술이 아니라,
+하나의 에이전트 시스템을 구성하는 **계층적 스택**을 형성한다.
+
+```
++--------------------------------------------------+
+|              Evaluator / Observability            |
+|          (LangSmith, Arize Phoenix, DSPy)         |
+|       전체 스택의 동작을 관찰하고 최적화한다        |
++--------------------------------------------------+
+|                  Orchestrator                     |
+|              (LangGraph, CrewAI)                  |
+|       에이전트의 워크플로우를 설계하고 제어한다      |
++--------------------------------------------------+
+|              Connector / Protocol                 |
+|                    (MCP)                          |
+|       외부 시스템과의 연결을 표준화한다              |
++--------------------------------------------------+
+|              Foundation Models                    |
+|          (Claude, GPT, Gemini, etc.)              |
+|       추론과 생성의 기반을 제공한다                 |
++--------------------------------------------------+
+```
+
+각 계층의 역할과 상호작용은 다음과 같다.
+
+- **MCP (하단)**: 에이전트가 외부 세계와 상호작용할 수 있는 **인터페이스**를 제공한다.
+  MCP 서버를 통해 SQL, GitHub, Slack 등의 도구가 표준화된 형태로 노출된다.
+- **Orchestrator (중간)**: MCP를 통해 노출된 도구들을 **언제, 어떤 순서로, 어떤 조건에서** 호출할지 제어한다.
+  LangGraph의 노드에서 MCP 도구를 호출하고, 결과에 따라 다음 단계를 결정한다.
+- **Evaluator (상단)**: Orchestrator가 실행한 전체 워크플로우를 **추적하고 평가**한다.
+  DSPy는 프롬프트를 자동 최적화하고, LangSmith는 실행 트레이스를 시각화하여
+  병목이나 오류를 식별할 수 있게 한다.
+
+이 3가지가 결합될 때 비로소 "자율적으로 과업을 수행하면서도 신뢰할 수 있는" 에이전트 시스템이 완성된다.
+
+## 요약: 에이전트 기술 스택의 변화
+
+| 구분 | 과거 중심 (Retrieval) | 현재 중심 (Agentic) | 핵심 기술/도구 |
+| :--- | :--- | :--- | :--- |
+| **핵심 목표** | 관련 정보의 추출 | 자율적 과업 완수 | **LangGraph, CrewAI** |
+| **연동 방식** | 커스텀 API 래퍼 | 표준 프로토콜 기반 | **MCP (Model Context Protocol)** |
+| **최적화** | 임베딩 성능 개선 | 워크플로우 자동 최적화 | **DSPy, LangSmith** |
+
+## 실무 적용: 권장 도입 순서
+
+에이전트 기술 스택을 도입할 때 한 번에 모든 것을 적용하려 하면 복잡도가 급격히 증가한다.
+다음의 단계적 접근을 권장한다.
+
+### Phase 1: Orchestrator 도입
+
+가장 먼저 **LangGraph로 기존 체인을 그래프로 전환**한다.
+기존 RAG 파이프라인이 있다면, 검색-생성-평가의 흐름을 그래프로 재구성하는 것부터 시작한다.
+이 단계에서 조건 분기와 재시도 루프를 도입하면 즉각적인 품질 개선 효과를 얻을 수 있다.
+
+### Phase 2: Evaluator 연동
+
+LangGraph 그래프가 동작하면, **LangSmith를 연동하여 트레이스를 수집**한다.
+실행 추적 데이터가 쌓이면 다음 질문에 답할 수 있게 된다.
+
+- 어떤 노드에서 지연이 발생하는가
+- 불필요한 루프가 반복되고 있지 않은가
+- 도구 호출 실패율이 높은 도구는 무엇인가
+
+충분한 데이터가 확보되면 DSPy를 도입하여 프롬프트 자동 최적화를 시도한다.
+
+### Phase 3: MCP로 도구 표준화
+
+연동해야 할 외부 시스템이 3개 이상이 되면 **MCP 도입의 효용**이 본격적으로 나타난다.
+기존 커스텀 래퍼를 MCP 서버로 전환하면, 새로운 도구 추가 시 개발 비용이 크게 줄어든다.
+또한 MCP 커뮤니티에서 이미 구현된 서버(GitHub, Slack, PostgreSQL 등)를
+그대로 가져다 사용할 수 있다는 점도 큰 이점이다.
+
+```
+Phase 1          Phase 2              Phase 3
+LangGraph   -->  + LangSmith/DSPy  -->  + MCP
+(제어 확보)       (관찰 + 최적화)        (연결 표준화)
+```
+
+## 정리
+
+에이전트 기술의 핵심 전환은 **"정보를 찾는 시스템"에서 "과업을 수행하는 시스템"으로의 이동**이다.
+이 전환을 지탱하는 기술 스택은 3가지 축으로 구성된다.
+
+1. **Orchestrator (LangGraph)**: 에이전트의 사고와 행동을 순환 그래프로 모델링하여,
+   조건 분기, 루프, 상태 관리가 가능한 워크플로우를 구축한다.
+2. **MCP**: 외부 시스템 연동을 표준 프로토콜로 통합하여,
+   도구 생태계의 재사용성과 확장성을 확보한다.
+3. **Evaluator (DSPy, LangSmith)**: 에이전트의 실행을 추적하고,
+   프롬프트와 워크플로우를 데이터 기반으로 자동 최적화한다.
+
+이 3가지는 독립적으로도 가치가 있지만,
+결합되었을 때 비로소 **자율적이면서도 신뢰할 수 있는 에이전트 시스템**이라는 목표에 도달한다.
+데이터 과학자의 관점에서 이 기술 스택은 "모델 성능 개선"을 넘어
+"시스템 수준의 문제 해결 능력 확보"로 역할을 확장하는 기반이 된다.

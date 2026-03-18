@@ -1,0 +1,411 @@
+---
+title: "Azure Document Intelligence 출력 형식 활용 가이드"
+subtitle: "JSON, Markdown, Plain Text 출력 비교와 RAG 파이프라인 통합 전략"
+description: |
+  Azure Document Intelligence의 출력 형식(JSON, Markdown, Plain Text)별 특성과 활용법을 비교 분석한다.
+  JSON 스키마의 구조적 활용, Markdown 변환 방법(Studio GUI, Python SDK, 배치 처리),
+  그리고 RAG 파이프라인과의 통합 아키텍처를 실무 관점에서 다룬다.
+categories:
+  - AI
+  - Cloud
+  - Azure
+  - RAG
+author: Kwangmin Kim
+date: 03/18/2026
+---
+
+## 도입
+
+Azure Document Intelligence로 문서를 분석한 후, 그 결과를 **어떤 형식으로 추출하느냐**에 따라 후속 파이프라인의 설계가 크게 달라진다. RAG 시스템에 투입할 것인지, 데이터베이스에 적재할 것인지, 단순 텍스트 검색에 활용할 것인지에 따라 최적의 출력 형식이 다르다.
+
+이 글에서는 JSON, Markdown, Plain Text 세 가지 출력 형식의 특성을 비교하고, 각 형식의 실무적 활용 방법과 RAG 파이프라인 통합 전략을 다룬다.
+
+::: {.callout-note}
+Azure Document Intelligence 인스턴스 생성 및 기본 설정에 대해서는 [Azure Document Intelligence 인스턴스 생성](20-az-document-intelligence.qmd) 글을 참고한다.
+:::
+
+## 출력 형식 비교
+
+Azure Document Intelligence는 분석 결과를 여러 형식으로 제공한다. 각 형식의 특성과 적합한 사용 사례가 다르다.
+
+| 항목 | JSON | Markdown | Plain Text |
+|:---|:---|:---|:---|
+| **구조 보존** | 좌표, 신뢰도, 계층 구조 모두 포함 | 제목, 표, 목록 구조 보존 | 구조 정보 없음 |
+| **파일 크기** | 가장 큼 (메타데이터 포함) | 중간 | 가장 작음 |
+| **가독성** | 낮음 (기계용) | 높음 (인간+기계 겸용) | 높음 (인간용) |
+| **LLM 토큰 효율** | 낮음 (좌표 등 불필요 데이터 포함) | 높음 (핵심 구조만 포함) | 중간 (구조 정보 부재) |
+| **후처리 필요성** | 파싱 로직 필수 | 즉시 활용 가능 | 구조 복원 불가 |
+| **주요 사용 사례** | ETL, 품질 관리, 좌표 기반 처리 | RAG, 문서 변환, 콘텐츠 관리 | 단순 텍스트 검색, 키워드 추출 |
+
+### 사용 사례별 권장 형식
+
+- **RAG 파이프라인 구축** → **Markdown** (구조 보존 + 토큰 효율)
+- **데이터 품질 관리, 좌표 기반 마스킹** → **JSON** (신뢰도, 좌표 정보 활용)
+- **전문 검색(full-text search)** → **Plain Text** (가장 경량)
+- **복합 요구사항** → **JSON 추출 후 Markdown 변환** (두 형식의 장점 결합)
+
+## JSON 출력 활용
+
+### JSON의 본질적 가치
+
+JSON 추출의 핵심 가치는 **기계 가독성(Machine Readability)** 확보에 있다. 단순 텍스트가 인간의 해독을 위한 것이라면, JSON은 알고리즘이 문서 내의 좌표, 신뢰도, 계층 구조를 연산할 수 있게 만드는 표준 규격이다.
+
+### JSON 스키마 주요 필드
+
+Azure Document Intelligence가 반환하는 JSON의 핵심 필드는 다음과 같다.
+
+```json
+{
+  "content": "전체 텍스트 (읽기 순서 기준)",
+  "pages": [
+    {
+      "pageNumber": 1,
+      "width": 8.5,
+      "height": 11.0,
+      "words": [
+        {
+          "content": "Azure",
+          "polygon": [1.2, 0.5, 2.1, 0.5, 2.1, 0.7, 1.2, 0.7],
+          "confidence": 0.98,
+          "span": {"offset": 0, "length": 5}
+        }
+      ],
+      "lines": [
+        {
+          "content": "Azure Document Intelligence",
+          "polygon": [1.2, 0.5, 6.8, 0.5, 6.8, 0.7, 1.2, 0.7]
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "rowCount": 3,
+      "columnCount": 4,
+      "cells": [
+        {
+          "rowIndex": 0,
+          "columnIndex": 0,
+          "content": "항목",
+          "kind": "columnHeader"
+        }
+      ]
+    }
+  ],
+  "styles": [
+    {
+      "isHandwritten": false,
+      "spans": [{"offset": 0, "length": 27}],
+      "confidence": 0.95
+    }
+  ]
+}
+```
+
+### JSON 활용 사례
+
+#### 정밀한 데이터 매핑 (Spatial Analysis)
+
+`polygon` 좌표 데이터를 활용하면 문서의 물리적 위치 기반 처리가 가능하다.
+
+- **영역별 분류**: 헤더, 본문, 푸터를 좌표 기반으로 분리하여 필요한 정보만 필터링
+- **비식별화 처리**: 개인정보(주민번호, 계좌번호 등)가 위치한 좌표값을 찾아 자동 마스킹
+
+#### 자동화 파이프라인 구축 (ETL)
+
+- **DB 적재**: 추출된 키-값 쌍을 관계형 DB나 NoSQL에 직접 삽입
+- **RAG 연동**: JSON의 구조 정보를 함께 전달하면 표나 문단의 맥락을 정확하게 보존 가능
+
+#### 데이터 품질 관리
+
+```python
+import json
+
+with open("analysis_result.json", "r", encoding="utf-8") as f:
+    result = json.load(f)
+
+# 신뢰도 기반 검수: confidence < 0.8인 단어만 추출
+low_confidence_words = []
+for page in result["pages"]:
+    for word in page["words"]:
+        if word["confidence"] < 0.8:
+            low_confidence_words.append({
+                "text": word["content"],
+                "confidence": word["confidence"],
+                "page": page["pageNumber"],
+                "position": word["polygon"]
+            })
+
+print(f"검수 필요 단어 수: {len(low_confidence_words)}")
+for w in low_confidence_words:
+    print(f"  [{w['page']}p] '{w['text']}' (신뢰도: {w['confidence']:.2f})")
+```
+
+$confidence < 0.8$인 단어만 추출하여 사람이 수동 검토하게 하는 하이브리드 워크플로우를 구성하면, 전수 조사의 비용을 획기적으로 낮출 수 있다.
+
+### JSON 활용 시 주의사항
+
+JSON 데이터의 밀도가 매우 높기 때문에 모든 좌표와 메타데이터를 LLM의 컨텍스트 윈도우에 입력하면 **토큰 비용이 기하급수적으로 상승**한다. 또한 모델의 Attention이 분산되어 오히려 정답 추출 성능이 저하될 수 있다.
+
+::: {.callout-tip}
+모든 JSON 데이터를 사용하는 대신, **텍스트 + 핵심 레이아웃 마크업** 형태로 경량화하는 전처리를 권장한다. 좌표 정보는 제외하되, 제목 수준($H1, H2$)과 표 구조만을 남긴 Markdown으로 변환하여 인덱싱하는 것이 비용 대비 성능 면에서 가장 우수하다.
+:::
+
+### 주요 활용 분야 요약
+
+| 활용 분야 | 주요 메커니즘 |
+|:---|:---|
+| **금융/회계** | 영수증, 세금계산서의 항목명과 금액을 키-값 쌍으로 추출하여 회계 시스템 자동 입력 |
+| **물류/유통** | 선하증권(B/L), 송장의 정형 데이터를 추출하여 재고 관리 시스템과 연동 |
+| **의료/법률** | 진료 기록이나 판결문에서 특정 키워드의 위치와 빈도를 통계적으로 분석 |
+| **디지털 전환** | 아카이브된 고서나 수기 문서를 검색 가능한 디지털 텍스트 데이터베이스로 전환 |
+
+## Read 모델 vs Layout 모델
+
+Markdown 변환을 이해하려면 먼저 두 모델의 차이를 명확히 알아야 한다.
+
+| 항목 | Read 모델 | Layout 모델 |
+|:---|:---|:---|
+| **핵심 기능** | 단순 텍스트 추출 (OCR) | 문서 레이아웃 + 구조 인식 |
+| **표(Table) 인식** | 지원하지 않음 | 행-열 구조 인식 |
+| **제목(Header) 인식** | 지원하지 않음 | $H1, H2$ 등 계층 구조 인식 |
+| **목록(List) 인식** | 지원하지 않음 | 순서형/비순서형 목록 인식 |
+| **Markdown 출력** | 지원하지 않음 | `outputContentFormat=markdown` 지원 |
+| **기본 다운로드 형식** | JSON (텍스트 + 좌표) | JSON (구조 포함) |
+| **사용 사례** | 단순 텍스트 추출, 키워드 검색 | RAG, 문서 변환, 구조 분석 |
+
+::: {.callout-important}
+Studio GUI의 **다운로드 버튼은 JSON 파일만 제공**한다. Markdown 파일을 직접 다운로드하는 버튼은 현재 존재하지 않는다.
+:::
+
+## Markdown 변환 방법
+
+### 방법 1: Studio GUI 수동 복사
+
+가장 빠르지만 자동화가 불가능한 방법이다.
+
+1. 왼쪽 메뉴에서 `Document Analysis` → `Layout` 모델을 선택한다
+2. 문서를 업로드하여 분석을 실행한다
+3. 우측 **Content** 탭 → **Markdown** 하위 탭을 선택한다
+4. 렌더링된 텍스트를 전체 선택(`Ctrl+A`)하여 복사(`Ctrl+C`)한다
+5. VS Code 등에서 `.md` 파일로 저장한다
+
+::: {.callout-note}
+이 방법은 소수의 문서를 빠르게 확인하거나 테스트 용도로 적합하다. 대량 문서 처리에는 Python SDK를 사용해야 한다.
+:::
+
+### 방법 2: Python SDK 단일 파일 변환
+
+프로그래밍을 통해 Markdown 파일을 생성하는 표준적인 방법이다.
+
+```python
+from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.core.credentials import AzureKeyCredential
+
+# 1. 클라이언트 설정
+endpoint = "YOUR_ENDPOINT"
+key = "YOUR_KEY"
+client = DocumentIntelligenceClient(endpoint, AzureKeyCredential(key))
+
+# 2. Layout 모델로 분석 요청 (Markdown 형식 명시)
+with open("sample.pdf", "rb") as f:
+    poller = client.begin_analyze_document(
+        "prebuilt-layout",
+        analyze_request=f,
+        output_content_format="markdown"  # 핵심 파라미터
+    )
+
+result = poller.result()
+
+# 3. result.content에 Markdown 형식의 전체 문서가 담겨 있다
+with open("output.md", "w", encoding="utf-8") as f:
+    f.write(result.content)
+
+print(f"Markdown 파일 저장 완료: output.md")
+print(f"총 페이지 수: {len(result.pages)}")
+print(f"인식된 표 수: {len(result.tables) if result.tables else 0}")
+```
+
+핵심은 `output_content_format="markdown"` 파라미터다. 이 옵션이 없으면 일반 텍스트로 출력된다.
+
+::: {.callout-warning}
+`encoding="utf-8"`을 반드시 명시해야 한다. 한글이나 수학 기호가 포함된 문서에서 이 설정을 누락하면 파일이 깨질 수 있다.
+:::
+
+### 방법 3: URL 기반 분석
+
+로컬 파일이 아닌 URL로 접근 가능한 문서를 분석하는 경우 다음과 같이 요청한다.
+
+```python
+from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
+
+# URL 기반 분석 요청
+poller = client.begin_analyze_document(
+    "prebuilt-layout",
+    AnalyzeDocumentRequest(url_source=document_url),
+    output_content_format="markdown"
+)
+
+result = poller.result()
+
+with open("output_result.md", "w", encoding="utf-8") as f:
+    f.write(result.content)
+```
+
+Azure는 문서 내의 표, 제목, 목록을 인식한 뒤 Markdown 표준 문법(`|`, `#`, `-` 등)으로 직렬화하여 `result.content`에 담아준다.
+
+### 방법 4: 배치 처리 스크립트
+
+대량의 PDF 파일을 일괄 변환해야 하는 경우 CLI 기반 배치 처리 스크립트를 활용한다.
+
+```python
+"""
+PDF -> Markdown 변환 스크립트 (Azure Document Intelligence)
+
+사용법:
+    # 단일 파일
+    python convert_pdf_to_md.py path/to/document.pdf
+
+    # 단일 파일 + 출력 경로 지정
+    python convert_pdf_to_md.py path/to/document.pdf -o output/document.md
+
+    # 디렉토리 일괄 변환
+    python convert_pdf_to_md.py path/to/pdfs/ -o output/markdown/
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# 환경변수 로드 (.env.cloud 우선)
+PROJECT_ROOT = Path(__file__).parent.parent
+for env_file in [".env.cloud", ".env.local", ".env"]:
+    env_path = PROJECT_ROOT / env_file
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"환경변수 로드: {env_path}")
+        break
+
+from agent.shared.rag.pdf_converter import PDFToMarkdownConverter
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="PDF를 Markdown으로 변환 (Azure Document Intelligence)"
+    )
+    parser.add_argument(
+        "input", help="PDF 파일 경로 또는 PDF가 있는 디렉토리 경로"
+    )
+    parser.add_argument(
+        "-o", "--output", help="출력 경로 (파일 또는 디렉토리)", default=None
+    )
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    converter = PDFToMarkdownConverter()
+
+    if input_path.is_file():
+        result = converter.convert_and_save(str(input_path), args.output)
+        print(f"\n결과: {result}")
+    elif input_path.is_dir():
+        results = converter.convert_directory(str(input_path), args.output)
+        print(f"\n생성된 파일:")
+        for r in results:
+            print(f"  {r}")
+    else:
+        print(f"경로를 찾을 수 없음: {input_path}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+이 스크립트는 `PDFToMarkdownConverter` 클래스를 활용하여 단일 파일과 디렉토리 단위 변환을 모두 지원한다.
+
+## 엣지 케이스 처리
+
+### 표(Table) 처리
+
+Layout 모델은 표 구조를 Markdown 표 형식(`| column |`)으로 잘 변환한다. 그러나 다음 경우에는 추가 처리가 필요하다.
+
+- **병합 셀(merged cell)**: `columnSpan`, `rowSpan` 정보가 JSON에는 포함되지만 Markdown에서는 표현이 제한된다
+- **중첩 표**: Markdown은 중첩 표를 지원하지 않으므로, 별도의 후처리 로직이 필요하다
+
+### LaTeX 수식
+
+인쇄된 수학 수식은 `$...$` 형태로 변환된다. 그러나 복잡한 수식의 경우 변환 오류가 발생할 수 있다.
+
+::: {.callout-tip}
+수식이 많은 학술 문서(예: 수학 교재)의 경우, 변환 결과에 대한 사후 검수가 필수다. 복잡한 수식은 JSON의 원본 텍스트와 대조하여 교정하는 워크플로우를 권장한다.
+:::
+
+### 다단(Multi-column) 구성
+
+다단 구성 문서에서는 JSON 내의 읽기 순서(Reading Order)가 인간의 인지 순서와 일치하지 않을 수 있다. $y$축 좌표 기반의 클러스터링 알고리즘으로 보정이 가능하지만, 최적 임계값은 문서 레이아웃마다 달라질 수 있다.
+
+### 이미지
+
+Markdown 파일은 텍스트 기반이므로 문서 내의 이미지 자체를 포함할 수 없다. `result.figures` 정보를 기반으로 별도의 이미지 추출 로직을 구현해야 한다.
+
+## 파이프라인 통합 아키텍처
+
+PDF 문서를 Document Intelligence로 처리하여 RAG 시스템에 통합하는 전체 파이프라인은 다음과 같다.
+
+```{mermaid}
+flowchart LR
+    PDF[PDF 문서] --> DI[Azure Document<br/>Intelligence<br/>Layout 모델]
+    DI --> MD[Markdown 변환<br/>output_content_format=markdown]
+    MD --> CHUNK[Semantic Chunking<br/>제목/문단 기반 분할]
+    CHUNK --> EMB[Embedding<br/>text-embedding-3-large]
+    EMB --> VDB[Vector DB<br/>Azure AI Search]
+    VDB --> RET[Retriever<br/>Hybrid Search]
+    RET --> LLM[LLM<br/>GPT-4o / Claude]
+    LLM --> ANS[응답]
+
+    style DI fill:#e3f2fd
+    style MD fill:#fff3e0
+    style VDB fill:#f3e5f5
+```
+
+### 파이프라인 설계 핵심
+
+| 단계 | 핵심 결정사항 |
+|:---|:---|
+| **문서 분석** | Layout 모델 사용, Markdown 출력 형식 지정 |
+| **청킹** | 글자 수 기반이 아닌, Markdown 헤더(`#`, `##`) 기반의 의미론적 청킹 |
+| **임베딩** | 표 구조가 포함된 청크는 표 내용을 자연어 문장으로 변환 후 임베딩 |
+| **검색** | BM25 + Vector의 Hybrid Search로 키워드 매칭과 의미 검색을 동시 수행 |
+
+### RAG에서의 JSON vs Markdown 활용 전략
+
+단순 텍스트 기반 RAG는 문맥이 끊기는 단점이 있으나, Document Intelligence의 레이아웃 정보를 활용하면 이를 극복할 수 있다.
+
+- **의미론적 청킹(Semantic Chunking)**: JSON의 `styles`나 `lines` 정보를 바탕으로 제목과 본문을 구분하여 논리적 단위로 문서를 분할한다. 이는 벡터 검색 시 잘려나간 문맥으로 인한 hallucination을 최소화한다.
+- **표 데이터 보존**: JSON 내의 셀 인덱스 정보를 활용하여 표 구조를 Markdown이나 HTML 태그로 변환 후 Vector DB에 저장한다. LLM은 단순 나열된 수치보다 구조화된 표 형식에서 행-열 간의 인과관계를 훨씬 정확하게 추론한다.
+
+::: {.callout-tip}
+복잡한 레이아웃의 경우, Vision-Language Model(VLM)을 병행하여 시각적 특징을 벡터화하는 Multi-modal RAG가 강력한 대안이 될 수 있다.
+:::
+
+## 코딩 없는 자동화 대안
+
+코딩 없이 대량의 문서를 Markdown으로 변환해야 한다면, **Azure Logic Apps**나 **Power Automate**를 활용할 수 있다.
+
+- Document Intelligence 커넥터를 연결한다
+- 분석 결과의 `content` 필드를 파일 생성 액션으로 전달한다
+- Blob Storage에 자동으로 `.md` 파일이 저장되도록 구성한다
+
+이 방식은 별도의 코딩 없이 자동화된 Markdown 변환 시스템을 구축할 수 있다는 장점이 있다.
+
+## 정리
+
+Azure Document Intelligence의 출력 형식 선택은 후속 파이프라인의 설계를 결정짓는 핵심 의사결정이다.
+
+- **RAG 파이프라인 구축**이 목적이라면 **Markdown** 출력이 최적이다. 구조를 보존하면서도 토큰 효율이 높다.
+- **데이터 품질 관리, 좌표 기반 처리**가 필요하면 **JSON**을 활용한다.
+- 실무에서는 JSON으로 추출 후 핵심 구조만 남긴 **Markdown으로 경량화**하는 전처리가 비용 대비 성능 면에서 가장 우수하다.
+- Layout 모델을 사용해야 Markdown 출력이 가능하다. Read 모델은 단순 텍스트 추출만 지원한다.
+- 배치 처리가 필요한 경우 Python SDK 기반 스크립트를 활용한다.

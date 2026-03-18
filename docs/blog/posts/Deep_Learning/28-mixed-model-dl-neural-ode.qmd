@@ -1,0 +1,877 @@
+---
+title: "Neural ODE — 연속 시간 역학으로 종단 데이터 모델링"
+subtitle: "이산 시점을 넘어 연속적 궤적을 학습하는 미분방정식 기반 딥러닝"
+description: |
+  불규칙 시점, 결측, 연속 시간 역학을 자연스럽게 다루는 Neural ODE를 종단 데이터 맥락에서 다룬다.
+  ODE 기초, Adjoint Method, Latent ODE,
+  AI Agent 사용자 만족도 궤적 예측 실무 예시를
+  Python(torchdiffeq)과 개념적 R 코드로 구현한다.
+categories:
+  - Statistics
+  - Deep Learning
+  - Differential Equations
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Neural ODE — 연속 시간 역학으로 종단 데이터 모델링
+
+## 1. 왜 Neural ODE인가
+
+### 이산 시간 모델의 한계
+
+[25편(LSTM/GRU)](./25-mixed-model-dl-lstm.qmd), [26편(TCN)](./26-mixed-model-dl-tcn.qmd), [27편(Transformer)](./27-mixed-model-dl-transformer.qmd)에서 다룬 시퀀스 모델들은 공통적으로 **이산 시점(discrete time step)** 을 전제한다. 즉, 입력이 $(x_1, x_2, \ldots, x_T)$처럼 **등간격(equally spaced)** 으로 주어진다고 가정한다.
+
+그러나 실제 종단 데이터는 다음과 같은 구조를 갖는 경우가 훨씬 많다.
+
+| 사용자 | 측정 시점 (일) | 만족도 |
+|--------|----------------|--------|
+| A | 1, 3, 7, 30 | 4.2, 4.5, 3.8, 4.1 |
+| B | 1, 2, 5, 10, 14 | 3.9, 4.0, 4.3, 4.1, 4.5 |
+| C | 1, 7, 28 | 3.5, 3.7, 4.0 |
+
+- **불규칙 시간 간격**: 사용자마다 측정 시점이 다르다.
+- **측정 횟수 불일치**: 사용자 A는 4회, B는 5회, C는 3회.
+- **결측(missingness)**: 특정 시점에 데이터가 없는 것이 자연스러운 상태.
+
+LSTM이나 TCN에 이런 데이터를 넣으려면 **보간(interpolation)** 이나 **패딩(padding)** 으로 등간격 시퀀스를 인위적으로 만들어야 한다. 이 과정에서 정보 손실이 발생하고, 시간 간격의 의미가 왜곡된다.
+
+### 연속 시간의 자연스러운 표현
+
+**Neural ODE(Neural Ordinary Differential Equation)** 는 시간을 연속 변수로 취급한다. 상태 $h(t)$가 미분 방정식을 따라 연속적으로 진화한다고 모델링하므로, **임의의 시점에서 상태를 쿼리**할 수 있다.
+
+$$
+\frac{dh}{dt} = f_\theta(h(t), t)
+$$
+
+이 관점에서는 $t=1$이든 $t=3.7$이든 $t=14.2$이든 상관없이, ODE를 해당 시점까지 적분하면 상태를 얻는다. 등간격 가정이 필요 없다.
+
+### 핵심 논문
+
+Chen et al. (2018), *"Neural Ordinary Differential Equations"*, NeurIPS 2018 Best Paper. 이 논문이 Neural ODE를 제안하면서 딥러닝과 미분방정식의 연결을 재조명했다. 핵심 기여:
+
+1. ResNet의 이산 레이어를 연속 ODE로 일반화
+2. **Adjoint Method**로 메모리 효율적 역전파
+3. 연속 시간 시계열 모델링에 대한 새로운 패러다임
+
+---
+
+## 2. ODE 기초 복습
+
+### 상미분방정식 (ODE)
+
+상미분방정식(Ordinary Differential Equation)은 미지 함수의 도함수를 포함하는 방정식이다.
+
+$$
+\frac{dh}{dt} = f(h(t), t), \quad h(t_0) = h_0
+$$
+
+여기서:
+
+- $h(t) \in \mathbb{R}^d$: 시각 $t$에서의 **상태 벡터**
+- $f: \mathbb{R}^d \times \mathbb{R} \to \mathbb{R}^d$: 상태의 **변화율**을 정의하는 함수
+- $h_0$: **초기 조건 (initial condition)**
+
+이것을 **초기값 문제 (Initial Value Problem, IVP)** 라 부른다. 초기 상태 $h_0$가 주어지면, $f$를 따라 미래 시점의 상태 $h(t_1)$을 구할 수 있다.
+
+$$
+h(t_1) = h(t_0) + \int_{t_0}^{t_1} f(h(t), t) \, dt
+$$
+
+### 수치 적분법
+
+해석적으로 적분이 불가능한 경우(대부분), **수치 적분(numerical integration)** 을 사용한다.
+
+#### Euler Method (1차)
+
+가장 단순한 방법. 접선 방향으로 한 걸음씩 전진한다.
+
+$$
+h(t + \Delta t) = h(t) + \Delta t \cdot f(h(t), t)
+$$
+
+직관: 현재 기울기를 계산하고, 그 방향으로 $\Delta t$만큼 이동.
+
+#### Runge-Kutta 4차 (RK4)
+
+Euler보다 정밀한 표준 방법. 한 스텝 안에서 기울기를 4번 계산한다.
+
+$$
+\begin{aligned}
+k_1 &= f(h_n, t_n) \\
+k_2 &= f(h_n + \frac{\Delta t}{2} k_1, \; t_n + \frac{\Delta t}{2}) \\
+k_3 &= f(h_n + \frac{\Delta t}{2} k_2, \; t_n + \frac{\Delta t}{2}) \\
+k_4 &= f(h_n + \Delta t \cdot k_3, \; t_n + \Delta t) \\
+h_{n+1} &= h_n + \frac{\Delta t}{6}(k_1 + 2k_2 + 2k_3 + k_4)
+\end{aligned}
+$$
+
+#### Adaptive Solvers: Dormand-Prince (dopri5)
+
+스텝 크기를 **자동 조절**하는 적응형 방법. 변화가 급격한 구간에서는 작은 스텝, 완만한 구간에서는 큰 스텝을 사용한다. `torchdiffeq`의 기본 솔버가 `dopri5`이다.
+
+### ResNet과 ODE의 연결
+
+ResNet의 잔차 블록(residual block):
+
+$$
+h_{l+1} = h_l + f_\theta(h_l)
+$$
+
+이것은 **Euler Method에서 $\Delta t = 1$로 놓은 것**과 정확히 같다.
+
+$$
+h(t + 1) = h(t) + f_\theta(h(t), t) \quad \leftarrow \text{Euler with } \Delta t = 1
+$$
+
+즉, $L$개 레이어를 가진 ResNet은 **$[0, L]$ 구간을 $L$등분한 Euler 이산화**로 볼 수 있다. Neural ODE는 이 이산화를 제거하고 **연속 깊이(continuous depth)** 를 갖는 네트워크를 정의한다.
+
+```
+ResNet:  h_0 → [Block 1] → h_1 → [Block 2] → h_2 → ... → h_L
+                ↓ (연속화)
+Neural ODE:  h(0) → ODESolve(f_θ, h(0), 0, T) → h(T)
+```
+
+---
+
+## 3. Neural ODE 핵심 구조
+
+### ODESolve를 레이어로 사용
+
+Neural ODE의 핵심 아이디어: **ODE 수치 적분을 하나의 신경망 레이어로 취급**한다.
+
+```
+입력: h(t_0)
+         ↓
+    ODESolve(f_θ, h(t_0), t_0, t_1)
+         ↓
+출력: h(t_1)
+```
+
+여기서 $f_\theta$는 신경망(MLP 등)으로 매개변수화된 함수이다. Forward pass는 $t_0$에서 $t_1$까지 ODE를 적분하는 것이다.
+
+### Forward Pass
+
+주어진 초기 상태 $h(t_0)$에서 목표 시점 $t_1$까지의 상태를 계산한다.
+
+$$
+h(t_1) = h(t_0) + \int_{t_0}^{t_1} f_\theta(h(t), t) \, dt = \texttt{ODESolve}(f_\theta, h(t_0), t_0, t_1)
+$$
+
+**복수 시점**에서의 상태도 한 번의 적분으로 얻을 수 있다.
+
+$$
+h(t_1), h(t_2), \ldots, h(t_K) = \texttt{ODESolve}(f_\theta, h(t_0), [t_0, t_1, \ldots, t_K])
+$$
+
+이것이 불규칙 시점을 자연스럽게 처리하는 핵심 메커니즘이다.
+
+### Python: 기본 Neural ODE 정의
+
+```{python}
+import torch
+import torch.nn as nn
+from torchdiffeq import odeint
+
+class ODEFunc(nn.Module):
+    """dh/dt = f_θ(h, t)를 정의하는 신경망"""
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.Tanh(),
+            nn.Linear(64, 64),
+            nn.Tanh(),
+            nn.Linear(64, hidden_dim),
+        )
+
+    def forward(self, t, h):
+        # torchdiffeq 규약: forward(t, h)
+        return self.net(h)
+
+
+class NeuralODE(nn.Module):
+    """ODESolve를 레이어로 사용하는 모델"""
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super().__init__()
+        self.encoder = nn.Linear(input_dim, hidden_dim)
+        self.ode_func = ODEFunc(hidden_dim)
+        self.decoder = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x0, t_eval):
+        """
+        x0: 초기 관측 (batch, input_dim)
+        t_eval: 상태를 계산할 시점들 (num_times,)
+        """
+        h0 = self.encoder(x0)  # (batch, hidden_dim)
+
+        # ODE 적분: t_eval의 모든 시점에서 상태 반환
+        # 반환: (num_times, batch, hidden_dim)
+        h_t = odeint(self.ode_func, h0, t_eval, method='dopri5')
+
+        # 각 시점에서 출력 디코딩
+        out = self.decoder(h_t)  # (num_times, batch, output_dim)
+        return out
+
+# 사용 예시
+model = NeuralODE(input_dim=3, hidden_dim=32, output_dim=1)
+x0 = torch.randn(16, 3)                   # 배치 16, 초기 특성 3개
+t_eval = torch.tensor([0., 1., 3., 7., 14., 30.])  # 불규칙 시점
+predictions = model(x0, t_eval)            # (6, 16, 1)
+```
+
+`torchdiffeq.odeint`가 핵심이다. 내부에서 적응형 솔버(dopri5)가 자동으로 스텝 크기를 결정하면서 ODE를 적분한다.
+
+---
+
+## 4. Adjoint Method — 메모리 효율적 역전파
+
+### 왜 Adjoint가 필요한가
+
+일반적인 역전파(backpropagation through the solver)는 ODE 솔버의 **모든 중간 상태**를 저장해야 한다.
+
+- 솔버가 $N$개의 중간 스텝을 사용하면, 메모리 $O(N \times d)$ 필요.
+- 적응형 솔버는 $N$이 수백~수천이 될 수 있음.
+- **메모리 폭발**: 깊은 네트워크와 마찬가지 문제.
+
+**Adjoint Method**는 중간 상태를 저장하지 않고도 그래디언트를 계산할 수 있다. 메모리 $O(d)$ — 상태 차원에만 비례.
+
+### 수학적 유도
+
+손실 함수를 $L(h(t_1))$이라 하자. 우리가 계산하고 싶은 것은 $\frac{dL}{d\theta}$ (파라미터에 대한 그래디언트)이다.
+
+**Adjoint state** $a(t)$를 다음과 같이 정의한다:
+
+$$
+a(t) = -\frac{\partial L}{\partial h(t)} \in \mathbb{R}^d
+$$
+
+이 adjoint는 **시간 역방향**으로 다음 ODE를 만족한다:
+
+$$
+\frac{da}{dt} = -a(t)^T \frac{\partial f_\theta(h(t), t)}{\partial h}
+$$
+
+파라미터에 대한 그래디언트도 역방향 ODE로 계산한다:
+
+$$
+\frac{dL}{d\theta} = -\int_{t_1}^{t_0} a(t)^T \frac{\partial f_\theta(h(t), t)}{\partial \theta} \, dt
+$$
+
+### 증강 상태 (Augmented State)
+
+실제 구현에서는 $h(t)$, $a(t)$, $\frac{dL}{d\theta}$를 하나의 **증강 상태 벡터**로 묶어서 역방향 ODE 하나로 동시에 적분한다.
+
+$$
+\frac{d}{dt}
+\begin{pmatrix} h \\ a \\ \frac{dL}{d\theta} \end{pmatrix}
+=
+\begin{pmatrix} f_\theta(h, t) \\ -a^T \frac{\partial f}{\partial h} \\ -a^T \frac{\partial f}{\partial \theta} \end{pmatrix}
+$$
+
+시간 $t_1$에서 시작하여 $t_0$까지 역적분하면 그래디언트를 얻는다.
+
+### 메모리 비교
+
+| 방법 | 메모리 복잡도 | 계산 복잡도 |
+|------|--------------|------------|
+| Backprop through solver | $O(N \times d)$ | $O(N)$ |
+| Adjoint Method | $O(d)$ | $O(N) + \alpha$ (역방향 ODE) |
+
+- **Adjoint 장점**: 메모리 $O(1)$ (솔버 스텝 수 $N$에 무관).
+- **Adjoint 단점**: 역방향 ODE를 추가로 풀어야 하므로 **계산 시간**은 증가. 또한 수치 오차 누적 가능.
+- **Trade-off**: 메모리가 부족할 때 Adjoint, 그렇지 않으면 backprop through solver가 더 정확.
+
+`torchdiffeq`에서는 `odeint_adjoint`를 사용하면 자동으로 Adjoint Method가 적용된다.
+
+```{python}
+from torchdiffeq import odeint_adjoint
+
+# odeint 대신 odeint_adjoint 사용 → O(1) 메모리
+h_t = odeint_adjoint(ode_func, h0, t_eval, method='dopri5')
+```
+
+---
+
+## 5. Latent ODE for 종단 데이터
+
+### 왜 Latent ODE인가
+
+기본 Neural ODE는 초기 상태 $h(t_0)$에서 미래 궤적을 결정한다. 그러나 종단 데이터에서는:
+
+- 초기 관측이 **노이즈**를 포함한다.
+- 여러 시점의 관측을 **종합**하여 잠재 상태를 추론해야 한다.
+- 개인 간 **변이(between-subject variability)** 를 표현해야 한다.
+
+**Latent ODE** (Rubanova et al., 2019)는 Variational Autoencoder(VAE) 프레임워크 안에서 Neural ODE를 사용한다.
+
+### 모델 구조
+
+```
+관측 시퀀스: (x_{t_1}, x_{t_2}, ..., x_{t_K})
+       ↓
+   [Encoder: ODE-RNN]
+       ↓
+   잠재 초기 상태: q(z_0 | x_{1:K}) = N(μ_z0, σ²_z0)
+       ↓ (reparameterization trick)
+   z_0 ~ q(z_0)
+       ↓
+   [ODE Dynamics: dz/dt = f_θ(z(t), t)]
+       ↓ ODESolve
+   z(t_1), z(t_2), ..., z(t_K)
+       ↓
+   [Decoder]
+       ↓
+   x̂(t_1), x̂(t_2), ..., x̂(t_K)
+```
+
+각 구성 요소:
+
+1. **Encoder (ODE-RNN)**: 관측 시퀀스를 역방향으로 처리하여 잠재 초기 상태 $z_0$의 분포 $q(z_0 | x_{1:K})$를 추론. 불규칙 시점 간의 이동에 ODE를 사용 (관측 시점에서만 RNN 업데이트).
+2. **Latent Dynamics**: $z_0$에서 출발하여 Neural ODE로 잠재 궤적을 생성.
+3. **Decoder**: 각 시점의 잠재 상태 $z(t_k)$를 관측 공간으로 변환.
+
+### ODE-RNN Encoder
+
+일반 RNN은 등간격을 가정하지만, **ODE-RNN**은 관측 사이의 시간 간격을 ODE로 처리한다.
+
+$$
+\begin{aligned}
+\tilde{h}_i &= \texttt{ODESolve}(f_\theta, h_{i-1}, t_{i-1}, t_i) \quad &\text{(ODE로 시간 전진)} \\
+h_i &= \texttt{RNNCell}(\tilde{h}_i, x_i) \quad &\text{(관측으로 상태 업데이트)}
+\end{aligned}
+$$
+
+이렇게 하면 관측 사이의 시간 간격이 얼마든 상관없이 처리할 수 있다.
+
+### 손실 함수: ELBO
+
+VAE 프레임워크이므로 Evidence Lower Bound(ELBO)를 최대화한다.
+
+$$
+\mathcal{L} = \underbrace{\sum_{k=1}^{K} \mathbb{E}_{q(z_0)} \left[ \log p(x_{t_k} | z(t_k)) \right]}_{\text{reconstruction}} - \underbrace{D_{\text{KL}}\left( q(z_0 | x_{1:K}) \| p(z_0) \right)}_{\text{regularization}}
+$$
+
+- **Reconstruction term**: 잠재 궤적에서 디코딩한 값이 실제 관측과 일치하도록.
+- **KL term**: 잠재 초기 상태의 사후 분포가 사전 분포(보통 표준 정규)와 가까워지도록.
+
+### Mixed Model과의 연결
+
+Latent ODE는 개념적으로 **비선형 혼합 효과 모델(Nonlinear Mixed Effects Model)** 의 딥러닝 버전으로 볼 수 있다.
+
+| 개념 | Mixed Model | Latent ODE |
+|------|-------------|------------|
+| 개인별 변이 | Random Effects $b_i$ | 잠재 초기 상태 $z_0^{(i)}$ |
+| 시간 역학 | 선형 or 지정된 비선형 함수 | Neural ODE $f_\theta$ (유연한 비선형) |
+| 추정 | ML/REML | ELBO (VAE) |
+| 시점 제약 | 없음 (연속) | 없음 (연속) |
+
+차이점: Mixed Model은 역학 함수의 형태를 미리 지정하지만, Latent ODE는 $f_\theta$를 데이터에서 학습한다.
+
+---
+
+## 6. Python 실무 예시 — AI Agent 만족도 궤적 예측
+
+### 시나리오
+
+AI Agent 개인화 실험. 500명의 사용자가 30일간 불규칙 시점에서 만족도를 보고한다. 사용자별 측정 횟수는 3~8회. 목표: 초기 관측으로부터 30일 후 만족도 궤적을 예측한다.
+
+### 데이터 생성
+
+```{python}
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+
+np.random.seed(42)
+torch.manual_seed(42)
+
+n_users = 500
+
+# 사용자별 불규칙 시점 생성
+data = []
+for i in range(n_users):
+    n_obs = np.random.randint(3, 9)  # 3~8회 관측
+    times = np.sort(np.random.choice(range(1, 31), size=n_obs, replace=False)).astype(float)
+
+    # 개인별 기저 만족도와 변화 패턴
+    baseline = np.random.normal(4.0, 0.5)
+    trend = np.random.normal(0.01, 0.02)      # 개인별 선형 추세
+    amplitude = np.random.normal(0.3, 0.1)     # 비선형 변동 크기
+
+    # 궤적: 기저 + 추세 + 비선형 패턴 + 노이즈
+    y = baseline + trend * times + amplitude * np.sin(times * 0.3) + np.random.normal(0, 0.2, n_obs)
+
+    data.append({
+        'user_id': i,
+        'times': torch.tensor(times, dtype=torch.float32),
+        'values': torch.tensor(y, dtype=torch.float32),
+    })
+
+print(f"사용자 수: {n_users}")
+print(f"사용자 0: 시점 {data[0]['times'].numpy()}, 값 {data[0]['values'].numpy().round(2)}")
+```
+
+### Latent ODE 모델 구현
+
+```{python}
+import torch
+import torch.nn as nn
+from torchdiffeq import odeint
+
+# ---- ODE 동역학 함수 ----
+class LatentODEFunc(nn.Module):
+    """dz/dt = f_θ(z)"""
+    def __init__(self, latent_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, 50),
+            nn.ELU(),
+            nn.Linear(50, 50),
+            nn.ELU(),
+            nn.Linear(50, latent_dim),
+        )
+
+    def forward(self, t, z):
+        return self.net(z)
+
+
+# ---- ODE-RNN Encoder ----
+class ODERNNEncoder(nn.Module):
+    """불규칙 시점의 관측 시퀀스 → 잠재 초기 상태 q(z0)"""
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+
+        # 관측 사이의 시간 진화를 위한 ODE
+        self.ode_func = nn.Sequential(
+            nn.Linear(hidden_dim, 50),
+            nn.Tanh(),
+            nn.Linear(50, hidden_dim),
+        )
+
+        # 관측 시점에서의 GRU 업데이트
+        self.gru_cell = nn.GRUCell(input_dim, hidden_dim)
+
+        # z0 분포 파라미터
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
+
+    def ode_step(self, t, h):
+        return self.ode_func(h)
+
+    def forward(self, times, values):
+        """
+        times: (seq_len,) - 관측 시점 (역순)
+        values: (batch, seq_len, input_dim) - 관측값 (역순)
+        """
+        batch_size = values.shape[0]
+        h = torch.zeros(batch_size, self.hidden_dim, device=values.device)
+
+        # 시간 역순으로 처리 (마지막 관측부터)
+        for i in range(len(times) - 1):
+            # GRU 업데이트: 관측 정보 반영
+            h = self.gru_cell(values[:, i, :], h)
+
+            # ODE 적분: 다음 관측 시점까지 시간 역방향 이동
+            dt = times[i] - times[i + 1]  # 역순이므로 양수
+            t_span = torch.tensor([0., dt])
+            h = odeint(self.ode_step, h, t_span, method='euler')[-1]
+
+        # 마지막 관측 처리
+        h = self.gru_cell(values[:, -1, :], h)
+
+        # z0 분포 파라미터
+        mu = self.fc_mu(h)
+        logvar = self.fc_logvar(h)
+        return mu, logvar
+
+
+# ---- Decoder ----
+class Decoder(nn.Module):
+    """잠재 상태 → 관측 공간"""
+    def __init__(self, latent_dim, output_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, 50),
+            nn.ReLU(),
+            nn.Linear(50, output_dim),
+        )
+
+    def forward(self, z):
+        return self.net(z)
+
+
+# ---- 전체 Latent ODE 모델 ----
+class LatentODEModel(nn.Module):
+    def __init__(self, input_dim=1, hidden_dim=64, latent_dim=16, output_dim=1):
+        super().__init__()
+        self.encoder = ODERNNEncoder(input_dim, hidden_dim, latent_dim)
+        self.ode_func = LatentODEFunc(latent_dim)
+        self.decoder = Decoder(latent_dim, output_dim)
+        self.latent_dim = latent_dim
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, obs_times, obs_values, eval_times):
+        """
+        obs_times: (seq_len,) - 관측 시점 (역순)
+        obs_values: (batch, seq_len, 1) - 관측값 (역순)
+        eval_times: (num_eval,) - 예측할 시점
+        """
+        # Encode
+        mu, logvar = self.encoder(obs_times, obs_values)
+        z0 = self.reparameterize(mu, logvar)  # (batch, latent_dim)
+
+        # ODE dynamics
+        z_t = odeint(self.ode_func, z0, eval_times, method='dopri5')
+        # z_t: (num_eval, batch, latent_dim)
+
+        # Decode
+        pred = self.decoder(z_t)  # (num_eval, batch, output_dim)
+
+        return pred, mu, logvar
+
+# 모델 초기화
+model = LatentODEModel(input_dim=1, hidden_dim=64, latent_dim=16, output_dim=1)
+print(f"파라미터 수: {sum(p.numel() for p in model.parameters()):,}")
+```
+
+### 학습 루프
+
+```{python}
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+n_epochs = 100
+
+def vae_loss(pred, target, mu, logvar, kl_weight=0.1):
+    """ELBO loss = Reconstruction + KL divergence"""
+    recon_loss = nn.functional.mse_loss(pred, target)
+    kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon_loss + kl_weight * kl_loss, recon_loss, kl_loss
+
+for epoch in range(n_epochs):
+    total_loss = 0.
+    model.train()
+
+    for user_data in data:
+        times = user_data['times']
+        values = user_data['values']
+
+        # 역순 정렬 (encoder에 역순으로 입력)
+        idx = torch.argsort(times, descending=True)
+        rev_times = times[idx]
+        rev_values = values[idx].unsqueeze(0).unsqueeze(-1)  # (1, seq_len, 1)
+
+        # 정순 시점으로 예측
+        eval_times = times.sort()[0]
+        target = values[times.sort()[1]].unsqueeze(0).unsqueeze(-1)  # (1, seq_len, 1)
+
+        # Forward
+        pred, mu, logvar = model(rev_times, rev_values, eval_times)
+        pred = pred.squeeze(-1).T.unsqueeze(-1)  # shape 맞춤
+
+        # Loss
+        loss, recon, kl = vae_loss(pred, target, mu, logvar)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+
+    if (epoch + 1) % 20 == 0:
+        print(f"Epoch {epoch+1:3d} | Loss: {total_loss/n_users:.4f}")
+```
+
+### 궤적 시각화
+
+```{python}
+model.eval()
+fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+
+for idx, ax in enumerate(axes.flat):
+    user = data[idx]
+    times = user['times']
+    values = user['values']
+
+    # 예측: 0~30일 연속 궤적
+    t_fine = torch.linspace(0, 30, 200)
+
+    with torch.no_grad():
+        rev_idx = torch.argsort(times, descending=True)
+        rev_times = times[rev_idx]
+        rev_values = values[rev_idx].unsqueeze(0).unsqueeze(-1)
+
+        pred, _, _ = model(rev_times, rev_values, t_fine)
+        pred = pred.squeeze()  # (200,)
+
+    ax.plot(t_fine.numpy(), pred.numpy(), 'b-', alpha=0.7, label='Neural ODE 예측')
+    ax.scatter(times.numpy(), values.numpy(), c='red', s=40, zorder=5, label='실제 관측')
+    ax.set_xlabel('일 (day)')
+    ax.set_ylabel('만족도')
+    ax.set_title(f'사용자 {idx}')
+    ax.legend(fontsize=8)
+    ax.set_ylim(2.5, 5.5)
+
+plt.suptitle('AI Agent 사용자 만족도 — Latent ODE 궤적 예측', fontsize=14)
+plt.tight_layout()
+plt.savefig('neural_ode_trajectories.png', dpi=150)
+plt.show()
+```
+
+### R 개념적 코드
+
+R에서는 Neural ODE 전용 패키지가 성숙하지 않았으나, `deSolve` + `torch` (R torch)를 조합하거나, `diffeqr` (Julia 백엔드)을 사용할 수 있다.
+
+```{r}
+# R에서의 개념적 ODE 풀이 (deSolve)
+library(deSolve)
+
+# 간단한 ODE 시스템: 만족도 역학
+satisfaction_ode <- function(t, state, parameters) {
+  with(as.list(c(state, parameters)), {
+    # dh/dt = alpha * (target - h) + beta * sin(omega * t)
+    dh <- alpha * (target - h) + beta * sin(omega * t)
+    list(c(dh))
+  })
+}
+
+# 개인별 파라미터 (혼합 효과 역할)
+params <- c(alpha = 0.1, target = 4.2, beta = 0.3, omega = 0.3)
+state <- c(h = 3.8)
+
+# 불규칙 시점에서 풀기
+times <- c(0, 1, 3, 7, 14, 30)
+out <- ode(y = state, times = times, func = satisfaction_ode, parms = params)
+print(out)
+
+# 참고: 실제 Neural ODE는 f_θ를 신경망으로 대체
+# R에서 본격적으로 하려면:
+# - diffeqr: Julia DifferentialEquations.jl 백엔드
+# - torch::nn_module + 수동 ODE 풀이
+```
+
+---
+
+## 7. ODE-RNN vs Latent ODE vs Neural CDE 비교
+
+### 변형 모델들
+
+Neural ODE를 종단 데이터에 적용하는 여러 변형이 있다. 각각 **어떤 문제를 해결하느냐**가 다르다.
+
+### ODE-RNN (Rubanova et al., 2019)
+
+- **구조**: RNN + ODE. 관측 사이를 ODE로 연결, 관측 시점에서 RNN 업데이트.
+- **장점**: 불규칙 시점 처리. 구현이 비교적 간단.
+- **단점**: 순차적 처리(병렬화 어려움). 전체 궤적의 불확실성을 표현하지 못함.
+- **용도**: 불규칙 시점 + 순차적 의사결정이 필요할 때.
+
+### Latent ODE (Rubanova et al., 2019)
+
+- **구조**: VAE + Neural ODE. 잠재 공간에서 ODE 역학.
+- **장점**: 불확실성 표현(사후 분포). 잠재 궤적의 보간/외삽. 결측 자연스럽게 처리.
+- **단점**: 초기 상태에 모든 정보를 압축 → 긴 시퀀스에서 정보 손실 가능. KL collapse 위험.
+- **용도**: 궤적 전체를 생성/예측해야 할 때. 개인 간 변이가 중요할 때.
+
+### Neural CDE (Kidger et al., 2020)
+
+- **구조**: 제어 미분방정식(Controlled Differential Equation) 기반.
+
+$$
+\frac{dz}{dt} = f_\theta(z(t)) \cdot \frac{dX}{dt}
+$$
+
+여기서 $X(t)$는 관측 경로(path)의 보간. $\frac{dX}{dt}$가 **제어 신호(control signal)** 역할을 한다.
+
+- **장점**: 새로운 관측이 들어올 때마다 경로에 반영 → 온라인 업데이트에 가까움. 이론적으로 RNN의 연속 시간 일반화.
+- **단점**: 경로 보간 방법(linear, cubic spline 등) 선택이 결과에 영향.
+- **용도**: 스트리밍 데이터. 관측 경로 자체가 중요한 정보를 담고 있을 때.
+
+### 비교 요약
+
+| 속성 | ODE-RNN | Latent ODE | Neural CDE |
+|------|---------|------------|------------|
+| 불규칙 시점 | O | O | O |
+| 불확실성 표현 | X | O (VAE) | X (기본) |
+| 새 관측 반영 | RNN 업데이트 | 재인코딩 필요 | 경로에 자연스럽게 반영 |
+| 메모리 효율 | 보통 | Adjoint 사용 시 좋음 | Adjoint 사용 시 좋음 |
+| 구현 난이도 | 낮음 | 중간 | 중간~높음 |
+| 대표 라이브러리 | torchdiffeq | torchdiffeq | torchcde |
+| 적합 상황 | 단순 불규칙 시점 | 궤적 생성/예측, 개인 변이 | 스트리밍, 경로 의존적 |
+
+### 선택 가이드
+
+```
+불규칙 시점 종단 데이터?
+├── Yes
+│   ├── 궤적 전체를 생성/예측? → Latent ODE
+│   ├── 실시간 관측 반영? → Neural CDE
+│   └── 단순 분류/회귀? → ODE-RNN
+└── No (등간격)
+    └── LSTM, TCN, Transformer가 더 간단하고 빠름
+```
+
+---
+
+## 8. 한계와 실무 팁
+
+### Stiff ODE 문제
+
+**Stiff ODE**: 서로 다른 시간 스케일이 공존하는 시스템. 빠르게 변하는 성분과 느리게 변하는 성분이 동시에 존재.
+
+- `dopri5`(명시적 방법)는 stiff ODE에서 **극도로 작은 스텝**을 사용하게 되어 느려짐.
+- 해결: `implicit_adams` 등 암시적(implicit) 솔버 사용. 또는 `scipy_solver` 래퍼.
+
+```{python}
+# Stiff ODE에 대한 솔버 선택
+h_t = odeint(ode_func, h0, t_eval, method='implicit_adams')  # 암시적 솔버
+# 또는
+h_t = odeint(ode_func, h0, t_eval, method='dopri5',
+             rtol=1e-5, atol=1e-7)  # 허용 오차 조정
+```
+
+### 솔버 선택 가이드
+
+| 솔버 | 특징 | 권장 상황 |
+|------|------|----------|
+| `dopri5` | 적응형, 범용, 기본값 | 대부분의 상황 |
+| `euler` | 고정 스텝, 빠름, 부정확 | 디버깅, 빠른 프로토타이핑 |
+| `rk4` | 고정 스텝, 4차 정밀도 | 스텝 수를 직접 제어하고 싶을 때 |
+| `implicit_adams` | 암시적, stiff ODE용 | 시스템이 stiff할 때 |
+| `scipy_solver` | SciPy 백엔드 | CPU에서 안정성이 중요할 때 |
+
+### 학습 불안정성 대처
+
+Neural ODE 학습은 일반 딥러닝보다 까다롭다. 흔한 문제와 대응:
+
+1. **NFE(Number of Function Evaluations) 폭발**: 솔버가 수렴을 위해 너무 많은 스텝을 사용.
+   - 해결: NFE를 모니터링하고, 정규화 추가 (`kinetic_energy` regularization).
+
+2. **그래디언트 소실/폭발**: ODE 적분 구간이 길면 발생.
+   - 해결: 적분 구간 분할, 또는 그래디언트 클리핑.
+
+3. **느린 학습**: ODE 적분이 매 forward pass마다 실행되므로 epoch당 시간이 김.
+   - 해결: `euler` 솔버로 빠르게 프로토타이핑 후 `dopri5`로 전환.
+
+```{python}
+# NFE 모니터링 예시
+class ODEFuncWithNFE(nn.Module):
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.Tanh(),
+            nn.Linear(64, hidden_dim),
+        )
+        self.nfe = 0  # function evaluation 카운터
+
+    def forward(self, t, h):
+        self.nfe += 1
+        return self.net(h)
+
+# 학습 중 NFE 확인
+ode_func = ODEFuncWithNFE(32)
+ode_func.nfe = 0
+h_t = odeint(ode_func, h0, t_eval, method='dopri5')
+print(f"Forward pass NFE: {ode_func.nfe}")
+# NFE가 1000 이상이면 문제 → 정규화 필요
+```
+
+### 정규화 기법
+
+```{python}
+def kinetic_energy_regularization(ode_func, h0, t_eval, lam=0.01):
+    """
+    f_θ의 크기를 제한하여 솔버 스텝 수를 줄임.
+    ||f_θ(h,t)||² 를 정규화 항으로 추가.
+    """
+    h_t = odeint(ode_func, h0, t_eval, method='dopri5')
+
+    # 적분 구간에서 f의 크기 샘플링
+    t_sample = t_eval[torch.randint(len(t_eval), (5,))]
+    reg = 0.
+    for t_s in t_sample:
+        idx = (t_eval - t_s).abs().argmin()
+        f_val = ode_func(t_s, h_t[idx])
+        reg += f_val.pow(2).mean()
+
+    return h_t, lam * reg / len(t_sample)
+```
+
+### 계산 비용
+
+| 모델 | 학습 시간 (상대) | 추론 시간 (상대) | 메모리 |
+|------|-----------------|-----------------|--------|
+| LSTM | 1x | 1x | 낮음 |
+| TCN | 0.7x | 0.5x | 낮음 |
+| Transformer | 1.5x | 1.2x | 중간 |
+| Neural ODE (euler) | 2x | 1.5x | 낮음 |
+| Neural ODE (dopri5) | 5~10x | 3~5x | Adjoint 시 낮음 |
+| Latent ODE | 10~20x | 5~10x | Adjoint 시 중간 |
+
+### 언제 Neural ODE를 쓰지 말아야 하는가
+
+다음 조건이 **모두** 해당되면 LSTM이나 TCN이 더 나은 선택이다:
+
+1. **등간격 시점**: 모든 대상이 같은 시점에서 관측됨.
+2. **대규모 데이터**: 수십만~수백만 샘플. 학습 속도가 중요.
+3. **단순 분류/회귀**: 궤적 전체가 아니라 최종 결과만 필요.
+4. **해석 불필요**: 연속 역학의 해석이 중요하지 않음.
+
+반대로, 다음 상황에서 Neural ODE가 진가를 발휘한다:
+
+- 불규칙 시점, 결측이 많은 데이터
+- 연속 시간 궤적의 예측/보간이 목적
+- 물리적/생물학적 시스템처럼 **연속 역학**이 자연스러운 도메인
+- 임의의 시점에서 상태를 쿼리해야 하는 경우
+
+---
+
+## 9. 핵심 요약
+
+### Neural ODE 한 줄 요약
+
+> 신경망을 ODE의 우변에 놓아, 이산 레이어 대신 연속 시간 역학을 학습한다.
+
+### 핵심 포인트
+
+| 항목 | 내용 |
+|------|------|
+| 핵심 아이디어 | $\frac{dh}{dt} = f_\theta(h,t)$, ODESolve를 레이어로 사용 |
+| ResNet 연결 | ResNet = Euler 이산화된 ODE |
+| Adjoint Method | $O(1)$ 메모리 역전파, trade-off: 계산 시간 증가 |
+| Latent ODE | VAE + Neural ODE, 종단 데이터의 비선형 혼합 효과 모델 |
+| 불규칙 시점 | ODE 적분이 임의 시점을 자연스럽게 처리 |
+| 주요 라이브러리 | `torchdiffeq` (Python), `torchcde` (Neural CDE) |
+| 권장 상황 | 불규칙 시점, 연속 궤적 예측, 물리/생물학적 시스템 |
+| 비권장 상황 | 등간격 + 대규모 + 단순 예측 → LSTM/TCN이 더 효율적 |
+
+### 시리즈 내 위치
+
+```
+[13 DL Overview] ─┬─ [25 LSTM/GRU]
+                  ├─ [26 TCN]
+                  ├─ [27 Transformer]
+                  └─ [28 Neural ODE] ← 현재 파일
+```
+
+### 관련 파일
+
+- [13 — DL Overview](./13-mixed-model-dl-longitudinal.qmd): 딥러닝 기법 전체 개요
+- [25 — LSTM/GRU](./25-mixed-model-dl-lstm.qmd): 게이트 기반 순환 신경망
+- [26 — TCN](./26-mixed-model-dl-tcn.qmd): Temporal Convolutional Network
+- [27 — Transformer](./27-mixed-model-dl-transformer.qmd): 어텐션 기반 시퀀스 모델
+- [01 — LMM 입문](./01-mixed-model-intro.qmd): 선형 혼합 모델 (Latent ODE와 개념적 연결)
+
+### 참고 문헌
+
+- Chen, R.T.Q. et al. (2018). *Neural Ordinary Differential Equations*. NeurIPS.
+- Rubanova, Y. et al. (2019). *Latent ODEs for Irregularly-Sampled Time Series*. NeurIPS.
+- Kidger, P. et al. (2020). *Neural Controlled Differential Equations for Irregular Time Series*. NeurIPS.
+- Dupont, E. et al. (2019). *Augmented Neural ODEs*. NeurIPS.
+- Finlay, C. et al. (2020). *How to Train Your Neural ODE: the World of Jacobian and Kinetic Regularization*. ICML.

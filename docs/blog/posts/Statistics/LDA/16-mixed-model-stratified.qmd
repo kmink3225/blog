@@ -1,0 +1,415 @@
+---
+title: "Stratified Analysis & Nesting"
+subtitle: "nest() + map() 층화 분석과 교호작용 모델의 트레이드오프"
+description: |
+  계층적 데이터에서 그룹별 별도 모델을 적합하는 Stratified Analysis와
+  R의 nest() + map() 패턴을 다룬다. 교호작용 모델과 층화 분석의 트레이드오프,
+  층화 결과의 시각화, 그리고 Mixed Model로의 자연스러운 확장을 설명한다.
+categories:
+  - Statistics
+  - Mixed Model
+author: Kwangmin Kim
+date: 03/07/2026
+execute:
+  eval: false
+---
+
+# Stratified Analysis & Nesting
+
+## 세 가지 분석 전략
+
+같은 데이터에 대해 그룹별 효과를 파악하는 방법이 세 가지 있다.
+
+```
+전략 1: 전체 모델 (하나의 회귀선)
+  lm(Y ~ X + Group)
+  → 그룹 간 절편 차이만 허용, 기울기는 동일 가정
+
+전략 2: 교호작용 모델
+  lm(Y ~ X * Group)
+  → 그룹마다 다른 절편 + 다른 기울기
+  → 교호작용 계수로 그룹 간 기울기 차이 직접 검정 가능
+
+전략 3: 층화 분석 (각 그룹별 별도 모델)
+  for each group: lm(Y ~ X, data=group_data)
+  → 그룹별 계수를 독립적으로 추정
+  → 그룹 간 차이에 대한 공식 검정 없음
+```
+
+| | 전체 모델 | 교호작용 | 층화 분석 |
+|-|----------|---------|----------|
+| **그룹별 기울기** | ❌ 동일 | ✅ | ✅ |
+| **그룹 간 차이 검정** | △ (절편만) | ✅ (공식 검정) | ❌ (비공식) |
+| **해석 용이성** | 높음 | 중간 | 높음 |
+| **파라미터 수** | 적음 | 중간 | 많음 |
+| **소규모 그룹 안정성** | 높음 | 중간 | 낮음 |
+
+---
+
+## 교호작용 모델
+
+### 기본 형태
+
+```r
+library(tidyverse)
+
+# NYC Airbnb: borough마다 stars 효과가 다른가?
+fit_interaction <- lm(
+  price ~ stars * borough + room_type,
+  data = nyc_airbnb
+)
+
+fit_interaction |>
+  broom::tidy() |>
+  filter(str_detect(term, "stars")) |>
+  select(term, estimate, std.error, p.value)
+```
+
+```
+term                      estimate std.error  p.value
+stars                        27.1      4.0    <0.001   ← Manhattan에서 stars 효과
+stars:boroughBrooklyn        -6.4      5.1     0.21    ← Brooklyn vs Manhattan 차이
+stars:boroughQueens         -17.5      7.3     0.02   *
+stars:boroughBronx          -22.7     16.3     0.16
+```
+
+**해석:**
+
+- Manhattan(기준): stars 1점 증가 → 가격 $27.1 상승
+- Brooklyn: $27.1 - $6.4 = $20.7 상승 (차이 p=0.21, 유의하지 않음)
+- Queens: $27.1 - $17.5 = $9.6 상승 (차이 p=0.02, 유의)
+
+### Python에서 교호작용
+
+```python
+import statsmodels.formula.api as smf
+
+# * 는 주효과 + 교호작용 모두 포함
+model_int = smf.ols(
+    "price ~ stars * C(borough) + C(room_type)",
+    data=df
+).fit()
+
+# 교호작용 계수만 추출
+import pandas as pd
+coef_df = pd.DataFrame({
+    "coef": model_int.params,
+    "se":   model_int.bse,
+    "p":    model_int.pvalues
+})
+interaction_terms = coef_df[coef_df.index.str.contains("stars:")]
+print(interaction_terms.round(3))
+```
+
+---
+
+## 층화 분석: nest() + map() 패턴 (R)
+
+### 핵심 아이디어
+
+```r
+# 전통적 방법: 직접 필터링 (반복 코드)
+lm(price ~ stars + room_type, data=filter(nyc_airbnb, borough=="Manhattan"))
+lm(price ~ stars + room_type, data=filter(nyc_airbnb, borough=="Brooklyn"))
+# ...
+
+# nest() + map() 패턴: 깔끔한 함수형 프로그래밍
+nyc_airbnb |>
+  nest(data = -borough) |>             # borough별 데이터 중첩
+  mutate(
+    models = map(data, \(df) lm(price ~ stars + room_type, data=df)),
+    results = map(models, broom::tidy)  # 각 모델 결과 정리
+  ) |>
+  select(-data, -models) |>
+  unnest(results)
+```
+
+### 완전한 예시
+
+```r
+library(tidyverse)
+
+# Step 1: 그룹별 중첩
+nested_data <- nyc_airbnb |>
+  nest(data = -borough)
+
+print(nested_data)
+```
+
+```
+# A tibble: 4 × 2
+  borough   data
+  <fct>     <list>
+1 Manhattan <tibble [21,447 × 4]>
+2 Brooklyn  <tibble [16,810 × 4]>
+3 Queens    <tibble [5,821 × 4]>
+4 Bronx     <tibble [1,190 × 4]>
+```
+
+```r
+# Step 2: 각 그룹에 모델 적합
+results <- nyc_airbnb |>
+  nest(data = -borough) |>
+  mutate(
+    # 각 데이터셋에 lm 적합
+    models = map(data, \(df) lm(price ~ stars + room_type, data=df)),
+
+    # broom::tidy로 결과 정리
+    tidy_results = map(models, broom::tidy),
+
+    # broom::glance로 모델 적합도
+    glance_results = map(models, broom::glance)
+  )
+
+# Step 3: 결과 추출
+coef_df <- results |>
+  select(borough, tidy_results) |>
+  unnest(tidy_results)
+
+print(coef_df |> filter(term == "stars"))
+```
+
+```
+borough    term   estimate std.error statistic  p.value
+Manhattan  stars     21.9      2.7       8.1    <0.001
+Brooklyn   stars     20.3      2.5       8.1    <0.001
+Queens     stars      9.5      3.9       2.4     0.016
+Bronx      stars      4.4     15.0       0.3     0.775
+```
+
+### 층화 결과 시각화
+
+```r
+# stars 효과의 borough별 분포
+coef_df |>
+  filter(term == "stars") |>
+  ggplot(aes(x = borough, y = estimate, color = borough)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin = estimate - 1.96*std.error,
+                    ymax = estimate + 1.96*std.error),
+                width=0.2) +
+  geom_hline(yintercept=0, linestyle='dashed') +
+  labs(x="Borough", y="stars 계수 (95% CI)",
+       title="Borough별 별점 효과") +
+  theme_minimal()
+```
+
+```
+시각화 결과:
+stars 효과
+$30 │  •
+    │  ─  •
+$20 │  ─  ─  •
+    │        ─
+$10 │           ─
+    │           •
+$0  │              •
+    │              ─────────── (Bronx: 효과 없음, CI 큼)
+    └──────────────────────────
+       Manhattan Brooklyn Queens Bronx
+```
+
+### room_type 효과의 동네별 이질성
+
+```r
+# Manhattan 내 동네별 room_type 효과
+manhattan_results <- nyc_airbnb |>
+  filter(borough == "Manhattan") |>
+  nest(data = -neighborhood) |>
+  mutate(
+    models = map(data, \(df) {
+      # 너무 적은 데이터는 건너뜀
+      if(nrow(df) < 10) return(NULL)
+      lm(price ~ stars + room_type, data=df)
+    }),
+    results = map(models, \(m) {
+      if(is.null(m)) return(tibble())
+      broom::tidy(m)
+    })
+  ) |>
+  select(neighborhood, results) |>
+  unnest(results)
+
+# room_type 효과 동네별 시각화
+manhattan_results |>
+  filter(str_detect(term, "room_type")) |>
+  ggplot(aes(x = neighborhood, y = estimate)) +
+  geom_point(alpha=0.7) +
+  facet_wrap(~term, nrow=2) +
+  theme(axis.text.x = element_text(angle=80, hjust=1)) +
+  labs(title="Manhattan 동네별 room_type 효과")
+```
+
+```
+결과 패턴:
+- Private room 할인폭: 동네마다 -$80 ~ -$160 범위
+- Shared room 할인폭: 동네마다 -$100 ~ -$200 범위
+- 할인폭의 이질성이 크다 → 동네 랜덤 효과가 필요함을 시사
+```
+
+---
+
+## Python에서 Stratified Analysis
+
+```python
+import pandas as pd
+import statsmodels.formula.api as smf
+
+def stratified_regression(df, group_col, formula, min_obs=10):
+    """
+    그룹별 별도 회귀 분석 (R의 nest+map 패턴)
+    """
+    results = []
+
+    for group, group_df in df.groupby(group_col):
+        if len(group_df) < min_obs:
+            continue
+        try:
+            model = smf.ols(formula, data=group_df).fit()
+            tidy = model.params.reset_index()
+            tidy.columns = ["term", "estimate"]
+            tidy["std_error"] = model.bse.values
+            tidy["p_value"] = model.pvalues.values
+            tidy["group"] = group
+            tidy["n"] = len(group_df)
+            results.append(tidy)
+        except Exception as e:
+            print(f"{group}: 모델 적합 실패 ({e})")
+
+    return pd.concat(results, ignore_index=True)
+
+
+# 실행
+strat_results = stratified_regression(
+    df=nyc_airbnb,
+    group_col="borough",
+    formula="price ~ stars + C(room_type)"
+)
+
+# stars 효과만 추출
+stars_effect = strat_results[strat_results["term"] == "stars"]
+print(stars_effect[["group", "estimate", "std_error", "p_value", "n"]])
+```
+
+```
+        group  estimate  std_error  p_value     n
+Manhattan     21.9        2.7     <0.001  21447
+Brooklyn      20.3        2.5     <0.001  16810
+Queens         9.5        3.9      0.016   5821
+Bronx          4.4       15.0      0.775   1190
+```
+
+```python
+import matplotlib.pyplot as plt
+
+# 계수 + 신뢰구간 시각화
+fig, ax = plt.subplots(figsize=(8, 5))
+
+boroughs = stars_effect["group"]
+estimates = stars_effect["estimate"]
+ci = 1.96 * stars_effect["std_error"]
+
+ax.errorbar(
+    x=range(len(boroughs)),
+    y=estimates,
+    yerr=ci,
+    fmt='o', capsize=5, capthick=2, markersize=8
+)
+ax.axhline(0, color='red', linestyle='--', alpha=0.5)
+ax.set_xticks(range(len(boroughs)))
+ax.set_xticklabels(boroughs)
+ax.set_ylabel("stars 계수 (95% CI)")
+ax.set_title("Borough별 별점 효과")
+```
+
+---
+
+## 층화 분석 → Mixed Model: 자연스러운 확장
+
+층화 분석의 한계:
+
+1. **그룹 간 차이 공식 검정 불가** (교호작용 모델이 필요)
+2. **소규모 그룹 불안정** (Bronx: n=1190, 동네별은 더 작음)
+3. **정보 공유 없음** — 각 그룹이 독립적으로 추정, 다른 그룹 정보 활용 못함
+
+Mixed Model의 해결:
+
+```r
+# 층화 분석: 동네별 별도 모델
+# → 56개 동네 × 3개 계수 = 168개 파라미터
+# → 소규모 동네에서 불안정
+
+# Mixed Model: 랜덤 기울기로 정보 공유
+# → 전체 데이터에서 "평균 패턴" 학습
+# → 각 동네는 평균에서의 편차만 추정 (Shrinkage)
+# → 소규모 동네는 전체 평균 쪽으로 수축 (안정적)
+lmer(
+  price ~ stars + room_type + (1 + room_type | neighborhood),
+  data = manhattan_airbnb
+)
+```
+
+**Shrinkage 효과 시각화:**
+
+```r
+library(lme4)
+library(broom.mixed)
+
+# Mixed Model
+mm_fit <- lmer(
+  price ~ stars + room_type + (1 + room_type | neighborhood),
+  data = manhattan_airbnb
+)
+
+# 층화 추정 vs Mixed Model 랜덤 효과 비교
+strat_est <- manhattan_results |>
+  filter(term == "room_typePrivate room") |>
+  select(neighborhood, strat_estimate = estimate)
+
+mm_re <- ranef(mm_fit)$neighborhood |>
+  rownames_to_column("neighborhood") |>
+  select(neighborhood, mm_re = `room_typePrivate room`)
+
+comparison <- left_join(strat_est, mm_re, by="neighborhood")
+
+# 시각화
+ggplot(comparison, aes(x=strat_estimate, y=mm_re)) +
+  geom_point(alpha=0.6) +
+  geom_abline(slope=1, intercept=0, linestyle='dashed', color='red') +
+  geom_smooth(method='lm', se=FALSE) +
+  labs(x="층화 분석 추정치",
+       y="Mixed Model 랜덤 효과",
+       title="Shrinkage 효과: 층화 분석 vs Mixed Model")
+```
+
+```
+Shrinkage 효과 해석:
+- 대각선(빨간 점선): 두 추정이 완전히 동일한 경우
+- 실제 점들: 대각선 근처이지만 0(전체 평균) 쪽으로 당겨짐
+- 관측치 많은 동네: 층화 ≈ MM (충분한 정보)
+- 관측치 적은 동네: MM이 전체 평균 쪽으로 수축 (안정적)
+```
+
+---
+
+## 언제 무엇을 쓰는가
+
+```
+목표: 그룹 간 효과 차이가 존재하는가?
+→ 교호작용 모델 + LRT
+
+목표: 각 그룹의 효과 크기를 개별 추정
+→ 층화 분석 (충분한 표본) 또는 Mixed Model 랜덤 기울기
+
+목표: 소규모 그룹이 많음 + 안정적 추정
+→ Mixed Model (Shrinkage 덕분에 안정)
+
+목표: 탐색적 분석 (어떤 그룹이 다른가 시각화)
+→ 층화 분석 → 시각화 → 검정은 교호작용 모델로
+
+실무 권장 순서:
+1. 전체 모델 (주효과)
+2. 층화 분석 시각화 (탐색)
+3. 교호작용 모델 + LRT (공식 검정)
+4. Mixed Model 랜덤 기울기 (소규모 그룹 or 많은 그룹)
+```

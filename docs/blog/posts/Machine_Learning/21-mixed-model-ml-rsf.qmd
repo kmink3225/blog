@@ -1,0 +1,550 @@
+---
+title: "Random Survival Forest (RSF)"
+subtitle: "생존 분석의 비선형 대안 — 이탈 시간 예측"
+description: |
+  Cox Proportional Hazard 모델의 한계를 넘어서는 Random Survival Forest를 상세히 다룬다.
+  Log-rank split criterion, Nelson-Aalen 누적 위험 추정, C-index 평가,
+  변수 중요도(VIMP, SHAP)를 수식과 함께 설명하고,
+  AI Agent 이탈 예측 실무 예시를 Python(sksurv)과 R(randomForestSRC)로 구현한다.
+categories:
+  - Statistics
+  - Machine Learning
+  - Survival Analysis
+author: Kwangmin Kim
+date: 03/08/2026
+execute:
+  eval: false
+---
+
+# Random Survival Forest (RSF)
+
+## 왜 RSF인가: Cox PH 가정의 한계
+
+### Cox Proportional Hazard 모델 복습
+
+Cox 모델은 생존 분석의 표준이지만 핵심 가정이 존재한다.
+
+$$h(t \mid X) = h_0(t) \exp(\beta_1 X_1 + \beta_2 X_2 + \cdots + \beta_p X_p)$$
+
+여기서:
+
+- $h_0(t)$: 기저 위험 함수 (baseline hazard) — 비모수적으로 추정
+- $\exp(X\beta)$: 공변량의 효과 — **시간과 무관하게 일정**
+
+### Cox PH의 3가지 한계
+
+| 가정 | 의미 | 위반 사례 |
+|------|------|-----------|
+| **비례 위험 (PH)** | $HR = \frac{h(t \mid X=1)}{h(t \mid X=0)} = \text{상수}$ | 치료 효과가 초기에만 강하고 시간이 지나면 약해짐 |
+| **선형 결합** | $\log HR = \beta_1 X_1 + \beta_2 X_2$ | 만족도가 4.0 이상일 때만 이탈 방지 효과 (threshold) |
+| **교호작용 명세** | 분석가가 직접 지정해야 함 | 500개 변수 간 교호작용을 수동으로 명세하기 불가능 |
+
+**PH 가정 검정 (Schoenfeld 잔차)**:
+
+```python
+from lifelines import CoxPHFitter
+from lifelines.statistics import proportional_hazard_test
+
+cph = CoxPHFitter()
+cph.fit(df, duration_col="weeks_active", event_col="churned")
+
+# Schoenfeld 잔차 검정
+result = proportional_hazard_test(cph, df, time_transform="rank")
+print(result.summary)
+# p < 0.05인 변수가 있으면 PH 가정 위반
+```
+
+PH 가정이 깨지면 Cox 모델의 계수 해석이 무의미해진다. 이때 **Random Survival Forest**가 대안이 된다.
+
+---
+
+## Random Forest 복습: 분류/회귀 RF와의 관계
+
+### 일반 Random Forest 핵심 구조
+
+```
+Input: (X, Y) — 피처 행렬 + 결과 변수
+
+1. Bootstrap 샘플 B개 생성
+2. 각 부트스트랩에서 트리 학습:
+   a. 각 노드에서 p개 변수 중 m ≈ √p개를 랜덤 선택
+   b. 최적 분기점 탐색 (Gini / MSE)
+   c. 분기 반복 → leaf 노드
+3. 예측: 모든 트리 결과의 평균(회귀) 또는 다수결(분류)
+```
+
+### RSF의 차이점
+
+| 요소 | 일반 RF | Random Survival Forest |
+|------|---------|----------------------|
+| **결과 변수** | 연속형 Y 또는 범주형 Y | $(T, \delta)$ — 시간 + 사건 여부 |
+| **Split criterion** | MSE (회귀) / Gini (분류) | **Log-rank statistic** |
+| **Leaf 예측** | 평균값 / 다수 클래스 | **Nelson-Aalen 누적 위험 함수** |
+| **앙상블** | 평균 / 다수결 | 누적 위험 함수의 평균 |
+| **중도절단** | 해당 없음 | **자연스럽게 처리** |
+
+---
+
+## RSF 알고리즘 상세
+
+### Step 1: Bootstrap + 변수 랜덤 선택
+
+$B$개의 부트스트랩 샘플을 생성하고, 각 트리의 각 노드에서 $m = \lceil \sqrt{p} \rceil$개의 후보 변수를 랜덤으로 선택한다.
+
+### Step 2: Log-rank Split Criterion
+
+노드 $h$에서 변수 $X_j$의 분기점 $c$를 탐색할 때, 데이터를 두 자식 노드로 분할한다:
+
+- $L = \{i : X_{ij} \leq c\}$ (왼쪽)
+- $R = \{i : X_{ij} > c\}$ (오른쪽)
+
+**Log-rank test statistic**:
+
+$$L(X_j, c) = \frac{\left[\sum_{k=1}^{K} (d_{Lk} - e_{Lk})\right]^2}{\sum_{k=1}^{K} v_{Lk}}$$
+
+여기서:
+
+- $K$: 고유 사건 시간의 수
+- $d_{Lk}$: 시간 $t_k$에서 왼쪽 노드의 관측된 사건 수
+- $e_{Lk} = n_{Lk} \cdot \frac{d_k}{n_k}$: 기대 사건 수
+- $v_{Lk} = e_{Lk} \cdot \frac{n_k - d_k}{n_k} \cdot \frac{n_k - n_{Lk}}{n_k - 1}$: 분산
+- $n_{Lk}$: 시간 $t_k$ 직전에 왼쪽 노드에서 위험에 처한 수 (at risk)
+- $d_k, n_k$: 전체 노드의 사건 수, 위험 수
+
+**최적 분기**: $L(X_j, c)$를 최대화하는 $(X_j^*, c^*)$를 선택한다. 이는 두 자식 노드의 생존 분포 차이가 최대인 분기점이다.
+
+### Step 3: Leaf에서 Nelson-Aalen 누적 위험 추정
+
+트리 $b$의 leaf 노드 $\ell$에 도달한 관측치들로부터 **Nelson-Aalen 추정량**을 계산한다:
+
+$$\hat{H}_\ell(t) = \sum_{t_k \leq t} \frac{d_{\ell k}}{n_{\ell k}}$$
+
+여기서:
+
+- $d_{\ell k}$: leaf $\ell$에서 시간 $t_k$의 사건 수
+- $n_{\ell k}$: leaf $\ell$에서 시간 $t_k$의 위험 집합 크기
+
+생존 함수는 다음으로 추정된다:
+
+$$\hat{S}_\ell(t) = \exp\left(-\hat{H}_\ell(t)\right)$$
+
+### Step 4: Ensemble (앙상블)
+
+새 관측치 $x$에 대해 $B$개 트리 각각에서 해당하는 leaf의 누적 위험 함수를 구하고 평균한다:
+
+$$\hat{H}(t \mid x) = \frac{1}{B} \sum_{b=1}^{B} \hat{H}_{\ell_b(x)}(t)$$
+
+여기서 $\ell_b(x)$는 트리 $b$에서 $x$가 도달하는 leaf 노드이다.
+
+---
+
+## C-index (Concordance Index) 평가
+
+### 정의
+
+C-index는 생존 모델의 판별력(discrimination)을 측정한다. **"더 위험하다고 예측한 개체가 실제로 더 먼저 사건을 경험하는가?"**를 본다.
+
+$$C = \frac{\sum_{i,j} \mathbb{1}[\hat{H}(T_0 \mid x_i) > \hat{H}(T_0 \mid x_j)] \cdot \mathbb{1}[T_i < T_j] \cdot \delta_i}{\sum_{i,j} \mathbb{1}[T_i < T_j] \cdot \delta_i}$$
+
+### 직관적 이해
+
+| C-index | 의미 |
+|---------|------|
+| 0.5 | 동전 던지기 (무작위) |
+| 0.6~0.7 | 약한 판별력 |
+| 0.7~0.8 | 적절한 판별력 |
+| 0.8~0.9 | 좋은 판별력 |
+| 1.0 | 완벽한 판별력 |
+
+### 주의사항
+
+- C-index는 **상대적 순서만** 평가 — 절대적 생존 확률의 보정(calibration)은 별도
+- 중도절단이 많으면 C-index가 불안정해질 수 있음
+- **Time-dependent AUC** (Brier Score, IBS)로 보완 가능
+
+---
+
+## 변수 중요도
+
+### 1. Permutation VIMP (Variable Importance)
+
+RSF의 기본 변수 중요도 방법:
+
+```
+각 변수 X_j에 대해:
+  1. OOB(Out-of-Bag) 데이터로 원래 C-index 계산
+  2. X_j의 값을 랜덤 셔플 (permute)
+  3. 셔플 후 C-index 재계산
+  4. VIMP(X_j) = C_original - C_permuted
+```
+
+VIMP > 0이면 해당 변수가 예측에 기여한다. 값이 클수록 중요하다.
+
+### 2. SHAP for Survival Models
+
+SHAP은 개별 예측에 대한 변수 기여를 설명한다. 생존 모델에서는 **특정 시점 $t$에서의 생존 확률**에 대한 SHAP 값을 계산한다.
+
+```python
+import shap
+
+# 특정 시점(예: 12주)에서의 생존 확률을 예측 함수로 정의
+def predict_survival_at_t(X, t=12):
+    surv_funcs = rsf.predict_survival_function(X)
+    return np.array([fn(t) for fn in surv_funcs])
+
+# SHAP 계산
+explainer = shap.Explainer(
+    lambda X: predict_survival_at_t(pd.DataFrame(X, columns=feature_names)),
+    X_train
+)
+shap_values = explainer(X_test)
+
+# SHAP summary plot
+shap.summary_plot(shap_values, X_test, feature_names=feature_names)
+```
+
+### VIMP vs SHAP 비교
+
+| 측면 | Permutation VIMP | SHAP |
+|------|-----------------|------|
+| **범위** | 전역 (Global) | 전역 + 개별 (Local) |
+| **해석** | "이 변수 없으면 성능이 얼마나 떨어지는가" | "이 변수가 이 예측을 얼마나 밀었는가" |
+| **계산 비용** | 빠름 | 느림 (Kernel SHAP 기준) |
+| **교호작용** | 포착 안 됨 | SHAP interaction values로 포착 |
+| **시점 의존** | 전체 C-index 기반 | 특정 시점 $t$ 지정 가능 |
+
+---
+
+## 실무 예시: AI Agent 이탈 예측 (Python)
+
+### 데이터 설정
+
+```python
+import numpy as np
+import pandas as pd
+from sksurv.ensemble import RandomSurvivalForest
+from sksurv.util import Surv
+from sksurv.linear_model import CoxPHSurvivalAnalysis
+from sksurv.metrics import concordance_index_censored
+from sklearn.model_selection import train_test_split
+
+# AI Agent 사용자 데이터
+# - user_id: 사용자 ID
+# - weeks_active: 활성 주 수 (이탈까지 또는 관찰 종료까지)
+# - churned: 이탈 여부 (True=이탈, False=중도절단)
+# - 공변량: 세그먼트, 만족도, 세션 수, 개인화 비율 등
+
+np.random.seed(42)
+n = 500
+
+df = pd.DataFrame({
+    "user_id": range(n),
+    "weeks_active": np.random.exponential(12, n).clip(1, 52).astype(int),
+    "churned": np.random.binomial(1, 0.65, n).astype(bool),
+    "segment_MIEP": np.random.binomial(1, 0.3, n),
+    "segment_N": np.random.binomial(1, 0.2, n),
+    "avg_satisfaction": np.random.normal(3.5, 0.8, n).clip(1, 5),
+    "total_sessions": np.random.poisson(20, n),
+    "personalized_ratio": np.random.beta(2, 5, n),
+    "avg_turn_count": np.random.poisson(8, n),
+    "emotion_score": np.random.normal(0.1, 0.3, n).clip(-1, 1),
+})
+
+# 구조화된 생존 배열 생성
+y = Surv.from_dataframe("churned", "weeks_active", df)
+
+features = ["segment_MIEP", "segment_N", "avg_satisfaction",
+            "total_sessions", "personalized_ratio",
+            "avg_turn_count", "emotion_score"]
+X = df[features]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+print(f"Train: {X_train.shape[0]}, Test: {X_test.shape[0]}")
+print(f"이탈 비율: {df['churned'].mean():.1%}")
+```
+
+### RSF 학습 및 평가
+
+```python
+# Random Survival Forest
+rsf = RandomSurvivalForest(
+    n_estimators=300,
+    min_samples_split=10,
+    min_samples_leaf=6,
+    max_features="sqrt",
+    n_jobs=-1,
+    random_state=42
+)
+rsf.fit(X_train, y_train)
+
+# C-index 평가
+c_rsf = rsf.score(X_test, y_test)
+print(f"RSF C-index: {c_rsf:.3f}")
+# 예: RSF C-index: 0.782
+```
+
+### Cox PH 비교
+
+```python
+# Cox PH
+cox = CoxPHSurvivalAnalysis(alpha=0.01)
+cox.fit(X_train, y_train)
+c_cox = cox.score(X_test, y_test)
+print(f"Cox C-index: {c_cox:.3f}")
+# 예: Cox C-index: 0.721
+
+print(f"RSF 개선: {(c_rsf - c_cox):.3f} ({(c_rsf - c_cox)/c_cox*100:.1f}%)")
+```
+
+### 변수 중요도 시각화
+
+```python
+import matplotlib.pyplot as plt
+
+# Permutation VIMP
+vimp = rsf.feature_importances_
+feat_df = pd.DataFrame({
+    "feature": features,
+    "importance": vimp
+}).sort_values("importance", ascending=True)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.barh(feat_df["feature"], feat_df["importance"], color="steelblue")
+ax.set_xlabel("Permutation VIMP")
+ax.set_title("Random Survival Forest — 변수 중요도")
+plt.tight_layout()
+plt.show()
+```
+
+```
+변수 중요도 예시:
+avg_satisfaction     |████████████  0.31  ← 가장 중요
+personalized_ratio   |████████      0.22
+total_sessions       |██████        0.18
+emotion_score        |█████         0.16
+avg_turn_count       |████          0.13
+segment_MIEP         |███           0.10
+segment_N            |██            0.08
+```
+
+### 생존 곡선 예측 및 시각화
+
+```python
+# 특정 사용자의 생존 곡선
+surv_funcs = rsf.predict_survival_function(X_test.iloc[:5])
+
+fig, ax = plt.subplots(figsize=(10, 6))
+for i, fn in enumerate(surv_funcs):
+    ax.step(fn.x, fn(fn.x), where="post", label=f"User {i}")
+
+ax.set_xlabel("주 (Weeks)")
+ax.set_ylabel("생존 확률 S(t)")
+ax.set_title("RSF — 개별 사용자 생존 곡선")
+ax.legend()
+ax.set_xlim(0, 52)
+ax.set_ylim(0, 1)
+plt.tight_layout()
+plt.show()
+```
+
+### 하이퍼파라미터 튜닝
+
+```python
+from sklearn.model_selection import GridSearchCV
+
+# sksurv의 RSF는 scikit-learn API를 따르므로 GridSearchCV 가능
+param_grid = {
+    "n_estimators": [100, 300, 500],
+    "min_samples_split": [6, 10, 15],
+    "min_samples_leaf": [3, 6, 10],
+    "max_features": ["sqrt", "log2", 0.5],
+}
+
+# 주의: scoring="concordance_index_censored"는 직접 사용 불가
+# score() 메서드가 C-index를 반환하므로 기본 scorer 사용
+from sklearn.model_selection import ParameterGrid
+
+best_ci = 0
+best_params = {}
+
+for params in ParameterGrid(param_grid):
+    model = RandomSurvivalForest(random_state=42, n_jobs=-1, **params)
+    model.fit(X_train, y_train)
+    ci = model.score(X_test, y_test)
+    if ci > best_ci:
+        best_ci = ci
+        best_params = params
+
+print(f"Best C-index: {best_ci:.3f}")
+print(f"Best params: {best_params}")
+```
+
+---
+
+## R 코드: randomForestSRC
+
+```r
+library(randomForestSRC)
+library(survival)
+library(ggplot2)
+
+# 데이터 준비
+set.seed(42)
+n <- 500
+df <- data.frame(
+  weeks_active = pmin(pmax(round(rexp(n, 1/12)), 1), 52),
+  churned = rbinom(n, 1, 0.65),
+  segment_MIEP = rbinom(n, 1, 0.3),
+  segment_N = rbinom(n, 1, 0.2),
+  avg_satisfaction = pmin(pmax(rnorm(n, 3.5, 0.8), 1), 5),
+  total_sessions = rpois(n, 20),
+  personalized_ratio = rbeta(n, 2, 5),
+  avg_turn_count = rpois(n, 8),
+  emotion_score = pmin(pmax(rnorm(n, 0.1, 0.3), -1), 1)
+)
+
+# Train/Test 분할
+train_idx <- sample(1:n, 0.8 * n)
+train <- df[train_idx, ]
+test  <- df[-train_idx, ]
+
+# Random Survival Forest
+rsf_model <- rfsrc(
+  Surv(weeks_active, churned) ~
+    segment_MIEP + segment_N + avg_satisfaction +
+    total_sessions + personalized_ratio +
+    avg_turn_count + emotion_score,
+  data = train,
+  ntree = 300,
+  nodesize = 6,        # min_samples_leaf에 대응
+  mtry = 3,            # sqrt(7) ≈ 2.6 → 3
+  importance = TRUE,   # VIMP 계산
+  seed = 42
+)
+
+print(rsf_model)
+# C-index (OOB error rate = 1 - C-index)
+
+# 변수 중요도
+vimp_result <- vimp(rsf_model)
+print(vimp_result$importance)
+
+# 시각화
+plot(rsf_model)  # 생존 곡선
+plot(vimp_result) # 변수 중요도
+```
+
+### Cox PH 비교 (R)
+
+```r
+library(survival)
+
+# Cox PH 적합
+cox_model <- coxph(
+  Surv(weeks_active, churned) ~
+    segment_MIEP + segment_N + avg_satisfaction +
+    total_sessions + personalized_ratio +
+    avg_turn_count + emotion_score,
+  data = train
+)
+
+# C-index 비교
+cox_pred <- predict(cox_model, newdata = test, type = "lp")
+rsf_pred <- predict(rsf_model, newdata = test)$predicted
+
+# Harrell's C-index
+library(Hmisc)
+cox_ci <- rcorr.cens(-cox_pred, Surv(test$weeks_active, test$churned))["C Index"]
+rsf_ci <- rcorr.cens(rsf_pred, Surv(test$weeks_active, test$churned))["C Index"]
+
+cat(sprintf("Cox C-index: %.3f\n", cox_ci))
+cat(sprintf("RSF C-index: %.3f\n", rsf_ci))
+```
+
+---
+
+## Cox PH vs RSF 비교 표
+
+| 측면 | Cox PH | Random Survival Forest |
+|------|--------|----------------------|
+| **가정** | 비례 위험, 선형 결합 | 없음 (비모수) |
+| **교호작용** | 수동 명세 필요 | 자동 포착 |
+| **비선형 효과** | 스플라인으로 보완 | 자연스럽게 처리 |
+| **해석** | 명확 (HR, CI) | 블랙박스 (SHAP으로 보완) |
+| **소표본** | 강건 (p < n이면) | 약함 (데이터 필요) |
+| **중도절단** | 자연스럽게 처리 | 자연스럽게 처리 |
+| **예측 성능** | 데이터에 따라 | 비선형 관계 시 우수 |
+| **계산 속도** | 빠름 | 느림 (트리 수에 비례) |
+| **인과 추론** | 적합 (HR 해석) | 부적합 (예측만) |
+| **변수 수** | p < n 필요 | 고차원 가능 |
+| **신뢰구간** | 자연스럽게 제공 | Jackknife/Bootstrap 필요 |
+
+### 선택 기준
+
+```
+Cox PH를 먼저 시도:
+  ✓ PH 가정 만족 (Schoenfeld 검정 통과)
+  ✓ 변수 간 선형 관계가 적절
+  ✓ 인과 추론 / HR 해석이 필요
+
+RSF로 전환:
+  ✗ PH 가정 위반
+  ✗ 많은 비선형 교호작용 존재
+  ✗ 예측 성능이 최우선 (해석보다 정확도)
+  ✗ 고차원 (수백 개 변수)
+
+실무 권장: Cox 먼저 → PH 위반 시 RSF → SHAP으로 해석 보완
+```
+
+---
+
+## RSF의 확장
+
+### 1. Conditional Inference Forest (CIF)
+
+- 일반 RF의 변수 선택 편향(bias)을 교정
+- p-value 기반 분기 → 다수 범주를 가진 변수에 대한 편향 감소
+
+### 2. Extremely Randomized Survival Trees (ExtraSurvivalTrees)
+
+- 분기점을 완전 무작위로 선택 → 더 강한 정규화 효과
+- 분산 감소에 효과적
+
+### 3. Gradient Boosted Survival
+
+- XGBoost/LightGBM의 생존 분석 버전
+- `sksurv.ensemble.GradientBoostingSurvivalAnalysis`
+- RSF보다 예측 성능이 높을 수 있으나 과적합 위험
+
+```python
+from sksurv.ensemble import GradientBoostingSurvivalAnalysis
+
+gbs = GradientBoostingSurvivalAnalysis(
+    n_estimators=300,
+    learning_rate=0.05,
+    max_depth=3,
+    random_state=42
+)
+gbs.fit(X_train, y_train)
+c_gbs = gbs.score(X_test, y_test)
+print(f"Gradient Boosted Survival C-index: {c_gbs:.3f}")
+```
+
+---
+
+## 요약
+
+| 핵심 | 내용 |
+|------|------|
+| **RSF는** | Cox PH의 비례 위험·선형 가정 없이 생존 함수를 비모수적으로 추정 |
+| **Split criterion** | Log-rank statistic으로 생존 분포 차이가 최대인 분기점 선택 |
+| **Leaf 예측** | Nelson-Aalen 누적 위험 → 앙상블 평균 |
+| **평가** | C-index (판별력) + Brier Score (보정) |
+| **변수 중요도** | Permutation VIMP (전역) + SHAP (개별) |
+| **언제 사용** | PH 위반, 비선형 교호작용, 고차원, 예측 우선 |
+| **언제 안 사용** | 인과 추론, HR 해석 필요, 소표본 |
+
+**다음**: [22 — XGBoost + 시간 피처 공학](./22-mixed-model-ml-xgboost.qmd) — 종단 데이터를 테이블로 변환하여 Gradient Boosting 적용

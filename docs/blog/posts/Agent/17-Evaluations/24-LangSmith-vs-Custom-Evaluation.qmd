@@ -1,0 +1,652 @@
+---
+title: "LangSmith vs 자체 평가 시스템 구축"
+subtitle: "하이브리드 평가 전략과 핵심 메트릭 분석"
+description: |
+  LangSmith를 활용한 평가와 자체 커스텀 평가 시스템 구축 사이의 트레이드오프를 분석한다.
+  DSPy 결합 전략, RAG 성능 메트릭(The RAG Triad), Agent 궤적 메트릭, 운영 메트릭까지 실무에서 바로 적용 가능한 평가 체계를 다룬다.
+categories:
+  - AI
+  - LangChain
+  - LangSmith
+  - Evaluation
+  - DSPy
+author: Kwangmin Kim
+date: 03/18/2026
+---
+
+## 도입: 왜 평가 전략이 중요한가
+
+LLM 기반 시스템을 프로덕션에 배포할 때, 가장 과소평가되는 영역이 **평가(Evaluation)**이다. 전통적인 소프트웨어는 단위 테스트와 통합 테스트로 충분했지만, LLM 시스템은 출력이 비결정적(Non-deterministic)이고, 같은 입력에도 다른 결과를 반환할 수 있다. 이 특성은 "정답"의 정의 자체를 모호하게 만든다.
+
+평가 전략 없이 운영되는 LLM 시스템에는 다음과 같은 문제가 발생한다.
+
+* **회귀(Regression) 감지 불가:** 프롬프트 변경이나 모델 업데이트 후 품질 저하를 수치적으로 포착할 수 없다.
+* **병목 진단 불가:** RAG 파이프라인에서 검색(Retrieval)이 문제인지, 생성(Generation)이 문제인지 분리할 수 없다.
+* **비용 통제 불가:** 에이전트가 불필요한 도구 호출을 반복해도 이를 정량적으로 추적할 방법이 없다.
+
+초기 프로토타입 설계 및 디버깅 단계에서는 LangSmith를 활용하고, 시스템이 안정화된 후 특정 도메인에 특화된 지표가 필요할 때 자체 구축(Customized Evaluation)으로 전이하는 **하이브리드 전략**이 효과적이다. 이 글에서는 두 접근법의 트레이드오프를 분석하고, 실무에서 적용 가능한 평가 체계를 제시한다.
+
+## 1. LangSmith 분석
+
+### LangSmith의 강점 및 한계
+
+LangSmith는 주로 **LLM-as-a-Judge** 기법과 통계적 휴리스틱을 결합한 지표를 제공한다.
+
+* **강점:** $N$개의 런(Run)에 대한 Faithfulness, Relevancy 등을 즉각적으로 수치화할 수 있으며, 특히 **Traceability(추적 가능성)** 측면에서 압도적이다. 에이전트의 복잡한 추론 체인 중 어느 단계에서 정보 손실이 발생하는지 시각화하는 데 최적화되어 있다.
+* **한계점:** 범용 지표(General Metrics)에 의존하기 때문에, 도메인 특화된 정확성을 포착하지 못한다. 예를 들어, 생물학적 수치나 특정 실험 데이터의 선후 관계 등 정밀한 논리 검증에는 한계가 있다.
+
+### LangSmith 평가자(Evaluator) 구현
+
+LangSmith의 평가 시스템은 `RunEvaluator` 인터페이스를 중심으로 구성된다. 다음은 LangSmith SDK를 활용한 커스텀 평가자 정의와 데이터셋 기반 평가 실행 예제이다.
+
+```python
+from langsmith import Client
+from langsmith.evaluation import evaluate, LangChainStringEvaluator
+from langsmith.schemas import Run, Example
+
+client = Client()
+
+# 1. 내장 평가자 사용: LLM-as-a-Judge 기반 정확도 평가
+correctness_evaluator = LangChainStringEvaluator(
+    "labeled_score_string",
+    config={
+        "criteria": {
+            "accuracy": (
+                "Is the submission accurate compared to the reference? "
+                "Score from 0 to 10."
+            )
+        },
+        "normalize_by": 10,  # 0~1 범위로 정규화
+    },
+)
+
+# 2. 커스텀 평가자 정의: RunEvaluator 인터페이스 구현
+def must_contain_keywords(run: Run, example: Example) -> dict:
+    """결정론적 평가자: 답변에 필수 키워드가 포함되어 있는지 검증한다."""
+    prediction = run.outputs.get("output", "")
+    required = example.outputs.get("required_keywords", [])
+
+    found = sum(1 for kw in required if kw in prediction)
+    score = found / len(required) if required else 1.0
+
+    return {
+        "key": "keyword_coverage",
+        "score": score,
+        "comment": f"{found}/{len(required)} keywords found",
+    }
+
+# 3. 데이터셋 기반 평가 실행
+def predict(inputs: dict) -> dict:
+    """평가 대상 LLM 체인을 호출하는 함수."""
+    # 실제로는 chain.invoke(inputs) 등으로 대체
+    return {"output": "LLM이 생성한 답변"}
+
+results = evaluate(
+    predict,
+    data="my-eval-dataset",  # LangSmith에 등록된 데이터셋 이름
+    evaluators=[correctness_evaluator, must_contain_keywords],
+    experiment_prefix="v1.2-prompt-update",
+)
+```
+
+### LLM-as-a-Judge의 통계적 한계
+
+LLM-as-a-Judge 방식은 편리하지만, 다음과 같은 통계적 한계를 인지해야 한다.
+
+* **위치 편향(Position Bias):** 두 답변을 비교할 때, 먼저 제시된 답변을 선호하는 경향이 있다. 이를 완화하려면 답변 순서를 뒤집어 두 번 평가한 후 평균을 취해야 한다.
+* **장문 선호(Verbosity Bias):** 더 긴 답변에 높은 점수를 부여하는 경향이 존재한다. 길이 정규화(Length Normalization)를 적용하거나, 평가 프롬프트에서 "길이와 무관하게 판단하라"는 지시를 명시해야 한다.
+* **자기 강화 편향(Self-Enhancement Bias):** 동일 모델이 생성하고 평가할 경우, 자신의 출력 스타일을 선호할 수 있다. 생성 모델과 평가 모델을 분리하는 것이 바람직하다.
+* **재현성 문제:** `temperature > 0`일 때 동일 입력에 대해 다른 점수가 나올 수 있다. 평가 시에는 `temperature=0`을 권장하며, 여러 번 평가 후 분산을 함께 보고해야 한다.
+
+::: {.callout-warning}
+LLM-as-a-Judge 단독 사용은 위험하다. 반드시 결정론적 메트릭과 병행하고, 판정 모델의 평가 결과를 주기적으로 사람이 검증(Human-in-the-Loop)해야 한다.
+:::
+
+## 2. 자체 구축 분석
+
+### 자체 구축(Customized Metric)의 강점 및 한계
+
+데이터 과학자가 정의하는 커스텀 지표는 대개 **Deterministic(결정론적) 검증**과 **Embedding-based(임베딩 기반) 검증**의 혼합형이다.
+
+* **강점:** 비즈니스 로직에 100% 부합하는 평가가 가능하다. 예를 들어, 결과값에 반드시 포함되어야 할 필수 키워드나 수치 범위($\pm 5\%$) 등을 통계적 제약 조건($Constraint$)으로 설정할 수 있다.
+* **한계점:** 평가 파이프라인(Evaluation Pipeline) 자체를 유지보수해야 하는 오버헤드가 발생하며, 평가 모델($Judge$)의 편향(Bias)을 제어하기 위한 추가적인 통계 검증이 필요하다.
+
+### 결정론적 평가자 구현 예제
+
+다음은 정규표현식 검증과 임베딩 유사도를 결합한 커스텀 평가자의 구현 예제이다. LangSmith와 무관하게 독립적으로 실행할 수 있다.
+
+```python
+import re
+import numpy as np
+from dataclasses import dataclass
+from sentence_transformers import SentenceTransformer
+
+@dataclass
+class EvalResult:
+    metric_name: str
+    score: float        # 0.0 ~ 1.0
+    passed: bool
+    detail: str
+
+class DeterministicEvaluator:
+    """정규표현식 + 임베딩 유사도 기반 결정론적 평가자."""
+
+    def __init__(self, embed_model_name: str = "all-MiniLM-L6-v2"):
+        self.embed_model = SentenceTransformer(embed_model_name)
+
+    def regex_check(
+        self, text: str, patterns: list[str], mode: str = "all"
+    ) -> EvalResult:
+        """
+        필수 패턴 존재 여부를 정규표현식으로 검증한다.
+
+        Args:
+            text: 평가 대상 텍스트
+            patterns: 정규표현식 패턴 목록
+            mode: "all"이면 모든 패턴 충족 필요, "any"이면 하나만 충족
+        """
+        matches = [bool(re.search(p, text)) for p in patterns]
+
+        if mode == "all":
+            score = sum(matches) / len(matches)
+            passed = all(matches)
+        else:  # mode == "any"
+            score = 1.0 if any(matches) else 0.0
+            passed = any(matches)
+
+        failed_patterns = [
+            p for p, m in zip(patterns, matches) if not m
+        ]
+        return EvalResult(
+            metric_name="regex_check",
+            score=score,
+            passed=passed,
+            detail=f"Failed patterns: {failed_patterns}" if failed_patterns else "All patterns matched",
+        )
+
+    def embedding_similarity(
+        self, prediction: str, reference: str, threshold: float = 0.8
+    ) -> EvalResult:
+        """코사인 유사도 기반 의미적 유사성을 평가한다."""
+        embeddings = self.embed_model.encode([prediction, reference])
+        cos_sim = float(np.dot(embeddings[0], embeddings[1]) / (
+            np.linalg.norm(embeddings[0]) * np.linalg.norm(embeddings[1])
+        ))
+        return EvalResult(
+            metric_name="embedding_similarity",
+            score=cos_sim,
+            passed=cos_sim >= threshold,
+            detail=f"Cosine similarity: {cos_sim:.4f} (threshold: {threshold})",
+        )
+
+    def composite_score(
+        self, text: str, reference: str,
+        patterns: list[str],
+        weights: dict[str, float] = None,
+        thresholds: dict[str, float] = None,
+    ) -> dict:
+        """
+        정규표현식과 임베딩 유사도를 가중 합산한 종합 점수를 반환한다.
+
+        Args:
+            weights: {"regex": 0.4, "embedding": 0.6} 형태의 가중치
+            thresholds: {"regex": 0.8, "embedding": 0.75} 형태의 임계값
+        """
+        weights = weights or {"regex": 0.4, "embedding": 0.6}
+        thresholds = thresholds or {"regex": 1.0, "embedding": 0.8}
+
+        regex_result = self.regex_check(text, patterns)
+        embed_result = self.embedding_similarity(
+            text, reference, threshold=thresholds["embedding"]
+        )
+
+        final_score = (
+            weights["regex"] * regex_result.score
+            + weights["embedding"] * embed_result.score
+        )
+
+        return {
+            "final_score": final_score,
+            "regex": regex_result,
+            "embedding": embed_result,
+            "passed": regex_result.passed and embed_result.passed,
+        }
+
+# 사용 예시
+evaluator = DeterministicEvaluator()
+
+prediction = "서울의 2024년 평균 기온은 약 12.5도이며, 강수량은 1,200mm이다."
+reference = "서울의 연평균 기온은 12.5도이고 연간 강수량은 약 1,200mm 수준이다."
+
+result = evaluator.composite_score(
+    text=prediction,
+    reference=reference,
+    patterns=[r"\d+\.?\d*도", r"\d{1,},?\d*mm"],  # 온도와 강수량 수치 필수
+    weights={"regex": 0.5, "embedding": 0.5},
+)
+print(f"Final Score: {result['final_score']:.3f}, Passed: {result['passed']}")
+```
+
+### 커스텀 메트릭 함수 정의 패턴
+
+자체 평가 시스템을 구축할 때, 메트릭 함수는 다음과 같은 인터페이스를 따르는 것이 좋다. 이 패턴을 따르면 CI/CD 파이프라인에 쉽게 통합할 수 있다.
+
+```python
+from typing import Callable, Any
+from dataclasses import dataclass, field
+
+@dataclass
+class MetricConfig:
+    name: str
+    threshold: float
+    weight: float = 1.0
+    description: str = ""
+
+@dataclass
+class MetricReport:
+    metrics: list[EvalResult] = field(default_factory=list)
+
+    @property
+    def all_passed(self) -> bool:
+        return all(m.passed for m in self.metrics)
+
+    @property
+    def weighted_score(self) -> float:
+        if not self.metrics:
+            return 0.0
+        total_weight = sum(m.score for m in self.metrics)
+        return total_weight / len(self.metrics)
+
+# 메트릭 함수 시그니처 규약
+MetricFn = Callable[[str, str, dict[str, Any]], EvalResult]
+
+def numeric_range_metric(
+    prediction: str, reference: str, config: dict[str, Any]
+) -> EvalResult:
+    """
+    답변에 포함된 수치가 기대 범위 내에 있는지 검증한다.
+    config: {"pattern": r"\\d+\\.\\d+", "expected": 12.5, "tolerance": 0.05}
+    """
+    pattern = config["pattern"]
+    expected = config["expected"]
+    tolerance = config.get("tolerance", 0.05)
+
+    match = re.search(pattern, prediction)
+    if not match:
+        return EvalResult("numeric_range", 0.0, False, "No numeric value found")
+
+    value = float(match.group())
+    lower = expected * (1 - tolerance)
+    upper = expected * (1 + tolerance)
+    in_range = lower <= value <= upper
+
+    return EvalResult(
+        metric_name="numeric_range",
+        score=1.0 if in_range else 0.0,
+        passed=in_range,
+        detail=f"Value {value} vs expected {expected} (tolerance: {tolerance*100}%)",
+    )
+```
+
+## 3. 메트릭 상세
+
+### RAG 성능 평가 메트릭 (The RAG Triad)
+
+RAG 시스템의 병목 현상을 진단하기 위한 가장 표준적인 지표들이다.
+
+| 메트릭 이름 | 평가 대상 | 핵심 질문 |
+| :--- | :--- | :--- |
+| **Context Precision** | Retriever | 검색된 $k$개의 청크 중 실제 정답과 관련된 정보가 상위에 있는가? |
+| **Context Recall** | Retriever | 정답을 생성하는 데 필요한 모든 정보가 검색 결과에 포함되었는가? |
+| **Faithfulness** | Generator | 생성된 답변이 검색된 컨텍스트에만 근거하고 있는가? (환각 방지) |
+| **Answer Relevance** | Generator | 답변이 사용자의 질문(Query)에 직접적으로 부합하는가? |
+
+#### 수학적 정의
+
+각 메트릭의 수학적 정의를 이해하면, 점수가 낮을 때 어떤 부분을 개선해야 하는지 정확히 진단할 수 있다.
+
+**Context Precision (문맥 정밀도)**
+
+검색된 상위 $k$개 청크에서 관련 청크가 얼마나 앞쪽에 위치하는지를 측정한다. 랭킹을 고려한 정밀도이다.
+
+$$
+\text{Context Precision@}k = \frac{1}{|\text{relevant chunks in top-}k|} \sum_{i=1}^{k} \left( \text{is\_relevant}(i) \times \frac{\text{relevant count up to } i}{i} \right)
+$$
+
+여기서 $\text{is\_relevant}(i)$는 $i$번째 청크가 관련 있으면 1, 아니면 0이다. 이 수식은 Information Retrieval의 Average Precision과 동일한 구조이다.
+
+**Context Recall (문맥 재현율)**
+
+정답을 구성하는 문장(Statement) 중 검색된 컨텍스트에서 뒷받침할 수 있는 문장의 비율이다.
+
+$$
+\text{Context Recall} = \frac{|\text{ground truth statements attributable to context}|}{|\text{total ground truth statements}|}
+$$
+
+**Faithfulness (충실도)**
+
+생성된 답변에 포함된 주장(Claim) 중 검색된 컨텍스트로부터 추론 가능한 주장의 비율이다.
+
+$$
+\text{Faithfulness} = \frac{|\text{claims supported by context}|}{|\text{total claims in answer}|}
+$$
+
+Faithfulness가 낮다는 것은 모델이 컨텍스트에 없는 정보를 생성하고 있다는 의미, 즉 환각(Hallucination)이 발생하고 있다는 뜻이다.
+
+**Answer Relevance (답변 관련성)**
+
+원래 질문과 답변 사이의 의미적 유사도를 측정한다. 답변으로부터 역으로 생성한 질문 $q'_i$들과 원래 질문 $q$ 사이의 평균 코사인 유사도로 계산한다.
+
+$$
+\text{Answer Relevance} = \frac{1}{n} \sum_{i=1}^{n} \cos(E(q), E(q'_i))
+$$
+
+여기서 $E(\cdot)$는 임베딩 함수이고, $q'_i$는 답변으로부터 역생성된 $i$번째 질문이다.
+
+#### 4개 메트릭의 관계
+
+RAG Triad의 4개 메트릭은 RAG 파이프라인의 서로 다른 구간을 담당한다.
+
+```
+Query (사용자 질문)
+  |
+  v
+[Retriever] ----> Retrieved Context (검색된 문서)
+  |                       |
+  |  Context Precision    |  Context Recall
+  |  (상위 k에 관련 문서?) |  (필요한 정보 전부 포함?)
+  |                       |
+  v                       v
+[Generator] ----> Answer (생성된 답변)
+        |                   |
+        |  Faithfulness     |  Answer Relevance
+        |  (컨텍스트에만     |  (질문에 부합하는
+        |   근거하는가?)     |   답변인가?)
+        v                   v
+    환각 방지            질문-답변 정합성
+```
+
+이 관계를 이해하면 디버깅 방향이 명확해진다.
+
+* Context Precision 낮음 $\rightarrow$ 임베딩 모델 교체 또는 청킹 전략 변경
+* Context Recall 낮음 $\rightarrow$ 검색 범위 확대 또는 리랭킹(Reranking) 도입
+* Faithfulness 낮음 $\rightarrow$ 프롬프트에 "컨텍스트에 없는 정보는 답하지 마라" 지시 추가
+* Answer Relevance 낮음 $\rightarrow$ 프롬프트에 질문 재확인 단계 추가
+
+### Agent 전용 궤적 메트릭 (Trajectory Metrics)
+
+#### 단일 턴 평가 vs 궤적 평가의 차이
+
+단일 턴 평가(Single-turn Evaluation)는 하나의 입력에 대한 하나의 출력만 평가한다. 반면, 궤적 평가(Trajectory Evaluation)는 에이전트가 목표에 도달하기까지 거치는 **전체 사고 및 행동 과정**을 평가한다. 이 차이는 근본적으로 중요하다.
+
+단일 턴 평가에서는 최종 답변만 맞으면 합격이지만, 궤적 평가에서는 다음을 추가로 검증한다.
+
+* 올바른 도구를 올바른 순서로 호출했는가?
+* 불필요한 호출 없이 효율적으로 진행했는가?
+* 중간 단계의 추론이 논리적으로 타당했는가?
+
+#### 궤적 트레이스의 구조
+
+에이전트 궤적 트레이스는 다음과 같은 구조로 기록된다.
+
+```
+Trajectory Trace Example: "서울 날씨를 확인하고 우산이 필요한지 알려줘"
+============================================================
+Step 1: [Thought] 서울의 현재 날씨를 확인해야 한다.
+        [Action] tool_call: get_weather(city="서울")
+        [Result] {"temp": 18, "condition": "rain", "humidity": 85}
+        [Latency] 320ms | [Tokens] 45
+
+Step 2: [Thought] 비가 오고 있으므로 우산이 필요하다고 판단한다.
+        [Action] tool_call: none (final_answer 생성)
+        [Result] "현재 서울은 비가 오고 있습니다. 우산을 챙기세요."
+        [Latency] 180ms | [Tokens] 62
+
+Total Steps: 2 | Total Latency: 500ms | Total Tokens: 107
+Expected Tools: [get_weather] | Actual Tools: [get_weather]
+Goal Reached: Yes
+```
+
+이 트레이스를 기반으로 다음 메트릭을 산출한다.
+
+* **Tool Call Accuracy:** 질문의 의도에 맞는 적절한 도구(Tool)를 선택했는가? 위 예시에서는 `get_weather`를 올바르게 호출했으므로 1.0이다.
+* **Agent Goal Accuracy:** 여러 단계의 추론(Reasoning) 끝에 최종 목표에 도달했는가? 위 예시에서 "우산 필요 여부"라는 목표에 도달했으므로 1.0이다.
+* **Plan Adherence:** 에이전트가 설정한 초기 계획(Plan)을 이탈하지 않고 단계를 밟았는가? 불필요한 탐색 없이 2단계만에 완료했으므로 1.0이다.
+* **Tool Call F1:** 필요한 도구 호출을 빠뜨리거나 불필요한 호출을 남발하지 않았는가? $F_1 = \frac{2 \times P \times R}{P + R}$ 형태로, Precision은 호출된 도구 중 관련 도구 비율, Recall은 필요한 도구 중 실제 호출된 비율이다.
+
+::: {.callout-note}
+궤적 평가는 비용이 높다. 모든 요청에 대해 수행하는 것이 아니라, 샘플링 기반으로 일정 비율(예: 5~10%)의 트레이스만 평가하는 것이 현실적이다.
+:::
+
+### 운영 및 비용 메트릭 (Operational Metrics)
+
+실무에서 인프라 최적화를 위해 CLI나 SDK로 모니터링해야 하는 지표들이다.
+
+* **Token Efficiency:** 과업당 소비된 토큰 수. 특히 에이전트 루프가 길어질 때 비용 통제를 위해 필수이다.
+* **P95 Latency:** 전체 응답 중 하위 5%의 지연 시간. 에이전트가 특정 도구 호출에서 병목이 생기는지 확인한다.
+* **Cost per Success:** 성공적인 과업 완수당 소요된 비용(\$)으로 에이전트의 경제성을 평가한다.
+
+## 4. 의사결정 가이드: LangSmith vs 자체 구축 vs 하이브리드
+
+### 비교 테이블
+
+두 방식 사이의 선택은 **평가의 해상도(Resolution)**와 **개발 속도** 사이의 트레이드오프이다.
+
+| 평가 기준 | LangSmith (SaaS/Tool) | 자체 구축 (In-house) |
+| :--- | :--- | :--- |
+| **도입 속도** | 즉시 가능 (Low Effort) | 설계 및 구현 필요 (High Effort) |
+| **도메인 적합성** | 보통 (General-purpose) | 최상 (Domain-specific) |
+| **비용** | 사용량 기반 과금 (Variable) | 인프라 및 운영 인건비 (Fixed) |
+| **데이터 보안** | 외부 전송 리스크 존재 | 내부 폐쇄망 운영 가능 |
+| **유지보수** | 벤더 관리 | 자체 관리 필요 |
+| **확장성** | 벤더 인프라에 의존 | 자체 인프라 확장 필요 |
+
+### 의사결정 플로차트
+
+다음 질문에 순서대로 답하면 적절한 전략을 선택할 수 있다.
+
+```
+[Q1] 프로젝트가 PoC/프로토타입 단계인가?
+  |
+  +--> Yes --> LangSmith 단독 사용
+  |            (빠른 실험, Trace 시각화에 집중)
+  |
+  +--> No
+       |
+       [Q2] 데이터 보안 규제가 엄격한가? (금융, 의료, 공공)
+         |
+         +--> Yes --> 자체 구축 단독
+         |            (폐쇄망 운영, 외부 전송 불가)
+         |
+         +--> No
+              |
+              [Q3] 도메인 특화 정밀도가 필요한가?
+                |
+                +--> Yes --> 하이브리드
+                |            (LangSmith로 Trace + 자체 결정론적 메트릭)
+                |
+                +--> No --> LangSmith 중심
+                            (범용 메트릭 + 필요시 커스텀 평가자 추가)
+```
+
+### 전략별 구체적 적용 시나리오
+
+1. **Observability(관측 가능성)가 우선인 경우** $\rightarrow$ **LangSmith**. 에이전트가 왜 그런 답변을 했는지 과정을 뜯어보는 것이 급선무일 때 유용하다.
+2. **Accuracy(정밀도)가 우선인 경우** $\rightarrow$ **자체 구축**. 답변의 수치적 정확도나 특정 포맷 준수 여부가 비즈니스에 치명적일 때 필수적이다.
+3. **규모 확장 단계** $\rightarrow$ **하이브리드**. LangSmith로 전체 파이프라인의 건강 상태를 모니터링하면서, 핵심 비즈니스 로직은 자체 메트릭으로 CI/CD에 통합한다.
+
+## 5. DSPy와의 결합 전략
+
+최근 트렌드는 LangSmith를 단순 모니터링용으로 사용하고, 실제 평가 로직은 **DSPy의 Metric 함수**로 자체 정의하는 방식이다.
+
+### DSPy 메트릭 함수 정의
+
+DSPy에서 메트릭 함수는 `(example, prediction, trace=None) -> float` 시그니처를 따른다. 다음은 정규표현식 검증, 코사인 유사도, LLM 판정을 가중 합산하는 복합 메트릭의 예이다.
+
+```python
+import dspy
+import re
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+def composite_metric(example, prediction, trace=None):
+    """
+    DSPy 메트릭 함수: 정규표현식 + 코사인 유사도 + LLM 판정의 가중 합.
+
+    반환값:
+        float: 0.0 ~ 1.0 범위의 종합 점수
+    """
+    pred_text = prediction.answer
+    gold_text = example.answer
+
+    # 1. 정규표현식 검증 (필수 패턴 포함 여부)
+    required_patterns = getattr(example, "required_patterns", [])
+    if required_patterns:
+        regex_hits = sum(
+            1 for p in required_patterns if re.search(p, pred_text)
+        )
+        regex_score = regex_hits / len(required_patterns)
+    else:
+        regex_score = 1.0
+
+    # 2. 임베딩 코사인 유사도
+    emb = embed_model.encode([pred_text, gold_text])
+    cos_sim = float(np.dot(emb[0], emb[1]) / (
+        np.linalg.norm(emb[0]) * np.linalg.norm(emb[1])
+    ))
+
+    # 3. LLM-as-a-Judge (DSPy의 내장 기능 활용)
+    judge = dspy.ChainOfThought("question, gold_answer, predicted_answer -> score: float")
+    llm_result = judge(
+        question=example.question,
+        gold_answer=gold_text,
+        predicted_answer=pred_text,
+    )
+    llm_score = min(max(float(llm_result.score), 0.0), 1.0)
+
+    # 가중 합산
+    weights = {"regex": 0.3, "embedding": 0.3, "llm": 0.4}
+    final_score = (
+        weights["regex"] * regex_score
+        + weights["embedding"] * cos_sim
+        + weights["llm"] * llm_score
+    )
+
+    # trace가 None이 아니면 학습/최적화 모드이므로 점수 반환
+    # trace가 None이면 평가 모드
+    return final_score
+```
+
+### DSPy 최적화와 LangSmith 시각화의 연동
+
+DSPy에서 정의한 메트릭을 기반으로 프롬프트를 자동 최적화하고, 실행 로그를 LangSmith로 전송하여 시각화하는 파이프라인은 다음과 같다.
+
+```python
+import dspy
+from dspy.teleprompt import BootstrapFewShot
+
+# 1. DSPy 모듈 정의
+class RAGModule(dspy.Module):
+    def __init__(self):
+        self.retrieve = dspy.Retrieve(k=5)
+        self.generate = dspy.ChainOfThought("context, question -> answer")
+
+    def forward(self, question):
+        context = self.retrieve(question).passages
+        return self.generate(context=context, question=question)
+
+# 2. 메트릭 함수를 사용한 최적화
+optimizer = BootstrapFewShot(
+    metric=composite_metric,
+    max_bootstrapped_demos=4,
+    max_labeled_demos=8,
+)
+
+optimized_rag = optimizer.compile(
+    RAGModule(),
+    trainset=train_examples,
+)
+
+# 3. LangSmith로 실행 로그 전송 (환경 변수 설정)
+# export LANGCHAIN_TRACING_V2=true
+# export LANGCHAIN_API_KEY=<key>
+# export LANGCHAIN_PROJECT="dspy-rag-optimization"
+
+# 최적화된 모듈 실행 시 자동으로 LangSmith에 트레이스가 기록된다
+result = optimized_rag(question="서울의 연평균 기온은?")
+```
+
+::: {.callout-tip}
+DSPy의 메트릭 함수는 프롬프트 최적화뿐 아니라 CI/CD의 평가 단계에서도 그대로 재사용할 수 있다. 하나의 메트릭 정의로 최적화와 평가를 모두 수행할 수 있다는 점이 핵심적인 장점이다.
+:::
+
+## 6. 실무 적용 전략
+
+단순히 `Answer Correctness` 하나만 보는 것은 통계적으로 위험하다. **검색 품질**과 **생성 품질**을 분리해서 측정해야 한다.
+
+1. **초기 디버깅:** `Context Precision`을 통해 임베딩 모델과 청킹 전략을 먼저 튜닝한다.
+2. **신뢰성 확보:** 정확도가 중요한 도메인이라면 `Faithfulness` 점수를 0.9 이상으로 강제하는 Assertion을 추가한다.
+3. **에이전트 고도화:** `Tool Call Accuracy`를 모니터링하여 모델이 도구의 정의(Description)를 오해하고 있는지 분석한다.
+4. **비용 최적화:** `Token Efficiency`와 `Cost per Success`를 추적하여, 에이전트 루프가 과도하게 반복되는 케이스를 식별하고 프롬프트를 개선한다.
+
+### CI/CD 통합 예시
+
+평가를 CI/CD에 통합하면 프롬프트 변경 시 자동으로 품질 게이트를 적용할 수 있다.
+
+```python
+# ci_evaluation.py
+import sys
+import json
+
+def run_evaluation_suite(test_cases: list[dict]) -> dict:
+    """CI/CD에서 실행되는 평가 스위트."""
+    evaluator = DeterministicEvaluator()
+    results = []
+
+    for case in test_cases:
+        prediction = run_chain(case["input"])  # LLM 체인 실행
+        result = evaluator.composite_score(
+            text=prediction,
+            reference=case["expected"],
+            patterns=case.get("required_patterns", []),
+        )
+        results.append(result)
+
+    pass_rate = sum(1 for r in results if r["passed"]) / len(results)
+    avg_score = sum(r["final_score"] for r in results) / len(results)
+
+    report = {
+        "pass_rate": pass_rate,
+        "avg_score": avg_score,
+        "total_cases": len(results),
+        "failed_cases": [
+            i for i, r in enumerate(results) if not r["passed"]
+        ],
+    }
+
+    # 품질 게이트: 통과율 90% 미만이면 CI 실패
+    if pass_rate < 0.9:
+        print(f"FAIL: Pass rate {pass_rate:.1%} < 90% threshold")
+        sys.exit(1)
+
+    print(f"PASS: Pass rate {pass_rate:.1%}, Avg score {avg_score:.3f}")
+    return report
+```
+
+## 7. 한계점 및 대안
+
+LangSmith의 기본 메트릭은 대부분 **LLM-as-a-Judge** 방식에 기반하므로, 판정 모델(예: GPT-4o) 자체가 가진 편향에서 자유롭지 못하다.
+
+**대안:** 수치 데이터나 특정 포맷(JSON, SQL) 검증 시에는 LangSmith의 `create_json_match_evaluator`나 자체 정의한 정규표현식 기반의 **결정론적 메트릭**을 반드시 병행 사용한다.
+
+## 정리
+
+LangSmith로 전체 파이프라인의 가시성을 확보하되, 핵심 평가 로직(Assertion)은 자체적으로 Python 스크립트 기반의 커스텀 지표로 구축하여 CI/CD에 통합하는 방향이 가장 효과적이다. 핵심 원칙을 요약하면 다음과 같다.
+
+* **PoC 단계:** LangSmith의 Trace와 범용 메트릭으로 빠르게 시작한다.
+* **프로덕션 전환:** 도메인 특화 결정론적 메트릭을 자체 구축하고, LangSmith와 병행한다.
+* **지속 운영:** DSPy 메트릭 함수로 평가와 최적화를 통합하고, CI/CD 품질 게이트를 적용한다.
+
+전문 지식의 정합성이 중요한 도메인에서는 범용 메트릭에만 의존하지 않고, 도메인 특화 결정론적 검증을 반드시 병행해야 한다. LLM-as-a-Judge는 편리하지만 그 자체가 또 다른 LLM의 편향에 종속된다는 사실을 항상 인지하고, Human-in-the-Loop 검증 체계를 병행하는 것이 궁극적인 품질 보증 전략이다.

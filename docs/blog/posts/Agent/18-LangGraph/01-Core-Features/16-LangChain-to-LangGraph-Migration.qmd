@@ -1,0 +1,370 @@
+---
+title: "LangChain에서 LangGraph로의 전환 전략"
+subtitle: "단계적 마이그레이션을 위한 판단 기준과 실무 가이드"
+description: |
+  LangChain의 Chain 기반 단방향 파이프라인에서 LangGraph의 StateGraph 기반 양방향 그래프로 전환해야 하는 시점과 방법을 다룬다.
+  전환 판단의 3가지 Tipping Point, State 스키마 설계 패턴, 단계별 마이그레이션 절차를 코드 비교와 함께 설명한다.
+categories:
+  - LangChain
+  - LangGraph
+  - Agent
+  - Migration
+author: Kwangmin Kim
+date: 03/18/2026
+---
+
+## 도입
+
+LangChain은 LLM 애플리케이션의 빠른 프로토타이핑에 적합한 프레임워크이다. `LCEL`과 `AgentExecutor`를 활용하면 단방향 Chain을 신속하게 구성할 수 있다. 그러나 에이전트가 복잡해지고 다중 단계 의사결정, 상태 기반 분기, Human-in-the-Loop 등의 요구사항이 등장하면 Chain 기반 아키텍처의 한계에 부딪히게 된다.
+
+LangGraph는 이러한 한계를 해결하기 위해 설계된 프레임워크로, 상태 관리($State\ Management$)와 순환 그래프($Cyclic\ Graph$) 구조를 기반으로 복잡한 에이전트 워크플로를 구현할 수 있다. 이 글에서는 LangChain에서 LangGraph로 전환해야 하는 시점을 판단하는 기준과, 실제 마이그레이션을 수행하는 단계별 방법을 다룬다.
+
+## LangChain Chain 방식의 한계
+
+### 단방향 파이프라인의 구조적 제약
+
+LangChain의 `LCEL`은 본질적으로 데이터가 한 방향으로 흐르는 파이프라인이다. 각 단계의 출력이 다음 단계의 입력이 되는 구조이므로, 데이터 흐름의 예측 가능성이 높다는 장점이 있다. 그러나 다음과 같은 상황에서는 구조적 한계가 드러난다.
+
+- **조건부 반복**: 결과가 기준에 미달하면 이전 단계로 돌아가야 하는 경우, Chain에서는 이를 자연스럽게 표현하기 어렵다.
+- **비결정적 분기**: 실행 중 동적으로 다음 단계가 결정되어야 하는 경우, 사전에 고정된 Chain 구조로는 대응이 불가능하다.
+- **공유 상태 관리**: 여러 단계에서 동일한 상태를 읽고 쓰는 경우, Chain 간에 상태를 수동으로 전달해야 한다.
+
+### AgentExecutor의 블랙박스 문제
+
+`AgentExecutor`는 편리하지만 내부 동작의 투명성이 낮다. 에이전트의 루프 제어, 오류 처리, 중간 상태 접근 등을 세밀하게 조정하기 어렵다. 디버깅 시 문제의 원인이 LLM의 추론 능력인지, 도구 호출 로직인지, 실행 흐름 제어인지 판별하기 어려운 상황이 자주 발생한다.
+
+## LangGraph의 핵심 개념
+
+LangGraph는 세 가지 핵심 요소로 구성된다.
+
+### State (상태)
+
+그래프 전체에서 공유되는 데이터 구조이다. `TypedDict` 또는 `Pydantic` 모델로 정의하며, 모든 노드가 이 상태를 읽고 수정할 수 있다.
+
+### Node (노드)
+
+실제 작업을 수행하는 함수이다. 현재 State를 입력받아 수정된 State를 반환한다. LangChain에서 사용하던 Tool, Prompt, LLM 호출 로직이 그대로 노드의 핵심 로직이 된다.
+
+### Edge (엣지)
+
+노드 간의 전이를 정의한다. 조건부 엣지($Conditional\ Edge$)를 통해 State의 값에 따라 다음 노드를 동적으로 결정할 수 있다. 이것이 순환 그래프와 동적 분기를 가능하게 하는 핵심 메커니즘이다.
+
+### 아키텍처 비교: Chain vs StateGraph
+
+```
+[LangChain Chain - 단방향]
+
+  Input → Prompt → LLM → OutputParser → Result
+           ↓
+     (분기 불가, 반복 불가)
+
+
+[LangGraph StateGraph - 양방향]
+
+                    ┌──────────────┐
+                    │    State     │
+                    │ (공유 상태)  │
+                    └──────┬───────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+         ┌────────┐  ┌────────┐  ┌────────┐
+         │ Node A │  │ Node B │  │ Node C │
+         │(검색)  │  │(평가)  │  │(생성)  │
+         └───┬────┘  └───┬────┘  └───┬────┘
+             │           │           │
+             └─────┬─────┘           │
+                   │  조건부 엣지     │
+                   ▼                 │
+              품질 충분? ─── No ──→ 재검색
+                   │
+                  Yes
+                   ▼
+                 Result
+```
+
+## 전환 시점 판단: 3가지 Tipping Point
+
+다음 세 가지 지표 중 하나라도 나타나면 LangGraph로의 전환을 검토해야 하는 시점이다.
+
+### 1. 후진(Backtracking) 로직이 필요할 때
+
+사용자의 피드백이나 중간 결과의 품질에 따라 이전 단계로 돌아가야 하는 경우이다.
+
+**실무 시나리오**: RAG 시스템에서 검색 결과의 관련성 점수가 임계값 미만이면 쿼리를 재작성하여 다시 검색해야 한다. Chain에서는 이를 while 루프와 수동 상태 관리로 구현해야 하지만, LangGraph에서는 조건부 엣지로 자연스럽게 표현할 수 있다.
+
+### 2. 비결정적 루프 제어가 불가능할 때
+
+에이전트 간의 상호작용이 복잡해져서 단순 `Sequential Chain`으로는 실행 흐름을 제어할 수 없는 경우이다.
+
+**실무 시나리오**: 문서 분석 에이전트가 결과를 검증 에이전트에 전달하고, 검증 실패 시 다시 분석 에이전트로 돌아가며, 최대 3회 반복 후 사람에게 에스컬레이션하는 흐름이 필요할 때이다. 이러한 조건부 반복과 에스컬레이션 로직은 Chain으로 구현하면 코드가 스파게티화된다.
+
+### 3. 공유 메모리(Shared State) 관리가 수동으로 불가능할 때
+
+Multi-agent 시스템에서 여러 에이전트가 동일한 상태(대화 이력, 중간 결과, 메타데이터 등)를 참조하고 수정해야 하는 경우이다.
+
+**실무 시나리오**: 리서치 에이전트, 작성 에이전트, 검토 에이전트가 협업하여 보고서를 생성할 때, 각 에이전트가 공통 State의 `draft`, `feedback`, `sources` 필드를 독립적으로 읽고 업데이트해야 한다. 이를 Chain에서 수동으로 관리하면 상태 동기화 오류가 빈번하게 발생한다.
+
+## 코드 비교: 같은 작업의 두 가지 구현
+
+검색 결과를 평가하고 품질이 부족하면 재검색하는 간단한 RAG 워크플로를 두 가지 방식으로 구현해보면 차이가 명확해진다.
+
+### LangChain Chain 방식
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
+
+llm = ChatOpenAI(model="gpt-4o")
+
+# 단방향 Chain - 재검색 로직을 수동으로 구현해야 한다
+def rag_with_retry(query: str, max_retries: int = 3) -> str:
+    for attempt in range(max_retries):
+        # 검색
+        docs = retriever.invoke(query)
+
+        # 관련성 평가
+        eval_prompt = ChatPromptTemplate.from_template(
+            "다음 문서가 질문에 관련이 있는지 'yes' 또는 'no'로 답하라.\n"
+            "질문: {query}\n문서: {docs}"
+        )
+        eval_chain = eval_prompt | llm | StrOutputParser()
+        relevance = eval_chain.invoke({"query": query, "docs": docs})
+
+        if "yes" in relevance.lower():
+            # 답변 생성
+            gen_prompt = ChatPromptTemplate.from_template(
+                "다음 문서를 참고하여 질문에 답하라.\n"
+                "질문: {query}\n문서: {docs}"
+            )
+            gen_chain = gen_prompt | llm | StrOutputParser()
+            return gen_chain.invoke({"query": query, "docs": docs})
+
+        # 쿼리 재작성
+        rewrite_prompt = ChatPromptTemplate.from_template(
+            "다음 질문을 더 구체적으로 재작성하라: {query}"
+        )
+        rewrite_chain = rewrite_prompt | llm | StrOutputParser()
+        query = rewrite_chain.invoke({"query": query})
+
+    return "관련 문서를 찾지 못했다."
+```
+
+이 방식에서는 반복 로직, 조건 분기, 상태 관리를 모두 Python 코드로 직접 제어해야 한다. 워크플로가 복잡해질수록 코드의 가독성과 유지보수성이 급격히 저하된다.
+
+### LangGraph StateGraph 방식
+
+```python
+from typing import TypedDict, Annotated, Literal
+from langgraph.graph import StateGraph, START, END
+
+# 1. State 스키마 정의
+class RAGState(TypedDict):
+    query: str
+    documents: list[str]
+    relevance: str
+    answer: str
+    retry_count: int
+
+# 2. 각 단계를 독립적인 노드로 정의
+def retrieve(state: RAGState) -> dict:
+    docs = retriever.invoke(state["query"])
+    return {"documents": docs}
+
+def evaluate_relevance(state: RAGState) -> dict:
+    # LLM으로 관련성 평가
+    relevance = llm.invoke(
+        f"문서가 질문에 관련이 있는가? yes/no\n"
+        f"질문: {state['query']}\n문서: {state['documents']}"
+    ).content
+    return {"relevance": relevance}
+
+def generate_answer(state: RAGState) -> dict:
+    answer = llm.invoke(
+        f"문서를 참고하여 답변하라.\n"
+        f"질문: {state['query']}\n문서: {state['documents']}"
+    ).content
+    return {"answer": answer}
+
+def rewrite_query(state: RAGState) -> dict:
+    new_query = llm.invoke(
+        f"더 구체적으로 재작성하라: {state['query']}"
+    ).content
+    return {"query": new_query, "retry_count": state["retry_count"] + 1}
+
+# 3. 조건부 분기 함수
+def should_retry(state: RAGState) -> Literal["generate", "rewrite", "fail"]:
+    if "yes" in state["relevance"].lower():
+        return "generate"
+    if state["retry_count"] >= 3:
+        return "fail"
+    return "rewrite"
+
+# 4. 그래프 구성
+graph = StateGraph(RAGState)
+graph.add_node("retrieve", retrieve)
+graph.add_node("evaluate", evaluate_relevance)
+graph.add_node("generate", generate_answer)
+graph.add_node("rewrite", rewrite_query)
+
+graph.add_edge(START, "retrieve")
+graph.add_edge("retrieve", "evaluate")
+graph.add_conditional_edges("evaluate", should_retry, {
+    "generate": "generate",
+    "rewrite": "rewrite",
+    "fail": END,
+})
+graph.add_edge("rewrite", "retrieve")  # 순환 구조
+graph.add_edge("generate", END)
+
+app = graph.compile()
+```
+
+LangGraph 방식에서는 각 단계가 독립적인 노드로 분리되고, 조건부 분기와 순환이 그래프 구조로 선언적으로 표현된다. 새로운 노드 추가나 흐름 변경이 기존 코드에 영향을 주지 않는다.
+
+## 단계별 전환 방법
+
+### 1단계: State 스키마 설계 (Chain 유지 상태에서)
+
+전환의 첫 번째 단계는 현재 Chain의 입력/출력/중간 상태를 담는 공통 State 스키마를 정의하는 것이다. 이 단계에서는 아직 LangGraph를 도입하지 않으며, 기존 Chain 구현을 유지하면서 데이터 구조만 먼저 정비한다.
+
+```python
+from typing import TypedDict, Optional
+from pydantic import BaseModel, Field
+
+# TypedDict 방식 - 가볍고 빠른 정의
+class AgentState(TypedDict):
+    query: str
+    context: list[str]
+    intermediate_result: Optional[str]
+    final_answer: str
+    metadata: dict
+
+# Pydantic 방식 - 유효성 검증이 필요한 경우
+class AgentStatePydantic(BaseModel):
+    query: str = Field(description="사용자 질의")
+    context: list[str] = Field(default_factory=list)
+    intermediate_result: Optional[str] = None
+    final_answer: str = ""
+    metadata: dict = Field(default_factory=dict)
+    retry_count: int = Field(default=0, ge=0, le=5)
+```
+
+:::{.callout-tip}
+**구현은 단방향으로 하되, 데이터 구조는 LangGraph의 State 기반으로 설계하는 것**이 핵심 전략이다. 이렇게 해두면 나중에 각 함수를 노드로 감싸기만 하면 전환이 완료된다.
+:::
+
+### 2단계: 기존 로직을 노드 단위 함수로 분리
+
+Chain 내부의 각 단계를 독립적인 함수로 추출한다. 각 함수는 State를 입력받아 수정된 필드만 반환하는 형태로 작성한다.
+
+```python
+# 기존 Chain의 각 단계를 독립 함수로 분리
+def search_documents(state: AgentState) -> dict:
+    """검색 노드: query를 받아 context를 반환"""
+    docs = retriever.invoke(state["query"])
+    return {"context": [doc.page_content for doc in docs]}
+
+def generate_response(state: AgentState) -> dict:
+    """생성 노드: query와 context를 받아 답변을 반환"""
+    response = llm.invoke(
+        f"Context: {state['context']}\nQuestion: {state['query']}"
+    )
+    return {"final_answer": response.content}
+```
+
+### 3단계: StateGraph로 조립
+
+분리된 함수들을 LangGraph의 노드로 등록하고 엣지로 연결한다.
+
+```python
+from langgraph.graph import StateGraph, START, END
+
+graph = StateGraph(AgentState)
+graph.add_node("search", search_documents)
+graph.add_node("generate", generate_response)
+
+graph.add_edge(START, "search")
+graph.add_edge("search", "generate")
+graph.add_edge("generate", END)
+
+app = graph.compile()
+```
+
+### 4단계: 조건부 엣지 및 순환 구조 추가
+
+기본 그래프가 동작하면, 점진적으로 조건부 분기, Human-in-the-Loop, 에러 핸들링 등의 고급 기능을 추가한다.
+
+## State 설계 패턴
+
+### Reducer 패턴: 리스트 필드의 누적
+
+메시지나 문서 목록처럼 누적되어야 하는 필드에는 `Annotated` 타입과 reducer 함수를 사용한다.
+
+```python
+from typing import Annotated
+from operator import add
+
+class ChatState(TypedDict):
+    messages: Annotated[list, add]  # 메시지가 누적된다
+    current_tool: str               # 최신 값으로 덮어쓴다
+```
+
+### 중첩 State 패턴: 복잡한 도메인 모델
+
+도메인이 복잡한 경우 State를 계층적으로 구성한다.
+
+```python
+class DocumentState(TypedDict):
+    source: str
+    content: str
+    score: float
+
+class PipelineState(TypedDict):
+    query: str
+    documents: list[DocumentState]
+    selected_docs: list[DocumentState]
+    answer: str
+    evaluation: dict
+```
+
+## 전환 시 주의사항
+
+### LangChain 자산의 재사용
+
+LangChain에서 개발한 Tool, Prompt, OutputParser는 LangGraph에서 그대로 사용할 수 있다. 전환은 실행 흐름 제어 레이어의 변경이지, 핵심 로직의 재작성이 아니다.
+
+### 프레임워크 종속성 관리
+
+`AgentExecutor`에 과도하게 의존하면 전환 비용이 증가한다. 코어 로직을 프레임워크에 독립적인 순수 함수로 작성하고, 프레임워크는 이를 조율하는 역할만 하도록 설계하는 것이 바람직하다.
+
+### Bottom-up vs Top-down 트레이드오프
+
+| 접근 방식 | 장점 | 단점 |
+|-----------|------|------|
+| Bottom-up (Chain 먼저) | 빠른 기능 검증, 낮은 학습 곡선, 도메인 로직 집중 | Human-in-the-Loop 등 구현 시 코드 스파게티 위험 |
+| Top-down (LangGraph 먼저) | 초기부터 확장성 있는 아키텍처, 상태 제어권 완전 장악 | 초기 개발 속도 저하, 오버엔지니어링 가능성 |
+
+대부분의 실무 상황에서는 Bottom-up 접근으로 시작하여 PoC를 빠르게 검증한 후, Tipping Point에 도달했을 때 LangGraph로 전환하는 전략이 효과적이다.
+
+## 마이그레이션 체크리스트
+
+1. [ ] 현재 Chain의 입력/출력/중간 상태를 `TypedDict` 또는 `Pydantic` State로 정의했는가?
+2. [ ] 각 Chain 단계를 독립적인 함수(State 입력, dict 반환)로 분리했는가?
+3. [ ] 기존 Tool과 Prompt가 노드 내부에서 정상 동작하는지 확인했는가?
+4. [ ] 조건부 분기가 필요한 지점을 식별하고 `add_conditional_edges`로 전환했는가?
+5. [ ] 순환 구조가 필요한 경우 종료 조건(최대 반복 횟수 등)을 설정했는가?
+6. [ ] Human-in-the-Loop 지점을 `interrupt_before` 또는 `interrupt_after`로 설정했는가?
+7. [ ] 기존 테스트 케이스가 LangGraph 버전에서도 통과하는지 확인했는가?
+
+## 정리
+
+LangChain에서 LangGraph로의 전환은 프레임워크 교체가 아니라, 실행 흐름 제어의 패러다임 전환이다. 핵심 정리는 다음과 같다.
+
+- **전환 시점**: 후진 로직, 비결정적 루프, 공유 상태 관리 중 하나라도 필요해지면 전환을 검토한다.
+- **전환 전략**: 구현은 단방향으로 하되, 데이터 구조는 State 기반으로 먼저 설계한다.
+- **자산 재사용**: LangChain에서 검증된 Tool, Prompt, LLM 호출 로직은 LangGraph 노드에 그대로 이식할 수 있다.
+- **점진적 전환**: 기본 선형 그래프부터 시작하여 조건부 분기, 순환 구조, Human-in-the-Loop 순으로 확장한다.
+
+에이전트의 기본 로직(Reasoning)을 먼저 확립하고, 도메인 특화 Prompt와 Tool 정의를 최적화한 후에 LangGraph로 전환하는 것이 실무적 리스크를 최소화하는 경로이다.

@@ -1,0 +1,516 @@
+---
+title: "RAG 변형 비교: Self-RAG, Corrective RAG, AutoRAG, Agentic RAG"
+subtitle: "4가지 RAG 변형의 핵심 차이, 발전 흐름, 실무 선택 가이드"
+description: |
+  Vanilla RAG의 한계를 해결하기 위해 등장한 4가지 RAG 변형(Self-RAG, Corrective RAG, AutoRAG, Agentic RAG)의
+  핵심 메커니즘, 아키텍처, 구현 패턴을 비교 분석한다. 각 변형이 해결하는 문제와 적용 시점,
+  그리고 실무에서 효과적인 하이브리드 조합 전략을 다룬다.
+categories:
+  - RAG
+  - Self-RAG
+  - Corrective RAG
+  - AutoRAG
+  - Agentic RAG
+  - LangGraph
+author: Kwangmin Kim
+date: 03/18/2026
+---
+
+## 도입
+
+RAG(Retrieval-Augmented Generation)는 LLM의 환각(hallucination)을 줄이고 최신 정보를 활용하기 위한 핵심 기법이다. 그러나 기본 RAG(Vanilla RAG)는 검색 결과의 품질에 전적으로 의존하며, 검색 실패 시 부정확한 답변을 생성하는 문제가 있다.
+
+이 문제를 해결하기 위해 다양한 RAG 변형이 등장했다. 각 변형은 서로 다른 병목을 해결하기 위해 설계되었으며, **"누가 검색을 통제하느냐"와 "검색 결과를 얼마나 검증하느냐"**라는 두 가지 축으로 구분할 수 있다.
+
+이 글에서는 Self-RAG, Corrective RAG, AutoRAG, Agentic RAG의 핵심 차이를 분석하고, 실무에서 어떤 변형을 선택해야 하는지에 대한 판단 기준을 제시한다.
+
+## 분류 기준: 3가지 축
+
+RAG 변형들은 크게 세 가지 축으로 분류할 수 있다.
+
+| 축 | 핵심 질문 | 관련 변형 |
+|---|---|---|
+| 검색 품질 개선 | 검색 결과가 부정확하면 어떻게 보정하는가? | Corrective RAG |
+| 모델 내부 판단 강화 | LLM이 검색 필요성과 결과 품질을 스스로 판단할 수 있는가? | Self-RAG |
+| 자동화/최적화 | RAG 파이프라인 자체를 자동으로 튜닝할 수 있는가? | AutoRAG |
+| 에이전트 기반 의사결정 | 복잡한 질문을 다단계로 분해하여 해결할 수 있는가? | Agentic RAG |
+
+## Self-RAG
+
+### 정의
+
+Self-RAG는 Asai et al.(2023)이 제안한 프레임워크로, LLM이 스스로 검색 필요 여부를 판단하고, 검색된 문서의 관련성을 평가하며, 생성된 답변의 신뢰도를 자체 검증하는 방식이다. LLM에 reflection token을 학습시켜, 생성 과정 전반에 걸쳐 자기 평가(self-evaluation)를 수행한다.
+
+### 아키텍처
+
+```
+Query ──→ LLM (판단)
+             │
+        ┌────┴────┐
+        │         │
+   검색 필요    검색 불필요
+        │         │
+        ▼         ▼
+   Retrieval    바로 생성
+        │         │
+        ▼         │
+   관련성 평가     │
+   (self-check)   │
+        │         │
+        ▼         │
+   답변 생성 ◄────┘
+        │
+        ▼
+   신뢰도 평가
+   (self-check)
+        │
+   ┌────┴────┐
+   │         │
+  통과      미달
+   │         │
+   ▼         ▼
+ Result    재생성
+```
+
+### 핵심 메커니즘
+
+- **Retrieve Token**: LLM이 검색이 필요한지 아닌지를 판단한다. 사실적 질문에는 검색을 수행하고, 창작이나 일반 상식에는 검색을 건너뛴다.
+- **ISREL Token**: 검색된 문서가 질문에 관련이 있는지 평가한다.
+- **ISSUP Token**: 생성된 답변이 검색된 문서에 의해 뒷받침되는지 확인한다.
+- **ISUSE Token**: 최종 답변이 질문에 유용한지 판단한다.
+
+### LangGraph 구현 패턴
+
+```python
+from typing import TypedDict, Literal
+from langgraph.graph import StateGraph, START, END
+
+class SelfRAGState(TypedDict):
+    query: str
+    need_retrieval: bool
+    documents: list[str]
+    relevance_score: float
+    answer: str
+    is_supported: bool
+
+def decide_retrieval(state: SelfRAGState) -> dict:
+    """LLM이 검색 필요 여부를 판단한다"""
+    decision = llm.invoke(
+        f"다음 질문에 답하기 위해 외부 문서 검색이 필요한가? "
+        f"'yes' 또는 'no'로 답하라.\n질문: {state['query']}"
+    ).content
+    return {"need_retrieval": "yes" in decision.lower()}
+
+def check_relevance(state: SelfRAGState) -> dict:
+    """검색 결과의 관련성을 자체 평가한다"""
+    score = llm.invoke(
+        f"0~1 사이의 관련성 점수를 반환하라.\n"
+        f"질문: {state['query']}\n문서: {state['documents']}"
+    ).content
+    return {"relevance_score": float(score)}
+
+def route_by_retrieval(state: SelfRAGState) -> Literal["retrieve", "generate"]:
+    return "retrieve" if state["need_retrieval"] else "generate"
+
+def route_by_relevance(state: SelfRAGState) -> Literal["generate", "retrieve"]:
+    return "generate" if state["relevance_score"] > 0.7 else "retrieve"
+
+graph = StateGraph(SelfRAGState)
+graph.add_node("decide", decide_retrieval)
+graph.add_node("retrieve", retrieve_documents)
+graph.add_node("check", check_relevance)
+graph.add_node("generate", generate_answer)
+
+graph.add_edge(START, "decide")
+graph.add_conditional_edges("decide", route_by_retrieval)
+graph.add_edge("retrieve", "check")
+graph.add_conditional_edges("check", route_by_relevance)
+graph.add_edge("generate", END)
+```
+
+### 사용 적합 / 부적합 상황
+
+| 적합한 경우 | 부적합한 경우 |
+|---|---|
+| 환각 최소화가 최우선인 시스템 | 모든 질문에 반드시 검색이 필요한 도메인 |
+| 질문 유형이 다양하여 검색 선별이 필요한 경우 | 추론 비용을 최소화해야 하는 경우 |
+| 답변의 근거 추적(explainability)이 중요한 경우 | LLM 성능이 낮아 자체 판단 신뢰도가 부족한 경우 |
+
+## Corrective RAG (CRAG)
+
+### 정의
+
+Corrective RAG는 Yan et al.(2024)이 제안한 프레임워크로, 검색된 문서의 품질을 외부 평가 모듈로 검증하고, 품질이 부족하면 추가 검색이나 대체 소스를 활용하여 보정하는 방식이다. Self-RAG가 LLM 내부의 판단에 의존하는 것과 달리, CRAG는 별도의 경량 평가기(evaluator)를 사용한다.
+
+### 아키텍처
+
+```
+Query ──→ Retrieval
+              │
+              ▼
+       ┌─────────────┐
+       │  Evaluator   │
+       │ (관련성 평가) │
+       └──────┬──────┘
+              │
+     ┌────────┼────────┐
+     │        │        │
+  Correct  Ambiguous  Incorrect
+     │        │        │
+     ▼        ▼        ▼
+   그대로    Knowledge  Web Search
+   사용     Refinement  (대체 소스)
+     │        │        │
+     └────────┼────────┘
+              ▼
+         Generation
+```
+
+### 핵심 메커니즘
+
+- **Knowledge Refinement**: 검색된 문서에서 관련 없는 부분을 제거하고 핵심 정보만 추출한다.
+- **3단계 판정**: 검색 결과를 Correct / Ambiguous / Incorrect 세 등급으로 분류한다.
+- **대체 소스 활용**: 내부 문서 검색이 실패하면 웹 검색 등 외부 소스로 전환한다.
+
+### LangGraph 구현 패턴
+
+```python
+class CRAGState(TypedDict):
+    query: str
+    documents: list[str]
+    evaluation: str  # "correct" | "ambiguous" | "incorrect"
+    refined_docs: list[str]
+    answer: str
+
+def evaluate_documents(state: CRAGState) -> dict:
+    """검색 결과의 품질을 평가한다"""
+    eval_result = evaluator.invoke({
+        "query": state["query"],
+        "documents": state["documents"]
+    })
+    return {"evaluation": eval_result}
+
+def route_by_evaluation(
+    state: CRAGState
+) -> Literal["use_docs", "refine", "web_search"]:
+    if state["evaluation"] == "correct":
+        return "use_docs"
+    elif state["evaluation"] == "ambiguous":
+        return "refine"
+    else:
+        return "web_search"
+
+graph = StateGraph(CRAGState)
+graph.add_node("retrieve", retrieve)
+graph.add_node("evaluate", evaluate_documents)
+graph.add_node("use_docs", pass_through)
+graph.add_node("refine", knowledge_refinement)
+graph.add_node("web_search", web_search_fallback)
+graph.add_node("generate", generate)
+
+graph.add_edge(START, "retrieve")
+graph.add_edge("retrieve", "evaluate")
+graph.add_conditional_edges("evaluate", route_by_evaluation)
+graph.add_edge("use_docs", "generate")
+graph.add_edge("refine", "generate")
+graph.add_edge("web_search", "generate")
+graph.add_edge("generate", END)
+```
+
+### 사용 적합 / 부적합 상황
+
+| 적합한 경우 | 부적합한 경우 |
+|---|---|
+| 검색 인덱스의 품질이 일정하지 않은 경우 | 검색 결과가 항상 고품질인 경우 |
+| 내부/외부 다중 소스를 활용해야 하는 경우 | 평가 단계의 추가 지연(latency)을 허용할 수 없는 경우 |
+| 검색 오류에 대한 복원력(resilience)이 중요한 경우 | 단순한 FAQ 스타일의 질의응답 시스템 |
+
+## AutoRAG
+
+### 정의
+
+AutoRAG는 RAG 파이프라인의 구성 요소(chunk size, embedding 모델, retriever 종류, reranker 등)를 자동으로 탐색하고 최적의 조합을 찾아내는 시스템이다. 사람이 수동으로 파라미터를 튜닝하는 대신, 다양한 구성을 자동 실험하고 벤치마크 평가를 통해 최적 파이프라인을 선택한다.
+
+### 아키텍처
+
+```
+┌──────────────────────────────────────┐
+│          AutoRAG Optimizer           │
+├──────────────────────────────────────┤
+│                                      │
+│  ┌──────────┐  ┌──────────┐         │
+│  │ Config A │  │ Config B │  ...    │
+│  │----------│  │----------│         │
+│  │chunk:512 │  │chunk:1024│         │
+│  │emb:ada   │  │emb:bge   │         │
+│  │ret:dense │  │ret:hybrid│         │
+│  │rank:none │  │rank:cohere│        │
+│  └────┬─────┘  └────┬─────┘         │
+│       │              │               │
+│       ▼              ▼               │
+│  ┌──────────────────────────┐       │
+│  │   Evaluation Benchmark   │       │
+│  │  (precision, recall,     │       │
+│  │   faithfulness, latency) │       │
+│  └────────────┬─────────────┘       │
+│               │                      │
+│               ▼                      │
+│     Best Pipeline Selection          │
+└──────────────────────────────────────┘
+```
+
+### 핵심 메커니즘
+
+- **구성 공간 탐색**: chunk size, overlap, embedding 모델, retriever 유형, reranker, top-k 등의 조합을 체계적으로 탐색한다.
+- **자동 평가**: 사전 정의된 벤치마크 데이터셋에 대해 precision, recall, faithfulness 등의 지표를 자동 계산한다.
+- **파이프라인 선택**: 평가 결과를 기반으로 최적의 파이프라인 구성을 자동 선택한다.
+
+### 구현 패턴 (개념적)
+
+```python
+# AutoRAG의 핵심은 다양한 조합을 체계적으로 실험하는 것이다
+configs = {
+    "chunk_size": [256, 512, 1024],
+    "embedding": ["text-embedding-ada-002", "bge-large"],
+    "retriever": ["dense", "sparse", "hybrid"],
+    "reranker": [None, "cohere", "cross-encoder"],
+    "top_k": [3, 5, 10],
+}
+
+results = []
+for config in generate_combinations(configs):
+    pipeline = build_pipeline(config)
+    metrics = evaluate(pipeline, benchmark_dataset)
+    results.append({"config": config, "metrics": metrics})
+
+best = max(results, key=lambda x: x["metrics"]["faithfulness"])
+```
+
+### 사용 적합 / 부적합 상황
+
+| 적합한 경우 | 부적합한 경우 |
+|---|---|
+| Production 환경에서 RAG 성능을 최대화해야 하는 경우 | 프로토타이핑 단계에서 빠른 검증이 필요한 경우 |
+| 충분한 평가 데이터셋이 확보된 경우 | 평가 데이터셋이 없거나 도메인이 빈번하게 변하는 경우 |
+| 수동 튜닝에 드는 엔지니어링 비용을 줄이고 싶은 경우 | 파이프라인 구조 자체를 변경해야 하는 경우 |
+
+## Agentic RAG
+
+### 정의
+
+Agentic RAG는 LLM 에이전트가 문제 해결의 주체가 되어, 검색을 하나의 도구(tool)로 활용하면서 다단계 추론(multi-step reasoning)을 수행하는 방식이다. 단일 검색-생성 사이클이 아니라, 에이전트가 계획(Plan)을 세우고, 필요에 따라 반복적으로 검색, API 호출, 계산 등 다양한 도구를 조합하여 복잡한 질문에 답한다.
+
+### 아키텍처
+
+```
+Query ──→ Agent (Planner)
+              │
+              ▼
+         ┌─────────┐
+         │  Plan    │
+         │ 수립     │
+         └────┬────┘
+              │
+              ▼
+    ┌─────────────────────┐
+    │    Action Loop       │
+    │  ┌───────────────┐  │
+    │  │ 1. 생각(Think) │  │
+    │  │ 2. 행동(Act)   │──┼──→ Tool 1: 문서 검색
+    │  │ 3. 관찰(Observe)│ │──→ Tool 2: DB 조회
+    │  │ 4. 반복/종료   │  │──→ Tool 3: 계산기
+    │  └───────────────┘  │──→ Tool 4: Web Search
+    └─────────┬───────────┘
+              │
+              ▼ (종료 조건 충족)
+           Result
+```
+
+### 핵심 메커니즘
+
+- **ReAct 패턴**: Thought → Action → Observation의 반복 루프를 통해 점진적으로 정보를 수집하고 추론한다.
+- **동적 검색**: 한 번의 검색으로 부족하면 쿼리를 변형하여 추가 검색을 수행한다.
+- **도구 오케스트레이션**: 검색 외에도 데이터베이스 조회, API 호출, 수학 계산 등 다양한 도구를 상황에 맞게 선택한다.
+- **Multi-hop QA**: 복잡한 질문을 하위 질문으로 분해하고, 각 하위 질문의 답변을 종합하여 최종 답을 도출한다.
+
+### LangGraph 구현 패턴
+
+```python
+from langgraph.prebuilt import ToolNode
+from langchain_core.tools import tool
+
+@tool
+def search_docs(query: str) -> str:
+    """내부 문서를 검색한다"""
+    return retriever.invoke(query)
+
+@tool
+def search_web(query: str) -> str:
+    """웹에서 최신 정보를 검색한다"""
+    return web_searcher.invoke(query)
+
+@tool
+def query_database(sql: str) -> str:
+    """데이터베이스를 조회한다"""
+    return db.execute(sql)
+
+tools = [search_docs, search_web, query_database]
+tool_node = ToolNode(tools)
+
+class AgenticRAGState(TypedDict):
+    messages: Annotated[list, add]
+
+def agent_node(state: AgenticRAGState) -> dict:
+    """에이전트가 다음 행동을 결정한다"""
+    response = llm_with_tools.invoke(state["messages"])
+    return {"messages": [response]}
+
+def should_continue(state: AgenticRAGState) -> Literal["tools", "end"]:
+    last = state["messages"][-1]
+    if last.tool_calls:
+        return "tools"
+    return "end"
+
+graph = StateGraph(AgenticRAGState)
+graph.add_node("agent", agent_node)
+graph.add_node("tools", tool_node)
+
+graph.add_edge(START, "agent")
+graph.add_conditional_edges("agent", should_continue, {
+    "tools": "tools",
+    "end": END,
+})
+graph.add_edge("tools", "agent")  # 도구 실행 후 에이전트로 복귀
+```
+
+### 사용 적합 / 부적합 상황
+
+| 적합한 경우 | 부적합한 경우 |
+|---|---|
+| Multi-hop 추론이 필요한 복잡한 질문 | 단순 검색-답변으로 충분한 경우 |
+| 검색 외 다른 도구(DB, API, 계산)가 필요한 경우 | 지연 시간(latency)에 민감한 경우 |
+| 질문의 유형이 사전에 예측 불가능한 경우 | LLM 호출 비용을 최소화해야 하는 경우 |
+
+## 비교 분석
+
+### 핵심 차이 요약
+
+| 구분 | 컨트롤 주체 | 핵심 메커니즘 | 해결하는 문제 |
+|---|---|---|---|
+| Self-RAG | LLM 내부 | 자체 판단 토큰으로 검색/검증 | 불필요한 검색, 환각 |
+| Corrective RAG | 외부 평가기 | 검색 결과 품질 평가 후 보정 | 검색 품질 불일치 |
+| AutoRAG | 자동화 시스템 | 파이프라인 구성 자동 탐색 | 수동 튜닝 비용 |
+| Agentic RAG | Agent | 다단계 추론 + 도구 오케스트레이션 | 복잡한 multi-hop 질문 |
+
+### 정량적 비교
+
+| 구분 | 지연 시간 | LLM 호출 비용 | 구현 복잡도 | 정확도 향상 |
+|---|---|---|---|---|
+| Vanilla RAG | 낮음 | 1회 | 낮음 | 기준선 |
+| Self-RAG | 중간 | 2-3회 | 중간 | 중~높음 |
+| Corrective RAG | 중간 | 1-2회 + 평가기 | 중간 | 중간 |
+| AutoRAG | 높음 (최적화 시) / 낮음 (운영 시) | 다수 (실험) / 1회 (운영) | 높음 | 높음 |
+| Agentic RAG | 높음 | 3-10회+ | 높음 | 높음 |
+
+## 발전 흐름
+
+RAG 변형들의 등장 순서는 시간적 선후관계라기보다, **문제 해결의 연쇄 과정**으로 이해해야 한다. 각 변형은 이전 방식의 병목을 해결하기 위해 등장했다.
+
+### 단계별 병목과 해결
+
+```
+Vanilla RAG
+    │
+    │  병목: 검색 결과에 무관한 문서가 섞임
+    ▼
+Corrective RAG
+    │
+    │  병목: LLM이 검색 필요성을 판단하지 못함
+    ▼
+Self-RAG
+    │
+    │  병목: 복잡한 질문은 한 번의 검색으로 해결 불가
+    ▼
+Agentic RAG
+    │
+    │  병목: 파이프라인 튜닝에 엔지니어링 비용이 과다
+    ▼
+AutoRAG
+```
+
+### 대체 관계가 아닌 보완 관계
+
+이 변형들은 버전 업 관계가 아니다. Self-RAG가 Corrective RAG를 대체하지 않으며, Agentic RAG가 상위 개념도 아니다. 각각은 서로 다른 문제를 해결하는 독립적인 모듈이다.
+
+## 하이브리드 아키텍처
+
+실무에서는 단일 변형만 사용하기보다, 여러 변형을 조합한 하이브리드 구조가 효과적이다.
+
+### 조합 패턴 1: Agentic + Corrective
+
+에이전트가 검색을 수행하고, 검색 결과를 Corrective RAG의 평가 모듈로 검증한다.
+
+```
+Agent ──→ Retrieval ──→ CRAG Evaluator ──→ 보정/재검색 ──→ Generation
+```
+
+### 조합 패턴 2: Agentic + Self-RAG + Corrective
+
+가장 강력한 조합으로, 세 가지 변형의 장점을 모두 활용한다.
+
+```
+Agentic RAG (오케스트레이션)
+ ├── Self-RAG (검색 필요성 판단)
+ ├── Corrective RAG (검색 결과 검증)
+ └── AutoRAG (파이프라인 최적화)
+```
+
+이 구조에서 각 모듈의 역할은 다음과 같다.
+
+- **Agent**: 전체 워크플로를 조율하고 다음 행동을 결정한다.
+- **Self-RAG**: 검색이 필요한 시점을 판단하여 불필요한 검색을 방지한다.
+- **Corrective RAG**: 검색된 문서의 품질을 검증하고 부족하면 보정한다.
+- **AutoRAG**: 검색 파이프라인 자체의 파라미터를 최적화한다.
+
+### 조합 패턴 3: Self-RAG + Corrective (정확도 중심)
+
+비용과 복잡도를 줄이면서 정확도를 극대화하려는 경우 적합하다.
+
+```
+Query ──→ Self-RAG(검색 판단) ──→ Retrieval ──→ CRAG(결과 검증) ──→ Generation
+```
+
+## 실무 선택 가이드
+
+### 도입 단계별 추천
+
+| 단계 | 접근 방식 | 목표 |
+|---|---|---|
+| 1단계 | Vanilla RAG + Hybrid Search | Baseline 지표 확보 |
+| 2단계 | Corrective RAG 추가 | 검색 품질 보정 (retrieval score + thresholding) |
+| 3단계 | Self-RAG 추가 | LLM에 판단 권한 일부 위임 |
+| 4단계 | Agentic 구조 전환 | Multi-hop, Tool 사용 |
+| 5단계 | AutoRAG 도입 | 실험 자동화, 파이프라인 최적화 |
+
+### 목적별 선택 기준
+
+**정확도 최우선 (환각 최소화)**
+Self-RAG + Corrective RAG 조합을 추천한다. Self-RAG로 검색 필요성을 판단하고, Corrective RAG로 검색 결과를 검증하는 이중 안전장치를 구성한다.
+
+**운영 효율 / 튜닝 비용 절감**
+AutoRAG를 추천한다. 초기 구축 비용이 높지만, 이후 파이프라인 최적화에 드는 엔지니어링 비용을 크게 줄일 수 있다.
+
+**복잡한 질의 처리 (multi-hop reasoning)**
+Agentic RAG를 추천한다. 질문을 하위 단계로 분해하고, 반복적 검색과 다양한 도구를 조합하여 종합적인 답변을 생성한다.
+
+**빠른 응답 속도 우선**
+Vanilla RAG 또는 최소한의 Corrective RAG를 추천한다. Self-RAG와 Agentic RAG는 다중 LLM 호출로 인해 지연 시간이 증가한다.
+
+## 정리
+
+RAG 변형의 핵심 인사이트는 다음과 같다.
+
+- **발전 순서는 존재하지만, 최종 형태는 조합 시스템이다.** 단일 변형으로 모든 문제를 해결하려 하지 않는다.
+- **각 변형은 서로 다른 병목을 해결한다.** 검색 품질(CRAG), 검색 판단(Self-RAG), 복잡한 추론(Agentic), 자동 최적화(Auto)는 독립적인 문제이다.
+- **Baseline 없이 고급 변형을 도입하면 안 된다.** Vanilla RAG로 기준 지표를 확보한 후, 실제 병목에 해당하는 변형을 선택적으로 도입한다.
+- **실무에서는 Agent가 오케스트레이션하고, Self-RAG가 판단하고, Corrective RAG가 검증하고, AutoRAG가 튜닝하는 하이브리드 구조**가 가장 강력하다.
