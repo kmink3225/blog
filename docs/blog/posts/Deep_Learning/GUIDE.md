@@ -1,3 +1,19 @@
+---
+name: Deep_Learning_GUIDE
+type: category
+version: 1.0
+description: Deep Learning 카테고리 포스트 작성 규칙 — 수학+코드 하이브리드, NLP, 아키텍처 중심
+scope: docs/blog/posts/Deep_Learning/
+parent: AGENT_GUIDE.md
+index: docs/blog/posts/Deep_Learning/index.qmd
+book_sources: []
+cross_references:
+  - docs/blog/posts/Math/GUIDE.md
+  - docs/blog/posts/Statistics/GUIDE.md
+  - docs/blog/posts/Machine_Learning/GUIDE.md
+  - docs/blog/posts/Agent/GUIDE.md
+---
+
 # Deep Learning 카테고리 작성 가이드
 
 > 이 문서는 `AGENT_GUIDE.md`의 공통 규칙을 보충하는 **Deep Learning 전용 가이드**이다.

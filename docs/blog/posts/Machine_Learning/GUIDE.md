@@ -1,3 +1,19 @@
+---
+name: Machine_Learning_GUIDE
+type: category
+version: 1.0
+description: Machine Learning 카테고리 포스트 작성 규칙 — 알고리즘 비교, SHAP 해석, 커리큘럼 기반
+scope: docs/blog/posts/Machine_Learning/
+parent: AGENT_GUIDE.md
+index: docs/blog/posts/Machine_Learning/index.qmd
+book_sources: []
+cross_references:
+  - docs/blog/posts/Statistics/GUIDE.md
+  - docs/blog/posts/Deep_Learning/GUIDE.md
+  - docs/blog/posts/Data_Science/GUIDE.md
+  - docs/blog/posts/Experimentation/GUIDE.md
+---
+
 # Machine Learning 카테고리 작성 가이드
 
 > 이 문서는 `AGENT_GUIDE.md`의 공통 규칙을 보충하는 **Machine Learning 전용 가이드**이다.

@@ -1,0 +1,279 @@
+---
+title: "스킬 패턴의 실전 적용: 블로그 지식 관리 시스템 구축"
+subtitle: "LangChain Skills 패턴을 코드가 아닌 도메인 지식 운영에 적용한 사례"
+description: |
+  LangChain이 공개한 Claude Code용 스킬 패턴(YAML frontmatter, 계층 구조, 트리거 기반 로딩)을
+  기술 블로그의 지식 관리 시스템에 적용한 실전 사례를 정리한다.
+  스킬 파일의 구조를 "코드 작성 가이드"에서 "블로그 운영 매뉴얼"로 확장한 과정,
+  설계 결정의 근거, 그리고 실제 동작 결과를 기록한다.
+categories:
+  - Agent
+  - Architecture
+  - Claude Code
+author: Kwangmin Kim
+date: 03/20/2026
+---
+
+## 배경
+
+LangChain이 Claude Code용 스킬 세트를 공개했을 때, 핵심 인사이트는 다음이었다:
+
+> 모델을 바꾸지 않고, **올바른 컨텍스트를 올바른 시점에 제공하는 것만으로** 성능이 4~5배 향상되었다.
+> (LangChain 작업 통과율: 25% → 95%)
+
+이 원리를 코드 작성이 아닌 **블로그 지식 관리**에 적용하면 어떤 결과가 나올까? 이 포스트는 그 실험의 기록이다.
+
+**선행 포스트:**
+
+- [스킬 기반 Agent 패턴](./01-skill-based-agent-pattern.qmd) — LangChain 스킬의 구조와 프로그레시브 디스클로저 원리
+- [스킬 역분석: Agent용 시스템 프롬프트 작성 원리](../02-Prompt/40-PromptWriting-AgentSkillPrompt.qmd) — 스킬의 프롬프트 패턴 분석
+- [Claude Code의 Long Context 대응 전략](./04-claude-code-context-strategy.qmd) — 컨텍스트 관리 아키텍처
+
+---
+
+## 문제: Agent에게 블로그를 잘 쓰게 하려면?
+
+12개 카테고리, 수백 개의 포스트로 구성된 기술 블로그가 있다. Agent에게 다음을 요구한다:
+
+1. **새 블로그 포스트 작성** — 카테고리별 스타일, 구조, 용어, 교재 참조를 일관되게 따라야 한다
+2. **질문에 대한 블로그 기반 답변** — 기존 포스트를 검색하여 근거로 활용해야 한다
+3. **콘텐츠 gap 발견** — 아직 작성되지 않은 주제를 식별하고 제안해야 한다
+
+### 나이브한 접근의 한계
+
+```
+[방법 1: 모든 규칙을 하나의 프롬프트에]
+
+System Prompt에 12개 카테고리의 작성 규칙, 교재 참조, 용어 매핑,
+파일명 패턴, index.qmd 구조를 모두 넣는다.
+
+→ 컨텍스트 과부하 → Lost in the Middle → 규칙 누락/혼동
+
+[방법 2: 매번 사용자가 지시]
+
+"한다 체로 써줘, 수식 $ 양쪽에 공백 넣어줘, index.qmd도 업데이트해줘..."
+
+→ 매번 같은 지시를 반복 → 빠뜨리면 일관성 깨짐
+```
+
+---
+
+## 해결: LangChain 스킬 패턴 적용
+
+### 핵심 대응 관계
+
+LangChain 스킬의 각 구성 요소를 블로그 지식 관리에 매핑했다:
+
+| LangChain 스킬 | 블로그 지식 시스템 | 역할 |
+|---|---|---|
+| System Prompt | `AGENT_GUIDE.md` | 전체 운영 규칙 (질문 응답, 작성 체크리스트, 공통 규칙) |
+| SKILL.md (도메인별) | `{Category}/GUIDE.md` × 12 | 카테고리별 작성 규칙 (콘텐츠 구조, 용어, 교재) |
+| Reference docs | `BOOK_SOURCE_GUIDE.md` | 교재 소스 참조 규칙 |
+| YAML frontmatter | 모든 GUIDE의 YAML 헤더 | 메타데이터 (관계, 버전, 범위) |
+| Trigger condition | `description` 필드 | 언제 이 가이드를 로드해야 하는지 |
+
+### 계층 구조 설계
+
+```
+AGENT_GUIDE.md (type: master, v2.0)
+├── 질문 응답 가이드          ← 검색 → 답변 → gap 발견 흐름
+├── 블로그 작성 체크리스트     ← Step 1~4 + 중복 판단
+├── 공통 규칙                ← YAML 헤더, 한다 체, 수식, 개행
+├── Multi-disciplinary 원칙  ← 융합 주제 시 참조 가이드 매핑
+│
+├── Statistics/GUIDE.md (type: category, v1.0)
+│   ├── scope: docs/blog/posts/Statistics/
+│   ├── book_sources: [statistics/, glm/, mixed_model/, survival/, fda/, bayesian/]
+│   └── cross_references: [Math, Experimentation, ML, DL]
+│
+├── Experimentation/GUIDE.md (type: category, v1.0)
+│   ├── scope: docs/blog/posts/Experimentation/
+│   ├── book_sources: [epidemiology/]
+│   └── cross_references: [Statistics, Data_Science, Engineering, ML]
+│
+├── ... (10개 카테고리)
+│
+└── BOOK_SOURCE_GUIDE.md (type: reference, v1.0)
+    └── book_sources: [8개 교재 그룹]
+```
+
+### YAML Frontmatter 스키마
+
+LangChain 스킬의 `description`이 "when to invoke"를 기술하듯, 블로그 가이드의 YAML도 **"이 가이드를 언제, 어떻게 사용하는가"**를 기계 판독 가능하게 기술한다:
+
+```yaml
+---
+name: Statistics_GUIDE           # 고유 식별자
+type: category                   # master | category | reference
+version: 1.0                    # 변경 추적
+description: >                   # 트리거 조건 + 핵심 특성
+  Statistics 카테고리 포스트 작성 규칙 —
+  수학적 엄밀성, 교재 기반, 이론-실무 연결
+scope: docs/blog/posts/Statistics/  # 적용 범위
+parent: AGENT_GUIDE.md           # 상위 가이드 (계층)
+index: docs/blog/posts/Statistics/index.qmd  # 콘텐츠 목록
+book_sources:                    # 참조 교재
+  - docs/book/statistics/
+  - docs/book/survival/
+cross_references:                # 융합 주제 시 함께 참조
+  - docs/blog/posts/Math/GUIDE.md
+  - docs/blog/posts/Experimentation/GUIDE.md
+---
+```
+
+---
+
+## 프로그레시브 디스클로저의 적용
+
+### LangChain의 원리
+
+```
+[기존] 모든 문서를 프롬프트에 포함 → 컨텍스트 과부하 → 성능 저하
+
+[스킬 패턴] 필요한 시점에 필요한 문서만 로드 → 집중된 컨텍스트 → 성능 향상
+```
+
+### 블로그 시스템에서의 적용
+
+```
+[기존] "블로그 써줘" → Agent가 모든 규칙을 기억해야 함 → 규칙 누락
+
+[가이드 패턴]
+1. "생존 분석 블로그 써줘"
+2. Agent가 AGENT_GUIDE.md 읽음 → 공통 규칙 파악
+3. category_guides에서 Statistics/GUIDE.md 식별
+4. Statistics/GUIDE.md 읽음 → 수식 표기, 교재 매핑, 콘텐츠 구조
+5. cross_references에서 Experimentation/GUIDE.md 발견 (생존 분석 = 임상시험 연결)
+6. book_sources에서 docs/book/survival/ 확인 → 교재 내용 참조
+7. 모든 맥락이 갖춰진 상태에서 포스트 작성
+```
+
+핵심은 **한 번에 모든 가이드를 읽지 않는다**는 것이다. 작업 맥락에 따라 필요한 가이드만 선택적으로 로드하므로 컨텍스트 효율이 높다.
+
+---
+
+## 실제 동작 결과
+
+이 시스템을 적용한 후 실제 블로그 작성에서 관찰된 변화:
+
+### 작성 품질
+
+| 항목 | 가이드 없이 | 가이드 적용 후 |
+|---|---|---|
+| 한다 체 일관성 | 간헐적으로 경어체 섞임 | 일관 유지 |
+| 수식 `$` 공백 | 렌더링 실패 빈발 | 규칙 준수 |
+| index.qmd 업데이트 | 자주 누락 | 체크리스트로 보장 |
+| 교재 참조 | 일반 지식에 의존 | `docs/book/` 소스 기반 |
+| 코드 예시 구조 | 프레임워크 코드만 제시 | low-level 구현 → 프레임워크 2단계 |
+
+### 중복 판단
+
+Step 1.5(기존 콘텐츠 중복 판단) 규칙 덕분에:
+
+- Data Science overview → 기존 `0.intro.qmd` **보강**으로 결정 (새 파일 생성 방지)
+- 통계학 overview → 기존에 없으므로 **새 파일 생성**
+- 생존 분석 overview → 기존에 없으므로 **새 폴더 + 새 파일 생성**
+
+### Multi-disciplinary 연결
+
+A/B 테스트 overview 작성 시:
+
+```
+AGENT_GUIDE.md의 Multi-disciplinary 매핑 테이블 참조
+→ 주 카테고리: Experimentation/GUIDE.md
+→ 함께 참조: Statistics/GUIDE.md (가설검정), Engineering/GUIDE.md (플랫폼)
+→ 결과: 역학↔통계↔IT 3열 용어 매핑 테이블 자동 포함
+```
+
+---
+
+## 프롬프트 엔지니어링과의 차이
+
+이 접근법은 단순한 프롬프트 엔지니어링이 아니다:
+
+| 기준 | 프롬프트 엔지니어링 | 스킬 기반 지식 시스템 |
+|---|---|---|
+| 지속성 | 대화 1회 | 파일 기반, 영구적 |
+| 구조 | 텍스트 한 덩어리 | 계층 구조 (master → category → reference) |
+| 관계 정의 | 없음 | YAML `cross_references` 로 명시적 그래프 |
+| 버전 관리 | 불가 | `version` 필드 + git 추적 |
+| 로딩 전략 | 전체 로드 | 프로그레시브 디스클로저 (필요한 것만) |
+| 적용 범위 | 코드 생성 | 지식 관리, 검색, 콘텐츠 생성, gap 발견 |
+| 재사용 | 복붙 | 파일 참조 (`parent`, `cross_references`) |
+
+### 수준별 분류
+
+```
+Level 1: 프롬프트 엔지니어링       ← "한다 체로 써줘"
+Level 2: System Prompt Design     ← CLAUDE.md에 규칙 정의
+Level 3: Skill-based Architecture ← YAML 메타데이터 + 계층 + 관계 그래프
+Level 4: Agent Instruction System ← 검색 규칙 + 중복 판단 + gap 발견 + 교재 연결
+```
+
+지금 구축한 시스템은 Level 3~4에 해당한다.
+
+---
+
+## 확장 가능성
+
+### 현재 구현
+
+```
+가이드 파일 (정적 마크다운)
+  ↓
+Agent가 읽고 규칙 따름 (수동 참조)
+```
+
+### 가능한 확장
+
+```
+[자동 트리거] 사용자가 "생존 분석" 언급
+  → YAML description 매칭 → Statistics/GUIDE.md 자동 로드
+
+[가이드 자동 업데이트] 새 포스트 작성 완료
+  → index.qmd 업데이트 → GUIDE.md 버전 bump
+
+[품질 검증] 포스트 작성 후
+  → GUIDE.md의 콘텐츠 구조(8단계) 충족 여부 자동 체크
+
+[지식 그래프] cross_references 기반
+  → 카테고리 간 관계를 시각화 → 콘텐츠 gap 자동 발견
+```
+
+---
+
+## 핵심 교훈
+
+1. **LangChain 스킬 패턴은 코드 작성 이외에도 적용 가능하다.** 지식 관리, 콘텐츠 운영, 프로젝트 매뉴얼 등 "Agent가 규칙을 따라야 하는 모든 영역"에 같은 패턴이 작동한다.
+
+2. **프로그레시브 디스클로저가 핵심이다.** 12개 카테고리의 규칙을 한 번에 주면 컨텍스트 과부하로 규칙이 누락된다. 작업 맥락에 맞는 가이드만 선택적으로 로드하면 일관성이 유지된다.
+
+3. **YAML frontmatter가 가이드 간 관계를 기계 판독 가능하게 만든다.** `cross_references` 필드 덕분에 Agent가 "이 주제를 다룰 때 어떤 다른 가이드도 함께 읽어야 하는가"를 스스로 판단할 수 있다.
+
+4. **중복 판단 규칙이 콘텐츠 품질을 보호한다.** Step 1.5 없이는 비슷한 내용의 파일이 계속 생성될 위험이 있다. "보강 vs 신규" 판단 기준을 명시함으로써 블로그의 구조적 일관성을 유지한다.
+
+5. **이것은 프롬프트 엔지니어링의 상위 개념이다.** 일회성 프롬프트가 아니라, 파일 기반으로 영속적이고, 계층 구조로 조직되며, 버전 관리가 되는 **Agent Instruction Architecture**이다.
+
+---
+
+## 관련 주제
+
+**선행 포스트 (스킬 패턴 분석)**
+
+- [스킬 기반 Agent 패턴](./01-skill-based-agent-pattern.qmd) — LangChain 스킬의 구조와 프로그레시브 디스클로저
+- [컨텍스트 관리 전략](./02-context-management.qmd) — Agent의 컨텍스트 효율화
+- [Hybrid RAG + Skill](./03-hybrid-rag-skill.qmd) — RAG와 스킬의 결합
+- [Claude Code의 Long Context 대응](./04-claude-code-context-strategy.qmd) — 모델과 아키텍처 양면의 전략
+- [스킬 역분석: 시스템 프롬프트 작성 원리](../02-Prompt/40-PromptWriting-AgentSkillPrompt.qmd) — SKILL.md의 프롬프트 패턴
+
+**실제 적용된 가이드 파일**
+
+- [AGENT_GUIDE.md](../../../../../AGENT_GUIDE.md) — 마스터 가이드 (type: master)
+- [BOOK_SOURCE_GUIDE.md](../../../../book/BOOK_SOURCE_GUIDE.md) — 교재 참조 가이드 (type: reference)
+- 12개 카테고리별 `GUIDE.md` — 카테고리 가이드 (type: category)
+
+**다른 카테고리 연결**
+
+- [프롬프트 엔지니어링 기초](../02-Prompt/06-PromptBasic.qmd) — Level 1 프롬프트 기법
+- [시스템 프롬프트 설계](../02-Prompt/36-PromptWriting-SystemPrompt.qmd) — Level 2 설계
+- [LangGraph 소개](../18-LangGraph/01-Core-Features/01-LangGraph-Introduction.qmd) — Agent 오케스트레이션

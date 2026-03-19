@@ -1,3 +1,17 @@
+---
+name: Engineering_GUIDE
+type: category
+version: 1.0
+description: Engineering 카테고리 포스트 작성 규칙 — 도구 튜토리얼, CLI 중심, 시리즈 구성
+scope: docs/blog/posts/Engineering/
+parent: AGENT_GUIDE.md
+index: docs/blog/posts/Engineering/index.qmd
+book_sources: []
+cross_references:
+  - docs/blog/posts/Agent/GUIDE.md
+  - docs/blog/posts/Data_Science/GUIDE.md
+---
+
 # Engineering 카테고리 작성 가이드
 
 > 이 문서는 `AGENT_GUIDE.md`의 공통 규칙을 보충하는 **Engineering 전용 가이드**이다.

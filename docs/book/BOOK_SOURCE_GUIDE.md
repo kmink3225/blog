@@ -1,3 +1,37 @@
+---
+name: BOOK_SOURCE_GUIDE
+type: reference
+version: 1.0
+description: 교재 기반 블로그 작성 시 소스 파일 참조 규칙
+scope: docs/book/
+parent: AGENT_GUIDE.md
+book_sources:
+  - group: statistics
+    path: docs/book/statistics/
+    authors: Casella & Berger
+  - group: linear_algebra
+    path: docs/book/linear_algebra/
+    authors: Strang, Magnus, Matrix Cookbook
+  - group: glm
+    path: docs/book/glm/
+    authors: McCullagh & Nelder, Faraway
+  - group: mixed_model
+    path: docs/book/mixed_model/
+    authors: Hedeker & Gibbons
+  - group: survival
+    path: docs/book/survival/
+    authors: Kleinbaum, Hosmer, Klein, Collett
+  - group: epidemiology
+    path: docs/book/epidemiology/
+    authors: Hernan, Woodward, Schulz, Maxwell, Buisson
+  - group: bayesian
+    path: docs/book/bayesian/
+    authors: Gelman, Downey
+  - group: fda
+    path: docs/book/fda/
+    authors: Ramsay, Kokoszka
+---
+
 # Book Source Guide — 블로그 작성용 교재 레퍼런스
 
 ## 목적

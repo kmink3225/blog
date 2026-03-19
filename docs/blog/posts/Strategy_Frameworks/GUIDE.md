@@ -1,3 +1,18 @@
+---
+name: Strategy_Frameworks_GUIDE
+type: category
+version: 1.0
+description: Strategy Frameworks 카테고리 포스트 작성 규칙 — 이론/프레임워크, 학술적 엄밀성, AI 연계
+scope: docs/blog/posts/Strategy_Frameworks/
+parent: AGENT_GUIDE.md
+index: docs/blog/posts/Strategy_Frameworks/index.qmd
+book_sources: []
+cross_references:
+  - docs/blog/posts/Experimentation/GUIDE.md
+  - docs/blog/posts/Agent/GUIDE.md
+  - docs/blog/posts/Statistics/GUIDE.md
+---
+
 # Strategy Frameworks 카테고리 작성 가이드
 
 > 이 문서는 `AGENT_GUIDE.md`의 공통 규칙을 보충하는 **Strategy Frameworks 전용 가이드**이다.

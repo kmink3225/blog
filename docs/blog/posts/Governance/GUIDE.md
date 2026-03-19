@@ -1,3 +1,17 @@
+---
+name: Governance_GUIDE
+type: category
+version: 1.0
+description: Governance 카테고리 포스트 작성 규칙 — 업무 프로세스, 데이터 모델링, 표준화
+scope: docs/blog/posts/Governance/
+parent: AGENT_GUIDE.md
+index: docs/blog/posts/Governance/index.qmd
+book_sources: []
+cross_references:
+  - docs/blog/posts/Engineering/GUIDE.md
+  - docs/blog/posts/Statistics/GUIDE.md
+---
+
 # Governance 카테고리 작성 가이드
 
 > 이 문서는 `AGENT_GUIDE.md`의 공통 규칙을 보충하는 **Governance 전용 가이드**이다.

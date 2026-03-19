@@ -1,3 +1,21 @@
+---
+name: Data_Science_GUIDE
+type: category
+version: 1.0
+description: Data Science 카테고리 포스트 작성 규칙 — 통합자(hub), 방법론, CRISP-DM, 비즈니스 연결
+scope: docs/blog/posts/Data_Science/
+parent: AGENT_GUIDE.md
+index: docs/blog/posts/Data_Science/index.qmd
+book_sources: []
+cross_references:
+  - docs/blog/posts/Statistics/GUIDE.md
+  - docs/blog/posts/Machine_Learning/GUIDE.md
+  - docs/blog/posts/Deep_Learning/GUIDE.md
+  - docs/blog/posts/Engineering/GUIDE.md
+  - docs/blog/posts/Experimentation/GUIDE.md
+  - docs/blog/posts/Governance/GUIDE.md
+---
+
 # Data Science 카테고리 작성 가이드
 
 > 이 문서는 `AGENT_GUIDE.md`의 공통 규칙을 보충하는 **Data Science 전용 가이드**이다.

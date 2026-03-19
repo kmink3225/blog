@@ -1,3 +1,20 @@
+---
+name: Experimentation_GUIDE
+type: category
+version: 1.0
+description: Experimentation 카테고리 포스트 작성 규칙 — 역학 원류, 인과추론 프레임워크, A/B 테스트
+scope: docs/blog/posts/Experimentation/
+parent: AGENT_GUIDE.md
+index: docs/blog/posts/Experimentation/index.qmd
+book_sources:
+  - docs/book/epidemiology/
+cross_references:
+  - docs/blog/posts/Statistics/GUIDE.md
+  - docs/blog/posts/Data_Science/GUIDE.md
+  - docs/blog/posts/Engineering/GUIDE.md
+  - docs/blog/posts/Machine_Learning/GUIDE.md
+---
+
 # Experimentation 카테고리 작성 가이드
 
 > 이 문서는 `AGENT_GUIDE.md`의 공통 규칙을 보충하는 **Experimentation 전용 가이드**이다.

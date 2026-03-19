@@ -1,3 +1,16 @@
+---
+name: Code_Test_GUIDE
+type: category
+version: 1.0
+description: Code Test 카테고리 포스트 작성 규칙 — 문제-풀이 쌍, 알고리즘/SQL 유형별 분류
+scope: docs/blog/posts/Code_Test/
+parent: AGENT_GUIDE.md
+index: docs/blog/posts/Code_Test/index.qmd
+book_sources: []
+cross_references:
+  - docs/blog/posts/Engineering/GUIDE.md
+---
+
 # Code Test 카테고리 작성 가이드
 
 > 이 문서는 `AGENT_GUIDE.md`의 공통 규칙을 보충하는 **Code Test 전용 가이드**이다.

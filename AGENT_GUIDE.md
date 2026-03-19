@@ -1,23 +1,107 @@
+---
+name: AGENT_GUIDE
+type: master
+version: 2.0
+description: 블로그 전체 운영 규칙 — 질문 응답, 포스트 작성, 카테고리 관리의 최상위 가이드
+scope: global
+category_guides:
+  - path: docs/blog/posts/Statistics/GUIDE.md
+    category: Statistics
+  - path: docs/blog/posts/Math/GUIDE.md
+    category: Math
+  - path: docs/blog/posts/Experimentation/GUIDE.md
+    category: Experimentation
+  - path: docs/blog/posts/Agent/GUIDE.md
+    category: Agent
+  - path: docs/blog/posts/Deep_Learning/GUIDE.md
+    category: Deep Learning
+  - path: docs/blog/posts/Machine_Learning/GUIDE.md
+    category: Machine Learning
+  - path: docs/blog/posts/Data_Science/GUIDE.md
+    category: Data Science
+  - path: docs/blog/posts/Engineering/GUIDE.md
+    category: Engineering
+  - path: docs/blog/posts/Governance/GUIDE.md
+    category: Governance
+  - path: docs/blog/posts/Code_Test/GUIDE.md
+    category: Code Test
+  - path: docs/blog/posts/Strategy_Frameworks/GUIDE.md
+    category: Strategy Frameworks
+  - path: docs/blog/posts/Surveilance/GUIDE.md
+    category: Surveilance
+reference_guides:
+  - path: docs/book/BOOK_SOURCE_GUIDE.md
+    purpose: 교재 기반 블로그 작성 시 참조
+---
+
 # AGENT_GUIDE.md — Blog Repository Instructions
 
-> **참조 문서**: 교재 기반 블로그 작성 시 [docs/book/BOOK_SOURCE_GUIDE.md](docs/book/BOOK_SOURCE_GUIDE.md) 를 반드시 참조한다.
->
-> **카테고리별 가이드**: 아래 카테고리의 포스트를 작성할 때는 해당 GUIDE.md를 함께 참조한다.
->
-> | 카테고리 | 가이드 경로 |
-> |---|---|
-> | Statistics | [docs/blog/posts/Statistics/GUIDE.md](docs/blog/posts/Statistics/GUIDE.md) |
-> | Math | [docs/blog/posts/Math/GUIDE.md](docs/blog/posts/Math/GUIDE.md) |
-> | Experimentation | [docs/blog/posts/Experimentation/GUIDE.md](docs/blog/posts/Experimentation/GUIDE.md) |
-> | Agent | [docs/blog/posts/Agent/GUIDE.md](docs/blog/posts/Agent/GUIDE.md) |
-> | Deep Learning | [docs/blog/posts/Deep_Learning/GUIDE.md](docs/blog/posts/Deep_Learning/GUIDE.md) |
-> | Machine Learning | [docs/blog/posts/Machine_Learning/GUIDE.md](docs/blog/posts/Machine_Learning/GUIDE.md) |
-> | Data Science | [docs/blog/posts/Data_Science/GUIDE.md](docs/blog/posts/Data_Science/GUIDE.md) |
-> | Engineering | [docs/blog/posts/Engineering/GUIDE.md](docs/blog/posts/Engineering/GUIDE.md) |
-> | Governance | [docs/blog/posts/Governance/GUIDE.md](docs/blog/posts/Governance/GUIDE.md) |
-> | Code Test | [docs/blog/posts/Code_Test/GUIDE.md](docs/blog/posts/Code_Test/GUIDE.md) |
-> | Strategy Frameworks | [docs/blog/posts/Strategy_Frameworks/GUIDE.md](docs/blog/posts/Strategy_Frameworks/GUIDE.md) |
-> | Surveilance | [docs/blog/posts/Surveilance/GUIDE.md](docs/blog/posts/Surveilance/GUIDE.md) |
+## 질문 응답 가이드 — 블로그 기반 지식 검색
+
+사용자가 특정 주제에 대해 질문하면, **블로그에 이미 작성된 콘텐츠를 먼저 검색**하여 답변의 근거로 활용한다. 이 블로그는 사용자의 학습 자산이므로, 일반적인 지식보다 블로그에 정리된 내용을 우선 참조한다.
+
+### Step 1: 관련 포스트 검색
+
+질문의 키워드와 맥락을 기반으로 관련 포스트를 찾는다.
+
+**검색 순서:**
+
+1. **카테고리 추정**: 질문 주제가 어느 카테고리에 해당하는지 판단한다
+2. **index.qmd 스캔**: 해당 카테고리의 `index.qmd`에서 관련 항목을 찾는다
+3. **키워드 검색**: `Grep`으로 `docs/blog/posts/` 전체에서 핵심 키워드를 검색한다 (YAML title, subtitle, description + 본문)
+4. **크로스 카테고리 확인**: Multi-disciplinary 주제(A/B 테스트, 생존 분석 등)는 여러 카테고리를 교차 검색한다
+
+**검색 범위 확장 기준:**
+
+| 질문 유형 | 검색 카테고리 예시 |
+|---|---|
+| 통계 개념 질문 | Statistics → Math → Experimentation |
+| ML/DL 알고리즘 질문 | Machine_Learning → Deep_Learning → Statistics |
+| 실험 설계 질문 | Experimentation → Statistics → Data_Science |
+| 인프라/도구 질문 | Engineering → Agent |
+| 프로젝트 전체 흐름 | Data_Science → 관련 모든 카테고리 |
+
+### Step 2: 블로그 기반 답변 구성
+
+관련 포스트를 찾았으면, 그 내용을 기반으로 답변을 구성한다.
+
+**답변 구조:**
+
+1. **질문에 대한 직접 답변** — 블로그 내용을 바탕으로 핵심을 요약한다
+2. **관련 포스트 링크 제시** — "이 주제는 다음 포스트에서 상세히 다루고 있다"와 함께 파일 경로를 제시한다
+3. **블로그에 없는 부분 보충** — 블로그에서 다루지 않는 부분은 일반 지식으로 보충하되, 블로그 내용과 구분한다
+
+**답변 예시 형식:**
+
+```
+[질문에 대한 답변]
+
+📎 관련 블로그 포스트:
+- docs/blog/posts/Statistics/survival/01-survival-overview.qmd — 생존 분석 개요
+- docs/blog/posts/Experimentation/AB_test/01-ab-test-overview.qmd — A/B 테스트 개요
+
+💡 블로그에 아직 없는 내용:
+- [보충 설명]
+```
+
+### Step 3: 콘텐츠 gap 발견 시 행동
+
+검색 결과 관련 포스트가 없거나 불충분하면, 사용자에게 알린다.
+
+| 상황 | 행동 |
+|---|---|
+| 관련 포스트가 존재하고 답변에 충분 | 포스트 내용을 기반으로 답변 + 링크 제시 |
+| 관련 포스트가 존재하지만 질문의 일부만 다룸 | 포스트 기반 답변 + 부족한 부분 보충 + "이 부분은 블로그에 아직 없다" 명시 |
+| 관련 포스트가 전혀 없음 | 일반 지식으로 답변 + "이 주제는 블로그에 아직 정리되지 않았다. 작성할까?" 제안 |
+| `index.qmd`에 placeholder(1111-11-11)로만 존재 | "이 주제는 계획되어 있지만 아직 작성되지 않았다" + 일반 지식으로 답변 + 작성 제안 |
+
+### 주의사항
+
+- **블로그 내용과 일반 지식을 혼동하지 않는다.** 블로그에 작성된 내용을 인용할 때는 파일 경로를 명시한다.
+- **블로그의 용어와 표기법을 따른다.** 블로그에서 "한다 체"를 사용하더라도 답변은 대화체로 한다. 다만 블로그 내용을 인용할 때는 원문 그대로 제시한다.
+- **교재 소스(`docs/book/`)도 활용한다.** 블로그 포스트에 없지만 교재 소스에는 있는 내용이면, 교재를 참조하여 답변하고 블로그 작성을 제안할 수 있다.
+
+---
 
 ## Project Overview
 
