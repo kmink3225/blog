@@ -229,3 +229,17 @@ $$
 | 생존 분석 | `docs/book/survival/` | Kleinbaum, Hosmer |
 | FDA | `docs/book/fda/` | Ramsay & Silverman, Kokoszka |
 | 베이지안 | `docs/book/bayesian/` | Gelman, Downey |
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조하여 관련 챕터를 특정한 후, Full MD에서 상세 내용을 확인한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| Casella & Berger — Statistical Inference (2002) | `docs/book/statistics/Casella-Berger-Statistical-Inference-summary.md` | 확률론, 추정, 검정, 신뢰구간, 점근이론 |
+| Gelman et al. — Bayesian Data Analysis (2013) | `docs/book/bayesian/Gelman-BDA-summary.md` | 베이지안 추론, 사후분포, MCMC, 계층모형 |
+| Downey — Think Bayes (2021) | `docs/book/bayesian/Downey-Think-Bayes-summary.md` | 베이지안 기초, Python 구현 |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용

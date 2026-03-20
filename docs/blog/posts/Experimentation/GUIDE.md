@@ -232,3 +232,19 @@ print(f"그룹당 필요 표본 크기: {int(np.ceil(n))}")
 | 역학 방법론 | `docs/book/epidemiology/` | Woodward (Epidemiology: Study Design and Data Analysis) |
 | 실험 설계 | `docs/book/epidemiology/` | Schulz (CONSORT), Maxwell (실험 설계) |
 | A/B 테스트 | `docs/book/epidemiology/` | Buisson (A/B Testing) |
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| Hernan & Robins — Causal Inference: What If (2020) | `docs/book/epidemiology/Hernan-Causal-Inference-summary.md` | 인과추론, 반사실, DAG, IP 가중 |
+| Buisson — Behavioral Data Analysis (2021) | `docs/book/epidemiology/Buisson-Behavioral-Data-Analysis-summary.md` | 행동 데이터 인과추론, A/B 테스트 |
+| Schulz & Grimes — Essential Concepts in Clinical Research (2018) | `docs/book/epidemiology/Schulz-Clinical-Research-summary.md` | RCT 설계, 관찰역학 |
+| Maxwell & Delaney — Designing Experiments (2004) | `docs/book/epidemiology/Maxwell-Designing-Experiments-summary.md` | 실험 설계, 모형 비교, ANOVA |
+| Woodward — Epidemiology: Study Design and Data Analysis (2014) | `docs/book/epidemiology/Woodward-Epidemiology-summary.md` | 역학 연구 설계, 데이터 분석 |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용

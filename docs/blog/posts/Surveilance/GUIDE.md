@@ -180,3 +180,17 @@ bibliography: references.bib
 | IMDRF | International Medical Device Regulators Forum | 국제 |
 | SGS | Societe Generale de Surveillance | 인증 기관 |
 | DHF | Design History File | 문서 체계 |
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| Ramsay & Silverman — Functional Data Analysis (1997) | `docs/book/fda/Ramsay-FDA-summary.md` | 함수형 데이터 분석 이론, 스플라인 |
+| Ramsay & Silverman — Applied FDA (2002) | `docs/book/fda/Ramsay-Applied-FDA-summary.md` | FDA 사례 연구, 실무 적용 |
+| Kokoszka & Reimherr — Introduction to FDA (2017) | `docs/book/fda/Kokoszka-Intro-FDA-summary.md` | FDA 입문, 현대적 접근 |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
