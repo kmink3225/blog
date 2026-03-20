@@ -106,7 +106,7 @@ cross_references:
 
 - [프롬프트 엔지니어링](../Agent/02-Prompt/) — 추론 방법론의 AI 적용
 - [A/B 테스트](../Experimentation/01-ab-test-mechanism.qmd) — 의사결정 이론의 실험적 적용
-- [베이즈 정리](../Statistics/2023-02-05_probability.qmd) — 가추적 추론의 수학적 기반
+- [베이즈 정리](../Statistics/06-probability.qmd) — 가추적 추론의 수학적 기반
 ```
 
 ---

@@ -159,7 +159,7 @@ print(f"그룹당 필요 표본 크기: {int(np.ceil(n))}")
 
 **다른 카테고리 연결**
 
-- [GLM과 로지스틱 회귀](../Statistics/2026-03-07_glm.qmd) — 이진 지표 분석의 통계적 기반
+- [GLM과 로지스틱 회귀](../Statistics/32-mixed-model-roadmap.qmd) — 이진 지표 분석의 통계적 기반
 - [MAB와 강화학습](../Agent/16-Agent/bandit.qmd) — 탐색-활용 트레이드오프
 ```
 
@@ -179,7 +179,7 @@ print(f"그룹당 필요 표본 크기: {int(np.ceil(n))}")
 - 실무 체크리스트 형태의 포스트를 권장한다
 - 메트릭 선정 → 표본 크기 → 실행 → 분석 → 의사결정 흐름을 따른다
 
-### 인과추론 (Causal_inference/)
+### 인과추론 (Causal_Inference/)
 
 - Potential Outcomes 프레임워크를 기본으로 사용한다
 - 관찰 데이터 방법론(PSM, DiD, IV, RDD, SCM)은 RCT와의 비교를 통해 설명한다
