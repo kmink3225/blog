@@ -179,7 +179,7 @@ shap.summary_plot(shap_values[1], X[:100])
 
 **선행 지식**
 
-- [확률과 베이즈 정리](../Statistics/2023-02-05_probability.qmd)
+- [확률과 베이즈 정리](../Statistics/06-probability.qmd)
 - [선형대수 기초](../Math/linear_algebra/01.basic_vector.qmd)
 
 **후속 주제**

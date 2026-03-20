@@ -162,7 +162,7 @@ print(f"log-likelihood = {log_lik:.3f}")
 
 **선행 지식**
 
-- [확률론 기초](../2023-02-05_probability.qmd)
+- [확률론 기초](../06-probability.qmd)
 - [확률 분포](../2023-02-06_distribution.qmd)
 
 **후속 주제**
