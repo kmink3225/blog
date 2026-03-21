@@ -1,7 +1,7 @@
 ---
 name: "Epidemiology: Study Design and Data Analysis"
 type: book-summary
-source_file: "Woodward, Mark - Epidemiology _ study design and data analysis-Chapman & Hall_CRC (2014).md"
+source_file: "Woodward-Epidemiology_full.md"
 authors: "Mark Woodward"
 year: 2014
 total_pages: 849

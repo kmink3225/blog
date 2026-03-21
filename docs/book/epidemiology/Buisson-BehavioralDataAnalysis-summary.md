@@ -1,7 +1,7 @@
 ---
 name: "Behavioral Data Analysis with R and Python"
 type: book-summary
-source_file: "Florent Buisson - Behavioral Data Analysis with R and Python_ Customer-Driven Data for Real Business Results-O'Reilly Media (2021).md"
+source_file: "Buisson-BehavioralDataAnalysis_full.md"
 authors: "Florent Buisson"
 year: 2021
 total_pages: 321

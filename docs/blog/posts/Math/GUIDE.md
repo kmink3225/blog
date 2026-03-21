@@ -219,9 +219,9 @@ print(f"내적: {dot_product}, 사잇각: {theta:.1f}도")
 
 | 교재 | Summary 경로 | 활용 영역 |
 |---|---|---|
-| Strang — Introduction to Linear Algebra (4th Ed.) | `docs/book/linear_algebra/Strang-Intro-Linear-Algebra-summary.md` | 벡터, 행렬, 고유값, SVD |
-| Strang — Linear Algebra and Its Applications | `docs/book/linear_algebra/Strang-LA-Applications-summary.md` | 응용 선형대수 |
-| Magnus & Neudecker — Matrix Differential Calculus (3rd Ed.) | `docs/book/linear_algebra/Magnus-Matrix-Differential-Calculus-summary.md` | 행렬 미분, 벡터화, 크로네커 곱 |
-| Matrix Cookbook | `docs/book/linear_algebra/Matrix-Cookbook-summary.md` | 행렬 공식 레퍼런스 |
+| Strang — Introduction to Linear Algebra (4th Ed.) | `docs/book/linear_algebra/Strang-IntroLinearAlgebra-summary.md` | 벡터, 행렬, 고유값, SVD |
+| Strang — Linear Algebra and Its Applications | `docs/book/linear_algebra/Strang-LinearAlgebraApplications-summary.md` | 응용 선형대수 |
+| Magnus & Neudecker — Matrix Differential Calculus (3rd Ed.) | `docs/book/linear_algebra/Magnus-MatrixDifferentialCalculus-summary.md` | 행렬 미분, 벡터화, 크로네커 곱 |
+| Matrix Cookbook | `docs/book/linear_algebra/Petersen-MatrixCookbook-summary.md` | 행렬 공식 레퍼런스 |
 
 **참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용

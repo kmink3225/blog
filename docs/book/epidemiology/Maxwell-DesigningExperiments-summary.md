@@ -1,7 +1,7 @@
 ---
 name: "Designing Experiments and Analyzing Data: A Model Comparison Perspective"
 type: book-summary
-source_file: "Scott E. Maxwell, Harold D. Delaney - Designing Experiments and Analyzing Data_ A Model Comparison Perspective-Routledge Academic (2004).md"
+source_file: "Maxwell-DesigningExperiments_full.md"
 authors: "Scott E. Maxwell, Harold D. Delaney"
 year: 2004
 total_pages: 868

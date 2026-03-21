@@ -241,3 +241,19 @@ class SelfAttention(nn.Module):
 - 텐서 shape은 `[batch, seq_len, d_model]` 형태로 대괄호 표기한다
 - 손실 함수, 활성화 함수 등은 정의와 그래프를 함께 제시한다
 - 기울기(gradient) 유도 시 chain rule 단계를 명시한다
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| Goodfellow et al. — Deep Learning (2016) | `docs/book/deep_learning/Goodfellow-DeepLearning-summary.md` | DL 이론, CNN, RNN, 생성모델 |
+| Zhang et al. — Dive into Deep Learning (2023) | `docs/book/deep_learning/Zhang-D2L-summary.md` | DL 실습, PyTorch, Transformer |
+| Raschka — Build a Large Language Model (2025) | `docs/book/deep_learning/Raschka-BuildLLM-summary.md` | LLM 구현, Attention, 파인튜닝 |
+| Sutton & Barto — Reinforcement Learning (2018) | `docs/book/deep_learning/Sutton-RL-summary.md` | 강화학습, Q-Learning, Policy Gradient |
+| Jurafsky & Martin — Speech and Language Processing (2024) | `docs/book/deep_learning/Jurafsky-SLP-summary.md` | NLP, Transformer, 감정분석, 대화시스템 |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용

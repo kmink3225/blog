@@ -707,12 +707,21 @@ A/B 테스트, 생존 분석, 종단 데이터 분석 등 **여러 분야가 융
 ### 그룹 구조
 - `statistics/` — Casella & Berger (수리통계)
 - `linear_algebra/` — Strang, Magnus, Matrix Cookbook (선형대수, 행렬 미분)
-- `glm/` — McCullagh & Nelder, Faraway (GLM, 회귀)
+- `generalized_linear_model/` — McCullagh & Nelder, Faraway (GLM, 회귀)
 - `mixed_model/` — Hedeker & Gibbons (종단 데이터, 반복측정)
 - `survival/` — Kleinbaum, Klein, Hosmer, Collett (생존 분석)
 - `epidemiology/` — Hernan, Woodward, Schulz, Maxwell, Buisson (인과추론, 역학, 실험설계, AB test)
 - `bayesian/` — Gelman, Downey (베이지안)
-- `fda/` — Ramsay×2, Kokoszka (함수형 데이터 분석)
+- `functional_data_analysis/` — Ramsay×2, Kokoszka (함수형 데이터 분석)
+- `machine_learning/` — ESL, PRML, ISLR, Murphy (기계학습)
+- `deep_learning/` — Goodfellow, D2L, Raschka, Sutton, Jurafsky (딥러닝, NLP, RL)
+- `data_science/` — Chip Huyen×2, Provost (데이터 사이언스, ML 시스템, AI 엔지니어링)
+- `strategy_frameworks/` — Porter, Rumelt, Kahneman, Hurley, Lipton, Parrish (전략, 논리, 멘탈 모델)
+- `behavioral_analysis/` — Cooper, Kohavi, Montgomery, Thaler (행동분석, A/B 테스트, 실험설계)
+- `psychology/` — Eysenck, Cialdini, Morling, PAIR, HAX (인지심리, 설득, 연구방법, AI UX)
+- `linguistics/` — Sidnell, Huang, McEnery (대화분석, 화용론, 코퍼스 언어학)
+- `governance/` — DAMA DMBOK (데이터 거버넌스)
+- `ontology/` — Knowledge Graphs, Graph DB, CodeQL, CPG (지식 그래프, 코드 온톨로지)
 
 ### 2-Layer 교재 참조 체계
 

@@ -251,3 +251,19 @@ Semi-Supervised / Self-Supervised / Transfer Learning
 - 메트릭(F1, AUC-ROC, RMSE 등)의 수학적 정의와 선택 기준을 제시한다
 - SHAP, LIME, PDP 등 해석 도구의 원리와 코드를 포함한다
 - Data_Science/performance-index.qmd와 연계한다
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| Hastie et al. — Elements of Statistical Learning (2009) | `docs/book/machine_learning/Hastie-ESL-summary.md` | 지도/비지도학습 이론, 정규화, 앙상블, SVM |
+| Bishop — Pattern Recognition and Machine Learning (2006) | `docs/book/machine_learning/Bishop-PRML-summary.md` | 베이지안 ML, 확률적 모델링, EM, 커널 |
+| James et al. — Introduction to Statistical Learning (2021) | `docs/book/machine_learning/James-ISLR-summary.md` | ML 입문, R 실습, 트리, SVM, 딥러닝 기초 |
+| Murphy — Probabilistic ML: Introduction (2022) | `docs/book/machine_learning/Murphy-PMLIntro-summary.md` | 확률론적 ML 기초, 딥러닝, 비지도학습 |
+| Murphy — Probabilistic ML: Advanced (2023) | `docs/book/machine_learning/Murphy-PMLAdvanced-summary.md` | 추론, 생성모델, 인과추론, 강화학습 |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용

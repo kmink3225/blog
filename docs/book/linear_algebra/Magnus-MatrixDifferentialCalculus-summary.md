@@ -1,7 +1,7 @@
 ---
 name: "Matrix Differential Calculus with Applications in Statistics and Econometrics, Third Edition"
 type: book-summary
-source_file: "Magnus J., Neudecker H. Matrix differential calculus with applications in statistics and econometrics (3ed., Wiley, 1999)(ISBN 0471986321)(O)(470s)_MAl_.md"
+source_file: "Magnus-MatrixDifferentialCalculus_full.md"
 authors: "Jan R. Magnus, Heinz Neudecker"
 year: 2007
 total_pages: 470

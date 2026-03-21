@@ -1,7 +1,7 @@
 ---
 name: "Survival Analysis: A Self-Learning Text (3rd Ed.)"
 type: book-summary
-source_file: "Kleinbaum & Klein - Survival Analysis_ A Self-Learning Text (3rd Ed.).md"
+source_file: "Kleinbaum-SurvivalAnalysis_full.md"
 authors: "David G. Kleinbaum, Mitchel Klein"
 year: 2012
 total_pages: 700

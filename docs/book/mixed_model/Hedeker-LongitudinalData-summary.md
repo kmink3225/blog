@@ -1,7 +1,7 @@
 ---
 name: "Longitudinal Data Analysis"
 type: book-summary
-source_file: "Applied Longitudinal Data Analysis -Wiley-Interscience (2005) - (Wiley Series in Probability and Statistics) - Donald Hedeker, Robert D. Gibbons.md"
+source_file: "Hedeker-LongitudinalData_full.md"
 authors: "Donald Hedeker, Robert D. Gibbons"
 year: 2006
 total_pages: 360

@@ -1,7 +1,7 @@
 ---
 name: "Introduction to Linear Algebra, Fourth Edition"
 type: book-summary
-source_file: "Gilbert Strang_Introduction_to_Linear_Algebra-_Fourth_Edition.md"
+source_file: "Strang-IntroLinearAlgebra_full.md"
 authors: "Gilbert Strang"
 year: 2009
 total_pages: 575
