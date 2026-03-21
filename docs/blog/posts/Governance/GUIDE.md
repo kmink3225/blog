@@ -2,11 +2,12 @@
 name: Governance_GUIDE
 type: category
 version: 1.0
-description: Governance 카테고리 포스트 작성 규칙 — 업무 프로세스, 데이터 모델링, 표준화
+description: "LOAD when writing posts about data governance, data quality, metadata management, or organizational data standards. Covers DAMA DMBOK-based frameworks and practical governance implementation."
 scope: docs/blog/posts/Governance/
 parent: AGENT_GUIDE.md
 index: docs/blog/posts/Governance/index.qmd
-book_sources: []
+book_sources:
+  - docs/book/governance/
 cross_references:
   - docs/blog/posts/Engineering/GUIDE.md
   - docs/blog/posts/Statistics/GUIDE.md
@@ -54,23 +55,14 @@ cross_references:
 - 거버넌스 프레임워크 내에서의 위치를 설명한다
 - 구성 요소(조직, 프로세스, 기술, 정책)를 분해한다
 - 선행/후행 활동과의 관계를 명시한다
+- 추상적이거나 이해하기 어려운 개념에는 비유 등 직관적 설명을 적재적소에 포함한다 (필요시 별도 섹션으로 분리 가능)
 
-### 3. 직관적 설명 (Intuitive Explanation)
-
-- 조직 관점에서 왜 이 활동이 필요한지 비유로 설명한다
-
-```markdown
-> **직관**: 데이터 표준화는 "조직의 공용어 사전"을 만드는 것이다.
-> 부서마다 같은 개념을 다른 이름으로 부르면(매출/수익/Revenue) 보고서가 맞지 않고,
-> 시스템 통합 시 데이터 매핑에 막대한 비용이 든다.
-```
-
-### 4. 왜 필요한가 (Why It Matters)
+### 3. 왜 필요한가 (Why It Matters)
 
 - 거버넌스 부재 시 발생하는 구체적 비용과 리스크를 제시한다
 - 규제 준수(compliance) 관점을 포함한다
 
-### 5. 응용 분야 (Applications)
+### 4. 응용 분야 (Applications)
 
 ```markdown
 | 분야 | 거버넌스 활동 | 구체적 예시 |
@@ -81,12 +73,12 @@ cross_references:
 | 공공 | 데이터 카탈로그 | 공공데이터 포털 메타데이터 관리 |
 ```
 
-### 6. 예시 (Examples)
+### 5. 예시 (Examples)
 
 - 실제 거버넌스 산출물(용어 사전, 데이터 모델, 코드표)의 예시를 제시한다
 - Before/After 비교로 효과를 보여준다
 
-### 7. 코드/도구 예시 (Code/Tool Examples)
+### 6. 코드/도구 예시 (Code/Tool Examples)
 
 - SQL DDL, ERD, 메타데이터 관리 스크립트를 포함한다
 - 도구: ERD 모델링 도구, 데이터 카탈로그 도구
@@ -111,7 +103,7 @@ CREATE TABLE std_code (
 ```
 ```
 
-### 8. 관련 주제 (Related Topics)
+### 7. 관련 주제 (Related Topics)
 
 - 포스트 끝에 관련 개념과 블로그 내 링크를 목록으로 제시한다
 - 선행 지식(prerequisite)과 후속 주제(next)를 구분한다
@@ -161,10 +153,50 @@ format:
 
 ## 교재 레퍼런스
 
-이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+이 카테고리의 포스트 작성 시 다음 교재를 **논리적 뼈대**로 활용한다. 교재의 체계를 참고하되, agent의 최신 사전지식으로 outdated된 내용은 수정하고 부족한 부분은 보완한다.
 
 | 교재 | Summary 경로 | 활용 영역 |
 |---|---|---|
 | DAMA International — DMBOK 2nd Ed. (2017) | `docs/book/governance/DAMA-DMBOK-summary.md` | 데이터 거버넌스, 품질, 메타데이터, 보안 |
 
-**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 상세 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
+**활용 절차**: Summary 읽기 → 논리 구조 파악 → Full MD에서 수식/정의 확인 → 교재 내용 중 유효한 부분은 유지, outdated된 부분은 agent 지식으로 수정·보완 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
+
+---
+
+## 자주 발생하는 실수 패턴
+
+<fix-abstract-governance>
+
+```
+# WRONG: 추상적 서술
+데이터 품질이 중요하다. 조직은 데이터 품질을 관리해야 한다.
+
+# CORRECT: 구체적 품질 차원 + 측정 지표 + 실무 사례
+데이터 품질은 6가지 차원으로 측정한다 (DAMA DMBOK, Ch.13):
+| 차원 | 정의 | 측정 예시 |
+|------|------|----------|
+| 정확성(Accuracy) | 실제 값과의 일치도 | 주소 오류율 < 2% |
+| 완전성(Completeness) | 필수 필드의 비결측률 | NULL 비율 < 5% |
+| 일관성(Consistency) | 시스템 간 값 일치 | CRM-ERP 불일치 건수 |
+```
+
+</fix-abstract-governance>
+
+---
+
+<boundaries>
+
+### 할 수 있는 것
+
+- DMBOK 프레임워크 기반 거버넌스 설명
+- 데이터 품질 차원별 측정 지표 제시
+- 거버넌스 프로세스 설계 사례
+- 실무 적용 시나리오
+
+### 할 수 없는 것
+
+- 조직 특화 정책을 일반론으로 서술
+- 프레임워크 없이 경험담만 나열
+- 구체적 지표 없이 "품질이 중요하다" 식의 추상적 서술
+
+</boundaries>

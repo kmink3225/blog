@@ -1,0 +1,382 @@
+---
+title: "AI Agent 오프라인 평가 설계"
+subtitle: "Golden Dataset과 RAG 평가 지표로 온라인 실험 전 후보를 스크리닝한다"
+description: |
+  온라인 A/B 테스트는 트래픽과 시간이 든다. 오프라인 평가로 후보 구성을 사전 스크리닝하면
+  온라인 실험의 효율을 극적으로 높일 수 있다. Golden dataset 구축 방법, RAG 특화 평가 지표
+  (Relevance, Faithfulness, Groundedness), 자동 평가 파이프라인 설계를 다룬다.
+categories:
+  - Experimentation
+  - Agent
+author: Kwangmin Kim
+date: 03/21/2026
+---
+
+## 정의
+
+::: {.callout-note}
+## 정의: 오프라인 평가 (Offline Evaluation)
+
+오프라인 평가란, 실제 사용자 트래픽 없이 **사전 구축된 테스트 데이터셋(Golden Dataset)**에 대해 Agent의 응답을 생성하고, 미리 정의한 품질 지표로 점수를 산출하는 평가 방식이다.
+
+- 역학: Preclinical study, Phase I/II (탐색적 단계)
+- IT: Offline evaluation, Shadow testing, Backtesting
+- 목적: 온라인 실험에 투입할 가치가 있는 후보를 걸러내는 **스크리닝(screening)**
+- 한계: 실제 사용자 행동, 세션 맥락, 장기 효과는 포착하지 못한다
+- 핵심 가정: Golden Dataset이 실제 질의 분포를 대표한다 (외적 타당성). 이 가정이 위반되면 오프라인 성능이 온라인에서 재현되지 않는다
+:::
+
+---
+
+## 왜 오프라인 평가가 먼저인가
+
+온라인 A/B 테스트는 **비용이 높다**:
+
+| 비용 유형 | 설명 |
+|-----------|------|
+| 트래픽 비용 | 내부 Agent는 일일 질의 수가 적어 실험 기간이 길어진다 |
+| 기회 비용 | 열등한 변형(variant)에 배정된 사용자는 나쁜 경험을 한다 |
+| 엔지니어링 비용 | 라우팅, 로깅, 분석 파이프라인 구축이 필요하다 |
+
+MINERVA QnA Chatbot에서 10개 프롬프트 변형을 온라인 A/B로 모두 비교하면, 그룹당 176건 × 10개 변형 = 1,760건이 필요하다. 하루 50건이면 **35일**이 걸리고, 그 기간 동안 열등한 9개 변형에 노출된 사용자 약 1,580명은 최적이 아닌 응답을 받는다. 오프라인 평가로 상위 2~3개만 걸러내면, 온라인 실험은 352건(7일)이면 충분하다.
+
+오프라인 평가는 이 비용을 들이기 **전에** 후보를 줄인다:
+
+```
+10개 후보 구성 → [오프라인 평가] → 상위 2~3개 선별 → [온라인 A/B 테스트]
+```
+
+MINERVA의 경우, 3종 Agent × 다수 파라미터 조합에서 발생하는 수십 개의 후보를 모두 온라인 실험하는 것은 불가능하다. 오프라인 평가로 명확히 열등한 조합을 탈락시키고, 경합하는 소수만 온라인으로 보낸다.
+
+---
+
+## Golden Dataset 구축
+
+### Golden Dataset이란
+
+Golden Dataset은 **질의(query) + 기대 답변(expected answer) + 평가 기준(rubric)**으로 구성된 테스트 세트이다. 모든 오프라인 평가의 기반이 된다.
+
+### 구성 요소
+
+| 필드 | 설명 | 예시 (QnA Chatbot) |
+|------|------|---------------------|
+| `query` | 사용자 질의 | "표준 용어와 표준 단어의 차이는?" |
+| `expected_answer` | 참조 정답 | "표준 용어는 업무적 정의를 포함하고..." |
+| `source_docs` | 정답 근거 문서 | `data_standard_glossary.md`, Section 3.2 |
+| `difficulty` | 난이도 | easy / medium / hard |
+| `category` | 질의 유형 | 정의 질문, 비교 질문, 절차 질문 |
+
+### 구축 절차
+
+#### 1단계: 질의 수집
+
+실제 사용 로그가 있으면 가장 좋다. 없으면 다음 방법을 조합한다:
+
+```python
+# 방법 1: 문서 기반 질의 생성 (LLM 활용)
+query_generation_prompt = """
+다음 문서를 읽고, 이 문서를 참조해야 답할 수 있는 질문 5개를 생성하라.
+질문 유형: 정의 1개, 비교 1개, 절차 1개, 응용 1개, 엣지케이스 1개
+
+문서:
+{document_content}
+"""
+
+# 방법 2: 도메인 전문가 직접 작성
+# → 실제 업무에서 자주 묻는 질문을 수집
+
+# 방법 3: 기존 FAQ/매뉴얼에서 추출
+```
+
+#### 2단계: 참조 정답 작성
+
+도메인 전문가가 작성하는 것이 이상적이지만, 현실적으로 다음 방법을 혼용한다:
+
+- **Tier 1 (핵심)**: 전문가 직접 작성 — 30~50개. 자동 평가 보정의 기준점으로 사용
+- **Tier 2 (확장)**: LLM 생성 + 전문가 검토 — 100~200개. 효율과 품질의 균형
+- **Tier 3 (대량)**: LLM 생성 + 자동 검증 — 500개 이상. 통계적 안정성 확보용
+
+#### 3단계: 품질 검증
+
+```python
+# Golden Dataset 품질 체크리스트
+quality_checks = {
+    "coverage": "모든 문서/주제 영역이 대표되는가",
+    "difficulty_balance": "easy:medium:hard 비율이 적절한가 (30:50:20 권장)",
+    "answer_quality": "참조 정답이 정확하고 완전한가",
+    "source_traceability": "각 정답의 근거 문서가 명시되어 있는가",
+    "no_ambiguity": "질의가 모호하지 않고 하나의 명확한 의도를 가지는가",
+}
+```
+
+### MINERVA Agent별 Golden Dataset 예시
+
+| Agent | 질의 예시 | 기대 답변 유형 |
+|-------|-----------|---------------|
+| QnA Chatbot | "표준화 원칙에서 일관성 원칙이란?" | 정의 + 예시 |
+| QnA Chatbot | "표준 도메인과 표준 코드의 관계는?" | 관계 설명 |
+| Data Std Helper | "컬럼명 `cust_nm`에 대한 표준 용어를 추천하라" | 추천 결과 + 근거 규칙 |
+| Data Std Helper | "DATE 타입 컬럼의 표준 도메인은?" | 도메인 코드 + 형식 |
+| Insilico Code | "이 함수의 역할과 입출력을 설명하라" | 코드 분석 결과 |
+| Insilico Code | "이 모듈의 의존성 구조를 설명하라" | 의존성 그래프 + 설명 |
+
+---
+
+## RAG 평가 지표
+
+### 지표 체계
+
+RAG 기반 Agent의 응답 품질은 **검색(Retrieval)** 단계와 **생성(Generation)** 단계를 분리하여 평가해야 한다. 어느 단계에서 품질이 떨어지는지 진단하지 못하면 개선 방향을 잡을 수 없다.
+
+```
+질의 → [검색] → 검색된 문서 → [생성] → 최종 응답
+         ↓                        ↓
+    검색 품질 지표            생성 품질 지표
+```
+
+### 검색 품질 지표 (Retrieval Metrics)
+
+| 지표 | 정의 | 수식 |
+|------|------|------|
+| Hit Rate (Recall@k) | 상위 k개 검색 결과에 정답 문서가 포함되는 비율 | $\frac{\text{정답 포함 질의 수}}{\text{전체 질의 수}}$ |
+| MRR (Mean Reciprocal Rank) | 정답 문서의 순위 역수의 평균 | $\frac{1}{N}\sum_{i=1}^{N}\frac{1}{\text{rank}_i}$ |
+| nDCG@k | 순위를 고려한 검색 품질 | $\frac{DCG@k}{IDCG@k}$ |
+| Precision@k | 상위 k개 중 관련 문서의 비율 | $\frac{\text{관련 문서 수}}{k}$ |
+
+```python
+import numpy as np
+
+def hit_rate_at_k(retrieved_docs_list, relevant_docs_list, k=5):
+    """
+    Hit Rate@k: 상위 k개에 정답 문서가 하나라도 포함되면 hit
+
+    Parameters:
+        retrieved_docs_list: List[List[str]] - 각 질의별 검색된 문서 ID 리스트
+        relevant_docs_list: List[Set[str]] - 각 질의별 정답 문서 ID 집합
+    """
+    hits = 0
+    for retrieved, relevant in zip(retrieved_docs_list, relevant_docs_list):
+        top_k = retrieved[:k]
+        if any(doc in relevant for doc in top_k):
+            hits += 1
+    return hits / len(retrieved_docs_list)
+
+
+def mrr(retrieved_docs_list, relevant_docs_list):
+    """Mean Reciprocal Rank"""
+    reciprocal_ranks = []
+    for retrieved, relevant in zip(retrieved_docs_list, relevant_docs_list):
+        for rank, doc in enumerate(retrieved, 1):
+            if doc in relevant:
+                reciprocal_ranks.append(1.0 / rank)
+                break
+        else:
+            reciprocal_ranks.append(0.0)
+    return np.mean(reciprocal_ranks)
+```
+
+### 생성 품질 지표 (Generation Metrics)
+
+| 지표 | 측정 대상 | 설명 |
+|------|-----------|------|
+| **Faithfulness** | 응답 ↔ 검색 문서 | 응답이 검색된 문서의 내용에 근거하는가 (환각 여부) |
+| **Relevance** | 응답 ↔ 질의 | 응답이 질의에 대한 답을 실제로 제공하는가 |
+| **Groundedness** | 응답의 각 문장 ↔ 소스 | 응답의 각 주장이 특정 소스에 귀속 가능한가 |
+| **Completeness** | 응답 ↔ 기대 답변 | 기대 답변의 핵심 요소를 빠뜨리지 않았는가 |
+| **Conciseness** | 응답 자체 | 불필요한 반복이나 관련 없는 내용이 없는가 |
+
+### LLM-as-Judge 구현
+
+자동 평가의 핵심은 **LLM을 평가자로 활용**하는 것이다. 인간 평가와의 상관을 검증한 뒤 대규모로 적용한다.
+
+```python
+faithfulness_prompt = """
+다음 질의, 검색된 문서, Agent 응답을 보고 Faithfulness를 1~5점으로 평가하라.
+
+## 평가 기준
+- 5점: 응답의 모든 주장이 검색 문서에서 직접 확인 가능하다
+- 4점: 대부분의 주장이 문서에 근거하며, 합리적 추론 1~2개 포함
+- 3점: 핵심 주장은 문서에 근거하나, 일부 근거 없는 서술 존재
+- 2점: 문서 내용과 부분적으로만 일치하며, 상당 부분 근거 없음
+- 1점: 응답이 문서 내용과 거의 무관하거나 명백히 모순됨
+
+## 입력
+질의: {query}
+검색 문서: {retrieved_docs}
+Agent 응답: {response}
+
+## 출력 형식
+점수: [1-5]
+근거: [평가 이유를 2~3문장으로]
+"""
+
+relevance_prompt = """
+다음 질의와 Agent 응답을 보고 Relevance를 1~5점으로 평가하라.
+
+## 평가 기준
+- 5점: 질의의 모든 측면에 직접적으로 답한다
+- 4점: 핵심 질문에 답하며, 부가적 측면 일부 누락
+- 3점: 관련된 내용이나, 질의의 핵심을 부분적으로만 다룸
+- 2점: 주제는 관련되나, 실질적 답변이 아님
+- 1점: 질의와 무관한 응답
+
+## 입력
+질의: {query}
+Agent 응답: {response}
+
+## 출력 형식
+점수: [1-5]
+근거: [평가 이유를 2~3문장으로]
+"""
+```
+
+---
+
+## 자동 평가 파이프라인
+
+### 전체 구조
+
+```
+Golden Dataset (N개 질의)
+    ↓
+[Agent 구성 A] → 응답 A₁, A₂, ..., Aₙ
+[Agent 구성 B] → 응답 B₁, B₂, ..., Bₙ
+    ↓
+[검색 평가] Hit Rate, MRR, nDCG
+[생성 평가] Faithfulness, Relevance, Completeness (LLM-as-Judge)
+    ↓
+[통계 비교] 구성 A vs B — paired t-test 또는 Wilcoxon signed-rank
+    ↓
+[스크리닝 결과] 온라인 실험 후보 선정
+```
+
+### 구현 예시
+
+```python
+import pandas as pd
+from scipy import stats
+
+class OfflineEvaluator:
+    """Agent 오프라인 평가 파이프라인"""
+
+    def __init__(self, golden_dataset: list[dict], judge_llm):
+        self.dataset = golden_dataset
+        self.judge = judge_llm
+
+    def evaluate_config(self, agent_config: dict) -> pd.DataFrame:
+        """단일 Agent 구성에 대해 Golden Dataset 전체를 평가한다"""
+        results = []
+        for item in self.dataset:
+            # Agent 실행
+            response = self.run_agent(agent_config, item["query"])
+
+            # 검색 지표
+            retrieval_scores = self.evaluate_retrieval(
+                retrieved=response["retrieved_docs"],
+                relevant=item["source_docs"]
+            )
+
+            # 생성 지표 (LLM-as-Judge)
+            generation_scores = self.evaluate_generation(
+                query=item["query"],
+                response=response["answer"],
+                retrieved_docs=response["retrieved_docs"],
+                expected=item["expected_answer"]
+            )
+
+            results.append({
+                "query_id": item["id"],
+                **retrieval_scores,
+                **generation_scores
+            })
+
+        return pd.DataFrame(results)
+
+    def compare_configs(self, config_a: dict, config_b: dict) -> dict:
+        """두 구성의 성능을 통계적으로 비교한다"""
+        scores_a = self.evaluate_config(config_a)
+        scores_b = self.evaluate_config(config_b)
+
+        comparisons = {}
+        for metric in ["hit_rate", "faithfulness", "relevance", "completeness"]:
+            # Paired test: 동일 질의에 대한 점수 차이 검정
+            stat, p_value = stats.wilcoxon(
+                scores_a[metric], scores_b[metric],
+                alternative="two-sided"
+            )
+            diff = scores_b[metric].mean() - scores_a[metric].mean()
+            comparisons[metric] = {
+                "mean_a": scores_a[metric].mean(),
+                "mean_b": scores_b[metric].mean(),
+                "diff": diff,
+                "p_value": p_value,
+                "significant": p_value < 0.05
+            }
+
+        return comparisons
+```
+
+### 반복 실행과 신뢰구간
+
+LLM 출력의 비결정성 때문에 **동일 질의-구성 조합을 복수 회 실행**해야 한다:
+
+```python
+def evaluate_with_replication(agent_config, query, n_reps=5):
+    """동일 질의에 대해 n번 반복 실행하여 평균과 분산을 추정한다"""
+    scores = []
+    for _ in range(n_reps):
+        response = run_agent(agent_config, query)
+        score = evaluate_response(response)
+        scores.append(score)
+
+    return {
+        "mean": np.mean(scores),
+        "std": np.std(scores, ddof=1),
+        "ci_95": (
+            np.mean(scores) - 1.96 * np.std(scores, ddof=1) / np.sqrt(n_reps),
+            np.mean(scores) + 1.96 * np.std(scores, ddof=1) / np.sqrt(n_reps)
+        ),
+        "n_reps": n_reps
+    }
+```
+
+::: {.callout-tip}
+## 반복 횟수 가이드
+
+- **temperature=0**: 3회 반복이면 충분하다. Azure OpenAI의 서비스 레이어 변동(부동소수점 연산 순서 등)으로 미세한 차이가 발생하지만, LLM-as-Judge 평가 점수에 영향을 줄 정도는 아니다.
+- **temperature>0**: 5~10회 반복을 권장한다. temperature=0.7에서 동일 질의의 Relevance 점수가 2~5점 범위로 변동할 수 있으며, 3회로는 평균의 95% 신뢰구간이 ±1.5점까지 넓어져 구성 간 차이를 식별할 수 없다.
+- **LLM-as-Judge 평가**: Judge LLM 자체도 비결정적이므로, Agent 반복 × Judge 반복의 교차 설계가 이상적이다. 최소한 Agent 3회 × Judge 1회로 시작하고, Judge 분산이 크면 Judge 반복도 추가한다.
+:::
+
+---
+
+## 오프라인 평가의 한계
+
+오프라인 평가만으로는 다음을 포착할 수 없다:
+
+| 한계 | 설명 | 대응 |
+|------|------|------|
+| 실제 질의 분포 | Golden Dataset이 실사용 패턴을 완벽히 대표하지 못한다 | 사용 로그 기반으로 Golden Dataset을 지속 갱신한다 |
+| 세션 맥락 | 멀티턴 대화의 맥락 의존성을 단일 질의로 평가하기 어렵다 | 멀티턴 시나리오를 Golden Dataset에 포함한다 |
+| 사용자 만족도 | 객관적 정확도와 주관적 만족도는 다를 수 있다 | 온라인 실험에서 사용자 피드백을 수집한다 |
+| 장기 효과 | 학습 효과, 신뢰도 변화 등 시간 경과에 따른 변화 | 온라인 실험 기간을 충분히 확보한다 |
+| 시스템 부하 | 응답 지연, 동시 접속 등 운영 환경의 영향 | 부하 테스트를 별도로 수행한다 |
+
+**결론**: 오프라인 평가는 온라인 실험의 **대체가 아니라 전 단계(preclinical)**이다. 오프라인에서 명확히 열등한 후보를 탈락시키고, 경합하는 소수를 온라인에서 최종 판정한다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [AI Agent A/B 테스트 개요](./40-project-agent-ab-overview.qmd) — 시리즈 도입, 기존 A/B와의 차이
+
+**시리즈 다음 포스트**
+
+- [Agent 실험 메트릭 설계](./42-project-agent-metrics-design.qmd) — 오프라인 지표를 온라인 메트릭으로 전환하는 논리
+
+**다른 카테고리 연결**
+
+- [Agent 카테고리](../../Agent/index.qmd) — RAG 파이프라인 구축, 프롬프트 엔지니어링
+- [A/B 테스트의 핵심 메커니즘](../01-ab-test-mechanism.qmd) — 가설 검정의 기본 프로세스

@@ -1,0 +1,362 @@
+---
+title: "실험 결과 분석과 의사결정"
+subtitle: "효과 크기 해석, 신뢰구간 기반 판단, Go/No-Go 프레임워크"
+description: |
+  실험 설계와 실행이 끝나면 결과를 분석하고 의사결정을 내려야 한다.
+  p-value를 넘어 효과 크기와 신뢰구간 중심의 해석, 가드레일 위반 처리,
+  그리고 조직의 Go/No-Go 의사결정 프레임워크를 제시한다.
+categories:
+  - Experimentation
+  - Statistics
+author: Kwangmin Kim
+date: 03/21/2026
+---
+
+## 정의
+
+::: {.callout-note}
+## 정의: 실험 의사결정
+
+실험 의사결정이란, 수집된 데이터를 통계적으로 분석한 뒤 **"이 변경을 프로덕션에 적용할 것인가?"**를 판단하는 과정이다. 통계적 유의성만이 아니라 **실무적 의의(practical significance)**, **가드레일 안전**, **비즈니스 맥락**을 종합적으로 고려한다.
+
+- 역학: Clinical significance vs Statistical significance 구분
+- IT: Practical significance, Minimum Detectable Effect 기반 판단
+:::
+
+---
+
+## 분석 전 검증 (Pre-analysis Checks)
+
+결과를 해석하기 전에 실험의 **내적 타당성**을 먼저 확인한다. 이 검증을 건너뛰면 잘못된 데이터로 의사결정을 내리게 된다.
+
+::: {.callout-important}
+## 결과 해석의 전제 가정
+
+분석 결과의 인과적 해석은 다음 가정이 충족될 때만 유효하다:
+
+- **SUTVA**: 실험 단위 간 간섭(interference)이 없다. Agent 실험에서는 동일 문서 풀을 공유하므로, 한 변형이 문서 캐시에 영향을 주면 다른 변형에도 영향이 전파될 수 있다.
+- **무작위 배정의 유효성**: SRM 검정이 이를 확인한다. SRM이 실패하면 이하의 모든 분석은 편향된 것으로 간주한다.
+- **측정의 일관성**: 자동 평가(LLM-as-Judge)의 점수가 실험 기간 동안 안정적이어야 한다. Judge 모델 업데이트가 있었다면 구간별로 분리 분석한다.
+:::
+
+### SRM 검정 (Sample Ratio Mismatch)
+
+```python
+from scipy.stats import chisquare
+
+def pre_analysis_checks(df, expected_ratio=0.5, alpha_srm=0.01):
+    """실험 데이터의 내적 타당성 검증"""
+    n_control = len(df[df["variant"] == "control"])
+    n_treatment = len(df[df["variant"] == "treatment"])
+    total = n_control + n_treatment
+
+    # SRM 검정
+    expected = [total * expected_ratio, total * (1 - expected_ratio)]
+    stat, p_srm = chisquare([n_control, n_treatment], expected)
+
+    checks = {
+        "srm": {
+            "n_control": n_control,
+            "n_treatment": n_treatment,
+            "actual_ratio": round(n_control / total, 4),
+            "p_value": round(p_srm, 6),
+            "pass": p_srm >= alpha_srm,
+        },
+        "missing_data": {
+            "control_missing_rate": df[df["variant"] == "control"].isnull().mean().to_dict(),
+            "treatment_missing_rate": df[df["variant"] == "treatment"].isnull().mean().to_dict(),
+        },
+        "duration": {
+            "start": str(df["timestamp"].min()),
+            "end": str(df["timestamp"].max()),
+            "days": (df["timestamp"].max() - df["timestamp"].min()).days,
+        },
+    }
+
+    checks["all_pass"] = checks["srm"]["pass"]
+    if not checks["all_pass"]:
+        checks["action"] = "실험 중단 — SRM 원인 조사 필요"
+
+    return checks
+```
+
+### 검증 체크리스트
+
+| 항목 | 기준 | 실패 시 조치 |
+|------|------|-------------|
+| SRM | p > 0.01 | 배정 로직·로깅 점검, 결과 신뢰 불가 |
+| 결측률 | 그룹 간 차이 < 2%p | 결측 메커니즘 조사 |
+| 실험 기간 | 계획된 기간 충족 | 조기 종료 사유 확인 |
+| 외부 이벤트 | 실험 기간 중 시스템 변경 없음 | 영향 범위 분석 |
+
+---
+
+## 효과 크기 중심의 해석
+
+### p-value의 한계
+
+p-value는 "효과가 있는가?"에만 답한다. "효과가 얼마나 큰가?"에는 답하지 못한다.
+
+```
+실험 A: diff = +0.01, p = 0.001  ← 표본이 매우 크면 작은 차이도 유의
+실험 B: diff = +0.50, p = 0.08   ← 표본이 작으면 큰 차이도 비유의
+
+어느 실험이 더 의미 있는가? → 효과 크기(diff)를 봐야 한다
+```
+
+### 신뢰구간 기반 판단
+
+```python
+import numpy as np
+from scipy import stats
+
+def analyze_experiment_result(
+    control_scores,
+    treatment_scores,
+    mde: float,
+    alpha: float = 0.05
+) -> dict:
+    """실험 결과를 효과 크기 + 신뢰구간 중심으로 분석한다"""
+    n_c, n_t = len(control_scores), len(treatment_scores)
+    mean_c, mean_t = np.mean(control_scores), np.mean(treatment_scores)
+    diff = mean_t - mean_c
+
+    # Welch's t-test
+    t_stat, p_value = stats.ttest_ind(
+        treatment_scores, control_scores, equal_var=False
+    )
+
+    # 신뢰구간
+    se = np.sqrt(np.var(control_scores, ddof=1)/n_c + np.var(treatment_scores, ddof=1)/n_t)
+    ci_lower = diff - stats.t.ppf(1-alpha/2, df=min(n_c, n_t)-1) * se
+    ci_upper = diff + stats.t.ppf(1-alpha/2, df=min(n_c, n_t)-1) * se
+
+    # Cohen's d
+    pooled_std = np.sqrt((np.var(control_scores, ddof=1) + np.var(treatment_scores, ddof=1)) / 2)
+    cohens_d = diff / pooled_std if pooled_std > 0 else 0
+
+    # 판정
+    significant = p_value < alpha
+    practically_meaningful = abs(diff) >= mde
+    ci_excludes_zero = (ci_lower > 0) or (ci_upper < 0)
+
+    return {
+        "control_mean": round(mean_c, 4),
+        "treatment_mean": round(mean_t, 4),
+        "diff": round(diff, 4),
+        "ci_95": (round(ci_lower, 4), round(ci_upper, 4)),
+        "cohens_d": round(cohens_d, 3),
+        "p_value": round(p_value, 6),
+        "statistically_significant": significant,
+        "practically_meaningful": practically_meaningful,
+        "interpretation": _interpret(significant, practically_meaningful, diff, ci_lower, ci_upper, mde),
+    }
+
+def _interpret(significant, meaningful, diff, ci_lo, ci_hi, mde):
+    if significant and meaningful:
+        return f"통계적으로 유의하고 실무적으로 의미 있는 개선 (diff={diff:+.3f}, MDE={mde})"
+    elif significant and not meaningful:
+        return f"통계적으로 유의하나 효과 크기가 MDE({mde}) 미만 — 실무적 가치 재검토"
+    elif not significant and ci_hi < mde:
+        return f"신뢰구간 상한({ci_hi:.3f})이 MDE({mde}) 미만 — 의미 있는 효과 없음 확인"
+    elif not significant:
+        return f"판단 보류 — 신뢰구간이 넓어 효과 유무를 단정할 수 없음. 추가 데이터 수집 검토"
+    return "해석 불가"
+```
+
+### 효과 크기 해석 가이드
+
+| Cohen's d | 해석 | Agent 실험 예시 |
+|-----------|------|----------------|
+| 0.2 | 작은 효과 | Relevance 0.2점 개선 (미미) |
+| 0.5 | 중간 효과 | Relevance 0.5점 개선 (체감 가능) |
+| 0.8 | 큰 효과 | Relevance 0.8점 개선 (명백한 차이) |
+
+---
+
+## 가드레일 위반 처리
+
+### 가드레일 판정 로직
+
+```python
+def check_guardrails(df, guardrail_config: dict) -> dict:
+    """가드레일 메트릭 위반 여부를 판정한다"""
+    treatment_df = df[df["variant"] == "treatment"]
+    results = {}
+
+    for name, config in guardrail_config.items():
+        value = treatment_df[config["column"]].mean()
+        threshold = config["threshold"]
+        direction = config["direction"]  # "lower_is_better" or "higher_is_better"
+
+        if direction == "lower_is_better":
+            violated = value > threshold
+        else:
+            violated = value < threshold
+
+        results[name] = {
+            "value": round(value, 4),
+            "threshold": threshold,
+            "violated": violated,
+            "severity": "CRITICAL" if violated else "OK",
+        }
+
+    any_violated = any(r["violated"] for r in results.values())
+    results["overall"] = {
+        "any_violated": any_violated,
+        "action": "실험 기각 — 가드레일 위반" if any_violated else "가드레일 통과"
+    }
+    return results
+
+# MINERVA 가드레일 설정
+guardrails = {
+    "hallucination_rate": {
+        "column": "is_hallucination",
+        "threshold": 0.10,
+        "direction": "lower_is_better",
+    },
+    "error_rate": {
+        "column": "is_error",
+        "threshold": 0.02,
+        "direction": "lower_is_better",
+    },
+    "latency_p95": {
+        "column": "latency_ms",
+        "threshold": 5000,  # 5초
+        "direction": "lower_is_better",
+    },
+}
+```
+
+---
+
+## Go/No-Go 의사결정 프레임워크
+
+### 판정 매트릭스
+
+```
+                    가드레일 통과        가드레일 위반
+                    ─────────────      ──────────────
+유의 + 의미있음  →  Go (출시)          No-Go (기각)
+유의 + 작은효과  →  Review             No-Go (기각)
+비유의          →  Hold (보류/연장)     No-Go (기각)
+```
+
+### 종합 판정 함수
+
+```python
+def go_no_go_decision(
+    primary_result: dict,
+    guardrail_result: dict,
+    secondary_results: list[dict] = None,
+) -> dict:
+    """Go/No-Go 의사결정
+
+    Args:
+        primary_result: analyze_experiment_result()의 반환값
+        guardrail_result: check_guardrails()의 반환값
+        secondary_results: 2차 메트릭 분석 결과 리스트
+    """
+    guardrail_pass = not guardrail_result["overall"]["any_violated"]
+    significant = primary_result["statistically_significant"]
+    meaningful = primary_result["practically_meaningful"]
+
+    # Step 1: 가드레일
+    if not guardrail_pass:
+        return {
+            "decision": "NO-GO",
+            "reason": "가드레일 위반",
+            "details": guardrail_result,
+            "action": "Treatment 적용 금지. 가드레일 위반 원인 분석 후 실험 재설계."
+        }
+
+    # Step 2: Primary metric
+    if significant and meaningful:
+        decision = "GO"
+        reason = "1차 메트릭 유의하고 실무적으로 의미 있는 개선"
+        action = "Treatment를 프로덕션에 적용한다."
+    elif significant and not meaningful:
+        decision = "REVIEW"
+        reason = "통계적으로 유의하나 효과 크기가 MDE 미만"
+        action = "비용/복잡도 대비 효과를 검토한다. 유지보수 이점이 있으면 Go 가능."
+    else:
+        decision = "HOLD"
+        reason = "유의한 차이 미확인"
+        action = "실험 연장, MDE 재조정, 또는 다른 변형으로 재실험."
+
+    # Step 3: Secondary metrics (참고용)
+    secondary_summary = None
+    if secondary_results:
+        n_improved = sum(1 for r in secondary_results if r.get("diff", 0) > 0)
+        secondary_summary = f"{len(secondary_results)}개 중 {n_improved}개 개선 방향"
+
+    return {
+        "decision": decision,
+        "reason": reason,
+        "action": action,
+        "primary": primary_result["interpretation"],
+        "secondary_summary": secondary_summary,
+    }
+```
+
+---
+
+## 결과 보고서 템플릿
+
+```markdown
+# 실험 결과 보고서
+
+## 실험 개요
+- 실험명: QnA Chatbot 프롬프트 v2
+- 기간: 2026-07-01 ~ 2026-07-08
+- 트래픽: Control 188건, Treatment 192건
+
+## Pre-analysis Checks
+- SRM: p=0.82 (정상)
+- 결측률: Control 1.1%, Treatment 0.8% (정상)
+
+## 가드레일
+- 환각률: 6.3% (임계값 10%) — 통과
+- 오류율: 0.5% (임계값 2%) — 통과
+
+## 1차 메트릭: Relevance Score
+- Control: 3.52 ± 0.98
+- Treatment: 3.87 ± 0.91
+- 차이: +0.35 [95% CI: 0.16, 0.54]
+- Cohen's d: 0.37
+- p-value: 0.0003
+
+## 판정
+**GO** — 통계적으로 유의하고 (p<0.001), 효과 크기(0.35)가 MDE(0.30)를 초과하며,
+가드레일 위반 없음. Treatment(프롬프트 v2)를 프로덕션에 적용한다.
+```
+
+---
+
+## 흔한 실수
+
+| 실수 | 왜 문제인가 | 올바른 접근 |
+|------|------------|------------|
+| p < 0.05이면 무조건 출시 | 작은 효과도 유의할 수 있음 | 효과 크기와 MDE를 함께 확인 |
+| p > 0.05이면 "효과 없음" 결론 | 검정력 부족일 수 있음 | 신뢰구간을 확인하여 판단 보류/효과 없음 구분 |
+| 가드레일 무시 | 1차 메트릭 개선이 다른 지표 악화를 가릴 수 있음 | 가드레일을 먼저 확인 |
+| 사후 가설 추가 | 데이터 스누핑 | 사전 정의한 메트릭만으로 판정 |
+| Subgroup 분석을 확정적으로 해석 | Multiple testing으로 false positive | 탐색적 분석으로 표기, 후속 실험으로 확인 |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Human-in-the-Loop 평가](./47-project-agent-human-eval.qmd) — 정성적 평가 결과
+- [단순 A/B 테스트 설계](./43-project-agent-simple-ab.qmd) — 실험 설계와 검정 방법
+
+**시리즈 다음 포스트**
+
+- [Thompson Sampling 동적 라우팅](./49-project-agent-thompson-routing.qmd) — 고정 배분을 넘어 동적 최적화로
+
+**다른 카테고리 연결**
+
+- [가설 검정](../../Statistics/2023-04-10_hypothesis.qmd) — p-value, 신뢰구간의 통계적 기초
+- [인과추론 프레임워크](../Causal_Inference/01-causal-inference-overview.qmd) — ATE 추정의 이론적 기반

@@ -2,7 +2,7 @@
 name: Surveilance_GUIDE
 type: category
 version: 1.0
-description: Surveilance 카테고리 포스트 작성 규칙 — FDA/EMA 규제, 인허가, BibTeX 참고문헌
+description: "LOAD when writing posts about medical device regulation (FDA, EMA, MFDS), SaMD classification, clinical validation, or AI/ML regulatory strategy. Covers regulatory frameworks with BibTeX references."
 scope: docs/blog/posts/Surveilance/
 parent: AGENT_GUIDE.md
 index: docs/blog/posts/Surveilance/index.qmd
@@ -58,25 +58,15 @@ cross_references:
 - 규제 프레임워크의 구조와 논리를 설명한다
 - 위험 분류 체계, 심사 경로, 필수 요건을 정리한다
 - 규제 기관별 차이점을 비교한다
+- 추상적이거나 이해하기 어려운 개념에는 비유, 규제 부재 시 위험 예시 등 직관적 설명을 적재적소에 포함한다 (필요시 별도 섹션으로 분리 가능)
 
-### 3. 직관적 설명 (Intuitive Explanation)
-
-- 규제의 목적(환자 안전)을 중심으로 설명한다
-- 규제 없는 상황의 위험성을 예시로 제시한다
-
-```markdown
-> **직관**: 의료 AI 규제는 "제품이 안전하고 효과적인지 증명하라"는 요구이다.
-> 자동차가 출시 전 충돌 테스트를 거치는 것처럼,
-> 의료 AI도 임상적 성능(민감도, 특이도)과 안전성(편향, 실패 모드)을 입증해야 한다.
-```
-
-### 4. 왜 필요한가 (Why It Matters)
+### 3. 왜 필요한가 (Why It Matters)
 
 - 규제 미준수 시 법적/비즈니스 리스크를 제시한다
 - 승인 전략 수립의 중요성을 강조한다
 - AI/ML 기반 의료기기의 특수한 규제 도전을 설명한다
 
-### 5. 응용 분야 (Applications)
+### 4. 응용 분야 (Applications)
 
 ```markdown
 | 제품 유형 | 규제 경로 | 구체적 예시 |
@@ -88,13 +78,13 @@ cross_references:
 | 웰니스 앱 | 의료기기 비해당 | 운동 추적, 수면 모니터링 |
 ```
 
-### 6. 예시 (Examples)
+### 5. 예시 (Examples)
 
 - 실제 FDA/EMA 승인 사례를 분석한다
 - 승인 전략(predicate device 선정, 임상 데이터 구성)을 단계별로 보여준다
 - 승인 실패 사례에서의 교훈을 포함한다
 
-### 7. 코드 예시 (Code Examples — Optional)
+### 6. 코드 예시 (Code Examples — Optional)
 
 - 성능 검증(민감도, 특이도, ROC 곡선) 코드를 포함한다
 - 시그모이드 피팅, PCR 곡선 분석 등 도메인 특화 분석 코드를 포함한다
@@ -118,7 +108,7 @@ print(f"Sensitivity: {sensitivity:.3f}, Specificity: {specificity:.3f}")
 ```
 ```
 
-### 8. 관련 주제 (Related Topics)
+### 7. 관련 주제 (Related Topics)
 
 - 포스트 끝에 관련 개념과 블로그 내 링크를 목록으로 제시한다
 - 선행 지식(prerequisite)과 후속 주제(next)를 구분한다
@@ -170,6 +160,29 @@ bibliography: references.bib
 
 ---
 
+## 자주 발생하는 실수 패턴
+
+<fix-regulation-without-source>
+
+```
+# WRONG: 출처 없는 규제 요건 서술
+FDA는 AI/ML 기반 의료기기에 대해 지속적 학습을 허용한다.
+
+# CORRECT: 구체적 가이던스 문서명, 발행 연도, 섹션을 명시
+FDA는 AI/ML 기반 SaMD에 대해 Predetermined Change Control Plan(PCCP)을 통한
+지속적 학습을 허용하는 프레임워크를 제시하였다.
+
+- 근거: "Artificial Intelligence/Machine Learning (AI/ML)-Based Software as a
+  Medical Device (SaMD) Action Plan" (FDA, January 2021)
+- 관련 가이던스: "Marketing Submission Recommendations for a Predetermined
+  Change Control Plan for AI/ML-Enabled Device Software Functions" (FDA, 2023)
+- 핵심 요건: SaMD Pre-Specifications (SPS) + Algorithm Change Protocol (ACP)
+```
+
+</fix-regulation-without-source>
+
+---
+
 ## 규제 기관 약어
 
 | 약어 | 정식 명칭 | 관할 |
@@ -183,14 +196,40 @@ bibliography: references.bib
 
 ---
 
-## 교재 레퍼런스
+## 참고 소스
 
-이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+이 카테고리는 교재(book)보다 **규제 기관의 공식 가이던스와 국제 표준**이 primary source이다. 규제는 수시로 업데이트되므로 agent의 최신 사전지식으로 보완한다.
 
-| 교재 | Summary 경로 | 활용 영역 |
-|---|---|---|
-| Ramsay & Silverman — Functional Data Analysis (1997) | `docs/book/functional_data_analysis/Ramsay-FunctionalDataAnalysis-summary.md` | 함수형 데이터 분석 이론, 스플라인 |
-| Ramsay & Silverman — Applied FDA (2002) | `docs/book/functional_data_analysis/Ramsay-AppliedFDA-summary.md` | FDA 사례 연구, 실무 적용 |
-| Kokoszka & Reimherr — Introduction to FDA (2017) | `docs/book/functional_data_analysis/Kokoszka-IntroFDA-summary.md` | FDA 입문, 현대적 접근 |
+| 소스 | 역할 |
+|------|------|
+| FDA Guidance Documents (fda.gov/medical-devices) | 510(k), De Novo, PMA 심사 경로, SaMD 가이던스 |
+| FDA AI/ML-Based SaMD Action Plan | AI/ML 기반 의료기기 규제 프레임워크 |
+| IMDRF SaMD Documents | SaMD 정의, 위험 분류, 임상 평가 국제 표준 |
+| IEC 62304 | 의료기기 소프트웨어 수명주기 프로세스 |
+| ISO 14971 | 의료기기 위험 관리 |
+| EU MDR (2017/745) / IVDR (2017/746) | EU 의료기기/체외진단 규정 |
+| MFDS 의료기기 소프트웨어 허가 심사 가이드라인 | 국내 인허가 기준 |
 
-**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
+**활용 절차**: 관련 규제 가이던스 확인 → agent 사전지식으로 최신 규제 동향 통합 → 블로그 스타일로 재작성. 규제 인용 시 문서명과 발행 연도를 명시한다.
+
+---
+
+<boundaries>
+
+### 할 수 있는 것
+
+- 규제 프레임워크 구조 설명 (FDA, EMA, MFDS, IMDRF)
+- 실제 승인 사례 분석 (510(k), De Novo, PMA 경로)
+- 성능 검증 코드 (민감도, 특이도, ROC, AUC)
+- BibTeX 기반 참고문헌 관리
+- 규제 기관별 비교표 작성
+- AI/ML 의료기기의 특수 규제 도전 설명
+
+### 할 수 없는 것
+
+- 규제 해석을 법적 조언(legal advice)으로 제시
+- 출처 없는 규제 요건 서술 (가이던스 문서명 + 연도 필수)
+- 특정 제품의 인허가 전략을 확정적으로 제시
+- 규제 문서 전문을 번역하여 게시
+
+</boundaries>

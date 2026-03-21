@@ -2,11 +2,12 @@
 name: Agent_GUIDE
 type: category
 version: 1.0
-description: Agent 카테고리 포스트 작성 규칙 — LangChain/LangGraph, 코드 중심 튜토리얼, RAG
+description: LOAD when writing posts about LangChain, LangGraph, RAG, Agent architecture, prompt engineering, or GraphRAG. Covers code-centric tutorials with progressive complexity from basics to advanced agent patterns.
 scope: docs/blog/posts/Agent/
 parent: AGENT_GUIDE.md
 index: docs/blog/posts/Agent/index.qmd
-book_sources: []
+book_sources:
+  - docs/book/ontology/
 cross_references:
   - docs/blog/posts/Engineering/GUIDE.md
   - docs/blog/posts/Math/GUIDE.md
@@ -56,6 +57,7 @@ Agent 카테고리의 포스트는 다음 구조를 따른다. 주제에 따라 
 - 기술의 작동 원리를 아키텍처 수준에서 설명한다
 - 데이터 흐름(pipeline)을 단계별로 분해한다
 - 핵심 컴포넌트 간 관계를 명시한다
+- 추상적이거나 이해하기 어려운 개념에는 비유, 기존 방식과의 비교 등 직관적 설명을 적재적소에 포함한다 (필요시 별도 섹션으로 분리 가능)
 
 ```markdown
 ## RAG 파이프라인
@@ -67,18 +69,7 @@ Agent 카테고리의 포스트는 다음 구조를 따른다. 주제에 따라 
 ```
 ```
 
-### 3. 직관적 설명 (Intuitive Explanation)
-
-- 비유를 사용하여 기술적 개념을 쉽게 설명한다
-- 기존 방식과의 비교를 통해 차이를 명확히 한다
-
-```markdown
-> **직관**: RAG는 "오픈북 시험"과 같다.
-> LLM 단독 사용이 암기 시험이라면, RAG는 참고 자료를 펼쳐놓고 답하는 것이다.
-> 모든 것을 외울 필요 없이, 어디서 찾아야 하는지만 알면 된다.
-```
-
-### 4. 왜 필요한가 (Why It Matters)
+### 3. 왜 필요한가 (Why It Matters)
 
 - LLM의 한계와 이를 보완하는 방법을 설명한다
 - 실무에서 마주하는 구체적 문제를 제시한다
@@ -92,7 +83,7 @@ Agent 카테고리의 포스트는 다음 구조를 따른다. 주제에 따라 
 | Fine-tuning | 도메인 특화 성능 | 비용 높음, 데이터 필요 | 스타일/형식 학습 |
 ```
 
-### 5. 응용 분야 (Applications)
+### 4. 응용 분야 (Applications)
 
 - 산업/도메인별 활용 사례를 구체적으로 기술한다
 
@@ -106,13 +97,13 @@ Agent 카테고리의 포스트는 다음 구조를 따른다. 주제에 따라 
 | 교육 | 교재 기반 튜터링 | 학습 자료 기반 질의응답 |
 ```
 
-### 6. 예시 (Examples)
+### 5. 예시 (Examples)
 
 - 입출력 예시를 구체적으로 보여준다
 - 기대 동작과 실제 동작을 비교한다
 - 실패 케이스와 성공 케이스를 대비한다
 
-### 7. 코드 예시 (Code Examples)
+### 6. 코드 예시 (Code Examples)
 
 - Python 코드로 구현한다 (이 카테고리의 핵심)
 - 패키지: `langchain`, `langchain-openai`, `langchain-community`, `langgraph`, `chromadb`, `faiss` 등
@@ -143,7 +134,7 @@ print(response.content)
 ```
 ```
 
-### 8. 관련 주제 (Related Topics)
+### 7. 관련 주제 (Related Topics)
 
 - 포스트 끝에 관련 개념과 블로그 내 링크를 목록으로 제시한다
 - 선행 지식(prerequisite)과 후속 주제(next)를 구분한다
@@ -219,6 +210,37 @@ print(response.content)
 
 ---
 
+## 자주 발생하는 오류 패턴
+
+<fix-deprecated-api>
+WRONG:
+```python
+from langchain.chat_models import ChatOpenAI
+```
+CORRECT:
+```python
+from langchain_openai import ChatOpenAI  # v0.3+
+```
+LangChain v0.3부터 `langchain.chat_models`, `langchain.llms` 등 monolithic import는 deprecated이다. 분리된 패키지(`langchain-openai`, `langchain-community` 등)에서 import한다.
+</fix-deprecated-api>
+
+<fix-hardcoded-api-key>
+WRONG:
+```python
+llm = ChatOpenAI(openai_api_key="sk-...")  # API 키 직접 입력
+```
+CORRECT:
+```python
+from dotenv import load_dotenv
+load_dotenv()  # .env 파일에서 OPENAI_API_KEY 자동 로드
+
+llm = ChatOpenAI()  # 환경변수에서 자동 참조
+```
+API 키를 코드에 직접 포함하면 보안 사고로 이어진다. 반드시 환경변수(`.env` + `python-dotenv`)를 사용한다.
+</fix-hardcoded-api-key>
+
+---
+
 ## 코드 작성 규칙
 
 - LangChain v0.3+ 문법을 사용한다 (deprecated API 사용 금지)
@@ -255,9 +277,24 @@ LangChain v0.3부터 `from langchain.chat_models import ChatOpenAI`는 deprecate
 
 ---
 
-## 교재 레퍼런스
+## 참고 소스
 
-이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+이 카테고리는 주로 **공식 문서와 GitHub 레포지토리**가 primary source이다. 기술 변화가 빠르므로 agent의 최신 사전지식으로 보완한다.
+
+### 공통 (LangChain/LangGraph/LLM API)
+
+| 소스 | 역할 |
+|------|------|
+| LangChain 공식 문서 (python.langchain.com) | 체인, 메모리, 도구, 출력 파서 등 핵심 API |
+| LangGraph 공식 문서 (langchain-ai.github.io/langgraph) | 상태 그래프, 멀티 에이전트, 체크포인트 |
+| LangChain GitHub (langchain-ai/langchain) | 최신 코드, 예제, 변경 이력 |
+| LangGraph GitHub (langchain-ai/langgraph) | 그래프 기반 에이전트 구현 패턴 |
+| OpenAI API 문서 (platform.openai.com/docs) | Chat Completions, Function Calling, Embeddings |
+| Anthropic API 문서 (docs.anthropic.com) | Claude API, Tool Use |
+
+### GraphRAG 하위 주제 — 교재 레퍼런스
+
+GraphRAG(21-GraphRAG/) 관련 포스트 작성 시 다음 교재를 **논리적 뼈대**로 활용한다.
 
 | 교재 | Summary 경로 | 활용 영역 |
 |---|---|---|
@@ -266,4 +303,21 @@ LangChain v0.3부터 `from langchain.chat_models import ChatOpenAI`는 deprecate
 | CodeQL Documentation | `docs/book/ontology/CodeQL-summary.md` | 코드→관계형 DB, QL 쿼리 |
 | CPG Specification | `docs/book/ontology/Code-Property-Graph-CPG-summary.md` | AST+CFG+PDG 통합 코드 그래프 |
 
-**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 상세 확인 → 블로그 스타일로 재작성
+**활용 절차**: 공식 문서에서 최신 API/패턴 확인 → agent 사전지식과 통합 → 블로그 스타일로 재작성. 버전 변경이 잦으므로 포스트에 사용한 패키지 버전을 명시한다. GraphRAG 주제는 교재 Summary → Full MD 참조도 병행한다.
+
+---
+
+## Boundaries
+
+<boundaries>
+### CAN (허용)
+- 실행 가능한 코드 예시 제공 (복붙 즉시 실행 가능 수준)
+- LangChain v0.3+ 문법 사용
+- 사용한 패키지 버전 명시
+- 공식 문서(LangChain, LangGraph, OpenAI, Anthropic) 기반 서술
+
+### CANNOT (금지)
+- deprecated API 사용 (`from langchain.chat_models import ...` 등 monolithic import)
+- API 키를 코드에 직접 포함 (`openai_api_key="sk-..."`)
+- 공식 문서에 없는 비공식 패턴 권장 (커뮤니티 해킹, undocumented internal API 등)
+</boundaries>

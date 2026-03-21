@@ -1,0 +1,466 @@
+---
+title: "프로덕션 A/B 플랫폼 설계"
+subtitle: "Assignment Service, Feature Flag, 로깅, 자동 중단 — MINERVA 인프라 연동"
+description: |
+  실험이 일회성이 아니라 조직의 반복 프로세스가 되려면 플랫폼이 필요하다.
+  Agent 실험 플랫폼의 핵심 컴포넌트(배정 서비스, 로깅, 분석 엔진, 자동 중단),
+  Feature flag 통합, MINERVA의 Azure 인프라와의 연동 방안을 설계한다.
+categories:
+  - Experimentation
+  - Agent
+  - Engineering
+author: Kwangmin Kim
+date: 03/21/2026
+---
+
+## 정의
+
+::: {.callout-note}
+## 정의: 실험 플랫폼 (Experimentation Platform)
+
+실험 플랫폼이란, A/B 테스트의 **설계, 배정, 로깅, 분석, 의사결정**을 자동화하는 시스템이다. 실험의 신뢰성, 재현성, 확장성을 보장한다.
+
+- 핵심 컴포넌트: Assignment Service, Event Logger, Analysis Engine, Dashboard
+- Agent 특화 요소: LLM-as-Judge 파이프라인, 비결정적 출력 처리, Golden Dataset 관리
+- 목표: 실험 운영 비용을 최소화하고, 누구나 실험을 수행할 수 있게 한다
+
+- 역학: Clinical Trial Management System (CTMS), Electronic Data Capture (EDC)
+- IT: Experimentation Platform (Optimizely, LaunchDarkly, 자체 구축)
+:::
+
+---
+
+## 플랫폼 아키텍처
+
+### 전체 구조
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                    Experiment Platform                       │
+│                                                              │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    │
+│  │  Experiment   │   │  Assignment  │   │   Feature    │    │
+│  │  Config Store │──▶│   Service    │──▶│  Flag Client │    │
+│  │  (실험 설정)  │   │  (배정 로직)  │   │  (기능 전환)  │    │
+│  └──────────────┘   └──────────────┘   └──────────────┘    │
+│         │                   │                   │            │
+│         ▼                   ▼                   ▼            │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │                   Event Logger                        │   │
+│  │          (배정 이벤트, 응답, 메트릭 수집)               │   │
+│  └──────────────────────────────────────────────────────┘   │
+│         │                                                    │
+│         ▼                                                    │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    │
+│  │   Analysis   │   │  Auto-Judge  │   │  Dashboard   │    │
+│  │   Engine     │◀──│  Pipeline    │──▶│  (결과 시각화) │    │
+│  │  (통계 분석)  │   │ (LLM 평가)   │   │              │    │
+│  └──────────────┘   └──────────────┘   └──────────────┘    │
+│         │                                                    │
+│         ▼                                                    │
+│  ┌──────────────┐                                           │
+│  │ Auto-Stopper │                                           │
+│  │ (자동 중단)   │                                           │
+│  └──────────────┘                                           │
+└────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 핵심 컴포넌트
+
+### Assignment Service (배정 서비스)
+
+모든 실험의 진입점이다. 질의가 들어오면 **어떤 변형에 배정할지** 결정한다.
+
+```python
+from dataclasses import dataclass, field
+from enum import Enum
+import hashlib
+import json
+
+class AllocationStrategy(Enum):
+    FIXED = "fixed"           # 고정 비율 (전통 A/B)
+    THOMPSON = "thompson"     # Thompson Sampling
+    EPSILON_GREEDY = "epsilon_greedy"
+
+@dataclass
+class ExperimentConfig:
+    experiment_id: str
+    name: str
+    variants: dict[str, dict]  # {"control": {config}, "treatment": {config}}
+    allocation: AllocationStrategy = AllocationStrategy.FIXED
+    traffic_ratio: float = 0.5  # control 비율 (FIXED일 때)
+    status: str = "running"  # draft, running, paused, completed
+    guardrails: dict = field(default_factory=dict)
+    start_date: str = ""
+    max_samples: int = 0
+
+class AssignmentService:
+    """실험 배정 서비스"""
+
+    def __init__(self):
+        self.experiments: dict[str, ExperimentConfig] = {}
+        self.thompson_engines: dict[str, object] = {}
+
+    def register_experiment(self, config: ExperimentConfig):
+        self.experiments[config.experiment_id] = config
+        if config.allocation == AllocationStrategy.THOMPSON:
+            from thompson import BetaBernoulliThompson
+            self.thompson_engines[config.experiment_id] = BetaBernoulliThompson(
+                list(config.variants.keys())
+            )
+
+    def assign(self, experiment_id: str, unit_id: str) -> tuple[str, dict]:
+        """변형 배정
+
+        Returns:
+            (variant_name, variant_config)
+        """
+        config = self.experiments[experiment_id]
+        if config.status != "running":
+            return "control", config.variants["control"]
+
+        if config.allocation == AllocationStrategy.FIXED:
+            variant = self._hash_assign(experiment_id, unit_id, config.traffic_ratio)
+        elif config.allocation == AllocationStrategy.THOMPSON:
+            variant = self.thompson_engines[experiment_id].select_arm()
+        else:
+            variant = "control"
+
+        return variant, config.variants[variant]
+
+    def _hash_assign(self, experiment_id, unit_id, ratio):
+        hash_input = f"{experiment_id}:{unit_id}"
+        hash_val = int(hashlib.sha256(hash_input.encode()).hexdigest(), 16)
+        return "control" if (hash_val % 10000) / 10000 < ratio else "treatment"
+```
+
+### Event Logger (이벤트 로거)
+
+모든 실험 이벤트를 기록한다. 분석의 원천 데이터이다.
+
+```python
+import json
+from datetime import datetime
+
+@dataclass
+class ExperimentEvent:
+    timestamp: str
+    experiment_id: str
+    variant: str
+    unit_id: str
+    event_type: str  # "assignment", "response", "metric", "feedback"
+    payload: dict
+
+class EventLogger:
+    """실험 이벤트 로거
+
+    프로덕션에서는 Azure Event Hub 또는 Kafka로 교체한다.
+    """
+
+    def __init__(self, storage_path: str = "experiment_logs/"):
+        self.storage_path = storage_path
+
+    def log_assignment(self, experiment_id, variant, unit_id, config):
+        """배정 이벤트 기록"""
+        event = ExperimentEvent(
+            timestamp=datetime.now().isoformat(),
+            experiment_id=experiment_id,
+            variant=variant,
+            unit_id=unit_id,
+            event_type="assignment",
+            payload={"config": config}
+        )
+        self._write(event)
+
+    def log_response(self, experiment_id, variant, unit_id, query, response, latency_ms):
+        """응답 이벤트 기록"""
+        event = ExperimentEvent(
+            timestamp=datetime.now().isoformat(),
+            experiment_id=experiment_id,
+            variant=variant,
+            unit_id=unit_id,
+            event_type="response",
+            payload={
+                "query": query,
+                "response": response,
+                "latency_ms": latency_ms,
+            }
+        )
+        self._write(event)
+
+    def log_metric(self, experiment_id, variant, unit_id, metrics: dict):
+        """메트릭 이벤트 기록 (자동 평가 결과)"""
+        event = ExperimentEvent(
+            timestamp=datetime.now().isoformat(),
+            experiment_id=experiment_id,
+            variant=variant,
+            unit_id=unit_id,
+            event_type="metric",
+            payload=metrics
+        )
+        self._write(event)
+
+    def _write(self, event: ExperimentEvent):
+        # 로컬 파일 기반 (프로덕션: Event Hub / Cosmos DB)
+        with open(f"{self.storage_path}/{event.experiment_id}.jsonl", "a") as f:
+            f.write(json.dumps(event.__dict__, ensure_ascii=False) + "\n")
+```
+
+### Auto-Judge Pipeline (자동 평가 파이프라인)
+
+Agent 응답을 실시간으로 자동 평가한다.
+
+```python
+class AutoJudgePipeline:
+    """LLM-as-Judge 기반 자동 평가 파이프라인"""
+
+    def __init__(self, judge_model, rubrics: dict):
+        self.judge = judge_model
+        self.rubrics = rubrics
+
+    async def evaluate(self, query, response, retrieved_docs) -> dict:
+        """응답에 대한 자동 평가 수행"""
+        scores = {}
+
+        # 병렬 평가 (Relevance, Faithfulness, Completeness)
+        for metric, rubric in self.rubrics.items():
+            prompt = rubric["prompt_template"].format(
+                query=query,
+                response=response,
+                retrieved_docs=retrieved_docs
+            )
+            result = await self.judge.generate(prompt)
+            scores[metric] = self._parse_score(result)
+
+        # 파생 지표
+        scores["is_hallucination"] = scores.get("faithfulness", 5) <= 2
+        scores["is_low_quality"] = scores.get("relevance", 5) <= 2
+
+        return scores
+
+    def _parse_score(self, judge_output: str) -> float:
+        """Judge 출력에서 점수를 추출한다"""
+        import re
+        match = re.search(r"점수:\s*(\d)", judge_output)
+        return int(match.group(1)) if match else 3  # 파싱 실패 시 중립값
+```
+
+### Auto-Stopper (자동 중단)
+
+가드레일 위반 또는 sequential boundary 도달 시 자동으로 실험을 중단한다.
+
+```python
+class AutoStopper:
+    """실험 자동 중단 엔진"""
+
+    def __init__(self, assignment_service: AssignmentService):
+        self.service = assignment_service
+
+    def check_and_stop(self, experiment_id: str, current_data: dict):
+        """가드레일과 sequential boundary를 확인한다"""
+        config = self.service.experiments[experiment_id]
+
+        # 가드레일 확인 (매 관측마다)
+        for name, guard in config.guardrails.items():
+            value = current_data.get(name)
+            if value is not None and self._violated(value, guard):
+                self._stop_experiment(experiment_id, f"가드레일 위반: {name}={value}")
+                return True
+
+        return False
+
+    def _violated(self, value, guard):
+        if guard["direction"] == "lower_is_better":
+            return value > guard["threshold"]
+        return value < guard["threshold"]
+
+    def _stop_experiment(self, experiment_id, reason):
+        """실험을 안전하게 중단한다"""
+        config = self.service.experiments[experiment_id]
+        config.status = "paused"
+        # 모든 트래픽을 control로 복구
+        print(f"[AUTO-STOP] {experiment_id}: {reason}")
+        print(f"  → 모든 트래픽을 control로 전환")
+```
+
+---
+
+## MINERVA 인프라 연동
+
+### Azure 기반 아키텍처
+
+MINERVA의 기존 인프라를 활용한 실험 플랫폼 구성:
+
+| 컴포넌트 | Azure 서비스 | 역할 |
+|----------|-------------|------|
+| Assignment Service | Azure Container Apps | 배정 로직 호스팅 |
+| Event Logger | Azure Event Hub + Cosmos DB | 이벤트 스트리밍 + 영구 저장 |
+| Auto-Judge | Azure OpenAI (GPT-4.1) | LLM-as-Judge 실행 |
+| Analysis Engine | Azure Functions (Timer) | 주기적 통계 분석 |
+| Dashboard | Streamlit (기존) | 결과 시각화 |
+| Config Store | Cosmos DB | 실험 설정 관리 |
+
+### 기존 RAG 파이프라인과의 통합 지점
+
+```
+사용자 질의
+    ↓
+[기존] Streamlit Frontend
+    ↓
+[NEW] Assignment Service → 실험 배정 결정
+    ↓
+[기존] FastAPI Backend
+    ↓
+[기존] RAG Pipeline (Hybrid Search → LLM)
+    ↓                    ↓
+[기존] 응답 반환     [NEW] Event Logger (배정, 응답, 지연 기록)
+                          ↓
+                    [NEW] Auto-Judge (비동기 평가)
+                          ↓
+                    [NEW] Analysis Engine (통계 분석)
+```
+
+핵심 원칙: **기존 파이프라인을 최소한으로 수정**한다. Assignment Service는 프론트엔드와 백엔드 사이에, Event Logger는 응답 후 비동기로 동작한다.
+
+### Feature Flag 통합
+
+```python
+class FeatureFlagClient:
+    """Feature flag 기반 Agent 구성 전환
+
+    실험 플랫폼의 배정 결과를 Agent 파라미터로 변환한다.
+    """
+
+    def __init__(self, assignment_service: AssignmentService):
+        self.service = assignment_service
+
+    def get_agent_config(self, experiment_id: str, unit_id: str) -> dict:
+        """실험 배정에 따른 Agent 구성을 반환한다"""
+        variant, config = self.service.assign(experiment_id, unit_id)
+
+        # 기본 구성 + 실험 오버라이드
+        base_config = {
+            "model": "gpt-4.1",
+            "system_prompt": "default",
+            "top_k": 6,
+            "search_strategy": "hybrid",
+        }
+        base_config.update(config)  # 실험 변형의 설정으로 오버라이드
+
+        return {
+            "variant": variant,
+            "config": base_config,
+        }
+```
+
+---
+
+## 실험 운영 워크플로우
+
+### 실험 생명주기
+
+```
+Draft → Review → Running → [Monitoring] → Completed/Stopped
+  │       │        │            │               │
+  │       │        │            ├─ 가드레일 위반 → Stopped
+  │       │        │            ├─ Sequential 조기 종료 → Completed
+  │       │        │            └─ 목표 표본 도달 → Completed
+  │       │        │
+  │       │        └─ Auto-Judge + Auto-Stopper 동작
+  │       │
+  │       └─ 메트릭 정의, 표본 크기, 가드레일 확인
+  │
+  └─ 실험 설정 작성 (YAML/JSON)
+```
+
+### 실험 설정 예시
+
+```yaml
+experiment:
+  id: "minerva-qna-prompt-v2-2026q3"
+  name: "QnA Chatbot 프롬프트 v2 실험"
+  owner: "data-science-team"
+  start_date: "2026-07-01"
+
+  variants:
+    control:
+      system_prompt: "prompts/qna_v1.txt"
+      top_k: 6
+    treatment:
+      system_prompt: "prompts/qna_v2.txt"
+      top_k: 6
+
+  allocation:
+    strategy: "fixed"  # or "thompson"
+    traffic_ratio: 0.5
+
+  metrics:
+    primary:
+      name: "relevance_score"
+      mde: 0.3
+    guardrails:
+      - name: "hallucination_rate"
+        threshold: 0.10
+        direction: "lower_is_better"
+      - name: "error_rate"
+        threshold: 0.02
+        direction: "lower_is_better"
+
+  stopping:
+    max_samples: 400
+    sequential: true
+    n_interim_analyses: 4
+    spending_function: "obrien_fleming"
+
+  analysis:
+    test: "welch_t_test"
+    alpha: 0.05
+    power: 0.80
+```
+
+---
+
+## 확장 로드맵
+
+| 단계 | 내용 | 시기 |
+|------|------|------|
+| MVP | 수동 배정 + 로깅 + 수동 분석 | PoC 기간 |
+| v1 | Assignment Service + Auto-Judge + 기본 대시보드 | 성능 평가 기간 |
+| v2 | Sequential testing + Auto-stopper | 프로덕션 전환 기 |
+| v3 | Thompson Sampling + 실험 병렬 실행 + 자동 보고서 | 프로덕션 운영 |
+
+::: {.callout-tip}
+## MVP부터 시작한다
+
+처음부터 완성된 플랫폼을 만들지 않는다. 스프레드시트 + 수동 배정 + Python 스크립트 분석으로 시작해도 된다. 실험 문화가 자리 잡힌 후에 자동화한다.
+:::
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Thompson Sampling 동적 라우팅](./49-project-agent-thompson-routing.qmd) — 동적 배분 알고리즘
+- [실험 결과 분석과 의사결정](./48-project-agent-analysis-decision.qmd) — Analysis Engine의 통계 로직
+
+**시리즈 전체 목록**
+
+- [AI Agent A/B 테스트 개요](./40-project-agent-ab-overview.qmd)
+- [오프라인 평가 설계](./41-project-agent-offline-eval.qmd)
+- [Agent 실험 메트릭 설계](./42-project-agent-metrics-design.qmd)
+- [단순 A/B 테스트 설계](./43-project-agent-simple-ab.qmd)
+- [표본 크기와 검정력](./44-project-agent-sample-size.qmd)
+- [Sequential Testing과 조기 종료](./45-project-agent-sequential.qmd)
+- [다중 비교 실험 설계](./46-project-agent-multiarm.qmd)
+- [Human-in-the-Loop 평가](./47-project-agent-human-eval.qmd)
+- [실험 결과 분석과 의사결정](./48-project-agent-analysis-decision.qmd)
+- [Thompson Sampling 동적 라우팅](./49-project-agent-thompson-routing.qmd)
+- [프로덕션 A/B 플랫폼 설계](./50-project-agent-production-platform.qmd) ← 현재
+
+**다른 카테고리 연결**
+
+- [Agent 카테고리](../../Agent/index.qmd) — MINERVA Agent 아키텍처
+- [데이터 거버넌스](../../Governance/index.qmd) — 실험 데이터의 품질 관리

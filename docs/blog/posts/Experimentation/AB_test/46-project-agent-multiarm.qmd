@@ -1,0 +1,368 @@
+---
+title: "다중 비교 실험 설계"
+subtitle: "3종 Agent 동시 비교, Factorial Design, Multiple Testing 보정"
+description: |
+  MINERVA의 3종 Agent를 동시에 비교하거나, 모델 × 프롬프트 × retrieval 파라미터를 조합 실험할 때의
+  설계 방법을 다룬다. Multiple testing 보정(Bonferroni, Holm, FDR)과
+  Factorial design의 상호작용 효과 분석을 포함한다.
+categories:
+  - Experimentation
+  - Statistics
+author: Kwangmin Kim
+date: 03/21/2026
+---
+
+## 정의
+
+::: {.callout-note}
+## 정의: 다중 비교 (Multiple Comparison)
+
+하나의 실험에서 **둘 이상의 비교**를 수행할 때 발생하는 통계적 문제이다. 비교 횟수가 늘어날수록 **최소 하나의 false positive가 발생할 확률(Family-Wise Error Rate, FWER)**이 증가한다.
+
+$$
+\text{FWER} = 1 - (1-\alpha)^m \approx m \cdot \alpha \quad (\text{when } \alpha \text{ is small})
+$$
+
+여기서 $m$은 비교 횟수이다. 10개 비교를 α=0.05로 수행하면, 실제 FWER ≈ 0.40이다.
+
+- 역학: Multiple comparison in clinical trials (다군 임상시험), Factorial design
+- IT: Multi-arm testing, A/B/n test
+:::
+
+---
+
+## MINERVA에서 다중 비교가 필요한 상황
+
+### 상황 A: 3종 Agent 비교
+
+3종 Agent의 성능을 동시에 비교하면 3개의 pairwise comparison이 발생한다:
+
+```
+QnA Chatbot vs Data Std Helper
+QnA Chatbot vs Insilico Agent
+Data Std Helper vs Insilico Agent
+```
+
+::: {.callout-warning}
+## 다른 태스크를 비교할 수 있는가?
+
+3종 Agent는 **서로 다른 태스크**를 수행한다. 동일 메트릭으로 직접 비교하는 것이 의미 있는 경우는 제한적이다 (예: 공통 인프라 지표인 응답 시간). 도메인별 메트릭(정확도 등)은 Agent 내에서 비교하는 것이 더 적절하다.
+
+Agent 간 비교가 의미 있는 경우: **동일 Agent의 서로 다른 구성(variant)**을 비교할 때이다.
+:::
+
+### 상황 B: 단일 Agent 내 다중 변형
+
+QnA Chatbot의 프롬프트 4개 버전을 동시에 테스트하면:
+
+```
+Control vs Treatment1
+Control vs Treatment2
+Control vs Treatment3
+→ 3개 비교 (Control 기준)
+
+모든 쌍: C(4,2) = 6개 비교
+```
+
+### 상황 C: Factorial Design
+
+모델(2) × 프롬프트(3) × top-k(2) = 12개 조합을 실험하면:
+
+| Factor | Levels | 값 |
+|--------|--------|-----|
+| 모델 | 2 | GPT-4.1, GPT-4o |
+| 프롬프트 | 3 | v1, v2, v3 |
+| top-k | 2 | 5, 10 |
+
+---
+
+## Multiple Testing 보정
+
+### Bonferroni 보정
+
+가장 보수적인 방법이다. 각 비교의 유의수준을 $\alpha/m$으로 낮춘다.
+
+$$
+\alpha_{\text{adjusted}} = \frac{\alpha}{m}
+$$
+
+```python
+def bonferroni_correction(p_values, alpha=0.05):
+    """Bonferroni 보정: 가장 보수적"""
+    m = len(p_values)
+    adjusted_alpha = alpha / m
+    results = []
+    for i, p in enumerate(p_values):
+        results.append({
+            "comparison": i + 1,
+            "p_value": p,
+            "adjusted_alpha": adjusted_alpha,
+            "significant": p < adjusted_alpha,
+        })
+    return results
+
+# 예: 3개 비교, α=0.05
+# 보정된 α = 0.05/3 = 0.0167
+# p-values: [0.01, 0.03, 0.04]
+results = bonferroni_correction([0.01, 0.03, 0.04])
+# 비교 1: p=0.01 < 0.0167 → 유의 ✓
+# 비교 2: p=0.03 > 0.0167 → 비유의 ✗
+# 비교 3: p=0.04 > 0.0167 → 비유의 ✗
+```
+
+### Holm-Bonferroni (Step-down)
+
+Bonferroni보다 검정력이 높다. p-value를 정렬한 뒤 순차적으로 판정한다.
+
+```python
+def holm_correction(p_values, alpha=0.05):
+    """Holm step-down: Bonferroni보다 강력"""
+    m = len(p_values)
+    # p-value 오름차순 정렬
+    indexed = sorted(enumerate(p_values), key=lambda x: x[1])
+    results = [None] * m
+
+    for rank, (orig_idx, p) in enumerate(indexed):
+        adjusted_alpha = alpha / (m - rank)
+        significant = p < adjusted_alpha
+        results[orig_idx] = {
+            "comparison": orig_idx + 1,
+            "p_value": p,
+            "rank": rank + 1,
+            "adjusted_alpha": round(adjusted_alpha, 4),
+            "significant": significant,
+        }
+        if not significant:
+            # 이후 모든 비교도 비유의
+            for remaining_rank in range(rank + 1, m):
+                rem_idx = indexed[remaining_rank][0]
+                results[rem_idx] = {
+                    "comparison": rem_idx + 1,
+                    "p_value": indexed[remaining_rank][1],
+                    "rank": remaining_rank + 1,
+                    "adjusted_alpha": alpha / (m - remaining_rank),
+                    "significant": False,
+                }
+            break
+
+    return results
+```
+
+### Benjamini-Hochberg (FDR 제어)
+
+FWER 대신 **False Discovery Rate**를 제어한다. FWER보다 관대하여 검정력이 높다.
+
+```python
+def benjamini_hochberg(p_values, alpha=0.05):
+    """BH procedure: FDR 제어"""
+    m = len(p_values)
+    indexed = sorted(enumerate(p_values), key=lambda x: x[1])
+    results = [None] * m
+
+    # 가장 큰 k 찾기: p_(k) ≤ k/m × α
+    max_significant_rank = 0
+    for rank, (orig_idx, p) in enumerate(indexed, 1):
+        threshold = rank / m * alpha
+        if p <= threshold:
+            max_significant_rank = rank
+
+    for rank, (orig_idx, p) in enumerate(indexed, 1):
+        results[orig_idx] = {
+            "comparison": orig_idx + 1,
+            "p_value": p,
+            "rank": rank,
+            "bh_threshold": round(rank / m * alpha, 4),
+            "significant": rank <= max_significant_rank,
+        }
+
+    return results
+```
+
+### 어떤 보정을 사용할 것인가?
+
+| 상황 | 권장 방법 | 이유 |
+|------|-----------|------|
+| 비교 수가 적고 (2~5), false positive 비용이 높음 | Holm | FWER 제어, Bonferroni보다 강력 |
+| 비교 수가 많고 (>5), 탐색적 분석 | BH (FDR) | 검정력 보존, 탐색에 적합 |
+| 사전 정의된 primary comparison이 있음 | 보정 불필요 (primary만) | 1차 비교가 명확하면 보정 불필요 |
+| 안전성(가드레일) 비교 | Bonferroni | 가장 보수적, 안전 우선 |
+
+---
+
+## Factorial Design
+
+### 왜 Factorial인가
+
+단일 변수 실험을 순차적으로 진행하면:
+
+```
+실험 1: 프롬프트 A vs B → 6주
+실험 2: top-k 5 vs 10 → 6주
+실험 3: 모델 GPT-4.1 vs GPT-4o → 6주
+총: 18주, 상호작용 효과 파악 불가
+```
+
+Factorial design은 **모든 조합을 동시에 실험**한다:
+
+```
+2×2×2 = 8 조합 → 6주, 주효과 + 상호작용 모두 파악
+```
+
+이 차이는 단순히 시간 절약이 아니다. 순차 실험에서는 "프롬프트 v2가 가장 좋다"와 "top-k=10이 가장 좋다"를 **별도로** 결론내리지만, 프롬프트 v2 + top-k=10 조합이 프롬프트 v2 + top-k=5보다 나쁠 수 있다(상호작용 효과). 순차 실험 18주를 투자하고도 최적 조합을 놓칠 수 있는 것이다. Factorial design은 6주 만에 주효과와 상호작용을 동시에 파악하여, 이 함정을 피한다.
+
+### Full Factorial 설계
+
+```python
+import itertools
+import pandas as pd
+
+# MINERVA QnA Chatbot: 2×3×2 Factorial
+factors = {
+    "model": ["gpt-4.1", "gpt-4o"],
+    "prompt": ["v1", "v2", "v3"],
+    "top_k": [5, 10],
+}
+
+# 모든 조합 생성
+combinations = list(itertools.product(*factors.values()))
+design_matrix = pd.DataFrame(combinations, columns=factors.keys())
+print(f"총 {len(design_matrix)}개 조합")
+print(design_matrix)
+```
+
+### 표본 크기 고려
+
+$k$개 조합이 있으면 총 필요 표본 = $k \times n_{\text{per cell}}$이다.
+
+```python
+# 12 조합 × 30건/cell = 360건 총 필요
+# 일일 50건 → 약 8일 (각 조합에 ~4건/일)
+# 주의: 셀당 30건은 검정력이 낮을 수 있음
+
+# 더 현실적: 2×2 = 4 조합 (가장 유망한 factor만)
+# 4 조합 × 88건/cell = 352건 → 약 8일
+```
+
+### 상호작용 효과 분석
+
+```python
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
+
+def analyze_factorial(df, response_col="relevance"):
+    """Factorial design의 주효과와 상호작용 분석
+
+    Args:
+        df: 실험 결과 DataFrame (columns: model, prompt, top_k, relevance)
+    """
+    # Two-way ANOVA (3-way는 셀당 관측수가 충분할 때)
+    formula = f"{response_col} ~ C(model) * C(prompt) * C(top_k)"
+    model = ols(formula, data=df).fit()
+    anova_table = sm.stats.anova_lm(model, typ=2)
+
+    return anova_table
+
+# 결과 해석:
+# C(model)                    → 모델 주효과
+# C(prompt)                   → 프롬프트 주효과
+# C(top_k)                    → top-k 주효과
+# C(model):C(prompt)          → 모델×프롬프트 상호작용
+# C(model):C(top_k)           → 모델×top-k 상호작용
+# C(prompt):C(top_k)          → 프롬프트×top-k 상호작용
+# C(model):C(prompt):C(top_k) → 3차 상호작용
+```
+
+::: {.callout-tip}
+## 상호작용이 유의하면?
+
+"GPT-4.1 + 프롬프트 v2"에서만 특별히 좋은 성능이 나온다면, 모델과 프롬프트 사이에 상호작용이 존재하는 것이다. 이 경우 모델과 프롬프트를 독립적으로 최적화할 수 없고, **조합 단위**로 판단해야 한다.
+:::
+
+### Fractional Factorial
+
+조합이 너무 많으면 (예: 5개 factor × 각 3 level = 243 조합), 모든 조합을 실험할 수 없다. Fractional factorial은 **고차 상호작용을 포기**하고 주효과와 2차 상호작용만 추정한다.
+
+```python
+# Resolution III: 주효과만 추정 (2차 상호작용과 혼재)
+# Resolution IV: 주효과 + 일부 2차 상호작용
+# Resolution V: 주효과 + 모든 2차 상호작용
+
+# 실무 권장: Resolution IV 이상
+# 2^(k-p) design: k개 factor에서 p개를 절약
+# 예: 2^(5-2) = 8 조합으로 5개 factor의 주효과 추정
+```
+
+MINERVA에서 5개 factor(모델, 프롬프트, top-k, chunk_size, reranker)를 실험한다면, Full factorial은 $2^5 = 32$ 조합이다. 하루 50건 기준으로 셀당 30건만 확보해도 32 × 30 / 50 = **19일**이 필요하고, 검정력은 매우 낮다. $2^{5-2} = 8$ 조합의 Fractional factorial(Resolution III)을 사용하면 8일이면 충분하지만, 주효과가 2차 상호작용과 혼재(aliased)된다. Resolution IV($2^{5-1} = 16$ 조합)가 실무적 타협점이다 — 주효과는 깨끗하게 추정하면서 16일이면 실험이 끝난다.
+
+---
+
+## Dunnett's Test: Control 대비 다중 비교
+
+여러 treatment를 하나의 control과 비교할 때, Bonferroni보다 강력한 전용 방법이다.
+
+```python
+from scipy import stats
+
+def dunnett_like_comparison(control_scores, treatment_scores_dict, alpha=0.05):
+    """Control 대비 여러 treatment 비교 (Dunnett 근사)
+
+    Args:
+        control_scores: 대조군 점수 배열
+        treatment_scores_dict: {"treatment_name": scores_array, ...}
+    """
+    m = len(treatment_scores_dict)  # 비교 횟수
+    results = {}
+
+    for name, scores in treatment_scores_dict.items():
+        stat, p_value = stats.ttest_ind(scores, control_scores, equal_var=False)
+        diff = scores.mean() - control_scores.mean()
+
+        # Bonferroni 보정 (Dunnett's exact test의 근사)
+        adjusted_alpha = alpha / m
+
+        results[name] = {
+            "diff": diff,
+            "p_value": p_value,
+            "adjusted_alpha": adjusted_alpha,
+            "significant": p_value < adjusted_alpha,
+        }
+
+    return results
+
+# MINERVA: 프롬프트 v1(control) 대비 v2, v3, v4 비교
+# m=3 비교 → adjusted α = 0.05/3 = 0.0167
+```
+
+---
+
+## 실무 의사결정 흐름
+
+```
+실험 변수 수 확인
+    ↓
+┌─ 1개 변수, 2 variants → 단순 A/B (이전 포스트)
+├─ 1개 변수, 3+ variants → Control 기준 Dunnett + Holm 보정
+├─ 2~3개 변수 → Full Factorial + ANOVA
+└─ 4+ 변수 → Fractional Factorial 또는 Bayesian Optimization
+    ↓
+표본 크기 = 조합 수 × 셀당 필요 n
+    ↓
+기간 확인 → 현실적? → No → 조합 수 줄이기 (factor/level 축소)
+```
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Sequential Testing과 조기 종료](./45-project-agent-sequential.qmd) — 중간 분석과 조기 종료
+- [표본 크기와 검정력](./44-project-agent-sample-size.qmd) — 셀당 표본 크기 계산
+
+**시리즈 다음 포스트**
+
+- [Human-in-the-Loop 평가](./47-project-agent-human-eval.qmd) — 자동 평가를 넘어 인간 평가
+
+**다른 카테고리 연결**
+
+- [RCT와 A/B 테스트의 설계 원칙](../32-study-design-rct.qmd) — 요인 설계의 역학적 기원

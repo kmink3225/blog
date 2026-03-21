@@ -2,11 +2,12 @@
 name: Deep_Learning_GUIDE
 type: category
 version: 1.0
-description: Deep Learning 카테고리 포스트 작성 규칙 — 수학+코드 하이브리드, NLP, 아키텍처 중심
+description: "LOAD when writing posts about neural networks, CNN, RNN, Transformer, NLP, GAN, or reinforcement learning. Covers theory-to-code pipeline with PyTorch implementations and architecture comparisons."
 scope: docs/blog/posts/Deep_Learning/
 parent: AGENT_GUIDE.md
 index: docs/blog/posts/Deep_Learning/index.qmd
-book_sources: []
+book_sources:
+  - docs/book/deep_learning/
 cross_references:
   - docs/blog/posts/Math/GUIDE.md
   - docs/blog/posts/Statistics/GUIDE.md
@@ -59,6 +60,7 @@ $$
 - 순전파(forward pass)와 역전파(backpropagation)의 수학적 과정을 설명한다
 - 기존 방법의 한계 → 새로운 방법의 해결 방식으로 동기를 제시한다
 - ASCII 다이어그램 또는 Mermaid로 구조를 시각화한다
+- 추상적이거나 이해하기 어려운 개념에는 비유, 기존 방법과의 비교 등 직관적 설명을 적재적소에 포함한다 (필요시 별도 섹션으로 분리 가능)
 
 ```markdown
 ## Transformer 아키텍처
@@ -77,24 +79,13 @@ $$
 ```
 ```
 
-### 3. 직관적 설명 (Intuitive Explanation)
-
-- 수식 없이 핵심 아이디어를 전달한다
-- 기존 방법과의 비교를 통해 차이를 명확히 한다
-
-```markdown
-> **직관**: RNN이 책을 한 글자씩 순서대로 읽는 사람이라면,
-> Transformer는 책 전체를 한눈에 펼쳐놓고 관련 있는 부분끼리 연결하는 사람이다.
-> 순서에 의존하지 않으므로 병렬 처리가 가능하고, 먼 거리의 단어 간 관계도 직접 파악할 수 있다.
-```
-
-### 4. 왜 필요한가 (Why It Matters)
+### 3. 왜 필요한가 (Why It Matters)
 
 - 선행 모델의 구체적 한계를 제시한다 (예: RNN의 기울기 소실)
 - 이 기법이 해결하는 문제를 명시한다
 - 성능 비교(벤치마크)를 포함한다
 
-### 5. 응용 분야 (Applications)
+### 4. 응용 분야 (Applications)
 
 ```markdown
 | 분야 | 모델 | 구체적 예시 |
@@ -106,12 +97,12 @@ $$
 | 생명과학 | AlphaFold | 단백질 구조 예측 |
 ```
 
-### 6. 예시 (Examples)
+### 5. 예시 (Examples)
 
 - 소규모 데이터로 순전파/역전파 과정을 단계별로 보여준다
 - 차원, 형상(shape) 변화를 명시한다 (예: `[batch, seq_len, d_model]`)
 
-### 7. 코드 예시 (Code Examples)
+### 6. 코드 예시 (Code Examples)
 
 - **2단계 구성**: (1) 순수 Python/NumPy로 알고리즘 원리를 구현 → (2) PyTorch로 실무 코드 제시
 - 패키지: `numpy` (low-level), `torch`, `torch.nn`, `transformers` (Hugging Face), `torchvision`
@@ -185,7 +176,7 @@ class SelfAttention(nn.Module):
 ```
 ```
 
-### 8. 관련 주제 (Related Topics)
+### 7. 관련 주제 (Related Topics)
 
 - 포스트 끝에 관련 개념과 블로그 내 링크를 목록으로 제시한다
 - 선행 지식(prerequisite)과 후속 주제(next)를 구분한다
@@ -246,7 +237,7 @@ class SelfAttention(nn.Module):
 
 ## 교재 레퍼런스
 
-이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+이 카테고리의 포스트 작성 시 다음 교재를 **논리적 뼈대**로 활용한다. 교재의 체계를 참고하되, agent의 최신 사전지식으로 outdated된 내용은 수정하고 부족한 부분은 보완한다.
 
 | 교재 | Summary 경로 | 활용 영역 |
 |---|---|---|
@@ -256,4 +247,76 @@ class SelfAttention(nn.Module):
 | Sutton & Barto — Reinforcement Learning (2018) | `docs/book/deep_learning/Sutton-RL-summary.md` | 강화학습, Q-Learning, Policy Gradient |
 | Jurafsky & Martin — Speech and Language Processing (2024) | `docs/book/deep_learning/Jurafsky-SLP-summary.md` | NLP, Transformer, 감정분석, 대화시스템 |
 
-**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
+**활용 절차**: Summary 읽기 → 논리 구조 파악 → Full MD에서 수식/정의 확인 → 교재 내용 중 유효한 부분은 유지, outdated된 부분은 agent 지식으로 수정·보완 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
+
+---
+
+## 자주 발생하는 오류 패턴 (fix blocks)
+
+<fix-architecture-without-math>
+
+**WRONG** — 수식 없이 한 줄 비유로 끝내는 설명:
+
+> "Transformer uses attention"
+> "Attention은 중요한 부분에 집중하는 메커니즘이다"
+
+**CORRECT** — 수식 → 직관 → 코드 3단계:
+
+1. **수식**: $\text{Attention}(Q,K,V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V$
+2. **직관**: 왜 $\sqrt{d_k}$로 스케일링하는가? — $d_k$가 클수록 내적 분산이 커져 softmax가 극단값으로 수렴하기 때문이다. 스케일링 없이는 gradient가 사라진다.
+3. **코드**: NumPy low-level 구현 → PyTorch `nn.MultiheadAttention` 순서로 제시한다.
+
+아키텍처 설명 시 반드시 이 3단계(수식 → 직관 → 코드)를 거친다. 비유는 직관 단계의 **보조 수단**일 뿐, 수식을 대체하지 않는다.
+
+</fix-architecture-without-math>
+
+<fix-code-without-shapes>
+
+**WRONG** — 텐서 연산 코드만 나열하고 shape 정보가 없는 경우:
+
+```python
+q = self.W_q(x).view(B, T, self.n_heads, self.d_k).transpose(1, 2)
+attn = (q @ k.transpose(-2, -1)) / (self.d_k ** 0.5)
+out = attn @ v
+```
+
+**CORRECT** — 각 레이어의 입출력 shape를 주석으로 명시:
+
+```python
+# x: [batch, seq_len, d_model] = [32, 128, 512]
+q = self.W_q(x)                          # [batch, seq_len, d_model]
+q = q.view(B, T, self.n_heads, self.d_k) # [batch, seq_len, n_heads, d_k] = [32, 128, 8, 64]
+q = q.transpose(1, 2)                    # [batch, n_heads, seq_len, d_k] = [32, 8, 128, 64]
+
+attn = (q @ k.transpose(-2, -1))         # [batch, n_heads, seq_len, seq_len] = [32, 8, 128, 128]
+attn = attn / (self.d_k ** 0.5)          # 스케일링, shape 동일
+out = attn @ v                           # [batch, n_heads, seq_len, d_k] = [32, 8, 128, 64]
+```
+
+모든 DL 코드 블록에서 **입력 shape → 중간 shape → 출력 shape**를 주석으로 추적한다. 구체적인 숫자 예시(예: `[32, 128, 512]`)를 병기하면 더 좋다.
+
+</fix-code-without-shapes>
+
+---
+
+## 경계 (Boundaries)
+
+<boundaries>
+
+### CAN (이 카테고리에서 해야 하는 것)
+
+- 교재 기반 수학적 유도 (손실 함수 미분, backprop chain rule 전개 등)
+- PyTorch 구현 (모델 정의 → 학습 루프 → 평가 파이프라인)
+- 아키텍처 비교표 (파라미터 수, 연산 복잡도, 장단점을 표로 정리)
+- **low-level → 프레임워크 2단계 코드**: NumPy/순수 Python으로 원리 구현 → PyTorch로 실무 코드
+- 텐서 shape 변환 추적 (입력부터 출력까지 모든 중간 shape 명시)
+- 선행 모델 한계 → 새 모델 해결 방식의 동기 서술
+
+### CANNOT (이 카테고리에서 하지 말아야 하는 것)
+
+- 수식 없이 "attention은 중요한 부분에 집중하는 것" 식의 비유만으로 설명하는 것
+- shape 주석 없는 텐서 연산 코드
+- 아키텍처 이름만 나열하고 내부 구조를 분해하지 않는 것
+- low-level 구현 없이 프레임워크 API 호출만으로 끝내는 것
+
+</boundaries>

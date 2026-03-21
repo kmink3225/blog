@@ -1,0 +1,323 @@
+---
+title: "Sequential Testing과 조기 종료"
+subtitle: "적은 트래픽에서 중간 분석으로 실험 기간을 단축한다"
+description: |
+  고정 표본 설계는 목표 표본에 도달할 때까지 기다려야 한다. 트래픽이 적은 Agent 실험에서는
+  이것이 수개월이 될 수 있다. Sequential testing은 중간 분석(interim analysis)을 허용하면서도
+  1종 오류를 통제하는 방법이다. Group Sequential Design과 Alpha Spending Function을 다룬다.
+categories:
+  - Experimentation
+  - Statistics
+author: Kwangmin Kim
+date: 03/21/2026
+---
+
+## 정의
+
+::: {.callout-note}
+## 정의: Sequential Testing (순차 검정)
+
+Sequential testing이란, 데이터가 축적되는 동안 **여러 번 중간 분석(interim analysis)**을 수행하여 조기에 결론을 내릴 수 있는 실험 설계이다. 핵심은 **반복 검정에 의한 1종 오류 팽창을 수학적으로 보정**하는 것이다.
+
+- 고정 표본 설계: $n$에 도달 → 1회 검정 → 결론
+- 순차 설계: $n_1, n_2, ..., n_K$에서 $K$회 검정 → 조기 종료 가능
+- 핵심 도구: Alpha Spending Function — 전체 $\alpha$를 각 중간 분석에 분배
+
+- 역학: Group Sequential Design, Interim analysis (임상시험에서 Data Safety Monitoring Board가 수행)
+- IT: Sequential testing, Always-valid inference
+:::
+
+---
+
+## 왜 Sequential Testing이 필요한가
+
+### Peeking Problem
+
+고정 표본 설계에서 중간에 결과를 확인하고 "유의하니까 중단"하면 실제 1종 오류율이 크게 증가한다.
+
+| 확인 횟수 | 명목 α | 실제 α (보정 없이) |
+|-----------|--------|-------------------|
+| 1 (고정) | 0.05 | 0.05 |
+| 2 | 0.05 | 0.08 |
+| 5 | 0.05 | 0.14 |
+| 10 | 0.05 | 0.19 |
+| 50 | 0.05 | 0.32 |
+
+이 숫자의 의미: 5% 유의수준으로 설계한 실험에서 5번 중간 확인하면, 실제로는 **14%의 확률로 효과가 없는데도 "효과 있다"고 결론**내리게 된다. 동전 던지기로 비유하면, 공정한 동전을 "앞면이 더 자주 나온다"고 판정하는 실수를 거의 3배 자주 범하는 것이다. 이 오류는 "데이터가 많아지면 해결되는" 종류가 아니라, 확인 횟수 자체가 만드는 구조적 문제이다.
+
+**MINERVA 맥락**: 일일 50건 트래픽으로 8일 실험을 계획했는데, 3일째에 "벌써 유의한 것 같은데?"라고 중간 확인하면 — 이것이 peeking problem이다.
+
+Sequential testing은 이 중간 확인을 **공식적으로 허용**하되, 1종 오류를 통제한다.
+
+### Agent 실험의 조기 종료 시나리오
+
+| 시나리오 | 조기 종료 이유 |
+|----------|--------------|
+| 압도적 우위 | Treatment가 대폭 개선 → 더 이상 Control에 노출시킬 이유 없음 |
+| 명백한 해악 (Futility) | Treatment가 악화 → 사용자 피해 최소화 |
+| 충분한 증거 | 효과가 확실하여 추가 데이터 수집이 불필요 |
+| 가드레일 위반 | 환각률 급증 등 안전 문제 |
+
+---
+
+## Group Sequential Design (GSD)
+
+### 기본 구조
+
+실험을 $K$개의 단계(stage)로 나누고, 각 단계에서 중간 분석을 수행한다.
+
+```
+Stage 1: n₁ 도달 → 검정 → {중단 or 계속}
+Stage 2: n₂ 도달 → 검정 → {중단 or 계속}
+  ⋮
+Stage K: nₖ 도달 → 최종 검정 → 결론
+```
+
+각 단계의 임계값(critical boundary)을 조정하여 전체 1종 오류를 $\alpha$로 유지한다.
+
+### 대표적 경계 설정 방법
+
+| 방법 | 특징 | 초기 기준 | 최종 기준 |
+|------|------|-----------|-----------|
+| **Pocock** | 모든 단계에서 동일한 기준 | 엄격 | 동일 |
+| **O'Brien-Fleming** | 초기에 매우 엄격, 후기에 완화 | 매우 엄격 | 거의 0.05 |
+| **Alpha Spending** | 유연한 α 분배 | 사용자 설정 | 사용자 설정 |
+
+```python
+import numpy as np
+from scipy.stats import norm
+
+def obrien_fleming_bounds(alpha, n_stages):
+    """O'Brien-Fleming 경계값 계산
+
+    초기 단계에서 매우 엄격한 기준을 적용하여,
+    압도적인 증거가 있을 때만 조기 종료를 허용한다.
+    """
+    # 근사적 계산: z* = z_α × √(K/k)
+    z_final = norm.ppf(1 - alpha / 2)  # 최종 단계 기준
+    bounds = []
+    for k in range(1, n_stages + 1):
+        z_k = z_final * np.sqrt(n_stages / k)
+        p_k = 2 * (1 - norm.cdf(z_k))  # 양측 p-value 기준
+        bounds.append({
+            "stage": k,
+            "z_boundary": round(z_k, 3),
+            "p_boundary": round(p_k, 6),
+            "information_fraction": k / n_stages,
+        })
+    return bounds
+
+# 5단계 GSD 예시
+bounds = obrien_fleming_bounds(alpha=0.05, n_stages=5)
+for b in bounds:
+    print(f"Stage {b['stage']}: z>{b['z_boundary']:.2f} (p<{b['p_boundary']:.4f}), "
+          f"정보 {b['information_fraction']:.0%}")
+
+# 출력:
+# Stage 1: z>4.38 (p<0.0000), 정보 20%  ← 거의 불가능한 수준
+# Stage 2: z>3.10 (p<0.0019), 정보 40%
+# Stage 3: z>2.53 (p<0.0114), 정보 60%
+# Stage 4: z>2.19 (p<0.0286), 정보 80%
+# Stage 5: z>1.96 (p<0.0500), 정보 100% ← 거의 고정 설계와 동일
+```
+
+이 결과가 직관적으로 의미하는 바: 데이터의 20%만 모인 Stage 1에서 조기 종료하려면 p < 0.00001 수준의 압도적 증거가 필요하다. MINERVA 실험에서 Relevance Score 차이가 1.5점(Cohen's d ≈ 1.5) 이상이어야 Stage 1에서 종료할 수 있는데, 이는 현실적으로 프롬프트 전면 재작성 수준의 극적인 변화가 아니면 발생하지 않는다. 반면 Stage 5(100% 데이터)에서의 기준은 z>1.96으로 고정 설계와 거의 같다. O'Brien-Fleming의 강점은 바로 이것이다 — 조기 종료가 일어나지 않았을 때 검정력 손실이 거의 없다.
+
+::: {.callout-tip}
+## O'Brien-Fleming의 장점
+
+최종 단계의 기준이 고정 표본 설계(z=1.96)와 거의 같다. 즉, 조기 종료가 일어나지 않았을 때 검정력 손실이 거의 없다. Agent 실험처럼 "조기 종료하면 좋지만, 못 해도 괜찮은" 상황에 적합하다.
+:::
+
+---
+
+## Alpha Spending Function
+
+### 개념
+
+Alpha spending function $\alpha^*(t)$는 정보 분율(information fraction) $t \in [0, 1]$에서 **누적적으로 소비된 α의 양**을 정의한다.
+
+$$
+\alpha^*(t): [0, 1] \to [0, \alpha], \quad \alpha^*(0) = 0, \quad \alpha^*(1) = \alpha
+$$
+
+각 중간 분석 $k$에서 소비하는 α:
+
+$$
+\Delta\alpha_k = \alpha^*(t_k) - \alpha^*(t_{k-1})
+$$
+
+### 대표적 spending functions
+
+```python
+from scipy.stats import norm
+
+def spending_obrien_fleming(t, alpha=0.05):
+    """O'Brien-Fleming 스타일 spending function"""
+    if t <= 0:
+        return 0
+    return 2 * (1 - norm.cdf(norm.ppf(1 - alpha / 2) / np.sqrt(t)))
+
+def spending_pocock(t, alpha=0.05):
+    """Pocock 스타일 spending function"""
+    return alpha * np.log(1 + (np.e - 1) * t)
+
+def spending_power(t, alpha=0.05, rho=3):
+    """Power family: α(t) = α × t^ρ
+    ρ=1: 균등 분배, ρ=3: 보수적 (O'Brien-Fleming과 유사)
+    """
+    return alpha * t ** rho
+```
+
+### MINERVA 실험 적용 예시
+
+```python
+class SequentialExperiment:
+    """Sequential testing을 적용한 Agent A/B 실험"""
+
+    def __init__(self, max_n, n_analyses, alpha=0.05, spending_func=None):
+        """
+        Args:
+            max_n: 최대 표본 크기 (그룹당)
+            n_analyses: 중간 분석 횟수 (최종 포함)
+            spending_func: Alpha spending function
+        """
+        self.max_n = max_n
+        self.n_analyses = n_analyses
+        self.alpha = alpha
+        self.spending = spending_func or spending_obrien_fleming
+        self.analysis_points = [max_n * k / n_analyses for k in range(1, n_analyses + 1)]
+        self.alpha_spent = 0
+
+    def interim_analysis(self, stage, control_scores, treatment_scores):
+        """중간 분석 수행"""
+        t = stage / self.n_analyses  # information fraction
+        alpha_cumulative = self.spending(t, self.alpha)
+        alpha_increment = alpha_cumulative - self.alpha_spent
+
+        # 검정
+        from scipy.stats import ttest_ind
+        stat, p_value = ttest_ind(treatment_scores, control_scores, equal_var=False)
+        diff = np.mean(treatment_scores) - np.mean(control_scores)
+
+        # 판정
+        reject = p_value < alpha_increment
+        self.alpha_spent = alpha_cumulative
+
+        return {
+            "stage": stage,
+            "n_per_group": len(control_scores),
+            "information_fraction": t,
+            "alpha_spent_cumulative": alpha_cumulative,
+            "alpha_this_stage": alpha_increment,
+            "diff": diff,
+            "p_value": p_value,
+            "reject_h0": reject,
+            "decision": self._decision(reject, p_value, alpha_increment, stage)
+        }
+
+    def _decision(self, reject, p_value, alpha_increment, stage):
+        if reject:
+            return "조기 종료: Treatment 유의하게 우수"
+        elif stage == self.n_analyses:
+            return "최종 분석: 유의한 차이 없음"
+        else:
+            return "계속 진행"
+
+# MINERVA QnA Chatbot 예시
+# 목표: 176건/그룹, 4회 중간 분석 (44건마다)
+experiment = SequentialExperiment(max_n=176, n_analyses=4)
+
+# Stage 1 (44건): O'Brien-Fleming이므로 극히 보수적
+result = experiment.interim_analysis(
+    stage=1,
+    control_scores=np.random.normal(3.5, 1.0, 44),
+    treatment_scores=np.random.normal(3.8, 1.0, 44)
+)
+print(f"Stage 1: p={result['p_value']:.4f}, α threshold={result['alpha_this_stage']:.6f}")
+print(f"판정: {result['decision']}")
+```
+
+---
+
+## Futility Stopping (무용 중단)
+
+"Treatment가 더 좋다"는 증거뿐 아니라, **"이대로 가면 유의한 차이를 보일 가능성이 없다"**는 판단으로도 조기 종료할 수 있다.
+
+### 조건부 검정력 (Conditional Power)
+
+현재까지의 데이터로 추정한 효과가 유지된다고 가정할 때, 최종 분석에서 귀무가설을 기각할 확률이다.
+
+$$
+CP(t) = P(\text{reject } H_0 \text{ at } t=1 \mid \text{data at } t)
+$$
+
+```python
+def conditional_power(current_z, current_t, final_z_alpha=1.96):
+    """조건부 검정력 계산
+
+    Args:
+        current_z: 현재 z-통계량
+        current_t: 현재 정보 분율 (0~1)
+        final_z_alpha: 최종 기각 기준
+    """
+    # 현재 추세가 유지된다고 가정
+    projected_z = current_z / np.sqrt(current_t)  # 최종 추정 z
+    remaining_t = 1 - current_t
+
+    # 조건부 검정력
+    cp = norm.cdf(
+        (projected_z * np.sqrt(1) - final_z_alpha) / np.sqrt(remaining_t / current_t)
+    )
+    return {
+        "conditional_power": cp,
+        "decision": "무용 중단 권고" if cp < 0.20 else "계속 진행",
+        "interpretation": (
+            f"현재 추세 유지 시 최종 기각 확률 {cp:.1%}. "
+            f"{'0.20 미만이므로 실험 지속의 가치가 낮다.' if cp < 0.20 else ''}"
+        )
+    }
+```
+
+::: {.callout-warning}
+## Futility stopping은 binding이 아니다
+
+Futility boundary를 넘었다고 반드시 중단할 의무는 없다. 비즈니스 판단에 따라 계속할 수 있다. 다만, 조건부 검정력이 10% 미만이면 실험 자원의 낭비일 가능성이 높다.
+:::
+
+---
+
+## MINERVA 적용 가이드
+
+### 권장 설정
+
+| 설정 | 값 | 근거 |
+|------|------|------|
+| 중간 분석 횟수 | 3~4회 | 너무 많으면 α 분배가 지나치게 보수적 |
+| Spending function | O'Brien-Fleming | 최종 분석 검정력 손실 최소 |
+| Futility boundary | CP < 0.20 | 무용한 실험 조기 중단 |
+| 가드레일 모니터링 | 매일 | 안전 문제는 즉시 감지해야 함 (α 보정 불필요) |
+
+### 가드레일 vs Sequential boundary
+
+가드레일 지표(환각률, 오류율)의 모니터링은 sequential testing의 α 보정과 **별개**이다:
+
+- **Sequential boundary**: North Star / Proxy 메트릭에 적용. α 소비를 관리한다
+- **가드레일**: 안전 지표. α 보정 없이 매일 모니터링하고, 임계값 초과 시 즉시 중단한다. 이는 1종 오류 제어가 아니라 **환자 안전(patient safety)** 논리와 같다
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [표본 크기와 검정력](./44-project-agent-sample-size.qmd) — MDE, 표본 크기 계산
+- [A/B 테스트의 핵심 메커니즘](../01-ab-test-mechanism.qmd) — 가설 검정, 1종/2종 오류
+
+**시리즈 다음 포스트**
+
+- [다중 비교 실험 설계](./46-project-agent-multiarm.qmd) — 3종 Agent 동시 비교, Factorial design
+
+**다른 카테고리 연결**
+
+- [가설 검정](../../Statistics/2023-04-10_hypothesis.qmd) — 통계적 검정의 기초

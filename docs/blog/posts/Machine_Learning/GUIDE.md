@@ -2,11 +2,12 @@
 name: Machine_Learning_GUIDE
 type: category
 version: 1.0
-description: Machine Learning 카테고리 포스트 작성 규칙 — 알고리즘 비교, SHAP 해석, 커리큘럼 기반
+description: LOAD when writing posts about classification, regression, ensemble methods, unsupervised learning, or model evaluation. Covers algorithm theory with mathematical foundations and scikit-learn implementations.
 scope: docs/blog/posts/Machine_Learning/
 parent: AGENT_GUIDE.md
 index: docs/blog/posts/Machine_Learning/index.qmd
-book_sources: []
+book_sources:
+  - docs/book/machine_learning/
 cross_references:
   - docs/blog/posts/Statistics/GUIDE.md
   - docs/blog/posts/Deep_Learning/GUIDE.md
@@ -59,25 +60,15 @@ $$
 - 목적 함수(loss function)와 최적화 방법을 명시한다
 - Bias-Variance Trade-off 관점에서 알고리즘을 분석한다
 - 하이퍼파라미터의 역할과 영향을 설명한다
+- 추상적이거나 이해하기 어려운 개념에는 비유, 결정 경계 시각화 등 직관적 설명을 적재적소에 포함한다 (필요시 별도 섹션으로 분리 가능)
 
-### 3. 직관적 설명 (Intuitive Explanation)
-
-- 비유를 사용하여 알고리즘의 핵심 아이디어를 전달한다
-- 결정 경계(decision boundary) 시각화를 활용한다
-
-```markdown
-> **직관**: Random Forest는 "다수결 투표"와 같다.
-> 한 명의 전문가(단일 결정 트리)보다 여러 전문가의 의견을 종합하면 더 정확하다.
-> 각 전문가가 서로 다른 데이터와 변수를 보게 하여 다양성을 확보한다.
-```
-
-### 4. 왜 필요한가 (Why It Matters)
+### 3. 왜 필요한가 (Why It Matters)
 
 - 단순 모델의 한계와 이를 보완하는 방식을 설명한다
 - 실무에서 이 알고리즘이 선호되는 이유를 제시한다
 - 대안 알고리즘과의 비교를 포함한다
 
-### 5. 응용 분야 (Applications)
+### 4. 응용 분야 (Applications)
 
 ```markdown
 | 분야 | 활용 | 구체적 예시 |
@@ -89,13 +80,13 @@ $$
 | 추천 | 개인화 | 협업 필터링 |
 ```
 
-### 6. 예시 (Examples)
+### 5. 예시 (Examples)
 
 - 소규모 데이터셋으로 알고리즘 동작을 단계별로 보여준다
 - 결정 경계, 학습 곡선 등 시각화를 포함한다
 - 하이퍼파라미터 변화에 따른 결과 차이를 보여준다
 
-### 7. 코드 예시 (Code Examples)
+### 6. 코드 예시 (Code Examples)
 
 - **2단계 구성**: (1) 순수 Python/NumPy로 알고리즘 원리를 구현 → (2) scikit-learn 등 프레임워크로 실무 코드 제시
 - 패키지: `numpy` (low-level), `scikit-learn`, `xgboost`, `lightgbm`, `pandas`, `matplotlib`, `shap`
@@ -168,7 +159,7 @@ shap.summary_plot(shap_values[1], X[:100])
 ```
 ```
 
-### 8. 관련 주제 (Related Topics)
+### 7. 관련 주제 (Related Topics)
 
 - 포스트 끝에 관련 개념과 블로그 내 링크를 목록으로 제시한다
 - 선행 지식(prerequisite)과 후속 주제(next)를 구분한다
@@ -192,6 +183,20 @@ shap.summary_plot(shap_values[1], X[:100])
 - [신경망과 딥러닝](../Deep_Learning/NLP/1.nlp_overview.qmd) — ML → DL 확장
 - [A/B 테스트와 모델 평가](../Experimentation/01-ab-test-mechanism.qmd) — 모델 배포 후 실험
 ```
+
+---
+
+## 자주 발생하는 품질 문제
+
+<fix-algorithm-without-tradeoff>
+WRONG: 알고리즘 설명만 나열하고 끝냄
+CORRECT: bias-variance tradeoff, 시간/공간 복잡도, 적합한 데이터 유형까지 포함
+</fix-algorithm-without-tradeoff>
+
+<fix-evaluation-without-context>
+WRONG: "accuracy 95%"라고만 보고
+CORRECT: 불균형 데이터 여부, 적절한 메트릭 선택 근거, baseline 비교를 함께 제시
+</fix-evaluation-without-context>
 
 ---
 
@@ -256,7 +261,7 @@ Semi-Supervised / Self-Supervised / Transfer Learning
 
 ## 교재 레퍼런스
 
-이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+이 카테고리의 포스트 작성 시 다음 교재를 **논리적 뼈대**로 활용한다. 교재의 체계를 참고하되, agent의 최신 사전지식으로 outdated된 내용은 수정하고 부족한 부분은 보완한다.
 
 | 교재 | Summary 경로 | 활용 영역 |
 |---|---|---|
@@ -266,4 +271,20 @@ Semi-Supervised / Self-Supervised / Transfer Learning
 | Murphy — Probabilistic ML: Introduction (2022) | `docs/book/machine_learning/Murphy-PMLIntro-summary.md` | 확률론적 ML 기초, 딥러닝, 비지도학습 |
 | Murphy — Probabilistic ML: Advanced (2023) | `docs/book/machine_learning/Murphy-PMLAdvanced-summary.md` | 추론, 생성모델, 인과추론, 강화학습 |
 
-**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 수식/정의 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
+**활용 절차**: Summary 읽기 → 논리 구조 파악 → Full MD에서 수식/정의 확인 → 교재 내용 중 유효한 부분은 유지, outdated된 부분은 agent 지식으로 수정·보완 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
+
+---
+
+## 경계 정의
+
+<boundaries>
+CAN:
+- 교재 기반 알고리즘 유도 (목적함수 → 최적화 → 해)
+- 알고리즘 간 비교표 (복잡도, 가정, 적합 상황)
+- scikit-learn + low-level NumPy 구현 병행
+- 실무 적용 맥락 (데이터 특성에 따른 알고리즘 선택 근거)
+
+CANNOT:
+- 알고리즘을 단순 API 호출로만 소개 (수학적 원리 없이 sklearn 코드만 나열)
+- 수학적 근거 없이 "이 알고리즘이 좋다" 주장 (벤치마크·이론적 분석 없는 추천 금지)
+</boundaries>

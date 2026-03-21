@@ -2,11 +2,12 @@
 name: Data_Science_GUIDE
 type: category
 version: 1.0
-description: Data Science 카테고리 포스트 작성 규칙 — 통합자(hub), 방법론, CRISP-DM, 비즈니스 연결
+description: LOAD when writing posts about CRISP-DM workflow, EDA, feature engineering, model deployment, MLOps, or AI engineering. Covers end-to-end data science pipeline with practical methodology.
 scope: docs/blog/posts/Data_Science/
 parent: AGENT_GUIDE.md
 index: docs/blog/posts/Data_Science/index.qmd
-book_sources: []
+book_sources:
+  - docs/book/data_science/
 cross_references:
   - docs/blog/posts/Statistics/GUIDE.md
   - docs/blog/posts/Machine_Learning/GUIDE.md
@@ -57,25 +58,15 @@ cross_references:
 - 방법론의 이론적 배경과 단계별 프로세스를 설명한다
 - 데이터 과학의 전체 파이프라인 내에서의 위치를 명시한다
 - Statistics/ML/DL/Engineering 간 역할 분담을 설명한다
+- 추상적이거나 이해하기 어려운 개념에는 비유, 실패/성공 사례 등 직관적 설명을 적재적소에 포함한다 (필요시 별도 섹션으로 분리 가능)
 
-### 3. 직관적 설명 (Intuitive Explanation)
-
-- 비즈니스 관점에서 왜 이 과정이 필요한지 설명한다
-- 실패 사례/성공 사례를 통해 중요성을 전달한다
-
-```markdown
-> **직관**: EDA는 "데이터와의 첫 대화"이다.
-> 환자를 진단하기 전에 문진하는 것처럼, 모델을 만들기 전에 데이터의 상태를 파악해야 한다.
-> EDA 없이 모델링하면 잘못된 가정 위에 집을 짓는 것과 같다.
-```
-
-### 4. 왜 필요한가 (Why It Matters)
+### 3. 왜 필요한가 (Why It Matters)
 
 - 이 단계를 건너뛰면 발생하는 구체적 문제를 제시한다
 - 비즈니스 의사결정에서의 역할을 설명한다
 - ROI, 효율성 관점에서 동기를 부여한다
 
-### 5. 응용 분야 (Applications)
+### 4. 응용 분야 (Applications)
 
 ```markdown
 | 분야 | 활용 | 구체적 예시 |
@@ -87,13 +78,13 @@ cross_references:
 | 물류 | 수요 예측 | 재고 최적화 |
 ```
 
-### 6. 예시 (Examples)
+### 5. 예시 (Examples)
 
 - end-to-end 프로젝트 시나리오를 제시한다
 - 문제 정의 → 데이터 → 분석 → 결론 흐름을 따른다
 - 의사결정 포인트를 강조한다
 
-### 7. 코드 예시 (Code Examples)
+### 6. 코드 예시 (Code Examples)
 
 - **2단계 구성**: (1) 순수 Python으로 원리를 구현 → (2) pandas/seaborn 등 프레임워크로 실무 코드 제시
 - 패키지: `pandas`, `numpy`, `matplotlib`, `seaborn`, `scikit-learn`
@@ -145,7 +136,7 @@ plt.show()
 ```
 ```
 
-### 8. 관련 주제 (Related Topics)
+### 7. 관련 주제 (Related Topics)
 
 - 포스트 끝에 관련 개념과 블로그 내 링크를 목록으로 제시한다
 - 선행 지식(prerequisite)과 후속 주제(next)를 구분한다
@@ -207,9 +198,102 @@ Data Science (프로세스, 방법론, 통합)
 
 ---
 
+## 흔한 실수 교정 (Fix Blocks)
+
+<fix-tool-without-methodology>
+
+**WRONG**: pandas/sklearn 코드만 나열
+
+```python
+# BAD — 코드만 있고 왜 이 방법을 택했는지 설명이 없다
+df = df.dropna()
+df['price_log'] = np.log1p(df['price'])
+model = RandomForestRegressor()
+model.fit(X_train, y_train)
+```
+
+**CORRECT**: 방법론적 근거(왜 이 전처리/피처를 선택했는가) → 코드
+
+```markdown
+## 결측치 처리 전략
+
+price 변수의 결측은 전체의 2.3%이며, MCAR 패턴을 보인다 (Little's test p=0.42).
+비율이 낮고 무작위 결측이므로 완전 제거(listwise deletion)를 선택한다.
+만약 MAR이었다면 다중 대체(MICE)를 사용해야 한다 (Huyen, 2022, Ch.4).
+
+price의 오른쪽 꼬리가 길어(skewness=3.2) log 변환을 적용한다.
+이를 통해 트리 모델의 분할 효율이 개선되고, 선형 모델에서도 잔차 정규성에 가까워진다.
+```
+
+```python
+# 결측 비율 확인 후 완전 제거
+print(f"price 결측 비율: {df['price'].isna().mean():.3f}")
+df = df.dropna(subset=['price'])
+
+# skewness 기반 log 변환
+print(f"변환 전 skewness: {df['price'].skew():.2f}")
+df['price_log'] = np.log1p(df['price'])
+print(f"변환 후 skewness: {df['price_log'].skew():.2f}")
+```
+
+</fix-tool-without-methodology>
+
+<fix-isolated-step>
+
+**WRONG**: EDA만 독립적으로 설명
+
+```markdown
+## EDA
+히스토그램을 그리고, 상관행렬을 확인하고, 이상치를 박스플롯으로 본다.
+```
+
+**CORRECT**: CRISP-DM 워크플로 내에서 EDA의 위치와 전후 단계 연결
+
+```markdown
+## EDA — CRISP-DM Phase 2: Data Understanding
+
+### 이전 단계와의 연결
+Business Understanding에서 정의한 핵심 질문:
+"어떤 숙소 특성이 가격 프리미엄을 만드는가?"
+이 질문에 답하기 위해 EDA에서 확인할 사항을 정리한다.
+
+### EDA 수행
+1. **타겟 분포**: price의 분포 → 변환 필요성 판단 (→ Data Preparation으로 연결)
+2. **피처-타겟 관계**: room_type별 가격 차이 → 모델링 전략에 반영 (→ Modeling으로 연결)
+3. **데이터 품질**: 결측 패턴, 이상치 → 전처리 전략 수립 (→ Data Preparation으로 연결)
+
+### 다음 단계로의 인사이트
+EDA 결과, neighbourhood_group과 room_type이 가격의 주요 설명 변수임을 확인했다.
+Data Preparation 단계에서 이 변수들의 인코딩 전략을 결정한다.
+```
+
+</fix-isolated-step>
+
+---
+
+## 범위 정의 (Boundaries)
+
+<boundaries>
+
+### CAN (이 카테고리에서 다루는 것)
+
+- 교재 기반 방법론 설명 (CRISP-DM, ML 시스템 설계, 비즈니스 프레이밍)
+- 실무 파이프라인: 데이터 수집 → 전처리 → 모델링 → 배포 → 모니터링 전체 흐름
+- 비즈니스 맥락 연결: 기술적 선택이 비즈니스 가치에 미치는 영향
+- 도구 비교: pandas vs polars, sklearn vs XGBoost, MLflow vs W&B 등 방법론적 관점의 도구 선택 가이드
+
+### CANNOT (이 카테고리에서 하지 않는 것)
+
+- 방법론적 근거 없이 코드만 나열 (→ `<fix-tool-without-methodology>` 참조)
+- 비즈니스 목적 없는 기술적 EDA만 수행 (→ `<fix-isolated-step>` 참조)
+
+</boundaries>
+
+---
+
 ## 교재 레퍼런스
 
-이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+이 카테고리의 포스트 작성 시 다음 교재를 **논리적 뼈대**로 활용한다. 교재의 체계를 참고하되, agent의 최신 사전지식으로 outdated된 내용은 수정하고 부족한 부분은 보완한다.
 
 | 교재 | Summary 경로 | 활용 영역 |
 |---|---|---|
@@ -217,4 +301,4 @@ Data Science (프로세스, 방법론, 통합)
 | Chip Huyen — Designing ML Systems (2022) | `docs/book/data_science/Huyen-DesigningMLSystems-summary.md` | ML 시스템 설계, 데이터, 배포, 모니터링 |
 | Provost & Fawcett — Data Science for Business (2013) | `docs/book/data_science/Provost-DataScienceBusiness-summary.md` | 비즈니스 관점 DS, 모델 평가, Expected Value |
 
-**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 상세 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
+**활용 절차**: Summary 읽기 → 논리 구조 파악 → Full MD에서 수식/정의 확인 → 교재 내용 중 유효한 부분은 유지, outdated된 부분은 agent 지식으로 수정·보완 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용

@@ -1,0 +1,426 @@
+---
+title: "Thompson Sampling 동적 라우팅"
+subtitle: "Beta 분포 기반 실시간 트래픽 최적 배분 — 탐색과 활용의 균형"
+description: |
+  고정 50:50 배분은 열등한 변형에 절반의 트래픽을 낭비한다. Thompson Sampling은
+  Beta 분포를 활용하여 성능이 좋은 변형에 자동으로 더 많은 트래픽을 보내면서도
+  탐색을 유지한다. Agent/프롬프트/파라미터 조합의 실시간 동적 최적화를 다룬다.
+categories:
+  - Experimentation
+  - Agent
+author: Kwangmin Kim
+date: 03/21/2026
+---
+
+## 정의
+
+::: {.callout-note}
+## 정의: Thompson Sampling
+
+Thompson Sampling(1933)은 **Bayesian 방식의 Multi-Armed Bandit 알고리즘**이다. 각 변형(arm)의 성공 확률에 대한 사후 분포(posterior)에서 샘플을 추출하고, **샘플 값이 가장 높은 변형에 트래픽을 배정**한다.
+
+- 핵심 아이디어: 불확실한 변형일수록 탐색(explore) 확률이 자연스럽게 높아진다
+- 수학적 기반: Beta-Bernoulli 모델 (이진 결과) 또는 Normal-Normal 모델 (연속 결과)
+- A/B 테스트와의 차이: 고정 배분 → **적응적 배분(adaptive allocation)**
+
+- 역학: Adaptive randomization, Response-adaptive design (윤리적 고려로 임상시험에서 발전)
+- IT: Multi-Armed Bandit, Dynamic traffic allocation
+:::
+
+---
+
+## 왜 Thompson Sampling인가
+
+### 고정 배분의 한계
+
+전통적 A/B 테스트에서 50:50 배분은 **통계적으로는 최적**이지만, **비즈니스적으로는 비용**이다:
+
+```
+1000건 질의, 50:50 배분
+
+Treatment이 실제로 더 좋다면:
+- Control에 배정된 500건 = 열등한 경험 제공 = 기회 비용
+- 이 비용은 실험 기간 내내 지속된다
+```
+
+이 기회 비용을 수치화하면: Treatment의 Task Completion Rate이 실제로 75%(Control 60%)라면, 500건 중 75건의 추가 성공을 포기한 것이다. MINERVA QnA Chatbot에서 이는 75명의 사용자가 추가 질문 없이 업무를 완료할 수 있었는데 그러지 못한 것을 의미한다. Thompson Sampling은 이 차이를 감지하는 즉시 Treatment 비율을 높여 기회 비용을 줄인다.
+
+### Thompson Sampling의 이점
+
+| 차원 | 고정 A/B | Thompson Sampling |
+|------|----------|-------------------|
+| 배분 비율 | 50:50 고정 | 성능에 따라 동적 조정 |
+| 기회 비용 | 높음 (열등한 arm에 50%) | 낮음 (자동 축소) |
+| 탐색-활용 | 순수 탐색 | 자동 균형 |
+| 수렴 속도 | 고정 | 좋은 arm이 빠르게 수렴 |
+| 통계적 추론 | 명확 (frequentist) | Bayesian credible interval |
+
+### MINERVA 맥락
+
+MINERVA Agent는 실험 변수 조합이 많다 (모델 × 프롬프트 × top-k × ...). 모든 조합을 50:50으로 실험하면 수개월이 걸린다. Thompson Sampling은 **열등한 조합을 빠르게 탈락**시키고 유망한 조합에 집중한다.
+
+---
+
+## Beta-Bernoulli Thompson Sampling
+
+### 이진 결과 (성공/실패)
+
+가장 기본적인 형태이다. 각 변형의 성공 확률 $\theta_k$에 대해 Beta 사전 분포를 설정한다.
+
+$$
+\theta_k \sim \text{Beta}(\alpha_k, \beta_k)
+$$
+
+- $\alpha_k$: 성공 횟수 + 사전 성공 (초기값 1)
+- $\beta_k$: 실패 횟수 + 사전 실패 (초기값 1)
+
+```python
+import numpy as np
+
+class BetaBernoulliThompson:
+    """Beta-Bernoulli Thompson Sampling
+
+    이진 결과 (예: Hit Rate, Task Completion) 기반 동적 배분
+    """
+
+    def __init__(self, arm_names: list[str], prior_alpha=1, prior_beta=1):
+        """
+        Args:
+            arm_names: 변형 이름 리스트
+            prior_alpha, prior_beta: Beta 사전분포 파라미터
+                (1,1) = 균등 사전분포 (무정보)
+                (2,2) = 약한 정보 (중앙 집중)
+        """
+        self.arms = arm_names
+        self.alpha = {arm: prior_alpha for arm in arm_names}
+        self.beta = {arm: prior_beta for arm in arm_names}
+        self.history = []
+
+    def select_arm(self) -> str:
+        """각 arm의 사후분포에서 샘플링하여 최고값 arm을 선택한다"""
+        samples = {}
+        for arm in self.arms:
+            samples[arm] = np.random.beta(self.alpha[arm], self.beta[arm])
+        selected = max(samples, key=samples.get)
+        return selected
+
+    def update(self, arm: str, reward: int):
+        """관측 결과로 사후분포를 업데이트한다
+
+        Args:
+            arm: 선택된 변형
+            reward: 1 (성공) 또는 0 (실패)
+        """
+        if reward == 1:
+            self.alpha[arm] += 1
+        else:
+            self.beta[arm] += 1
+        self.history.append({"arm": arm, "reward": reward})
+
+    def get_stats(self) -> dict:
+        """각 arm의 현재 통계"""
+        stats = {}
+        for arm in self.arms:
+            a, b = self.alpha[arm], self.beta[arm]
+            n = a + b - 2  # 사전분포 제외한 관측 수
+            stats[arm] = {
+                "n_observations": n,
+                "successes": a - 1,
+                "posterior_mean": round(a / (a + b), 4),
+                "posterior_std": round(np.sqrt(a * b / ((a+b)**2 * (a+b+1))), 4),
+                "ci_95": (
+                    round(np.percentile(np.random.beta(a, b, 10000), 2.5), 4),
+                    round(np.percentile(np.random.beta(a, b, 10000), 97.5), 4),
+                ),
+            }
+        return stats
+
+
+# 사용 예시: MINERVA 프롬프트 3개 버전 비교
+ts = BetaBernoulliThompson(["prompt_v1", "prompt_v2", "prompt_v3"])
+
+# 시뮬레이션: 진짜 성공 확률
+true_probs = {"prompt_v1": 0.60, "prompt_v2": 0.75, "prompt_v3": 0.65}
+
+for i in range(300):
+    arm = ts.select_arm()
+    reward = int(np.random.random() < true_probs[arm])
+    ts.update(arm, reward)
+
+# 결과 확인
+stats = ts.get_stats()
+for arm, s in stats.items():
+    print(f"{arm}: n={s['n_observations']}, "
+          f"posterior_mean={s['posterior_mean']}, "
+          f"95% CI={s['ci_95']}")
+```
+
+### 연속형 결과로 확장
+
+Relevance Score(1-5) 같은 연속형 메트릭에는 Normal-Normal 모델을 사용한다.
+
+```python
+class NormalThompson:
+    """Normal-Normal Thompson Sampling
+
+    연속형 메트릭 (Relevance Score 등) 기반 동적 배분
+    """
+
+    def __init__(self, arm_names: list[str], prior_mean=0, prior_var=10, known_var=1.0):
+        """
+        Args:
+            prior_mean: 사전 평균
+            prior_var: 사전 분산 (크게 설정 = 무정보)
+            known_var: 알려진 관측 분산 (σ²)
+        """
+        self.arms = arm_names
+        self.known_var = known_var
+        self.mu = {arm: prior_mean for arm in arm_names}
+        self.tau = {arm: 1/prior_var for arm in arm_names}  # precision
+        self.n = {arm: 0 for arm in arm_names}
+        self.sum_rewards = {arm: 0.0 for arm in arm_names}
+
+    def select_arm(self) -> str:
+        samples = {}
+        for arm in self.arms:
+            posterior_mean = self.mu[arm]
+            posterior_var = 1 / self.tau[arm]
+            samples[arm] = np.random.normal(posterior_mean, np.sqrt(posterior_var))
+        return max(samples, key=samples.get)
+
+    def update(self, arm: str, reward: float):
+        self.n[arm] += 1
+        self.sum_rewards[arm] += reward
+
+        # 사후분포 업데이트 (conjugate)
+        prior_tau = self.tau[arm]
+        obs_tau = 1 / self.known_var
+        self.tau[arm] = prior_tau + obs_tau
+        self.mu[arm] = (prior_tau * self.mu[arm] + obs_tau * reward) / self.tau[arm]
+```
+
+---
+
+## Regret 분석
+
+### Regret이란
+
+최적 arm만 선택했을 때의 누적 보상과 실제 누적 보상의 차이이다.
+
+$$
+R(T) = \sum_{t=1}^{T} (\mu^* - \mu_{a_t})
+$$
+
+- $\mu^*$: 최적 arm의 기대 보상
+- $\mu_{a_t}$: 시점 $t$에서 선택한 arm의 기대 보상
+
+```python
+def simulate_and_compute_regret(algorithm, true_probs, n_rounds=1000, n_simulations=100):
+    """Thompson Sampling vs 고정 배분의 Regret 비교"""
+    optimal_reward = max(true_probs.values())
+    arms = list(true_probs.keys())
+
+    ts_regrets = np.zeros((n_simulations, n_rounds))
+    uniform_regrets = np.zeros((n_simulations, n_rounds))
+
+    for sim in range(n_simulations):
+        # Thompson Sampling
+        ts = BetaBernoulliThompson(arms)
+        cumulative_regret = 0
+        for t in range(n_rounds):
+            arm = ts.select_arm()
+            reward = int(np.random.random() < true_probs[arm])
+            ts.update(arm, reward)
+            cumulative_regret += optimal_reward - true_probs[arm]
+            ts_regrets[sim, t] = cumulative_regret
+
+        # Uniform (고정 50:50:50)
+        cumulative_regret = 0
+        for t in range(n_rounds):
+            arm = arms[t % len(arms)]
+            cumulative_regret += optimal_reward - true_probs[arm]
+            uniform_regrets[sim, t] = cumulative_regret
+
+    return {
+        "thompson_mean_regret": ts_regrets.mean(axis=0),
+        "uniform_mean_regret": uniform_regrets.mean(axis=0),
+        "thompson_final": ts_regrets[:, -1].mean(),
+        "uniform_final": uniform_regrets[:, -1].mean(),
+    }
+```
+
+### Regret 시각화
+
+```python
+import matplotlib.pyplot as plt
+
+true_probs = {"prompt_v1": 0.60, "prompt_v2": 0.75, "prompt_v3": 0.65}
+results = simulate_and_compute_regret(None, true_probs, n_rounds=500, n_simulations=200)
+
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.plot(results["thompson_mean_regret"], label="Thompson Sampling", color="blue")
+ax.plot(results["uniform_mean_regret"], label="Uniform (고정 배분)", color="red", linestyle="--")
+ax.set_xlabel("라운드 (질의 수)")
+ax.set_ylabel("누적 Regret")
+ax.set_title("Thompson Sampling vs 고정 배분의 Regret 비교")
+ax.legend()
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+## MINERVA 동적 라우팅 적용
+
+### 시나리오: 프롬프트 최적화
+
+```python
+# MINERVA QnA Chatbot: 3개 프롬프트 버전을 동적 배분
+# 이진 메트릭: Task Completion (질의 후 추가 질문 없음 = 성공)
+
+router = BetaBernoulliThompson(
+    arm_names=["system_prompt_v1", "system_prompt_v2", "system_prompt_v3"],
+    prior_alpha=1,  # 균등 사전분포
+    prior_beta=1
+)
+
+def handle_query(query: str, session_id: str):
+    """실시간 질의 처리 + 동적 라우팅"""
+    # Thompson Sampling으로 프롬프트 선택
+    selected_prompt = router.select_arm()
+
+    # Agent 실행
+    response = run_agent(
+        config={"system_prompt": selected_prompt, "top_k": 6},
+        query=query
+    )
+
+    # 응답 반환
+    return response, selected_prompt
+
+def process_feedback(selected_prompt: str, task_completed: bool):
+    """사용자 피드백(또는 자동 판정)으로 보상 업데이트"""
+    router.update(selected_prompt, int(task_completed))
+```
+
+### 시나리오: 다변수 조합 최적화
+
+프롬프트 × top-k를 조합으로 실험할 때, 각 조합을 하나의 arm으로 취급한다.
+
+```python
+import itertools
+
+# 조합 생성
+prompts = ["v1", "v2", "v3"]
+top_ks = [5, 10]
+combinations = [f"prompt_{p}_topk_{k}" for p, k in itertools.product(prompts, top_ks)]
+# → ["prompt_v1_topk_5", "prompt_v1_topk_10", ..., "prompt_v3_topk_10"]
+
+router = BetaBernoulliThompson(combinations)
+# 6개 arm → Thompson Sampling이 자동으로 유망한 조합에 집중
+```
+
+---
+
+## Thompson Sampling의 주의사항
+
+### 통계적 추론의 어려움
+
+::: {.callout-warning}
+## A/B 테스트와의 트레이드오프
+
+Thompson Sampling은 기회 비용을 줄이지만, **전통적 의미의 p-value와 신뢰구간을 제공하지 않는다**. 적응적 배분 때문에 표본이 독립동일분포(i.i.d.)가 아니게 되어 frequentist 추론이 어렵다.
+
+대안:
+- Bayesian credible interval로 불확실성을 표현한다
+- "Best arm의 사후 확률"로 의사결정한다
+- 엄밀한 효과 크기 추정이 필요하면 고정 A/B를 사용한다
+:::
+
+### Delayed Feedback
+
+Agent 실험에서 "성공/실패" 판정이 즉시 이루어지지 않을 수 있다. Task Completion은 세션 종료 후에야 판정 가능하다.
+
+```python
+class DelayedThompson(BetaBernoulliThompson):
+    """지연 피드백을 처리하는 Thompson Sampling"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pending = []  # 피드백 대기 중인 배정
+
+    def select_arm_with_pending(self):
+        """피드백 대기 건을 고려하여 선택"""
+        # 대기 중인 건은 사전분포에 반영하지 않되,
+        # 과도한 배정 집중을 방지한다
+        arm = self.select_arm()
+        self.pending.append(arm)
+        return arm
+
+    def resolve_pending(self, arm: str, reward: int):
+        """지연 피드백 도착 시 업데이트"""
+        self.update(arm, reward)
+        if arm in self.pending:
+            self.pending.remove(arm)
+```
+
+### 종료 기준
+
+Thompson Sampling에는 고정된 종료 시점이 없다. 실무적 종료 기준:
+
+| 기준 | 값 | 설명 |
+|------|------|------|
+| Best arm 사후 확률 | > 0.95 | "이 arm이 최고일 확률이 95% 이상" |
+| 최소 관측 수 | 각 arm ≥ 30 | 충분한 탐색 보장 |
+| 최대 라운드 | 500 | 무한 실행 방지 |
+| Regret 수렴 | 기울기 < ε | 추가 탐색의 한계 효용 |
+
+왜 이 값들인가: 사후 확률 0.95는 "100번 중 95번은 이 arm이 최고"라는 의미로, 임상시험의 α=0.05와 대칭적인 확신 수준이다. 최소 관측 수 30은 Beta 분포의 사후 분산이 충분히 줄어들어 사후 평균이 안정화되는 경험적 하한이다. 30건 미만이면 사전분포(Beta(1,1))의 영향이 지나치게 커서, 실제 성능이 아니라 사전 믿음으로 판단하게 된다.
+
+```python
+def should_stop(ts: BetaBernoulliThompson, threshold=0.95, min_per_arm=30):
+    """종료 조건 판정"""
+    stats = ts.get_stats()
+
+    # 최소 관측 수 확인
+    for arm, s in stats.items():
+        if s["n_observations"] < min_per_arm:
+            return False, "최소 관측 수 미달"
+
+    # Best arm 사후 확률 계산 (Monte Carlo)
+    n_samples = 10000
+    samples = {
+        arm: np.random.beta(ts.alpha[arm], ts.beta[arm], n_samples)
+        for arm in ts.arms
+    }
+    best_counts = {arm: 0 for arm in ts.arms}
+    for i in range(n_samples):
+        best = max(ts.arms, key=lambda a: samples[a][i])
+        best_counts[best] += 1
+
+    best_arm = max(best_counts, key=best_counts.get)
+    best_prob = best_counts[best_arm] / n_samples
+
+    if best_prob >= threshold:
+        return True, f"Best arm: {best_arm} (P={best_prob:.3f})"
+    return False, f"최고 확률 {best_prob:.3f} < {threshold}"
+```
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [실험 결과 분석과 의사결정](./48-project-agent-analysis-decision.qmd) — 고정 A/B의 분석 방법
+- [A/B 테스트 개요](./01-ab-test-overview.qmd) — 실험의 통계적 프레임워크
+
+**시리즈 다음 포스트**
+
+- [프로덕션 A/B 플랫폼 설계](./50-project-agent-production-platform.qmd) — Thompson Sampling을 포함한 플랫폼 아키텍처
+
+**다른 카테고리 연결**
+
+- [MAB 개요](../MAB/index.qmd) — Multi-Armed Bandit의 이론적 기반, Regret 분석
+- [베이즈 정리](../../Statistics/06-probability.qmd) — Beta 분포, 사전-사후 분포 업데이트
