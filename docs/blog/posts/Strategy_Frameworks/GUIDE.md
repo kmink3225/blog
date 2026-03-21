@@ -116,3 +116,22 @@ cross_references:
 - 학술 출처를 반드시 명시한다
 - 형식: `(저자, 연도)` 또는 `출처: 문서명`
 - 주요 참조 소스: Stanford Encyclopedia of Philosophy, 경영학/경제학 교과서
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| Hurley — A Concise Introduction to Logic | `docs/book/strategy_frameworks/Hurley-Logic-summary.md` | 연역/귀납/귀추 추론 |
+| Lipton — Inference to the Best Explanation (2004) | `docs/book/strategy_frameworks/Lipton-InferenceBestExplanation-summary.md` | 귀추법, 과학적 추론 |
+| Porter — Competitive Strategy (1980) | `docs/book/strategy_frameworks/Porter-CompetitiveStrategy-summary.md` | 5 Forces, Value Chain |
+| Rumelt — Good Strategy Bad Strategy (2011) | `docs/book/strategy_frameworks/Rumelt-GoodStrategy-summary.md` | 전략의 본질, Kernel |
+| Kahneman — Thinking, Fast and Slow (2011) | `docs/book/strategy_frameworks/Kahneman-ThinkingFastSlow-summary.md` | 인지 편향, 시스템 1/2 |
+| Lafley & Martin — Playing to Win (2013) | `docs/book/strategy_frameworks/Lafley-PlayingToWin-summary.md` | Strategy Choice Cascade |
+| Dixit & Nalebuff — The Art of Strategy (2008) | `docs/book/strategy_frameworks/Dixit-ArtOfStrategy-summary.md` | 게임이론 기반 전략 |
+| Parrish — The Great Mental Models (Vol 1-3) | `docs/book/strategy_frameworks/Parrish-GreatMentalModelsV1-summary.md` | 멘탈 모델 |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 상세 확인 → 블로그 스타일로 재작성

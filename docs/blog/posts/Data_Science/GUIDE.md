@@ -204,3 +204,17 @@ Data Science (프로세스, 방법론, 통합)
 ```
 
 포스트에서 특정 기술을 깊이 다룰 때는 해당 카테고리로의 크로스 링크를 제공하고, Data Science 포스트 자체는 통합적 관점과 프로세스에 집중한다.
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| Chip Huyen — AI Engineering (2025) | `docs/book/data_science/Huyen-AIEngineering-summary.md` | LLM 시스템, RAG, Agent, 평가, 배포 |
+| Chip Huyen — Designing ML Systems (2022) | `docs/book/data_science/Huyen-DesigningMLSystems-summary.md` | ML 시스템 설계, 데이터, 배포, 모니터링 |
+| Provost & Fawcett — Data Science for Business (2013) | `docs/book/data_science/Provost-DataScienceBusiness-summary.md` | 비즈니스 관점 DS, 모델 평가, Expected Value |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 상세 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용

@@ -252,3 +252,18 @@ LangChain v0.3부터 `from langchain.chat_models import ChatOpenAI`는 deprecate
 `from langchain_openai import ChatOpenAI`를 사용한다.
 :::
 ```
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| Kejriwal et al. — Knowledge Graphs (2021) | `docs/book/ontology/Knowledge-Graphs-Kejriwal-summary.md` | 지식 그래프 설계, 구축, 추론 |
+| Robinson et al. — Graph Databases (2015) | `docs/book/ontology/Robinson-GraphDatabases-summary.md` | Neo4j, Cypher, 그래프 모델링 |
+| CodeQL Documentation | `docs/book/ontology/CodeQL-summary.md` | 코드→관계형 DB, QL 쿼리 |
+| CPG Specification | `docs/book/ontology/Code-Property-Graph-CPG-summary.md` | AST+CFG+PDG 통합 코드 그래프 |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 상세 확인 → 블로그 스타일로 재작성

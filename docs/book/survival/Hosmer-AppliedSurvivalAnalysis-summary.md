@@ -1,7 +1,7 @@
 ---
 name: "Applied Survival Analysis: Regression Modeling of Time-to-Event Data (2nd Ed.)"
 type: book-summary
-source_file: "Applied-Survival-Analysis-Regression-Modeling-of-Time-to-Event-Data-Second-Edition.md"
+source_file: "Hosmer-AppliedSurvivalAnalysis_full.md"
 authors: "David W. Hosmer, Stanley Lemeshow, Susanne May"
 year: 2008
 total_pages: 392

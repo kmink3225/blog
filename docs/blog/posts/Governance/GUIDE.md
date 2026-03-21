@@ -156,3 +156,15 @@ format:
       margin-width: 300px
 ---
 ```
+
+---
+
+## 교재 레퍼런스
+
+이 카테고리의 포스트 작성 시 다음 교재의 Summary를 먼저 참조한다.
+
+| 교재 | Summary 경로 | 활용 영역 |
+|---|---|---|
+| DAMA International — DMBOK 2nd Ed. (2017) | `docs/book/governance/DAMA-DMBOK-summary.md` | 데이터 거버넌스, 품질, 메타데이터, 보안 |
+
+**참조 절차**: Summary 읽기 → 키워드로 관련 챕터 특정 → Full MD에서 상세 확인 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용

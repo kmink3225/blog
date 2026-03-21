@@ -1,7 +1,7 @@
 ---
 name: "The Matrix Cookbook"
 type: book-summary
-source_file: "matrixcookbook.md"
+source_file: "Petersen-MatrixCookbook_full.md"
 authors: "Kaare Brandt Petersen, Michael Syskind Pedersen"
 year: 2012
 total_pages: 72

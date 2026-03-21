@@ -1,7 +1,7 @@
 ---
 name: "Bayesian Data Analysis (3rd Edition)"
 type: book-summary
-source_file: "Gelman et al. - Bayesian Data Analysis (3rd Ed.).md"
+source_file: "Gelman-BayesianDataAnalysis_full.md"
 authors: "Andrew Gelman, John B. Carlin, Hal S. Stern, David B. Dunson, Aki Vehtari, Donald B. Rubin"
 year: 2013
 total_pages: 661
