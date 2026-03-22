@@ -6,6 +6,9 @@ year: 2025
 total_pages: 512
 language: en
 keywords: [foundation-models, LLM, prompt-engineering, RAG, agents, finetuning, inference-optimization, AI-engineering, evaluation, dataset-engineering]
+sources:
+  - file: "Huyen-AIEngineering_marker_full.md"
+    tool: Marker
 ---
 
 # AI Engineering: Building Applications with Foundation Models — Summary
@@ -102,3 +105,13 @@ AI 애플리케이션의 프로덕션 아키텍처를 5단계 패턴으로 제�
 - Introduction to Building AI Applications with Foundation Models (p.24) `L:520`
 - Challenges of Evaluating Foundation Models `L:2389`
 - AI Engineering Architecture and User Feedback (p.472) `L:8517`
+
+---
+
+## Marker 세부 목차
+
+> `L:숫자`는 `Huyen-AIEngineering_marker_full.md`의 라인 번호.
+
+  - Introduction to Building AI Applications with Foundation Models (p.24) `L:520`
+  - Challenges of Evaluating Foundation Models `L:2389`
+  - AI Engineering Architecture and User Feedback (p.472) `L:8517`

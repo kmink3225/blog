@@ -6,6 +6,9 @@ year: 2025
 total_pages: 310
 language: en
 keywords: [supplementary material, probabilistic ML, Bayesian inference, Dirichlet process, graph learning, proximal methods, particle filtering, variational inference, state-space models, diffusion models]
+sources:
+  - file: "Murphy-PMLAdvancedSupp_marker_full.md"
+    tool: Marker
 ---
 
 # Probabilistic Machine Learning: Advanced Topics (Supplementary Material) — Summary
@@ -59,7 +62,8 @@ keywords: [supplementary material, probabilistic ML, Bayesian inference, Dirichl
 
 **키워드**: `MVN`, `missing data`, `sensor fusion`, `PageRank`
 
-**상세**: → (삭제됨) Ch 2 (line 258)
+**상세**: → `Murphy-PMLAdvancedSupp_marker_full.md` Ch 2 (L:266)
+다변량 가우시안(MVN)에서 관측값의 일부가 결측되었을 때 사후분포를 유도하는 방법을 다룬다. 결측 변수 y₂를 주변화한 뒤 관측 변수 y₁로 조건부 추론하면 사후 정밀도와 평균이 닫힌 형태로 구해진다. 두 센서의 측정 정밀도가 미지인 경우 센서 융합 문제를 다루며, MLE의 고정점 반복과 플러그인 근사를 설명한다. 베이지안 접근에서는 미지의 정밀도를 적분하여 제거하면 사후분포가 다봉(bimodal)이 될 수 있음을 보인다. 이는 어느 센서가 더 신뢰할 만한지에 대한 두 가지 가능성을 반영하며, 플러그인 방법의 과신(overconfidence) 문제를 드러낸다. 몬테카를로 샘플링을 통해 비켤레 사전분포 하에서도 사후분포를 근사할 수 있음을 설명한다. 구글 PageRank 알고리즘을 마르코프 체인 이론의 응용으로 소개하고, 역색인(inverted index)을 이용한 문서 검색과 문서 랭킹의 기초를 설명한다. PageRank 점수는 마르코프 체인의 정상분포로 정의되며, 전이 행렬은 랜덤 점프를 포함하여 정규 체인(regular chain)을 보장한다. 효율적 계산을 위해 멱방법(power method)과 몬테카를로 근사를 사용하며, 웹 스팸(JC Penney 사례)과 개인화 PageRank(랜덤 워크 with restart)도 설명한다
 
 ### Ch 3 보충: Bayesian Statistics (line 20)
 
@@ -67,7 +71,8 @@ keywords: [supplementary material, probabilistic ML, Bayesian inference, Dirichl
 
 **키워드**: `concept learning`, `informative priors`, `Tweedie formula`, `empirical Bayes`
 
-**상세**: → (삭제됨) Ch 3 (line 20)
+**상세**: → `Murphy-PMLAdvancedSupp_marker_full.md` Ch 3 (L:493)
+베이지안 개념 학습을 숫자 게임(number game)과 건강 수치 게임(healthy levels game)을 통해 상세히 설명한다. 숫자 게임에서는 양의 예제만으로 개념을 학습하며, 크기 원리(size principle)에 의해 데이터와 일치하는 가장 작은 가설이 선호됨을 보인다. 이는 오컴의 면도날에 해당하며, 우도비를 통해 "수상한 우연의 일치"를 정량화한다. 사전분포를 통해 배경 지식을 반영할 수 있고, 사후 예측 분포는 베이즈 모형 평균으로 계산한다. 플러그인 근사(MLE/MAP)는 소표본에서 과적합 문제를 일으키지만 대표본에서는 베이지안 접근과 수렴한다. 건강 수치 게임에서는 연속 가설 공간(축 평행 사각형)으로 확장하며, 비정보적 사전분포와 사후 샘플링을 사용한다. 정보적 사전분포로는 가우시안(수명, 영화 상영시간), 멱급수(영화 수익, 시 길이), Erlang(미국 하원의원 재임 기간) 사전분포를 각 도메인에 맞게 적용하며, 사후 중앙값의 해석적 유도를 제공한다. Tweedie 공식은 사전분포를 명시적으로 추정하지 않고도 주변 밀도의 스코어 함수를 이용하여 사후 평균과 분산을 계산하는 경험적 베이즈 방법이다. 다변량 가우시안으로의 확장도 제시하며, 고차원 신호에서는 신경망으로 스코어 함수를 근사할 수 있다
 
 ### Ch 7 보충: Optimization (line 50)
 
@@ -75,7 +80,8 @@ keywords: [supplementary material, probabilistic ML, Bayesian inference, Dirichl
 
 **키워드**: `proximal operator`, `ADMM`, `conjugate duality`, `Bayesian learning rule`
 
-**상세**: → (삭제됨) Ch 7 (line 50)
+**상세**: → `Murphy-PMLAdvancedSupp_marker_full.md` Ch 7 (L:1184)
+프록시멀 연산자(proximal operator)의 정의와 다양한 함수(ℓ₁ 노름, 핵 노름, 지시 함수 등)에 대한 계산법을 상세히 다룬다. 프록시멀 점 방법(PPM)과 그 일반화로서 미러 디센트(mirror descent)를 소개하며, 브레그만 발산을 이용한 갱신 규칙과 이중 공간에서의 경사하강 해석을 제공한다. 프록시멀 그래디언트 방법은 매끄러운 손실과 비매끄러운 정규화를 분리하여 최적화하며, ISTA와 FISTA(네스테로프 가속)가 ℓ₁ 희소 회귀의 대표적 응용이다. ADMM(교대 방향 승수법)은 변수 분할과 증강 라그랑지안을 통해 비매끄러운 두 항을 독립적으로 최적화하며, 견고 PCA(감시 영상의 배경/전경 분리) 등 행렬 분해 문제에 적용된다. 동적 프로그래밍은 피보나치 수열 예제와 HMM 추론(전방-후방, 비터비) 등 ML 응용을 간략히 다룬다. 켤레 쌍대성(conjugate duality)은 비볼록 함수에 대한 선형 하계를 구성하는 방법으로, 펜첼 변환과 르장드르 변환을 설명한다. 시그모이드 함수에 대한 지수 상계와 이차 하계(Jaakkola-Jordan 바운드)를 유도하고, 이차 하계가 가우시안 사전분포와 결합 시 정확한 가우시안 사후를 산출함을 보인다. 베이지안 학습 규칙(BLR)은 기대 손실에 엔트로피 페널티를 추가한 목적 함수를 자연 경사하강으로 최적화하는 통합 프레임워크이다. BLR에서 정확한 베이지안 추론, 켤레/부분 켤레 변분 추론, 경사하강, 뉴턴법, VOGN, RMSprop, Adam 등 다양한 알고리즘을 특수 경우로 유도한다. 변분 최적화(variational optimization)는 이산 변수 최적화를 확률 분포의 파라미터 최적화로 변환하여 미분 가능하게 만드는 방법이다
 
 ### Ch 30 보충: Graph Learning (line 182)
 
@@ -83,7 +89,8 @@ keywords: [supplementary material, probabilistic ML, Bayesian inference, Dirichl
 
 **키워드**: `SBM`, `Chow-Liu`, `DAG structure learning`, `graphical lasso`, `causal DAG`
 
-**상세**: → (삭제됨) Ch 30 (line 182)
+**상세**: → `Murphy-PMLAdvancedSupp_marker_full.md` Ch 30 (L:5729)
+확률적 블록 모형(SBM)은 노드를 잠재 그룹에 할당하고 그룹 간 연결 확률로 그래프를 생성하는 모형이다. 혼합 멤버십 SBM(MMSB)은 각 노드가 여러 그룹에 확률적으로 속할 수 있도록 확장한다. 무한 관계 모형(IRM)은 비모수 베이지안 확장으로 그룹 수를 데이터로부터 자동 결정한다. 트리 구조 학습에서 Chow-Liu 알고리즘은 상호정보량 최대 가중 스패닝 트리를 구성하여 최적 트리 근사를 찾으며, MAP 포레스트는 트리 구조에 사전분포를 포함한다. DAG 구조 학습은 충실성(faithfulness) 가정 하에 조건부 독립으로부터 그래프 구조를 복원한다. 베이지안 모형 선택에서는 BDeu 점수와 K2 알고리즘(노드 순서 기지)을 사용하며, 제약 기반 방법(PC, IC 알고리즘)은 조건부 독립 검정으로 골격을 먼저 찾고 방향을 결정한다. 희소 최적화 기반 방법은 연속 최적화로 DAG 구조를 학습하며, NOTEARS와 같은 비순환성 제약을 포함한다. 잠재 변수가 존재할 때의 구조 학습(FCI 알고리즘)도 다룬다. 비방향 그래프 학습에서 의존 네트워크(dependency network)는 각 노드의 조건부 분포를 독립적으로 추정하며, 그래프 라소(graphical lasso)는 ℓ₁ 정규화로 희소 정밀도 행렬을 추정한다. 인과 DAG 학습에서는 원인-결과 쌍 식별(ANM, 정보 기하학적 방법)과 개입 데이터를 이용한 인과 구조 발견, 그리고 저수준 입력(이미지 등)으로부터 인과 표현 학습을 설명한다
 
 ### Ch 31 보충: Nonparametric Bayesian Models (line 212)
 
@@ -91,15 +98,15 @@ keywords: [supplementary material, probabilistic ML, Bayesian inference, Dirichl
 
 **키워드**: `Dirichlet process`, `stick breaking`, `CRP`, `Pitman-Yor`, `IBP`, `DPP`
 
-**상세**: → (삭제됨) Ch 31 (line 212)
+**상세**: → `Murphy-PMLAdvancedSupp_marker_full.md` Ch 31 (L:6615)
+디리클레 과정(DP)은 확률 분포 위의 비모수 사전분포로, 집중 파라미터 α와 기저 측도 H로 정의된다. 임의의 유한 분할에 대해 디리클레 분포를 따르며, 콜모고로프 확장 정리에 의해 무한 차원으로 확장된다. DP의 켤레성에 의해 사후분포도 DP이며, 사후 기저 측도는 원래 기저와 경험적 분포의 볼록 결합이다. 스틱 브레이킹 구성은 Beta(1,α) 분포로 순차적으로 가중치를 생성하여 DP 표본(이산 확률 측도)을 구성한다. 중국 식당 과정(CRP)은 교환 가능한 클러스터 할당으로, 기존 테이블에 크기에 비례하여 합류하거나 α에 비례하여 새 테이블을 생성한다. DP 혼합 모형(DPMM)은 무한 혼합 모형으로, 연속 밀도의 비모수 사전분포로 사용되며, 축소 깁스 샘플러(Algorithm 3)와 평균장 변분 베이즈(스틱 브레이킹 절단)로 추론한다. 피트먼-요르 과정(PYP)은 할인 파라미터 d를 추가하여 DP를 일반화하며, 멱급수 분포를 따르는 클러스터 크기를 모형화한다. 인도 뷔페 과정(IBP)과 베타 과정은 잠재 특징 모형의 비모수 사전분포로, 각 관측이 여러 이진 특징을 가질 수 있다. 소분산 점근(small-variance asymptotics)은 DP 혼합의 분산을 0으로 보내면 DP-means(임계 거리 기반 k-평균 변형)를 유도한다. 완전 랜덤 측도(CRM)와 레비 과정은 DP, 베타 과정 등의 통합적 이론적 기반을 제공한다. 점 과정에서는 포아송 과정, 재생 과정, 호크스 과정(강화), 깁스 점 과정과 결정적 점 과정(DPP, 반발)을 다루며, 각각의 생성 메커니즘과 응용을 설명한다
 
 
 ---
 
-## 원본 목차 (Marker 기준)
+## Marker 세부 목차
 
-> 원본 파일: `Murphy-PMLAdvancedSupp_marker_full.md` | 총 ~7,822 라인
-> `L:숫자`로 `Read(file, offset=L, limit=N)` 직접 접근 가능
+> `L:숫자`는 `Murphy-PMLAdvancedSupp_marker_full.md`의 라인 번호.
 
 - 1 Introduction (p.10) `L:258`
 - 2 Probability (p.14) `L:266`

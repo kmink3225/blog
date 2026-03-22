@@ -6,6 +6,9 @@ year: 2026
 total_pages: 611
 language: en
 keywords: [NLP, large language models, transformers, BERT, speech recognition, TTS, parsing, information extraction, coreference, sentiment analysis, machine translation, RAG]
+sources:
+  - file: "Jurafsky-SLP_marker_full.md"
+    tool: Marker
 ---
 
 # Speech and Language Processing, 3rd Ed. — Summary
@@ -478,3 +481,212 @@ TTS(텍스트-음성 합성)의 역사를 폰 켐펠렌(1769년)의 기계적 �
 - Logistic Regression and Text Classification (p.69) `L:2127`
 - Post-training: Instruction Tuning, Alignment, and Test-Time Compute (p.225) `L:6127`
 - Volume II (p.386) `L:9940`
+
+---
+
+## Marker 세부 목차
+
+> `L:숫자`는 `Jurafsky-SLP_marker_full.md`의 라인 번호.
+
+- Volume I (p.8) `L:294`
+  - 2.2 Morphemes: Parts of Words `L:437`
+  - 2.3 Unicode `L:487`
+  - 2.4 Subword Tokenization: Byte-Pair Encoding (p.20) `L:595`
+  - 2.6 Regular Expressions `L:817`
+  - 2.6.5 A Simple Example `L:953`
+  - 2.7 Simple Unix Tools for Word Tokenization `L:1123`
+  - 2.8 Rule-based tokenization `L:1187`
+  - 2.9 Minimum Edit Distance `L:1244`
+  - 2.10 Summary `L:1357`
+  - 3.1 N-Grams `L:1436`
+  - 3.2 Evaluating Language Models: Training and Test Sets `L:1621`
+  - 3.3 Evaluating Language Models: Perplexity `L:1659`
+  - 3.4 Sampling sentences from a language model `L:1743`
+  - 3.5 Generalizing vs. overfitting the training set `L:1759`
+  - 3.6 Smoothing, Interpolation, and Backoff `L:1793`
+  - 3.7 Advanced: Perplexity's Relation to Entropy `L:1948`
+  - 3.8 Summary `L:2053`
+- Logistic Regression and Text Classification (p.69) `L:2127`
+  - 4.1 Machine learning and classification `L:2164`
+  - 4.2 The sigmoid function `L:2217`
+  - 4.3 Classification with Logistic Regression `L:2292`
+  - 4.4 Learning in Logistic Regression `L:2422`
+  - 4.5 The cross-entropy loss function `L:2434`
+  - 4.7 Multinomial logistic regression `L:2669`
+  - 4.8 Learning in Multinomial Logistic Regression `L:2752`
+  - 4.9 Evaluation: Precision, Recall, F-measure `L:2788`
+  - 4.10 Test sets and Cross-validation `L:2870`
+  - 4.11 Statistical Significance Testing `L:2888`
+  - 4.12 Avoiding Harms in Classification `L:2952`
+  - 4.13 Interpreting models (p.98) `L:2990`
+  - 4.14 Advanced: Regularization (p.98) `L:2996`
+  - 4.15 Advanced: Deriving the Gradient Equation `L:3050`
+  - 4.16 Summary `L:3092`
+  - 5.1 Lexical Semantics `L:3157`
+  - 5.2 Vector Semantics: The Intuition `L:3235`
+  - 5.3 Simple count-based embeddings `L:3273`
+  - 5.4 Cosine for measuring similarity `L:3341`
+  - 5.5 Word2vec `L:3401`
+  - 5.6 Visualizing Embeddings `L:3584`
+  - 5.8 Bias and Embeddings `L:3654`
+  - 5.9 Evaluating Vector Models `L:3672`
+  - 5.10 Summary `L:3686`
+  - 6.1 Units `L:3766`
+  - 6.2 The XOR problem `L:3842`
+  - 6.4 Feedforward networks for NLP: Classification `L:4041`
+  - 6.5 Embeddings as the input to neural net classifiers `L:4083`
+  - 6.6 Training Neural Nets `L:4193`
+  - 6.7 Summary `L:4412`
+  - 7.1 Three architectures for language models `L:4503`
+  - 7.2 Conditional Generation of Text: The Intuition `L:4525`
+  - 7.3 Prompting `L:4561`
+  - 7.4 Generation and Sampling `L:4657`
+  - 7.5 Training Large Language Models `L:4767`
+  - 7.6 Evaluating Large Language Models `L:4862`
+  - 7.7 Ethical and Safety Issues with Language Models `L:4960`
+  - 7.8 Summary `L:4994`
+  - 8.1 Attention `L:5062`
+  - 8.2 Transformer Blocks `L:5222`
+  - 8.4 The input: embeddings for token and position `L:5383`
+  - 8.5 The Language Modeling Head `L:5433`
+  - 8.7 Training `L:5511`
+  - 8.8 Dealing with Scale `L:5523`
+  - 8.9 Interpreting the Transformer `L:5598`
+  - 8.10 Summary `L:5634`
+  - 9.1 Bidirectional Transformer Encoders `L:5676`
+  - 9.2 Training Bidirectional Encoders `L:5731`
+  - 9.3 Contextual Embeddings `L:5831`
+  - 9.4 Fine-Tuning for Classification `L:5927`
+- 9.5 Fine-Tuning for Sequence Labeling: Named Entity Recognition (p.220) `L:5990`
+  - 9.6 Summary `L:6109`
+- Post-training: Instruction Tuning, Alignment, and Test-Time Compute (p.225) `L:6127`
+  - 10.1 Instruction Tuning (p.226) `L:6153`
+  - 10.2 Learning from Preferences `L:6265`
+  - 10.3 LLM Alignment via Preference-Based Learning `L:6385`
+- 11 Information Retrieval and Retrieval-Augmented Generation `L:6530`
+  - 11.1 Information Retrieval `L:6578`
+  - 11.2 Evaluation of Information-Retrieval Systems `L:6804`
+  - 11.3 Information Retrieval with Dense Vectors `L:6903`
+  - 11.4 Retrieval-Augmented Generation (RAG) `L:6958`
+  - 11.5 Datasets `L:7017`
+  - 11.6 Evaluating Question Answering `L:7083`
+  - 11.7 Summary `L:7093`
+- 12 Machine Translation `L:7170`
+  - 12.1 Language Divergences and Typology `L:7228`
+  - 12.2 Machine Translation using Encoder-Decoder `L:7328`
+  - 12.3 Details of the Encoder-Decoder Model `L:7423`
+  - 12.4 Decoding in MT: Beam Search `L:7459`
+  - 12.5 Translating in low-resource situations `L:7579`
+  - 12.6 MT Evaluation `L:7619`
+  - 12.8 Summary `L:7762`
+- 13 RNNs and LSTMs `L:7827`
+  - 13.1 Recurrent Neural Networks `L:7835`
+  - 13.1.1 Inference in RNNs (p.292) `L:7857`
+  - 13.2 RNNs as Language Models `L:7903`
+  - 13.3 RNNs for other NLP tasks `L:7984`
+  - 13.4 Stacked and Bidirectional RNN architectures `L:8048`
+  - 13.5 The LSTM `L:8102`
+  - 13.6 Summary: Common RNN NLP Architectures `L:8181`
+  - 13.7 The Encoder-Decoder Model with RNNs `L:8191`
+  - 13.9 Summary `L:8358`
+- 14 Phonetics and Speech Feature Extraction `L:8391`
+  - 14.1 Speech Sounds and Phonetic Transcription `L:8405`
+  - 14.2 Articulatory Phonetics (p.319) `L:8473`
+  - 14.3 Prosody `L:8563`
+  - 14.4 Acoustic Phonetics and Signals `L:8639`
+  - 14.4.1 Waves `L:8643`
+  - 14.5 Feature Extraction for Speech Recognition: Log Mel Spectrum (p.336) `L:8856`
+  - 14.6 MFCC: Mel Frequency Cepstral Coefficients `L:8975`
+  - 14.7 Summary `L:9022`
+- 15 Automatic Speech Recognition (p.346) `L:9070`
+  - 15.1 The Automatic Speech Recognition Task `L:9096`
+  - 15.2 Convolutional Neural Networks `L:9143`
+  - 15.3 The Encoder-Decoder Architecture for ASR `L:9210`
+  - 15.4 Self-supervised models: HuBERT `L:9315`
+  - 15.5 CTC `L:9407`
+  - 15.6 ASR Evaluation: Word Error Rate (p.366) `L:9516`
+  - 15.7 Summary `L:9593`
+- 16 Text-to-Speech `L:9632`
+  - 16.2 Using a codec to learn discrete audio tokens `L:9690`
+  - 16.3 VALL-E: Generating audio with 2-stage LM `L:9824`
+  - 16.4 TTS Evaluation `L:9875`
+  - 16.5 Other speech tasks `L:9887`
+  - 16.6 Spoken Language Models `L:9905`
+  - 16.7 Summary `L:9909`
+- Volume II (p.386) `L:9940`
+- 17 Sequence Labeling for Parts of Speech and Named Entities `L:9956`
+  - 17.1 (Mostly) English Word Classes `L:9978`
+  - 17.2 Part-of-Speech Tagging `L:10077`
+  - 17.3 Named Entities and Named Entity Tagging `L:10117`
+  - 17.4 HMM Part-of-Speech Tagging `L:10182`
+  - 17.5 Conditional Random Fields (CRFs) (p.403) `L:10430`
+  - 17.6 Evaluation of Named Entity Recognition `L:10619`
+  - 17.7 Further Details `L:10629`
+  - 17.8 Summary `L:10662`
+- 18 Context-Free Grammars and Constituency Parsing `L:10723`
+  - 18.1 Constituency (p.415) `L:10741`
+  - 18.2 Context-Free Grammars `L:10757`
+  - 18.3 Treebanks `L:10953`
+  - 18.4 Grammar Equivalence and Normal Form `L:11018`
+  - 18.6 CKY Parsing: A Dynamic Programming Approach `L:11124`
+  - 18.7 Span-Based Neural Constituency Parsing `L:11265`
+  - 18.7.1 Computing Scores for a Span `L:11271`
+  - 18.8 Evaluating Parsers `L:11338`
+  - 18.9 Heads and Head-Finding `L:11365`
+  - 18.10 Summary `L:11399`
+- 19 Dependency Parsing `L:11452`
+  - 19.1 Dependency Relations `L:11480`
+  - 19.2 Transition-Based Dependency Parsing `L:11592`
+  - 19.3 Graph-Based Dependency Parsing `L:11913`
+  - 19.4 Evaluation `L:12060`
+  - 19.5 Summary `L:12082`
+- 20 Information Extraction: Relations, Events, and Time `L:12121`
+  - 20.1 Relation Extraction `L:12159`
+  - 20.2 Relation Extraction Algorithms `L:12226`
+  - 20.3 Extracting Events `L:12560`
+  - 20.4 Representing Time `L:12587`
+  - 20.5 Representing Aspect `L:12641`
+  - 20.6 Temporally Annotated Datasets: TimeBank `L:12705`
+  - 20.7 Automatic Temporal Analysis `L:12737`
+  - 20.8 Template Filling `L:12868`
+  - 20.9 Summary `L:12966`
+- 21 Semantic Role Labeling (p.488) `L:12997`
+  - 21.1 Semantic Roles `L:13023`
+  - 21.2 Diathesis Alternations `L:13051`
+  - 21.3 Semantic Roles: Problems with Thematic Roles `L:13118`
+  - 21.4 The Proposition Bank `L:13141`
+  - 21.5 FrameNet `L:13201`
+  - 21.6 Semantic Role Labeling `L:13285`
+  - 21.7 Selectional Restrictions `L:13382`
+  - 21.8 Primitive Decomposition of Predicates `L:13515`
+  - 21.9 Summary `L:13573`
+- 22 Lexicons for Sentiment, Affect, and Connotation `L:13617`
+  - 22.1 Defining Emotion `L:13651`
+  - 22.2 Available Sentiment and Affect Lexicons `L:13679`
+  - 22.3 Creating Affect Lexicons by Human Labeling (p.512) `L:13736`
+  - 22.5 Supervised Learning of Word Sentiment `L:13886`
+  - 22.6 Using Lexicons for Sentiment Recognition `L:14016`
+  - 22.7 Using Lexicons for Affect Recognition `L:14033`
+  - 22.8 Lexicon-based methods for Entity-Centric Affect `L:14067`
+  - 22.9 Connotation Frames (p.524) `L:14084`
+- 23 Coreference Resolution and Entity Linking `L:14147`
+  - 23.1 Coreference Phenomena: Linguistic Background `L:14230`
+  - 23.3 Mention Detection `L:14449`
+  - 23.4 Architectures for Coreference Algorithms `L:14518`
+  - 23.5 Classifiers using hand-built features `L:14580`
+  - 23.6 A neural mention-ranking algorithm `L:14628`
+  - 23.7 Entity Linking (p.547) `L:14715`
+  - 23.8 Evaluation of Coreference Resolution `L:14838`
+  - 23.9 Winograd Schema problems `L:14864`
+  - 23.10 Gender Bias in Coreference `L:14905`
+  - 23.11 Summary `L:14924`
+- 24 Discourse Coherence `L:14991`
+  - 24.1 Coherence Relations `L:15047`
+  - 24.2 Discourse Structure Parsing `L:15145`
+  - 24.3 Centering and Entity-Based Coherence (p.567) `L:15266`
+  - 24.4 Representation learning models for local coherence `L:15405`
+  - 24.5 Global Coherence `L:15460`
+  - 24.6 Summary `L:15534`
+- 25 Conversation and its Structure (p.580) `L:15575`
+  - 25.1 Properties of Human Conversation `L:15581`
+  - 25.2 Dialog Acts and Corpora `L:15763`

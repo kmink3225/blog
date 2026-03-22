@@ -6,6 +6,9 @@ year: 2025
 total_pages: 337
 language: en
 keywords: [LLM, GPT, transformer, attention, pretraining, fine-tuning, tokenization, PyTorch, LoRA, instruction-tuning]
+sources:
+  - file: "Raschka-BuildLLM_marker_full.md"
+    tool: Marker
 ---
 
 # Build a Large Language Model (From Scratch) — Summary
@@ -279,3 +282,135 @@ LoRA(Low-Rank Adaptation)는 대규모 모델의 가중치 행렬 W의 업데이
 - Appendix A `L:9540`
 - On the CPU this resulted in `L:10187`
 - Hands-on projects for learning your way `L:11510`
+
+---
+
+## Marker 세부 목차
+
+> `L:숫자`는 `Raschka-BuildLLM_marker_full.md`의 라인 번호.
+
+  - Build a Large Language Model (From Scratch) `L:13`
+  - 1 Understanding large language models 1 (p.22) `L:64`
+  - 2 Working with text data 17 (p.38) `L:74`
+  - 1.1 What is an LLM? (p.23) `L:286`
+  - 1.2 Applications of LLMs (p.25) `L:310`
+  - 1.3 Stages of building and using LLMs (p.26) `L:326`
+  - 1.4 Introducing the transformer architecture (p.28) `L:356`
+  - 1.5 Utilizing large datasets (p.31) `L:390`
+  - 1.6 A closer look at the GPT architecture (p.33) `L:422`
+  - 1.7 Building a large language model (p.35) `L:448`
+  - 2.1 Understanding word embeddings (p.39) `L:501`
+  - 2.2 Tokenizing text (p.42) `L:531`
+  - 2.3 Converting tokens into token IDs (p.45) `L:667`
+  - 2.4 Adding special context tokens (p.50) `L:812`
+  - 2.5 Byte pair encoding (p.54) `L:943`
+  - Exercise 2.1 Byte pair encoding of unknown words `L:1011`
+  - 2.6 Data sampling with a sliding window (p.56) `L:1017`
+  - Exercise 2.2 Data loaders with different strides and context sizes (p.60) `L:1217`
+  - 2.7 Creating token embeddings (p.62) `L:1273`
+  - 2.8 Encoding word positions (p.64) `L:1357`
+  - 3.1 The problem with modeling long sequences (p.73) `L:1514`
+  - 3.2 Capturing data dependencies with attention mechanisms (p.75) `L:1542`
+  - 3.3 Attending to different parts of the input with self-attention (p.76) `L:1562`
+  - 3.3.1 A simple self-attention mechanism without trainable weights (p.77) `L:1574`
+  - 3.3.2 Computing attention weights for all input tokens (p.82) `L:1730`
+  - 3.4 Implementing self-attention with trainable weights (p.85) `L:1853`
+  - 3.4.1 Computing the attention weights step by step (p.86) `L:1867`
+  - Weight parameters vs. attention weights `L:1923`
+  - Why query, key, and value? (p.91) `L:2035`
+  - 3.4.2 Implementing a compact self-attention Python class (p.91) `L:2045`
+  - Exercise 3.1 Comparing SelfAttention\_v1 and SelfAttention\_v2 (p.94) `L:2156`
+  - 3.5 Hiding future words with causal attention (p.95) `L:2166`
+  - 3.5.1 Applying a causal attention mask (p.96) `L:2178`
+  - 3.5.2 Masking additional attention weights with dropout (p.99) `L:2326`
+  - 3.5.3 Implementing a compact causal attention class (p.101) `L:2385`
+  - 3.6 Extending single-head attention to multi-head attention (p.103) `L:2482`
+  - Exercise 3.2 Returning two-dimensional embedding vectors (p.106) `L:2564`
+  - 3.6.2 Implementing multi-head attention with weight splits (p.107) `L:2570`
+  - Exercise 3.3 Initializing GPT-2 size attention modules `L:2778`
+  - Implementing a GPT model from scratch to generate text (p.113) `L:2796`
+  - 4.1 Coding an LLM architecture (p.114) `L:2814`
+  - 4.2 Normalizing activations with layer normalization (p.120) `L:2992`
+  - Layer normalization vs. batch normalization `L:3154`
+  - 4.3 Implementing a feed forward network with GELU activations (p.126) `L:3160`
+  - 4.4 Adding shortcut connections (p.130) `L:3273`
+  - 4.5 Connecting attention and linear layers in a transformer block (p.134) `L:3414`
+  - 4.6 Coding the GPT model (p.138) `L:3500`
+  - Exercise 4.1 Number of parameters in feed forward and attention modules (p.142) `L:3638`
+  - Exercise 4.2 Initializing larger GPT models (p.143) `L:3665`
+  - 4.7 Generating text (p.143) `L:3669`
+  - Exercise 4.3 Using separate dropout parameters `L:3793`
+  - 5.1 Evaluating generative text models (p.150) `L:3826`
+  - 5.1.1 Using GPT to generate text (p.151) `L:3834`
+  - 5.1.2 Calculating the text generation loss (p.153) `L:3914`
+  - 5.1.3 Calculating the training and validation set losses (p.161) `L:4176`
+  - The cost of pretraining LLMs `L:4188`
+  - 5.2 Training an LLM (p.167) `L:4392`
+  - 5.3 Decoding strategies to control randomness (p.172) `L:4600`
+  - 5.3.1 Temperature scaling (p.173) `L:4634`
+  - 5.3.2 Top-k sampling (p.176) `L:4757`
+  - 5.3.3 Modifying the text generation function (p.178) `L:4824`
+  - 5.4 Loading and saving model weights in PyTorch (p.180) `L:4913`
+  - 5.5 Loading pretrained weights from OpenAI (p.181) `L:4967`
+  - 6.1 Different categories of fine-tuning (p.191) `L:5278`
+  - 6.2 Preparing the dataset (p.193) `L:5304`
+  - 6.3 Creating data loaders (p.196) `L:5477`
+  - Exercise 6.1 Increasing the context length `L:5585`
+  - 6.4 Initializing a model with pretrained weights (p.202) `L:5659`
+  - 6.5 Adding a classification head (p.204) `L:5760`
+  - Fine-tuning selected layers vs. all layers `L:5810`
+  - Exercise 6.2 Fine-tuning the whole model `L:5847`
+  - 6.6 Calculating the classification loss and accuracy (p.211) `L:5933`
+  - The initial loss values are `L:6104`
+  - 6.7 Fine-tuning the model on supervised data (p.216) `L:6114`
+  - Choosing the number of epochs `L:6288`
+  - 6.8 Using the LLM as a spam classifier (p.221) `L:6332`
+  - 7.1 Introduction to instruction fine-tuning (p.226) `L:6448`
+  - 7.2 Preparing a dataset for supervised instruction fine-tuning (p.228) `L:6462`
+  - Exercise 7.1 Changing prompt styles `L:6543`
+  - 7.3 Organizing data into training batches (p.232) `L:6635`
+  - Exercise 7.2 Instruction and input masking `L:6971`
+  - 7.4 Creating data loaders for an instruction dataset (p.244) `L:6975`
+  - 7.5 Loading a pretrained LLM (p.247) `L:7082`
+  - 7.6 Fine-tuning the LLM on instruction data (p.250) `L:7196`
+  - Exercise 7.3 Fine-tuning on the original Alpaca dataset `L:7328`
+  - 7.7 Extracting and saving responses (p.254) `L:7334`
+  - 7.8 Evaluating the fine-tuned LLM (p.259) `L:7508`
+  - Using larger LLMs via web APIs `L:7520`
+  - Running the code in a new Python session (p.263) `L:7606`
+  - Exercise 7.4 Parameter-efficient fine-tuning with LoRA (p.268) `L:7860`
+  - 7.9 Conclusions (p.268) `L:7864`
+  - 7.9.1 What's next? (p.268) `L:7868`
+  - 7.9.2 Staying up to date in a fast-moving field (p.269) `L:7878`
+  - 7.9.3 Final words (p.269) `L:7882`
+  - appendix A Introduction to PyTorch (p.272) `L:7902`
+  - PyTorch with a NumPy-like API (p.279) `L:8050`
+  - A.2.1 Scalars, vectors, matrices, and tensors `L:8054`
+  - A.2.3 Common PyTorch tensor operations `L:8117`
+  - A.3 Seeing models as computation graphs `L:8214`
+  - A.4 Automatic differentiation made easy `L:8236`
+  - A.5 Implementing multilayer neural networks `L:8303`
+  - A.6 Setting up efficient data loaders `L:8502`
+  - A.7 A typical training loop `L:8668`
+  - A.8 Saving and loading models `L:8868`
+  - A.9 Optimizing training performance with GPUs `L:8889`
+  - A.9.1 PyTorch computations on GPU devices `L:8893`
+  - A.9.3 Training with multiple GPUs `L:9026`
+  - SELECTING AVAILABLE GPUS ON A MULTI-GPU MACHINE `L:9169`
+  - Alternative PyTorch APIs for multi-GPU training (p.309) `L:9238`
+  - appendix B References and further reading `L:9254`
+  - Chapter 1 (p.310) `L:9256`
+  - Chapter 2 `L:9300`
+  - Chapter 3 `L:9329`
+  - Chapter 4 `L:9360`
+  - Chapter 5 `L:9398`
+  - Chapter 6 `L:9455`
+  - Chapter 7 `L:9493`
+  - Appendix A `L:9540`
+  - appendix C Exercise solutions `L:9569`
+  - On the CPU this resulted in `L:10187`
+  - appendix D Adding bells and whistles to the training loop (p.334) `L:10208`
+  - D.4 The modified training function `L:10490`
+  - appendix E Parameter-efficient fine-tuning with LoRA (p.343) `L:10614`
+  - E.4 Parameter-efficient fine-tuning with LoRA `L:10865`
+  - Hands-on projects for learning your way `L:11510`

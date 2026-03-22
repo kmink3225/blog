@@ -1,98 +1,137 @@
 # Book Summary 보강 작업 — Agent 핸드오프 문서
 
-> 최종 갱신: 2026-03-22
+> 최종 갱신: 2026-03-22 (세션 3 완료)
 
 ## 개요
 
-`docs/book/` 하위의 교재 참조 시스템을 완성하는 작업이다. 크게 **두 가지 작업**이 있다:
+`docs/book/` 하위의 교재 참조 시스템을 완성하는 작업이다. **세 가지 작업**이 있다:
 
-1. **상세 필드 채우기** — `*-summary.md`에서 `(삭제됨)`으로 표시된 상세 필드를 본문 기반 요약으로 교체
-2. **guide.md → summary.md 통합** — 각 카테고리의 `guide.md`는 잘못된 지시로 생성된 별도 버전의 summary 역할 파일이므로, guide.md의 고유 정보를 summary.md에 통합한 뒤 guide.md는 삭제
+1. **guide.md → summary.md 통합** — ✅ **완료** (세션 3)
+2. **상세 필드 채우기** — ✅ **완료** (세션 3) — 132/132 챕터 + 추가 559 챕터 보강
+3. **MinerU 변환 완료** — 데스크탑에서 나머지 6개 PDF를 MinerU로 변환 후 품질 검사 → docs/book/ 복사
 
 ---
 
-## 작업 1: 상세 필드 채우기
+## 전체 시스템 구조 (최종 목표)
+
+```
+AGENT_GUIDE.md (최상위 규칙)
+    ↓
+카테고리 GUIDE.md (docs/blog/posts/*/GUIDE.md)
+    ↓ "이 주제는 이 교재를 참조하라"
+Book Summary (docs/book/*/-summary.md) ← 지도
+    ↓ "이 챕터의 이 라인을 읽어라"
+Book Full MD (docs/book/*/_full.md) ← 본문
+```
+
+**목적:**
+- Agent가 수만 줄의 본문을 전부 읽지 않고, summary(지도)를 통해 필요한 부분만 정확히 찾아 읽는다
+- 토큰 비용 최적화 + 환각 방지 + 풍성한 근거 기반 블로그/답변
+
+---
+
+## 작업 1: guide.md → summary.md 통합
+
+### 상태: **완료** (8개 전부)
+
+| 카테고리 | guide.md 크기 | 상태 |
+|---------|-------------|------|
+| machine_learning | 403 lines | **완료** |
+| deep_learning | 401 lines | **완료** |
+| data_science | 127 lines | **완료** |
+| governance | 174 lines | **완료** |
+| behavioral_analysis | 161 lines | **완료** |
+| linguistics | 261 lines | **완료** |
+| ontology | 71 lines | **완료** |
+| psychology | 200 lines | **완료** |
+
+### guide.md 구조
+
+각 guide.md는 두 섹션:
+
+1. **소스 파일 목록** — 각 책의 파일 목록과 변환 도구(Marker, Document Intelligence 등)
+2. **챕터 목차 (Marker 기준)** — `L:숫자`로 marker_full.md의 세부 섹션 라인 참조
+
+### 통합 방법
+
+1. summary.md YAML frontmatter에 `sources:` 필드 추가 (변환 도구 정보)
+2. summary.md 끝에 `## Marker 세부 목차` 섹션 추가 (L: 라인 참조)
+3. guide.md 삭제
+
+### 통합 예시
+
+YAML frontmatter에 추가:
+```yaml
+sources:
+  - file: "Hastie-ESL_marker_full.md"
+    tool: Marker
+  - file: "Hastie-ESL_azure_full.md"
+    tool: Document Intelligence
+```
+
+파일 끝에 추가:
+```markdown
+---
+
+## Marker 세부 목차
+
+> `L:숫자`는 `Hastie-ESL_marker_full.md`의 라인 번호.
+
+- 2.3 Two Simple Approaches to Prediction `L:710`
+- 2.6 Statistical Models `L:1020`
+(...)
+```
+
+---
+
+## 작업 2: 상세 필드 채우기
 
 ### 목표
 
-`*-summary.md` 파일의 각 챕터에 있는 `**상세**: → (삭제됨) Ch N (line XXXX)` 를,
-해당 책의 `*_marker_full.md` 본문을 읽고 **10~15문장 한국어 요약**으로 교체한다.
+`*-summary.md`의 각 챕터에 있는 `**상세**: → (삭제됨)` 를, 해당 책의 `*_marker_full.md` 본문을 읽고 **10~15문장 한국어 요약**으로 교체.
 
 ### 핵심 규칙
 
-1. **사전 지식 사용 금지** — 반드시 `_marker_full.md` 본문을 `Read(file, offset, limit)`로 읽고, 그 내용만으로 요약 작성
-2. **포맷** — 아래 완료 예시를 정확히 따를 것
-3. **분량** — 챕터당 10~15문장
-4. **언어** — 한국어
-5. **rate limit** — 90% 도달 시 즉시 중단, 이 문서의 진행 현황 테이블을 갱신
+1. **사전 지식 사용 금지** — 반드시 `_marker_full.md` 본문을 `Read(file, offset, limit)`로 읽고 내용만으로 요약
+2. **포맷**: `**상세**: → {marker파일명} Ch N (L:시작라인)` + 줄바꿈 후 10~15문장 요약
+3. **언어**: 한국어 (한다 체)
 
-### 완료 예시 (Sutton-RL Ch 1)
+### 완료 예시
 
-교체 전:
-```markdown
-**상세**: → (삭제됨) Ch 1 (line 1285)
-```
-
-교체 후:
 ```markdown
 **상세**: → `Sutton-RL_marker_full.md` Ch 1 (L:150)
 이 장은 강화학습의 기본 틀을 소개하며, 환경과 상호작용하면서 목표를 달성하기 위해
 학습하는 에이전트라는 핵심 개념을 제시한다. (... 10~15문장 ...)
 ```
 
-**주의**: `(삭제됨)` 줄의 `(line XXXX)` 번호는 이전 작업의 잘못된 매핑이므로 **무시**한다.
-아래 챕터 시작 라인 표의 `L:` 값을 사용할 것.
-
-### 작업 절차 (챕터 1개당)
-
-```
-1. _marker_full.md에서 해당 챕터 시작 라인(L:)부터 60~100줄 Read
-2. 내용이 부족하면 추가로 50~100줄 더 Read
-3. 읽은 본문을 바탕으로 10~15문장 한국어 요약 작성
-4. summary.md에서 해당 챕터의 `(삭제됨)` 줄을 Edit으로 교체
-5. 교체 포맷:
-   **상세**: → `{marker파일명}` Ch {N} (L:{시작라인})
-   (줄바꿈 후 요약 본문)
-```
-
-효율 팁: 한 번에 5개 챕터를 병렬 Read → 순차 Edit
-
 ### 진행 현황
 
-| # | 책 (key) | 카테고리 | (삭제됨) 수 | 상태 | 비고 |
-|---|---------|---------|-----------|------|------|
-| 1 | Sutton-RL | deep_learning | 15 | **완료** | 15/15 챕터 교체 완료 |
-| 2 | Hastie-ESL | machine_learning | 18 | **읽기완료, 편집 미착수** | marker 본문 Ch1~18 모두 Read 완료, Edit 0건 |
-| 3 | James-ISLR | machine_learning | 13 | 미착수 | |
-| 4 | Murphy-PMLAdvancedSupp | machine_learning | 5 | 미착수 | Part 단위 구조, 챕터 매핑 확인 필요 |
-| 5 | DAMA-DMBOK | governance | 17 | 미착수 | Knowledge Area 단위 |
-| 6 | Huang-Pragmatics | linguistics | 9 | 미착수 | |
-| 7 | McEnery-CorpusLinguistics | linguistics | 9 | 미착수 | marker가 ## 수준 헤더 |
-| 8 | Sidnell-ConversationAnalysis | linguistics | 12 | 미착수 | 편집 논문집 |
-| 9 | Robinson-GraphDatabases | ontology | 7 | 미착수 | |
-| 10 | Cialdini-Persuasion | psychology | 9 | 미착수 | |
-| 11 | Eysenck-CognitivePsychology | psychology | 7 | 미착수 | marker 헤더 비표준, 재검색 필요 |
-| 12 | Morling-ResearchMethods | psychology | 11 | 미착수 | 로마 숫자 챕터, 본문 L: 재검색 필요 |
+| # | 책 (key) | 카테고리 | (삭제됨) 수 | 상태 |
+|---|---------|---------|-----------|------|
+| 1 | Sutton-RL | deep_learning | 15 | **완료** |
+| 2 | Hastie-ESL | machine_learning | 18 | **완료** |
+| 3 | James-ISLR | machine_learning | 13 | **완료** |
+| 4 | Murphy-PMLAdvancedSupp | machine_learning | 5 | **완료** |
+| 5 | DAMA-DMBOK | governance | 17 | **완료** |
+| 6 | Huang-Pragmatics | linguistics | 9 | **완료** |
+| 7 | McEnery-CorpusLinguistics | linguistics | 9 | **완료** |
+| 8 | Sidnell-ConversationAnalysis | linguistics | 12 | **완료** |
+| 9 | Robinson-GraphDatabases | ontology | 7 | **완료** |
+| 10 | Cialdini-Persuasion | psychology | 9 | **완료** |
+| 11 | Eysenck-CognitivePsychology | psychology | 7 | **완료** |
+| 12 | Morling-ResearchMethods | psychology | 11 | **완료** |
 
-**전체**: 15/132 챕터 완료 (약 11%)
+**전체**: 132/132 챕터 완료 (100%)
 
-### 다음 작업 순서 (권장)
+### 책별 챕터 시작 라인
 
-1. **Hastie-ESL** (18ch) — 이미 marker 본문 읽기 완료, 바로 Edit 시작 가능
-2. **James-ISLR** (13ch) — guide.md에 상세 챕터 L: 이미 존재
-3. **DAMA-DMBOK** (17ch) — 분량 큼
-4. 나머지 소규모 책들
+(아래 표의 L: 값은 _marker_full.md 기준)
 
----
-
-## 책별 챕터 시작 라인
-
-### Hastie-ESL (확정)
-- 파일: `machine_learning/Hastie-ESL-summary.md`
+#### Hastie-ESL
 - Marker: `machine_learning/Hastie-ESL_marker_full.md` (~14,534 라인)
 
-| Ch | 제목 | marker L: |
-|----|------|-----------|
+| Ch | 제목 | L: |
+|----|------|-----|
 | 1 | Introduction | 551 |
 | 2 | Overview of Supervised Learning | 678 |
 | 3 | Linear Methods for Regression | 1304 |
@@ -112,34 +151,30 @@
 | 17 | Undirected Graphical Models | 12103 |
 | 18 | High-Dimensional Problems: p >> N | 12617 |
 
-### James-ISLR (guide.md에서 추출, 검증 필요)
-- 파일: `machine_learning/James-ISLR-summary.md`
+#### James-ISLR
 - Marker: `machine_learning/James-ISLR_marker_full.md` (~15,230 라인)
-- guide.md에 158개 세부 섹션 L: 이 있으므로 챕터 시작 라인 특정 가능
 
-| Ch | marker L: (추정) | 비고 |
-|----|-----------------|------|
-| 1 | ~344 | "An Overview of Statistical Learning" |
-| 2 | 557 | "2.1 What Is Statistical Learning?" |
-| 3 | 1601 | "3.1 Simple Linear Regression" |
-| 4 | 3209 | "4.1 An Overview of Classification" |
-| 5 | 4961 | "5.1.1 The Validation Set Approach" |
-| 6 | ? | guide.md에서 grep 필요 |
-| 7 | 7045 | |
-| 8 | ? | grep 필요 |
-| 9 | ? | grep 필요 |
-| 10 | 9973 | |
-| 11 | 11540 | |
-| 12 | 12480 | |
-| 13 | 13784 | |
+| Ch | L: (추정) |
+|----|-----------|
+| 1 | ~344 |
+| 2 | 557 |
+| 3 | 1601 |
+| 4 | 3209 |
+| 5 | 4961 |
+| 6 | 5530 |
+| 7 | 7045 |
+| 8 | guide.md에서 확인 필요 |
+| 9 | guide.md에서 확인 필요 |
+| 10 | 9973 |
+| 11 | 11540 |
+| 12 | 12480 |
+| 13 | 13784 |
 
-### Murphy-PMLAdvancedSupp
-- 파일: `machine_learning/Murphy-PMLAdvancedSupp-summary.md`
+#### Murphy-PMLAdvancedSupp
 - Marker: `machine_learning/Murphy-PMLAdvancedSupp_marker_full.md` (~7,821 라인)
-- Part 단위 구조 — summary.md 챕터 구조와 매핑 확인 필요
 
-| Part | marker L: (추정) |
-|------|-----------------|
+| Part | L: |
+|------|-----|
 | I (Fundamentals) | 262 |
 | II (Inference) | 1178 |
 | III (Prediction) | 4423 |
@@ -147,12 +182,11 @@
 | V (Discovery) | 5289 |
 | VI (Decision making) | 7350 |
 
-### DAMA-DMBOK
-- 파일: `governance/DAMA-DMBOK-summary.md`
+#### DAMA-DMBOK
 - Marker: `governance/DAMA-DMBOK_marker_full.md` (~14,347 라인)
 
-| Knowledge Area | marker L: (추정) |
-|----------------|-----------------|
+| Knowledge Area | L: |
+|----------------|-----|
 | Data Management Introduction | 728 |
 | Data Governance | 1803 |
 | Data Architecture | 2614 |
@@ -170,156 +204,92 @@
 | Data Management Organization | 12451 |
 | Organizational Change Management | 12931 |
 
-### Huang-Pragmatics
-- 파일: `linguistics/Huang-Pragmatics-summary.md`
-- Marker: `linguistics/Huang-Pragmatics_marker_full.md` (~9,510 라인)
-- Ch 1, 4, 7, 8, 9는 marker에서 직접 grep 필요
-
-| Ch | marker L: (추정) |
-|----|-----------------|
-| 2 (Implicature) | 952 |
-| 3 (Presupposition) | 2349 |
-| 5 (Deixis) | 3894 |
-| 6 (Reference) | 4866 |
-
-### McEnery-CorpusLinguistics
-- 파일: `linguistics/McEnery-CorpusLinguistics-summary.md`
-- Marker: `linguistics/McEnery-CorpusLinguistics_marker_full.md` (~3,771 라인)
-- marker가 `##` 수준 헤더 사용 — 챕터 시작 라인 전체 grep 필요
-
-### Sidnell-ConversationAnalysis
-- 파일: `linguistics/Sidnell-ConversationAnalysis-summary.md`
-- Marker: `linguistics/Sidnell-ConversationAnalysis_marker_full.md` (~6,587 라인)
-- 편집 논문집, TOC L:93~100 부근, 실제 본문은 뒤에 있을 수 있음
-
-### Robinson-GraphDatabases
-- 파일: `ontology/Robinson-GraphDatabases-summary.md`
-- Marker: `ontology/Robinson-GraphDatabases_marker_full.md` (~4,647 라인)
-
-| 섹션 | marker L: (추정) |
-|------|-----------------|
-| Introduction | 301 |
-| Options for Storing Connected Data | 431 |
-| Data Modeling with Graphs | 634 |
-| Building a Graph Database Application | 1510 |
-| Graphs in the Real World | 2522 |
-| Graph Database Internals | 3375 |
-| Predictive Analysis with Graph Theory | 3716 |
-
-### Cialdini-Persuasion
-- 파일: `psychology/Cialdini-Persuasion-summary.md`
-- Marker: `psychology/Cialdini-Persuasion_marker_full.md` (~3,222 라인)
-- Ch 3 (Commitment & Consistency)는 직접 검색 필요
-
-| Ch | marker L: (추정) |
-|----|-----------------|
-| 1 (Weapons of Influence) | 78 |
-| 2 (Reciprocation) | 180 |
-| 4 (Social Proof) | 848 |
-| 5 (Liking) | 1236 |
-| 6 (Authority) | 1554 |
-| 7 (Scarcity) | 1744 |
-
-### Eysenck-CognitivePsychology
-- 파일: `psychology/Eysenck-CognitivePsychology-summary.md`
-- Marker: `psychology/Eysenck-CognitivePsychology_marker_full.md` (~20,111 라인)
-- marker 헤더 구조가 비표준적 — 챕터 시작 라인 전체 재검색 필요
-
-### Morling-ResearchMethods
-- 파일: `psychology/Morling-ResearchMethods-summary.md`
-- Marker: `psychology/Morling-ResearchMethods_marker_full.md` (~6,482 라인)
-- 로마 숫자(I~XIII) 챕터 구조, TOC L:23~97은 목차 영역이므로 실제 본문 시작 라인 별도 검색 필요
+#### 나머지 (Huang, McEnery, Sidnell, Robinson, Cialdini, Eysenck, Morling)
+- 챕터 시작 라인은 각 guide.md에 일부 있고, 나머지는 grep으로 검색 필요
+- 상세는 이전 핸드오프 문서 내용 참조
 
 ---
 
-## 작업 2: guide.md → summary.md 통합
+## 작업 3: MinerU PDF 변환 (데스크탑에서 수행)
 
-### 배경
+### 완료된 변환
 
-각 카테고리 폴더에 `guide.md`가 8개 존재한다. 이것은 잘못된 지시로 생성된 **다른 버전의 summary** 역할 파일이다.
-guide.md의 고유 정보를 summary.md에 통합한 뒤, guide.md는 삭제해야 한다.
+**Nougat 성공 (4개):**
+- Sutton RL, Huyen AI Engineering, Huyen Designing ML Systems, Hastie ESL
+- 출력: `새 폴더/nougat_output/`
 
-### 대상 파일
+**MinerU 성공 (5개):**
+- Kohavi AB Testing, Bishop PRML, James ISLR, Raschka Build LLM, Murphy PML Adv Supp, Provost DS Business
+- 출력: `새 폴더/mineru_output/{name}/auto/{name}.md`
 
-| 카테고리 | guide.md 크기 |
-|---------|-------------|
-| behavioral_analysis | 161 lines |
-| data_science | 127 lines |
-| deep_learning | 401 lines |
-| governance | 174 lines |
-| linguistics | 261 lines |
-| machine_learning | 403 lines |
-| ontology | 71 lines |
-| psychology | 200 lines |
+### 데스크탑에서 할 나머지 (6개)
 
-### guide.md의 구조
+| 순서 | 파일 | 페이지 |
+|------|------|--------|
+| 1 | Jurafsky SLP | 611 |
+| 2 | Montgomery DOE | 700 |
+| 3 | Goodfellow Deep Learning | 777 |
+| 4 | Murphy PML Intro | 850 |
+| 5 | Zhang D2L | 1089 |
+| 6 | Murphy PML Advanced | 1100 |
 
-각 guide.md는 두 섹션으로 구성:
+**변환 스크립트**: `새 폴더/convert_mineru.py` (15분 쿨다운, 2시간 타임아웃, GPU 온도 모니터링 포함)
 
-1. **소스 파일 목록** — 각 책의 파일 목록과 변환 도구(Marker, Document Intelligence 등) 표시
-   ```markdown
-   ### Hastie-ESL
-   | 파일 | 변환 도구 |
-   |---|---|
-   | Hastie-ESL-summary.md | 요약 |
-   | Hastie-ESL_marker_full.md | Marker |
-   ```
+**변환 후 절차**: 품질 검사 → 승인 → docs/book/에 복사 (바로 복사하지 않는다)
 
-2. **챕터 목차 (Marker 기준)** — `L:숫자`로 marker_full.md의 세부 섹션 참조
-   ```markdown
-   ### Hastie-ESL
-   - **파일**: `Hastie-ESL_marker_full.md`
-   - **총 라인 수**: ~14,535
-   - **주요 섹션** (16개):
-   - 2.3 Two Simple Approaches... `L:710`
-   ```
+### 변환 도구 설정 (blog conda env)
 
-### 통합 방법
-
-1. **소스 파일 목록**: summary.md의 YAML frontmatter 또는 상단에 통합
-   - 또는 카테고리 폴더에 별도 index/README로 유지할 수도 있음 (사용자 확인 필요)
-
-2. **챕터 목차 (Marker 세부 목차)**: 이미 일부 summary.md에 `**Marker 세부 목차**` 블록으로 들어가 있음
-   - guide.md의 세부 섹션 L: 참조가 summary.md보다 더 상세한 경우 → summary.md에 병합
-   - 중복인 경우 → 무시
-
-3. guide.md 삭제
-
-### 통합 절차
-
-```
-1. guide.md 읽기
-2. 해당 카테고리의 각 summary.md와 비교
-3. guide.md에만 있는 정보 식별:
-   - 소스 파일 목록 (변환 도구 정보)
-   - 더 상세한 Marker 세부 목차
-4. summary.md에 해당 정보 통합
-5. guide.md 삭제
-```
-
-> **주의**: 통합 전 사용자에게 소스 파일 목록을 어디에 넣을지 확인하는 것이 좋음.
-> summary.md frontmatter에 `sources:` 필드를 추가하는 방식이 깔끔할 수 있음.
-
-### 통합 진행 현황
-
-| 카테고리 | 상태 |
-|---------|------|
-| behavioral_analysis | 미착수 |
-| data_science | 미착수 |
-| deep_learning | 미착수 |
-| governance | 미착수 |
-| linguistics | 미착수 |
-| machine_learning | 미착수 |
-| ontology | 미착수 |
-| psychology | 미착수 |
+- MinerU: `magic-pdf -p input.pdf -o output_dir -m auto`
+- 설정: `C:\Users\kmkim\magic-pdf.json` (models-dir: `C:/Users/kmkim/mineru_models/models`)
+- transformers==4.46.3 (최신 버전은 Nougat/MinerU와 충돌)
+- 긴 파일명은 Windows 260자 제한에 걸리므로 짧은 이름으로 복사 후 변환
 
 ---
 
-## 주의사항
+## docs/book/ 폴더 구조
 
-- `(삭제됨)` 옆의 `(line XXXX)` 번호는 **이전 작업의 잘못된 참조**이므로 무시
-- 위 표의 `marker L:` 값 중 "(추정)"은 탐색 에이전트가 추출한 값 — 작업 시 `Grep`으로 재확인 권장
-- 일부 책(McEnery, Eysenck, Morling, Sidnell)은 marker 헤더 구조가 비표준적이므로 챕터 경계를 본문에서 직접 확인
-- `_marker_full.md`는 Marker(GPU PDF→MD 변환기) 출력물이므로 OCR 노이즈가 있을 수 있음
-- 작업 2(guide.md 통합)는 작업 1(상세 채우기)과 독립적이므로 병렬 진행 가능
-- rate limit 90% 도달 시 즉시 중단하고 이 문서의 진행 현황을 갱신할 것
+```
+docs/book/
+├── BOOK_SOURCE_GUIDE.md
+├── SUMMARY_FILL_TASK.md (이 파일)
+├── bayesian/              ← summary 완료, guide.md 없음 (기존)
+├── behavioral_analysis/   ← guide.md 통합 필요
+├── data_science/          ← guide.md 통합 필요
+├── deep_learning/         ← guide.md 통합 필요
+├── epidemiology/          ← summary 완료, guide.md 없음 (기존)
+├── functional_data_analysis/ ← summary 완료, guide.md 없음 (기존)
+├── generalized_linear_model/ ← summary 완료, guide.md 없음 (기존)
+├── governance/            ← guide.md 통합 필요
+├── linear_algebra/        ← summary 완료, guide.md 없음 (기존)
+├── linguistics/           ← guide.md 통합 필요
+├── machine_learning/      ← guide.md 통합 필요
+├── mixed_model/           ← summary 완료, guide.md 없음 (기존)
+├── ontology/              ← guide.md 통합 필요
+├── psychology/            ← guide.md 통합 필요
+├── statistics/            ← summary 완료, guide.md 없음 (기존)
+├── strategy_frameworks/   ← summary 완료, guide.md 없음
+└── survival/              ← summary 완료, guide.md 없음 (기존)
+```
+
+파일 명명 규칙:
+- `{Author}-{ShortTitle}-summary.md` — 지도 (챕터별 요약 + 키워드 + 라인 참조)
+- `{Author}-{ShortTitle}_full.md` — markitdown 변환 원본
+- `{Author}-{ShortTitle}_marker_full.md` — Marker 변환 원본
+- `{Author}-{ShortTitle}_azure_full.md` — Document Intelligence 변환 원본
+
+---
+
+## 관련 파일 참조
+
+- `AGENT_GUIDE.md` — 2-Layer 교재 참조 체계 (Book Source 섹션)
+- `docs/book/BOOK_SOURCE_GUIDE.md` — 교재 소스 가이드
+- 카테고리 GUIDE.md (`docs/blog/posts/*/GUIDE.md`) — 10개 카테고리에 교재 레퍼런스 섹션 추가 완료
+- CLAUDE.md — AGENT_GUIDE.md 참조 포인터
+
+## 메모리 참조
+
+- `~/.claude/projects/.../memory/feedback_conversion.md` — 변환 워크플로 (품질 검사 후 복사)
+- `~/.claude/projects/.../memory/feedback_network.md` — 사내 방화벽 주의
+- `~/.claude/projects/.../memory/feedback_tool_install.md` — 도구 설치 시 공식 문서 먼저
+- `~/.claude/projects/.../memory/project_blog_env.md` — conda 환경 (nblog vs blog)
+- `~/.claude/projects/.../memory/project_minerva.md` — MINERVA 프로젝트 맥락

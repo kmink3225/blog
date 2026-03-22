@@ -6,6 +6,9 @@ year: 2015
 total_pages: 338
 language: en
 keywords: [reinforcement learning, MDP, temporal-difference learning, Q-learning, policy gradient, Monte Carlo methods, dynamic programming, eligibility traces, function approximation, actor-critic]
+sources:
+  - file: "Sutton-RL_marker_full.md"
+    tool: Marker
 ---
 
 # Reinforcement Learning: An Introduction — Summary
@@ -158,3 +161,20 @@ keywords: [reinforcement learning, MDP, temporal-difference learning, Q-learning
 - Part II Approximate Solution Methods `L:3141`
 - On-policy Approximation of Action Values `L:3143`
 - Off-policy Approximation of Action Values `L:3573`
+
+---
+
+## Marker 세부 목차
+
+> `L:숫자`는 `Sutton-RL_marker_full.md`의 라인 번호.
+
+- Part I Tabular Solution Methods `L:467`
+- 3.4 Unified Notation for Episodic and Continuing Tasks `L:866`
+- \*5.8 Importance Sampling on Truncated Returns `L:1947`
+- 7.7 Off-policy Eligibility Traces using Importance Sampling `L:2766`
+- Planning and Learning with Tabular Methods `L:2836`
+- Part II Approximate Solution Methods `L:3141`
+- On-policy Approximation of Action Values `L:3143`
+- 9.1 Value Prediction with Function Approximation `L:3151`
+- Off-policy Approximation of Action Values `L:3573`
+- 11.3 R-Learning and the Average-Reward Setting `L:3644`

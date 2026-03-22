@@ -6,6 +6,9 @@ year: 2013
 total_pages: 414
 language: en
 keywords: [data-science, data-mining, predictive-modeling, classification, overfitting, clustering, evaluation, ROC, text-mining, business-strategy]
+sources:
+  - file: "Provost-DataScienceBusiness_marker_full.md"
+    tool: Marker
 ---
 
 # Data Science for Business — Summary
@@ -162,6 +165,55 @@ Ch 7의 기대값 프레임워크를 확장하여 복잡한 비즈니스 문제�
 - Examine Data Science Case Studies `L:5073`
 - Be Ready to Accept Creative Ideas from Any Source `L:5087`
 - Be Ready to Evaluate Proposals for Data Science Projects `L:5091`
+- The Fundamental Concepts of Data Science `L:5192`
+- What Data Can't Do: Humans in the Loop, Revisited `L:5270`
+- Privacy, Ethics, and Mining Data About Individuals `L:5304`
+- Is There More to Data Science? `L:5322`
+- Final Example: From Crowd-Sourcing to Cloud-Sourcing `L:5330`
+
+---
+
+## Marker 세부 목차
+
+> `L:숫자`는 `Provost-DataScienceBusiness_marker_full.md`의 라인 번호.
+
+- What You Need to Know About Data Mining and Data-Analytic Thinking `L:11`
+- The Ubiquity of Data Opportunities `L:519`
+- Data Processing and "Big Data" `L:603`
+- Data and Data Science Capability as a Strategic Asset `L:627`
+- Data Mining and Data Science, Revisited `L:683`
+- Business Problems and Data Science Solutions (p.42) `L:723`
+- Data Mining and Its Results `L:805`
+- Implications for Managing the Data Science Team `L:917`
+- Other Analytics Techniques and Technologies `L:933`
+- Introduction to Predictive Modeling: From Correlation to Supervised Segmentation (p.66) `L:1030`
+- Trees as Sets of Rules (p.94) `L:1412`
+- Fitting a Model to Data `L:1520`
+- Example: Logistic Regression versus Tree Induction `L:1824`
+- \* Example: Why Is Overfitting Bad? (p.147) `L:2077`
+- Overfitting Avoidance and Complexity Control (p.156) `L:2176`
+- Decision Analytic Thinking I: What Is a Good Model? (p.210) `L:3034`
+- A Key Analytical Framework: Expected Value `L:3142`
+- The Area Under the ROC Curve (AUC) `L:3524`
+- Cumulative Response and Lift Curves `L:3532`
+- Example: Performance Analytics for Churn Modeling (p.246) `L:3562`
+- Applying Bayes' Rule to Data Science `L:3804`
+- A Model of Evidence "Lift" (p.267) `L:3895`
+- Example: Evidence Lifts from Facebook "Likes" `L:3921`
+- \* The Relationship of IDF to Entropy (p.284) `L:4209`
+- Decision Analytic Thinking II: Toward Analytical Engineering (p.300) `L:4448`
+- Targeting the Best Prospects for a Charity Mailing `L:4460`
+- Other Data Science Tasks and Techniques (p.312) `L:4628`
+- Link Prediction and Social Recommendation `L:4835`
+- Bias, Variance, and Ensemble Methods `L:4888`
+- Data Science and Business Strategy (p.336) `L:4954`
+- Achieving Competitive Advantage with Data Science `L:4976`
+- Sustaining Competitive Advantage with Data Science `L:4988`
+- Attracting and Nurturing Data Scientists and Their Teams `L:5047`
+- Examine Data Science Case Studies `L:5073`
+- Be Ready to Accept Creative Ideas from Any Source `L:5087`
+- Be Ready to Evaluate Proposals for Data Science Projects `L:5091`
+- A Firm's Data Science Maturity `L:5150`
 - The Fundamental Concepts of Data Science `L:5192`
 - What Data Can't Do: Humans in the Loop, Revisited `L:5270`
 - Privacy, Ethics, and Mining Data About Individuals `L:5304`

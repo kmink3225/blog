@@ -65,6 +65,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `bayesian-data-analysis`, `posterior-distribution`, `conditional-probability`, `prior`, `likelihood`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 1 (line 1256)
+베이즈 데이터 분석은 확률 모델 설정, 사후분포 계산, 모델 적합도 평가의 세 단계로 이루어진다. 관측 불가능한 파라미터 θ, 관측 데이터 y, 미래 관측값 ỹ에 대한 확률적 표기법을 도입한다. 베이즈 규칙을 통해 사전분포와 가능도 함수의 곱에 비례하는 비정규화 사후분포를 유도하며, 이것이 베이즈 추론의 기술적 핵심이다. 사전 예측 분포와 사후 예측 분포를 정의하여 미래 관측값에 대한 예측 추론 체계를 구축한다. 교환 가능성 개념을 도입하여 관측값의 결합 확률 밀도가 인덱스 순열에 불변인 모델을 설정하는 기초를 마련한다. 유전학 예제에서 혈우병 보인자 여부를 베이즈 정리로 추론하는 이산적 사례를 제시한다. 맞춤법 검사 예제를 통해 여러 가설 간의 사후 확률 비교를 보여준다. 미식축구 포인트 스프레드 예제에서는 연속적 데이터에 대한 정규 모델 기반 베이즈 추론을 시연한다. 레코드 링키지 예제에서는 일치·불일치 비율을 활용한 확률적 데이터 결합 문제를 다룬다. 확률의 빈도주의적 해석과 주관적 해석 모두를 포용하면서, 불확실성의 직접적 확률 표현이라는 베이즈 프레임워크의 핵심 강점을 강조한다.
 
 ### Ch 2: Single-parameter models (pp. 29-57)
 
@@ -73,6 +74,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `single-parameter`, `conjugate-prior`, `binomial`, `noninformative-prior`, `weakly-informative-prior`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 2 (line 3149)
+이항 모델에서 교환 가능한 시행의 성공 횟수 y에 대해 파라미터 θ의 사후분포를 유도하며, 균등 사전분포 하에서 사후분포가 Beta(y+1, n-y+1)임을 보인다. Thomas Bayes와 Laplace의 역사적 공헌을 소개하며, Laplace는 파리 출생 데이터로 여아 비율이 0.5 미만임을 도덕적으로 확신하였다. 사후분포는 사전정보와 데이터 간의 타협으로서, 표본 크기가 증가할수록 데이터에 의해 더 강하게 지배된다. 사후 요약 통계량으로 평균, 중앙값, 최빈값 및 중심 사후 구간과 최고 사후 밀도 영역을 설명한다. 켤레 사전분포로서 베타 분포를 소개하고, 사전 파라미터가 가상적 사전 관측 횟수로 해석됨을 보여준다. 정보적·비정보적·약정보적 사전분포의 개념을 구분하며, Jeffreys 사전분포 Beta(1/2, 1/2)를 유도한다. 정규 분포의 단일 파라미터 모델에서 알려진 분산 하의 평균 추론과 알려진 평균 하의 분산 추론을 각각 다룬다. 포아송 모델을 소개하고 감마 켤레 사전분포를 적용하여 암 발생률 추정 예제를 분석한다. 지수 모델과 그 감마 켤레 사전분포도 간략히 다루어 단일 파라미터 베이즈 추론의 기본 틀을 완성한다. 비정보적 사전분포의 한계와 약정보적 사전분포의 실용적 장점을 논의한다.
 
 ### Ch 3: Introduction to multiparameter models (pp. 63-79)
 
@@ -81,6 +83,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `multiparameter`, `nuisance-parameter`, `marginalization`, `multinomial`, `bioassay`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 3 (line 5609)
+다중 파라미터 문제에서 관심 파라미터의 사후분포를 얻기 위해 귀찮은 파라미터(nuisance parameter)를 주변화하는 일반적 전략을 설명한다. 결합 사후 밀도를 조건부와 주변 밀도의 곱으로 분해하여, 주변 시뮬레이션과 조건부 시뮬레이션을 순차적으로 수행하는 방법을 제시한다. 정규 데이터에 비정보적 사전분포를 적용하여 μ|σ²,y의 조건부 사후분포가 정규이고, σ²|y의 주변 사후분포가 스케일 역카이제곱임을 유도한다. μ의 주변 사후분포가 t분포를 따르며, 이것이 빈도주의 피벗 양과 동일한 형태임을 보여준다. 사후 예측 분포를 위치 ȳ, 스케일 (1+1/n)^(1/2)s, 자유도 n-1인 t분포로 유도하여 미래 관측값 예측에 활용한다. Newcomb의 광속 측정 데이터를 정규 모델로 분석하는 예제를 제시한다. 켤레 사전분포인 정규-역카이제곱 분포 가족을 소개하고, 사후 파라미터가 사전정보와 데이터의 가중평균임을 보인다. 다항 분포에 대해 디리클레 켤레 사전분포를 적용한 범주형 데이터 분석을 다룬다. 다변량 정규 분포의 사후분포와 알려진·미지 분산 행렬 하의 추론을 설명한다. 생물학적 검정 실험에서 비켤레 로지스틱 회귀를 격자 계산과 시뮬레이션으로 분석하는 비표준 예제를 제시한다.
 
 ### Ch 4: Asymptotics and connections to non-Bayesian approaches (pp. 83-98)
 
@@ -89,6 +92,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `asymptotic-theory`, `normal-approximation`, `frequentist-connection`, `large-sample`, `consistency`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 4 (line 7011)
+사후분포의 정규 근사를 소개하며, 사후 최빈값에서의 테일러 전개를 통해 로그 사후 밀도를 이차 형태로 근사한다. 관측 정보 행렬 I(θ̂)의 역행렬이 근사 사후 분산 행렬이 되며, 이를 통해 점추정과 표준오차 기반의 구간 추정이 가능하다. 정규-미지 평균·분산 문제에서 (μ, log σ)에 대한 정규 근사의 구체적 형태를 유도한다. 생물학적 검정 예제에서 정규 근사가 소표본에서의 비대칭성을 놓치는 한계를 보여준다. 대표본 이론의 핵심 결과로서 사후분포의 점근적 정규성과 일치성을 제시하며, Fisher 정보량 J(θ)의 역할을 설명한다. 가능도가 사전분포를 지배하게 되는 메커니즘을 통해 베이즈 방법과 빈도주의 방법의 수렴을 논의한다. 대표본 이론이 실패하는 반례들을 제시하는데, 파라미터 공간 경계의 문제, 유한 혼합 모델에서의 앨리어싱, 무한 차원 파라미터 등이 포함된다. 베이즈 추론의 빈도주의적 평가를 다루며, 사후 구간의 빈도주의적 커버리지 특성을 논의한다. 비베이즈적 방법에 대한 베이즈적 해석을 제공하여 최대가능도추정, 부트스트랩, 비모수적 방법과의 연결을 설명한다. 변환을 통해 정규 근사의 정확도를 향상시킬 수 있으며, 저차원 주변 분포가 고차원 결합 분포보다 정규 근사에 더 가까운 경향이 있음을 설명한다.
 
 ### Ch 5: Hierarchical models (pp. 101-134)
 
@@ -97,6 +101,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `hierarchical-model`, `exchangeability`, `eight-schools`, `shrinkage`, `hyperparameter`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 5 (line 8226)
+여러 파라미터가 공통 구조로 연결된 문제에서 계층적 모델링의 필요성을 설명하며, 비계층적 모델은 소수 파라미터로는 적합도가 낮고 다수 파라미터로는 과적합하는 문제가 있음을 지적한다. 쥐 종양 발생률 추정 예제에서 70개 역사적 실험의 베타 모집단 분포를 이용하여 새 실험의 사전분포를 구성하는 과정을 보여준다. 교환 가능성 개념을 파라미터 수준에서 정의하여, 그룹 파라미터들이 공통 모집단 분포에서 추출된 것으로 모델링하는 원리를 제시한다. de Finetti 정리를 통해 교환 가능한 분포가 독립 동일 분포의 혼합으로 표현될 수 있음을 언급한다. 쥐 종양 예제의 완전한 베이즈 분석에서 초모수 (α, β)의 결합 사후분포를 격자 위에서 계산하고, 각 실험의 θj 사후분포가 전체 평균 쪽으로 수축됨을 보인다. 8개 학교(eight schools) SAT 코칭 효과 실험에서 정규 계층 모델을 적용하여, 완전 풀링과 비풀링 사이의 부분 풀링 추정을 수행한다. 그룹 간 표준편차 τ의 사후분포를 통해 수축 정도가 데이터에 의해 결정됨을 보여준다. 메타분석 예제에서 심장 이식 효과에 대한 여러 임상 연구 결과를 계층적으로 결합하는 방법을 제시한다. 분산 파라미터에 대한 약정보적 사전분포로서 균등분포와 반코시(half-Cauchy) 분포를 비교하며, 그룹 수가 적을 때 사전분포 선택의 중요성을 강조한다. 계층적 모델이 과적합을 피하면서도 데이터에 잘 적합할 수 있는 유연성을 제공한다는 실용적 장점을 논의한다.
 
 ### Ch 6: Model checking (pp. 141-163)
 
@@ -105,6 +110,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `model-checking`, `posterior-predictive-check`, `sensitivity-analysis`, `p-value`, `discrepancy`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 6 (line 11389)
+베이즈 분석에서 모델 점검은 확률 모델이 현실의 모든 측면을 포착하지 못할 수 있으므로 필수적이며, 모델의 결함이 실질적 추론에 미치는 영향을 판단하는 것이 핵심이다. 민감도 분석을 통해 합리적 대안 모델 하에서 사후 추론이 얼마나 변하는지 평가한다. 1992년 미국 대통령 선거 예측 예제에서 계층적 회귀 모델의 예측이 실질적 정치 지식과 부합하는지 점검하는 외부 검증 방법을 보여준다. 사후 예측 점검(posterior predictive check)의 핵심 개념은 모델이 적합하다면 모델에서 생성된 복제 데이터가 관측 데이터와 유사해야 한다는 것이다. Newcomb의 광속 측정 데이터에서 정규 모델의 사후 예측 분포가 관측된 이상치를 재현하지 못함을 시각적으로 보여준다. 검정 통계량 T(y)를 정의하고 사후 예측 p-값 Pr(T(y^rep) ≥ T(y)|y)를 계산하여 모델 부적합도를 수치적으로 측정한다. 불일치 측도(discrepancy measure) T(y,θ)를 도입하여 파라미터에 의존하는 검정 통계량으로 확장하며, 이를 통해 카이제곱 적합도 검정의 베이즈 버전을 구현한다. 그래픽을 이용한 사후 예측 점검에서 히스토그램, 산점도, 잔차 그림 등 다양한 시각적 비교 방법을 제시한다. 교육 테스트(8개 학교) 예제에서 정규 계층 모델의 적합성을 사후 예측 점검으로 평가하고, 모델이 데이터를 적절히 포착함을 확인한다. 모델 점검은 모델이 참인지 거짓인지를 묻는 것이 아니라, 모델의 결함이 관심 추론에 눈에 띄는 영향을 미치는지를 판단하는 과정이다.
 
 ### Ch 7: Evaluating, comparing, and expanding models (pp. 165-194)
 
@@ -113,6 +119,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `model-comparison`, `cross-validation`, `information-criteria`, `WAIC`, `bayes-factor`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 7 (line 13331)
+모델의 예측 정확도를 측정하여 모델을 비교하고 개선 방향을 탐색하며, 과적합 보정이 핵심 과제이다. 대통령 선거 예측을 위한 단순 선형 회귀를 실행 예제로 사용하여 경제 성장률과 득표율 간의 관계를 분석한다. 예측 정확도의 이상적 측정은 표본 외(out-of-sample) 예측 성능이며, 로그 예측 밀도를 일반적 측정 기준으로 채택한다. 기대 로그 점별 예측 밀도(elpd)와 로그 점별 예측 밀도(lppd)를 정의하여 모델 적합도의 기본 측정 체계를 구축한다. AIC는 최대가능도 추정 하의 로그 가능도에서 파라미터 수를 차감하여 과적합을 보정하며, DIC는 사후 평균 이탈도에 유효 파라미터 수 pD를 더하여 보정한다. WAIC(Widely Applicable Information Criterion)는 완전 베이즈적 접근으로 로그 점별 예측 밀도에서 유효 파라미터 수를 차감하며, AIC와 DIC를 포괄하는 개선된 기준이다. 교차 검증, 특히 LOO-CV(leave-one-out cross-validation)는 각 데이터 포인트를 순차적으로 제외하고 예측 밀도를 계산하여 과적합 없이 예측 정확도를 추정한다. 베이즈 팩터를 이용한 모델 비교를 소개하지만, 사전분포에 대한 높은 민감도와 비실용성을 지적한다. 연속적 모델 확장 접근법을 대안으로 제시하여, 단순 모델에 파라미터를 추가하며 사후분포를 통해 모델 복잡도를 결정하는 방법을 권장한다. 8개 학교 모델을 예시로 정보 기준들의 실제 적용을 비교한다.
 
 ### Ch 8: Modeling accounting for data collection (pp. 197-230)
 
@@ -121,6 +128,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `data-collection`, `ignorability`, `survey-sampling`, `stratification`, `censoring`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 8 (line 15580)
+데이터 수집 과정을 확률 모델에 반영하는 방법을 다루며, 표본 조사·설계 실험·관찰 연구에서의 설계 정보를 분석에 포함시켜야 한다는 두 가지 일반 원칙을 제시한다. 잠재적 완전 데이터 y와 포함 지시변수 I를 정의하여 관측 데이터와 결측 데이터를 구분하는 일반적 표기법을 도입한다. 완전 데이터 가능도 p(y,I|θ,φ) = p(y|θ)p(I|y,φ)로 분해하여, 데이터 모델과 포함 모델을 분리하는 체계를 구축한다. 무시가능성(ignorability) 조건을 정의하며, 결측이 무작위(MAR)이고 파라미터가 구별적(distinct)이면 결측 메커니즘을 무시하고 관측 데이터 가능도만으로 추론할 수 있다. 유한 모집단 추론과 초모집단 추론을 구분하여, 전자는 결측 데이터의 예측적 분포에, 후자는 모델 파라미터에 초점을 맞춘다. 표본 조사에서 층화·군집 표본의 베이즈 분석을 다루며, 설계 변수를 공변량으로 포함시키는 전략을 설명한다. 설계 실험에서 무작위 배치의 역할을 베이즈적 관점에서 논의하며, 무작위화가 무시가능성을 보장하는 메커니즘임을 보인다. 관찰 연구에서 인과 추론을 위한 반사실적(counterfactual) 결과 프레임워크를 소개하고, 교란 변수를 통제하기 위한 모델링 전략을 설명한다. 절단·결측 데이터의 처리에서 절단 정규 모델과 생존 분석의 예를 다룬다. 안정성 가정(SUTVA)을 설명하며, 처리가 다른 단위의 결과에 영향을 미치지 않는다는 전제를 논의한다.
 
 ### Ch 9: Decision analysis (pp. 237-257)
 
@@ -129,6 +137,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `decision-analysis`, `utility`, `survey-incentive`, `medical-screening`, `radon`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 9 (line 18874)
+베이즈 추론 결과를 의사결정에 활용하는 방법을 다루며, 결정 공간 열거, 각 결정 하의 확률 분포 계산, 효용 함수 정의, 기대 효용 최대화의 네 단계로 구성된다. 설문 인센티브 예제에서 39개 조사 실험의 메타분석을 계층적 회귀로 수행하여 인센티브 금액·시기·형태·모드·부담 수준별 응답률 증가를 추정한다. 통계적으로 유의하지 않은 회귀 계수도 결정 문제에서는 중요할 수 있으므로 0으로 설정해서는 안 된다는 실용적 교훈을 제시한다. 암 진단 의료 검진 예제에서 다단계 의사결정 나무를 구성하여, 검진 검사의 위험과 정보 가치를 균형 잡는 문제를 분석한다. 정보의 기대 가치(expected value of information) 개념을 도입하여, 추가 데이터 수집의 비용-편익 분석을 수행한다. 가정용 라돈 측정 예제에서 계층적 회귀 모델, 확률적 의사결정 분석, 효용 분석을 완전히 통합한 사례를 제시한다. 개인적 의사결정과 제도적 의사결정을 구분하며, 전자는 단일 사례에 대한 최적화이고 후자는 모집단 수준의 정책 결정이다. 효용 함수를 통해 달러 비용, 건강 결과 등 다중 속성을 하나의 척도로 통합하는 방법을 설명한다. 모델 선택 자체를 결정 문제로 형식화하여, 예측 성능의 개선이 추가 변수 수집 비용을 정당화하는지 판단하는 체계를 소개한다. 베이즈 추론과 의사결정 분석의 통합이 불확실성 하의 합리적 행동을 위한 일관된 프레임워크를 제공한다고 결론짓는다.
 
 ### Ch 10: Introduction to Bayesian computation (pp. 261-272)
 
@@ -137,6 +146,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `numerical-integration`, `rejection-sampling`, `importance-sampling`, `simulation`, `computing-environment`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 10 (line 20671)
+사후분포 p(θ|y)와 사후 예측 분포 p(ỹ|y)를 계산하기 위한 기본 방법들을 소개하며, 비정규화 밀도 q(θ|y)로 작업하는 것이 일반적임을 설명한다. 수치 적분(구적법)을 시뮬레이션(확률적) 방법과 결정론적 방법으로 구분하며, 격자 기반 계산에서 적응적 격자 형성까지 다룬다. 분포 근사법으로서 정규 근사를 상기시키고, 조잡한 추정(일부 정보를 무시한 단순 추정)이 보다 정교한 분석의 출발점과 디버깅 도구로 유용함을 설명한다. 직접 시뮬레이션에서는 켤레 모델의 사후분포에서 직접 표본을 추출하고, 주변-조건부 분해를 통해 순차적으로 시뮬레이션하는 방법을 다룬다. 기각 표본추출(rejection sampling)에서 근사 함수 g(θ)로부터 추출한 후 밀도비에 기반한 확률로 수락하는 알고리즘을 설명하며, g가 p에 비례할수록 효율적임을 강조한다. 중요도 표본추출(importance sampling)에서 근사 분포 g로부터의 추출에 중요도 비율 w(θ) = q(θ|y)/g(θ)를 가중하여 기댓값을 추정하며, 중요도 비율의 변동이 클 때 정확도가 떨어진다. 유효 표본 크기 S_eff를 정규화 가중치의 제곱합의 역수로 추정하여 중요도 표본추출의 효율을 진단한다. 중요도 재표본추출(SIR)에서 비복원 추출로 균등 가중 표본을 얻는 방법을 설명한다. 시뮬레이션 횟수 결정에 관해 사후 분위수 보고와 예측 추론에 필요한 정확도 기준을 논의한다. 계산 오버플로를 방지하기 위해 로그 밀도로 작업하고 지수화를 최대한 늦추는 실용적 지침을 제시한다.
 
 ### Ch 11: Basics of Markov chain simulation (pp. 275-291)
 
@@ -145,6 +155,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `MCMC`, `Gibbs-sampler`, `Metropolis-Hastings`, `convergence`, `effective-sample-size`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 11 (line 21552)
+마르코프 체인 몬테 카를로(MCMC)는 근사 분포에서 추출한 후 목표 사후분포로 수정해 나가는 반복적 시뮬레이션 방법이며, 전이 분포 T_t(θ^t|θ^(t-1))에 의해 순차적으로 표본을 생성한다. 깁스 표본추출기(Gibbs sampler)는 파라미터 벡터를 d개 부분벡터로 나누어, 각 부분벡터를 나머지 모든 성분의 현재 값에 조건부인 분포에서 순차적으로 추출한다. 이변량 정규 분포 예제에서 상관계수 ρ=0.8일 때 깁스 표본추출기의 느린 수렴을 시각적으로 보여준다. 메트로폴리스 알고리즘은 대칭 점프 분포에서 제안값 θ*를 추출하고, 밀도비 r = p(θ*|y)/p(θ^(t-1)|y)에 기반하여 min(r,1)의 확률로 수락하는 무작위 보행 방식이다. 메트로폴리스-헤이스팅스 알고리즘은 비대칭 점프 분포로 확장하여 밀도비에 제안 분포의 비율을 추가로 보정한다. 마르코프 체인의 수렴 증명은 비축약성·비주기성·비일시성 조건 하에서 유일한 정상 분포가 목표 분포와 일치함을 보이는 두 단계로 이루어진다. 수렴 진단을 위해 여러 독립적 체인을 과분산된 시작점에서 실행하고, R̂ 통계량(체인 간 분산/체인 내 분산의 비)을 통해 수렴 여부를 모니터링한다. 유효 표본 크기 n_eff를 자기상관 시간의 역수로 계산하여 상관된 MCMC 표본의 실효적 독립 표본 수를 추정한다. 계층적 정규 모델(8개 학교 예제)에 깁스 표본추출기를 적용하는 구체적 구현을 제시한다. 분할 R̂을 도입하여 체인의 전반부와 후반부를 비교함으로써 정상성까지 도달했는지 더욱 엄격하게 점검한다.
 
 ### Ch 12: Computationally efficient Markov chain simulation (pp. 293-309)
 
@@ -153,6 +164,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `HMC`, `Hamiltonian-Monte-Carlo`, `Stan`, `reparameterization`, `efficient-sampling`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 12 (line 23023)
+깁스 표본추출기와 메트로폴리스 알고리즘의 효율을 높이기 위한 재매개변수화와 튜닝 전략을 다룬다. 깁스 표본추출기는 파라미터 성분들이 독립일 때 가장 효율적이므로, 선형 변환을 통해 사후 상관을 제거하는 재매개변수화가 유용하다. 보조 변수(auxiliary variable) 도입으로 t 분포를 정규 분포의 혼합으로 표현하여 깁스 표본추출기를 적용하는 방법을 설명한다. 파라미터 확장(parameter expansion)에서 추가 스케일 파라미터 α를 도입하여 σ와 V_i 간의 사후 의존성을 깨뜨림으로써 수렴 속도를 향상시킨다. 메트로폴리스 점프 규칙의 최적 설정으로 c ≈ 2.4/√d 스케일링과 0.23~0.44의 수락률 목표를 제시하며, 적응적 시뮬레이션 알고리즘의 이론적 주의점을 설명한다. 슬라이스 표본추출(slice sampling)은 목표 밀도 아래 영역에서 균등 분포를 이용하여 표본을 추출하는 방법이다. 가역 점프 표본추출(reversible jump sampling)은 차원이 다른 모델 공간 간의 이동을 가능하게 하여 모델 평균화와 성분 수 추정에 활용된다. 해밀턴 몬테 카를로(HMC)는 운동량 변수를 도입하여 해밀턴 역학에 기반한 궤적을 따라 파라미터 공간을 탐색하며, 고차원에서 무작위 보행보다 훨씬 빠른 혼합을 달성한다. NUTS(No-U-Turn Sampler)를 포함한 HMC의 자동 튜닝 방법과 Stan 프로그래밍 환경을 소개하며, 계층적 모델에의 적용을 보여준다. 시뮬레이션 템퍼링과 병렬 템퍼링을 통해 다중 모드 분포에서의 체인 혼합 문제를 해결하는 방법을 다룬다.
 
 ### Ch 13: Modal and distributional approximations (pp. 311-349)
 
@@ -161,6 +173,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `modal-approximation`, `EM-algorithm`, `variational-inference`, `expectation-propagation`, `normal-approximation`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 13 (line 24169)
+복잡한 모델에서 반복적 시뮬레이션이 느릴 때 유용한 분포 근사 방법들을 소개한다. 사후 최빈값 탐색을 위해 조건부 최대화(stepwise ascent)와 뉴턴-랩슨 알고리즘을 설명하며, 준뉴턴(BFGS) 방법과 켤레 기울기 방법도 다룬다. 수치적 미분 계산을 위한 유한 차분법의 구현과 적절한 δ 값 선택 지침을 제시한다. 사후 최빈값이 파라미터 공간의 경계에 위치하는 문제를 8개 학교 예제의 τ 파라미터로 설명하며, 경계 회피 사전분포로서 Gamma(2, ·)를 권장한다. 정규 근사와 혼합 정규 근사를 사후 최빈값 중심으로 구성하여 빠른 추론과 MCMC 시작점으로 활용하는 방법을 설명한다. EM 알고리즘을 주변 사후 최빈값 탐색 방법으로 소개하며, E단계에서 잠재 변수의 조건부 기댓값을 계산하고 M단계에서 파라미터를 최적화하는 과정을 설명한다. 조건부 근사와 주변 근사를 결합하여 고차원 사후분포를 효율적으로 분해하는 전략을 다룬다. 변분 추론(variational inference)은 사후분포를 단순한 분포 가족으로 근사하되 KL 발산을 최소화하는 방법이며, 평균장(mean-field) 근사가 대표적이다. 기대치 전파(expectation propagation)는 각 가능도 인자를 순차적으로 근사하여 전체 사후분포를 구성하는 방법으로, 변분 추론과 보완적인 특성을 갖는다. 다양한 근사 전략이 가용할 때 여러 방법으로 적합하고 6-7장의 도구로 비교 평가하는 것을 권장한다.
 
 ### Ch 14: Introduction to regression models (pp. 353-378)
 
@@ -169,6 +182,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `linear-regression`, `bayesian-regression`, `incumbency`, `regularization`, `conditional-modeling`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 14 (line 27184)
+정규 선형 회귀 모델 y|β,σ,X ~ N(Xβ, σ²I)의 베이즈 분석을 소개하며, 표준 비정보적 사전분포 p(β,σ²|X) ∝ σ⁻²를 가정한다. 조건부 사후분포 β|σ,y ~ N(β̂, V_β σ²)와 주변 사후분포 σ²|y ~ Inv-χ²(n-k, s²)를 유도하여, 최소제곱 추정량과 베이즈 추정량이 일치함을 보인다. 사후 예측 분포를 유도하여 표본 변동과 파라미터 불확실성의 두 성분을 분리하고, 다변량 t 분포 형태임을 보인다. 미국 하원 선거에서의 현직 효과(incumbency advantage) 추정을 확장 예제로 사용하여 회귀 모델 구축, 사후분포 해석, 잔차 분석을 시연한다. 잔차 그림을 사후 예측 점검으로 해석하여 이분산성, 비선형성, 이상치를 진단하는 방법을 제시한다. 정규화 방법으로서 능형 회귀(ridge regression)가 β에 대한 정규 사전분포에 해당함을 보이고, LASSO가 라플라스 사전분포에 대응함을 설명한다. 불등 분산 모델에서 가중 최소제곱이 알려진 분산 구조 하의 베이즈 추정에 해당함을 보인다. 수치적 사전정보 포함 방법으로 켤레 사전분포와 가상 데이터(prior data) 접근법을 소개한다. 조건부 모델링의 정당성을 설명변수 X의 분포 파라미터 ψ와 회귀 파라미터 θ의 사전 독립성 가정으로 정당화한다. QR 분해를 이용한 효율적 사후 시뮬레이션 알고리즘의 구현을 설명한다.
 
 ### Ch 15: Hierarchical linear models (pp. 381-402)
 
@@ -177,6 +191,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `hierarchical-regression`, `varying-intercept`, `varying-slope`, `ANOVA`, `multilevel`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 15 (line 29197)
+예측변수가 여러 수준에 존재하는 데이터에서 계층적 회귀 모델의 필요성을 설명하며, 단순 변동 계수 모델 β ~ N(1α, σ²_β I)을 기본 형태로 제시한다. 급내 상관계수(intraclass correlation)가 변동 계수 모델과 등가임을 보이고, ρ = σ²_β/(σ² + σ²_β)로 표현한다. 혼합 효과 모델(mixed-effects model)에서 일부 계수에는 비정보적 사전분포를, 나머지에는 교환 가능한 정규 모집단 분포를 부여하는 구조를 설명한다. 미국 대통령 선거 예측 예제에서 전국·지역·주 수준의 설명변수를 포함한 비계층적 회귀를 먼저 적합하고, 잔차 분석으로 모델 부적합을 진단한다. 연도별 변동 절편을 포함한 계층적 모델로 확장하여 예측 정확도를 개선하며, 1992년 선거에 대한 사전 예측을 수행한다. 일반적인 계층적 선형 모델에서 β의 모집단 분포가 2차 수준 회귀 β ~ N(Zα, σ²_β I)로 표현되는 구조를 도입한다. 분산 분석(ANOVA)을 계층적 선형 모델의 특수 사례로 재해석하며, 여러 묶음의 변동 계수를 다루는 방법을 설명한다. 분산 성분 추정에서 σ²_β에 대한 사전분포 선택의 민감도를 논의하고, 데이터에 의한 반복이 부족한 분산 파라미터는 사전분포에 민감할 수 있음을 경고한다. 파라미터 확장(parameter expansion)을 적용하여 깁스 표본추출기의 수렴 속도를 개선하는 방법을 소개한다. R과 Stan을 사용한 계층적 모델의 구현 세부 사항을 부록에서 다룬다.
 
 ### Ch 16: Generalized linear models (pp. 405-432)
 
@@ -185,6 +200,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `GLM`, `logistic-regression`, `Poisson-regression`, `overdispersion`, `loglinear`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 16 (line 31535)
+일반화 선형 모델(GLM)은 선형 예측자 η = Xβ, 링크 함수 g(·), 반응 변수의 확률 분포 세 가지 요소로 구성된다. 포아송 회귀에서 로그 링크를 사용하여 계수 데이터를 모델링하며, 이항 모델에서는 로짓 링크(로지스틱 회귀)와 프로빗 링크를 소개한다. 과분산(overdispersion)이 실제 데이터에서 흔히 발생하며, 계층적 모델로 개별 관측에 정규 오차항을 추가하여 처리할 수 있다. 정규 근사를 이용하여 GLM의 가능도를 선형 회귀 형태의 의사 데이터(pseudodata)와 의사 분산(pseudovariance)으로 변환하는 방법을 상세히 유도한다. 잠재 연속 데이터(latent continuous data) 해석을 통해 프로빗 모델을 정규 잠재 변수의 이산화로 이해하고, 깁스 표본추출기 계산에 활용한다. 약정보적 사전분포로서 로지스틱 회귀 계수에 Cauchy(0, 2.5) 또는 t 분포를 사용하여 완전 분리(complete separation) 문제를 방지하는 전략을 설명한다. 경찰 검문의 인종별 과분산 포아송 회귀 예제에서 이전 범죄율을 오프셋으로 사용하여 검문 비율의 인종 간 차이를 분석한다. 국가 수준 여론 추정에서 다수준 회귀와 사후층화(MRP)를 결합한 계층적 로지스틱 회귀를 소개한다. 로그선형 모델을 다변량 범주형 데이터 분석 도구로 소개하며, 반복 비례 적합법(iterative proportional fitting)으로 최빈값을 계산한다. 순서형 다항 회귀에서 절단점 모델과 그 잠재 변수 해석을 설명한다.
 
 ### Ch 17: Models for robust inference (pp. 435-446)
 
@@ -193,6 +209,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `robustness`, `outliers`, `t-distribution`, `overdispersion`, `eight-schools`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 17 (line 34471)
+정규 모델이 이상치에 비강건(nonrobust)한 문제를 다루며, 8개 학교 예제에서 하나의 극단적 관측값이 모든 파라미터 추정에 미치는 과도한 영향을 보여준다. 교환 가능한 사전분포를 꼬리가 긴 분포(예: t 분포, 코시 분포, 혼합 모델)로 교체하면 이상치의 영향을 줄이면서도 베이즈 원칙을 유지할 수 있다. t 분포를 정규 분포의 과분산 확장으로 소개하며, y_i|V_i ~ N(μ, V_i), V_i ~ Inv-χ²(ν, σ²)의 혼합 표현을 통해 분산이 큰 관측값을 이상치로 해석한다. 음이항 분포를 포아송 모델의 과분산 대안으로, 베타-이항 분포를 이항 모델의 과분산 대안으로 각각 소개한다. 로빗(robit) 회귀를 도입하여 로지스틱·프로빗 회귀의 강건한 대안을 제시하며, 잠재 변수 u_i ~ t_ν((Xβ)_i, 1)로 구현한다. 민감도 분석에서 자유도 ν를 변화시키며 사후 추론의 변화를 관찰하는 방법을 설명한다. 혼합 공식에 기반한 깁스 표본추출기로 t 모델의 사후분포를 계산하며, 보조 분산 파라미터 V_i를 도입하여 조건부 정규 모델로 변환한다. 중요도 가중치를 사용하여 기존 사후분포 표본으로부터 강건 모델의 사후분포를 근사하는 효율적 방법을 제시한다. 8개 학교 예제에 t 분포 모집단 모델을 적용하여 정규 모델과의 추론 차이를 비교 분석한다. 표준 모델의 사용이 정당화되는 경우(중심극한정리, 켤레성, 해석 용이성)와 강건 대안이 필요한 경우를 논의한다.
 
 ### Ch 18: Models for missing data (pp. 449-467)
 
@@ -201,6 +218,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `missing-data`, `multiple-imputation`, `ignorability`, `MAR`, `multivariate-normal`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 18 (line 35484)
+결측 데이터 문제를 베이즈 프레임워크에서 다중 대체(multiple imputation)와 파라미터 추론의 두 과제로 분리하여 처리하는 방법을 설명한다. 완전 데이터 y = (y_obs, y_mis)와 포함 지시자 I의 결합 분포 p(y,I|θ,φ) = p(y|θ)p(I|y,φ)를 기본 모델로 설정한다. 무작위 결측(MAR) 조건 p(I|y_obs, y_mis, φ) = p(I|y_obs, φ)와 파라미터 구별 조건이 함께 충족되면 결측 메커니즘이 무시가능하다. 완전 무작위 결측(MCAR)은 I가 y에 전혀 의존하지 않는 더 강한 조건이며, 실제로는 드물다. 다중 대체의 핵심 아이디어는 결측값의 K개 대체 세트를 생성하여 각각에 대해 분석을 수행한 후 결과를 결합하는 것이다. 결합 추정량의 총 분산은 대체 내 분산(within-imputation)과 대체 간 분산(between-imputation)의 합으로 구성된다. EM 알고리즘과 데이터 증대(data augmentation) 알고리즘을 결측 데이터 맥락에서 재구성하며, E단계에서 결측값의 조건부 기댓값을 계산한다. 다변량 정규 모델에서의 결측값 처리를 구체적으로 다루며, 충분 통계량의 기대치 계산과 EM 반복을 설명한다. 여론조사 시계열 대체 예제에서 시간 의존적 결측 패턴을 갖는 조사 데이터의 대체 방법을 보여준다. 단조(monotone) 결측 패턴에서의 계산 효율화 방법과 비무시가능 결측 모델로의 확장을 논의한다.
 
 ### Ch 19: Parametric nonlinear models (pp. 471-486)
 
@@ -209,6 +227,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `nonlinear-model`, `serial-dilution`, `toxicokinetics`, `pharmacokinetics`, `parametric`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 19 (line 36896)
+예측변수와 파라미터가 선형으로 결합하지 않는 비선형 모델을 다루며, 일반화 선형 모델과 달리 E(y) 자체가 비선형 함수 μ(X_i, φ)로 표현된다. 연속 희석 검정(serial dilution assay) 예제에서 미지 화합물의 농도를 추정하기 위해 표준 곡선과 비선형 용량-반응 모델을 구축한다. 96웰 플레이트의 실험 설계에서 표준물질과 미지 시료의 희석 배열을 설명하며, 광학 측정 데이터의 포화 현상을 비선형 함수로 모델링한다. 계층적 비선형 모델에서 플레이트 간 변동과 시료 간 변동을 각각 다른 수준의 파라미터로 표현하여 정보를 효율적으로 결합한다. 모집단 독성동태학(population toxicokinetics) 예제에서 약물의 체내 농도 시간 경과를 구획 모델(compartmental model)로 표현한다. 비선형 모델의 세 단계 분석 과정으로 모델 구축, 사후분포 계산, 모델 점검을 제시하며, 각 단계에서의 특수한 주의점을 설명한다. 사후분포 계산에서 MCMC의 적용과 초기값 설정의 중요성을 강조하며, 비선형 모델에서는 선형 회귀 계산을 직접 적용할 수 없음을 지적한다. 외부 검증(external validation)을 통해 모집단 독성동태학 모델의 예측과 실제 외부 데이터를 비교하여 모델 적합도를 평가한다. 비선형 모델의 파라미터 해석에서 적합된 비선형 관계를 그래프로 표시하는 것이 필수적임을 강조한다. 비선형 모델은 문제별로 고유한 구조를 가지므로 표준화된 메뉴 방식이 아닌 문제 특화적 접근이 필요하다.
 
 ### Ch 20: Basis function models (pp. 487-498)
 
@@ -217,6 +236,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `basis-function`, `spline`, `shrinkage`, `knot-selection`, `nonparametric-regression`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 20 (line 38654)
+비선형 회귀에서 평균 함수 μ(x)를 기저 함수의 가중합 Σβ_h b_h(x)으로 모델링하는 방법을 소개하며, 가우시안 방사 기저 함수와 B-스플라인을 대표적인 기저 함수로 제시한다. B-스플라인은 구간별 연속 다항식으로 정의되며, 매듭(knot) 위치와 간격이 모델의 유연성을 결정한다. 기저 함수 모델은 파라미터에 대해 선형이므로 정규-역카이제곱 켤레 사전분포를 사용하여 표준 선형 회귀처럼 적합할 수 있다. 염소 농도 측정 예제에서 21개 B-스플라인 계수를 추정하면서 데이터 희소성 문제를 해결하기 위해 선형 모델 중심의 사전분포를 사용한다. 수축(shrinkage) 사전분포를 통해 사후 평균 곡선이 선형 회귀 추정으로 수축되면서도 비모수적 이탈을 허용하는 전략을 설명한다. 베이즈 변수 선택 혼합 사전분포 π_h δ_0 + (1-π_h) N(0, κ^(-1) σ²)를 도입하여 불필요한 기저 함수를 확률적으로 제거하는 방법을 제시한다. 모델 공간 탐색을 위한 깁스 표본추출기 알고리즘과 모델 평균화를 통한 불확실성 반영 방법을 설명한다. 축소 사전분포(shrinkage prior)를 변수 선택의 연속적 대안으로 소개하며, 스케일 혼합 정규 β_h ~ N(0, σ²_h), σ²_h ~ G 형태로 표현한다. 다변량 회귀와 회귀 표면으로의 확장에서 텐서곱 기저 함수와 가법적(additive) 모델 구조를 다룬다. 기저 함수의 수와 위치에 대한 불확실성을 다루기 위해 자유 매듭 접근법과 가역 점프 MCMC의 사용을 논의한다.
 
 ### Ch 21: Gaussian process models (pp. 501-516)
 
@@ -225,6 +245,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `Gaussian-process`, `GP-regression`, `covariance-function`, `functional-data`, `density-estimation`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 21 (line 39566)
+가우시안 과정(GP)은 임의의 유한 차원 주변 분포가 가우시안인 확률 과정으로, 회귀 함수 μ(x)에 대한 사전분포로 자연스럽게 사용된다. GP는 평균 함수 m과 공분산 함수 k로 매개변수화되며, μ ~ GP(m, k)로 표기한다. 제곱 지수(squared exponential) 공분산 함수 k(x,x') = τ² exp(-|x-x'|²/(2l²))에서 τ는 크기를, l은 평활도를 제어한다. 기저 함수 확장과 GP의 동치 관계를 보여주며, 기저 계수에 정규 사전분포를 부여하면 유도되는 GP의 공분산 함수가 k(x,x') = b(x)^T Σ_β b(x')임을 유도한다. 가우시안 관측 모델 하에서 GP 사전분포의 조건부 켤레성을 이용하여 사후 평균과 공분산을 해석적으로 계산하며, O(n³) 행렬 역산이 주된 계산 비용이다. 생일·출생일 데이터 분석 예제에서 시계열을 장기 추세, 단기 변동, 주간 준주기 패턴, 연간 계절 패턴, 특별일 효과의 다섯 가지 GP 합으로 분해한다. 이방성(anisotropic) 공분산 함수에서 각 예측변수별 길이 스케일 l_j를 도입하여 비모수적 변수 선택을 수행한다. 잠재 가우시안 과정 모델에서 비가우시안 관측 모델과 GP를 결합하여 분류, 계수 데이터, 생존 분석 등에 확장한다. 함수적 데이터 분석에서 여러 개의 관측 곡선을 GP 모델로 동시에 분석하는 방법을 소개한다. 마르코프 랜덤 필드, 저차원 기저 근사, 희소 공분산 행렬 등 대규모 데이터에 대한 GP 근사 방법들을 논의한다.
 
 ### Ch 22: Finite mixture models (pp. 519-543)
 
@@ -233,6 +254,7 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `mixture-model`, `label-switching`, `latent-variable`, `classification`, `reaction-time`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 22 (line 41036)
+혼합 분포 모델에서 관측값 y_i가 H개 성분 분포의 가중합 p(y_i|θ,λ) = Σλ_h f(y_i|θ_h)로부터 생성된다고 가정하며, 잠재 지시 변수 z_ih를 도입하여 각 관측값의 소속 성분을 표현한다. 혼합 비율 λ에 대해 디리클레 켤레 사전분포를 부여하고, 성분 파라미터 θ에 대한 사전분포를 독립적으로 설정한다. 유한 혼합 모델의 비식별성(nonidentifiability) 문제로서 라벨 스위칭을 설명하며, 성분 평균의 순서 제약이나 정보적 사전분포로 해결한다. 혼합 성분 수 H의 결정을 위해 사후 예측 점검과 모델 비교 방법을 사용할 수 있다. 조현병 환자의 반응시간 데이터 분석 예제에서, 비조현병 환자는 정규 랜덤 효과 모델로, 조현병 환자는 주의력 결핍에 의한 두 성분 혼합 모델로 설정한다. EM 알고리즘을 사용하여 지시 변수를 평균화하며 파라미터의 사후 최빈값을 추정하고, 다수의 시작점에서 실행하여 모든 중요한 최빈값을 탐색한다. 깁스 표본추출기로 지시 변수와 모델 파라미터를 교대로 추출하며, 지시 변수가 주어지면 일반적인 계층적 모델로 환원된다. 사후 예측 점검을 통해 혼합 모델의 적합도를 평가하며, 관측 데이터의 분위수와 복제 데이터의 분위수를 비교한다. 연속 혼합(continuous mixture)으로서 t 분포와 음이항 분포를 재해석하여 유한 혼합과의 연결을 보여준다. 혼합 모델을 실제 부분모집단의 반영 vs 유연한 밀도 추정 도구라는 두 관점에서 해석하며, 후자의 관점에서 클러스터 추론의 민감도를 경고한다.
 
 ### Ch 23: Dirichlet process models (pp. 545-573)
 
@@ -241,3 +263,4 @@ keywords: [bayesian-inference, hierarchical-models, MCMC, regression, model-chec
 **키워드**: `Dirichlet-process`, `nonparametric-Bayes`, `infinite-mixture`, `density-estimation`, `stick-breaking`
 
 **상세**: → `Gelman et al. - Bayesian Data Analysis (3rd Ed.).md` Ch 23 (line 43098)
+디리클레 과정(DP)은 디리클레 분포의 무한 차원 일반화로, 미지의 분포에 대한 사전분포로 사용된다. 베이즈 히스토그램에서 출발하여 구간별 확률 벡터 π에 디리클레 사전분포를 부여하고, 사후분포가 Dirichlet(a_1+n_1, ..., a_k+n_k)로 켤레적으로 갱신됨을 보인다. DP의 정의는 임의의 측정 가능한 분할 B_1,...,B_k에 대해 확률 (P(B_1),...,P(B_k))가 디리클레 분포를 따르는 확률 측도 P의 존재로 주어진다. 기저 측도 P_0는 분포의 사전 중심을, 정밀도 파라미터 α는 P_0 방향으로의 수축 정도를 제어한다. 스틱 브레이킹(stick-breaking) 구성에서 P(·) = Σπ_h δ_{θ_h}(·), π_h = V_h Π_{l<h}(1-V_l), V_h ~ Beta(1,α), θ_h ~ P_0로 DP의 실현을 직접 구성한다. DP의 실현이 이산 분포인 한계를 극복하기 위해, 커널 혼합 모델 f(y|P) = ∫K(y|θ)dP(θ)에 DP 사전분포를 부여하는 DP 혼합 모델(DPM)을 도입한다. 폴리아 항아리(Polya urn) 예측 규칙을 통해 P를 적분 소거한 후의 θ_i의 조건부 분포를 유도하며, 이것이 중국 식당 과정(CRP)의 확률적 구조를 갖는다. 밀도 추정을 넘어 회귀, 분류, 생존 분석 등으로의 확장을 다루며, 밀도 회귀에서 예측변수에 의존하는 혼합 가중치를 모델링한다. 계층적 디리클레 과정(HDP)을 통해 여러 그룹 간에 혼합 성분을 공유하면서도 그룹별 혼합 비율은 다르게 설정하는 구조를 소개한다. DP 모델의 계산을 위한 깁스 표본추출기 알고리즘과 슬라이스 표본추출 방법을 설명한다.

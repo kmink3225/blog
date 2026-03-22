@@ -32,9 +32,7 @@ category_guides:
     category: Strategy Frameworks
   - path: docs/blog/posts/Surveilance/GUIDE.md
     category: Surveilance
-reference_guides:
-  - path: docs/book/BOOK_SOURCE_GUIDE.md
-    purpose: 교재 기반 블로그 작성 시 참조
+reference_guides: []
 ---
 
 # AGENT_GUIDE.md — Blog Repository Instructions
@@ -605,7 +603,6 @@ agent의 사전지식은 너무 방대하여, 제약 없이 쓰면 불필요한 
 ### 운영 규칙
 
 - 렌더링 대상 아님 (`_quarto.yml`에서 제외)
-- 상세 가이드: `docs/book/BOOK_SOURCE_GUIDE.md`
 - 블로그 스타일(한다 체)로 재작성한다
 - 인용 시 `(저자, 연도, Ch.N)` 형식 사용
 - 교재 내용이 outdated되었거나 현재 best practice와 다른 경우, agent의 최신 사전지식으로 수정·보완한다
@@ -622,15 +619,15 @@ agent의 사전지식은 너무 방대하여, 제약 없이 쓰면 불필요한 
 | `epidemiology/` | Hernan, Woodward, Schulz, Maxwell, Buisson | 인과추론, 역학, 실험설계, AB test |
 | `bayesian/` | Gelman, Downey | 베이지안 |
 | `functional_data_analysis/` | Ramsay×2, Kokoszka | 함수형 데이터 분석 |
-| `machine_learning/` | ESL, PRML, ISLR, Murphy | 기계학습 |
-| `deep_learning/` | Goodfellow, D2L, Raschka, Sutton, Jurafsky | 딥러닝, NLP, RL |
-| `data_science/` | Chip Huyen×2, Provost | 데이터 사이언스, ML 시스템, AI 엔지니어링 |
-| `strategy_frameworks/` | Porter, Rumelt, Kahneman, Hurley, Lipton, Parrish | 전략, 논리, 멘탈 모델 |
-| `behavioral_analysis/` | Cooper, Kohavi, Montgomery, Thaler | 행동분석, A/B 테스트, 실험설계 |
+| `machine_learning/` | Hastie(ESL), James(ISLR), Bishop(PRML), Murphy(PMLIntro/Advanced/Supp) | 기계학습 |
+| `deep_learning/` | Goodfellow, Zhang(D2L), Raschka, Sutton(RL), Jurafsky(SLP) | 딥러닝, NLP, RL |
+| `data_science/` | Huyen(AIEng/DesigningML), Provost | 데이터 사이언스, ML 시스템, AI 엔지니어링 |
+| `strategy_frameworks/` | Porter, Rumelt, Kahneman, Hurley, Lipton, Parrish×3, Dixit, Lafley | 전략, 논리, 멘탈 모델, 게임이론 |
+| `behavioral_analysis/` | Cooper(ABA), Kohavi(ABTest), Montgomery(DOE), Thaler(Nudge) | 행동분석, A/B 테스트, 실험설계 |
 | `psychology/` | Eysenck, Cialdini, Morling, PAIR, HAX | 인지심리, 설득, 연구방법, AI UX |
 | `linguistics/` | Sidnell, Huang, McEnery | 대화분석, 화용론, 코퍼스 언어학 |
 | `governance/` | DAMA DMBOK | 데이터 거버넌스 |
-| `ontology/` | Knowledge Graphs, Graph DB, CodeQL, CPG | 지식 그래프, 코드 온톨로지 |
+| `ontology/` | Robinson(GraphDB), Kejriwal(KG), Keet(Ontology), CodeQL, CPG, KR | 지식 그래프, 온톨로지, 코드 분석 |
 
 ### 2-Layer 교재 참조 체계
 
@@ -638,8 +635,33 @@ agent의 사전지식은 너무 방대하여, 제약 없이 쓰면 불필요한 
 
 | 파일 유형 | 명명 규칙 | 역할 |
 |---|---|---|
-| **Summary MD** | `*-summary.md` | 목차 + 챕터별 요약 + 키워드. **항상 먼저 읽는다** (지도 역할) |
+| **Summary MD** | `*-summary.md` | 목차 + 챕터별 요약 + 키워드 + **상세 요약(10~15문장)** + Marker 세부 목차. **항상 먼저 읽는다** (지도 역할) |
 | **Full MD** | `*_full.md` | PDF→MD 변환 원본. 챕터 단위로 상세 내용 참조 시 사용 |
+
+#### Summary MD 구조
+
+각 Summary MD는 다음 구조를 따른다:
+
+```yaml
+---
+name: "책 제목"
+type: book-summary
+authors: "저자"
+year: 2024
+sources:                                    # 변환 소스 정보
+  - file: "Author-Book_marker_full.md"
+    tool: Marker
+  - file: "Author-Book_azure_full.md"
+    tool: Document Intelligence
+---
+```
+
+각 챕터 항목:
+- **핵심**: 2~3문장 핵심 요약
+- **키워드**: 검색용 태그
+- **상세**: → `Full MD 파일명` Ch N (L:라인번호) + 10~15문장 한국어 요약 (Full MD 본문 기반)
+
+파일 끝에 `## Marker 세부 목차` 섹션이 있는 경우, `L:숫자`로 Full MD의 세부 섹션 라인을 직접 참조할 수 있다.
 
 ### 교재 참조 절차
 
@@ -684,6 +706,33 @@ Full MD 읽기 (선택적 구간 or 챕터 전체)
 - Summary의 Contents 목차에 없는 챕터를 날조하지 않는다
 - 여러 교재를 교차 참조할 때는 각 교재의 Summary를 먼저 비교하여 가장 적합한 소스를 선택한다
 - 선택적 읽기 후 블로그를 작성할 때, **읽지 않은 구간의 내용을 사전학습 지식으로 채우면서 원문에서 읽은 것처럼 서술하지 않는다.** 원문에서 확인하지 않은 세부사항은 생략하거나, 필요하면 추가로 읽는다
+
+### Book Source 유지보수
+
+교재 소스는 정적 자산이 아니라 지속적으로 관리해야 한다. 다음 상황에서 유지보수가 필요하다:
+
+#### 1. 새 교재 추가 시
+
+새 PDF 변환 파일(`_full.md`)이 `docs/book/`에 추가되면:
+1. 해당 책의 `*-summary.md`를 생성한다 (YAML frontmatter + 챕터별 핵심/키워드/상세)
+2. `sources:` 필드에 변환 파일 정보를 추가한다
+3. Marker 변환본이 있으면 `## Marker 세부 목차` 섹션을 추가한다
+4. 이 파일(AGENT_GUIDE.md)의 그룹 구조 테이블을 업데이트한다
+5. 해당 카테고리의 `GUIDE.md`에 교재 레퍼런스를 추가한다
+
+#### 2. 기존 교재의 변환 품질 개선 시
+
+더 좋은 변환 도구로 재변환한 경우(예: Azure → Marker):
+1. 새 `_full.md` 파일을 추가하고, summary의 `sources:`에 추가한다
+2. 상세 요약의 라인 참조(`L:숫자`)를 새 파일 기준으로 업데이트한다
+3. Marker 세부 목차를 추가/갱신한다
+
+#### 3. 정기 점검
+
+새 세션 시작 시 사용자가 요청하면, 다음을 확인한다:
+- `_full.md`가 있지만 대응하는 `*-summary.md`가 없는 파일 (누락된 summary)
+- `*-summary.md`의 `**상세**` 필드에 요약 텍스트가 없는 챕터 (미보강)
+- `sources:` 필드가 누락된 summary
 
 <fix-book-source-misuse>
 
@@ -786,7 +835,7 @@ Full MD Ch.5의 정의/정리를 읽고 → 한다 체로 재구성
 
 | 태스크 유형 | 로드할 가이드 | 핵심 절차 |
 |---|---|---|
-| 새 블로그 포스트 작성 | AGENT_GUIDE + 해당 Category GUIDE + (교재 있으면) BOOK_SOURCE_GUIDE | Step 1~6 체크리스트 |
+| 새 블로그 포스트 작성 | AGENT_GUIDE + 해당 Category GUIDE | Step 1~6 체크리스트 |
 | 기존 포스트 보강/수정 | AGENT_GUIDE + 해당 Category GUIDE | 대상 파일 읽기 → 수정 → index.qmd 확인 |
 | 주제에 대한 질문 답변 | AGENT_GUIDE §7 (질문 응답 가이드) | 블로그 검색 → 교재 검색 → 사전지식 순 |
 | 시리즈 정리/재구성 | AGENT_GUIDE §8 (시리즈 정리) + Category GUIDE | 전체 읽기 → 진단 → 설계 → 파일 처리 |
