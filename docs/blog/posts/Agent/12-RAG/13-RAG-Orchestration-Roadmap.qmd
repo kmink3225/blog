@@ -1,0 +1,454 @@
+---
+title: "RAG 오케스트레이션 고도화 로드맵"
+subtitle: "Chain → Graph → Corrective → Self → Auto → Agentic RAG: 단계별 진화 전략과 서비스별 적용 기준"
+description: |
+  RAG 파이프라인을 단방향 체인에서 Agentic RAG까지 단계적으로 고도화하는
+  로드맵을 제시한다. 각 단계의 전제 조건, 진입 시점 판단 기준,
+  서비스 유형별 RAG 전략 선택 가이드를 다룬다.
+categories:
+  - RAG
+  - Corrective RAG
+  - Self-RAG
+  - AutoRAG
+  - Agentic RAG
+  - LangGraph
+  - Agent
+author: Kwangmin Kim
+date: 03/22/2026
+---
+
+## 도입: 왜 로드맵이 필요한가
+
+RAG 변형(Self-RAG, Corrective RAG, AutoRAG, Agentic RAG)의 **개념 비교**는 [RAG 변형 비교](./11-RAG-Variants-Comparison.qmd)에서 다루었다. 이 글은 그 다음 질문에 답한다: **어떤 순서로, 어떤 조건이 충족되었을 때 도입해야 하는가.**
+
+Huyen(2026, Ch.10)은 AI 애플리케이션의 진화를 5단계로 제시한다:
+컨텍스트 강화(RAG) → 가드레일 → 모델 라우터/게이트웨이 → 캐시 → 에이전트 패턴.
+이 중 **1단계(RAG)와 5단계(Agent Pattern) 사이**에 Corrective, Self, Auto RAG라는 중간 성숙 단계가 존재하며, 이 글은 그 중간 단계를 구체적으로 분해한다.
+
+한 덩어리로 Agentic RAG를 도입하려 하면 실패한다. 하위 파이프라인이 성숙하지 않은 상태에서 자율 판단 레이어를 올리면, 에이전트가 잘못된 기반 위에서 잘못된 결정을 내릴 뿐이다.
+
+## RAG 진화 단계: Naive → Advanced → Modular
+
+로드맵을 이해하기 위해, RAG의 세 가지 진화 단계를 먼저 구분한다. Naive RAG, Advanced RAG, Modular RAG는 **동일한 축 위의 연속된 단계**이지 별개의 기술이 아니다. 각 단계는 이전 단계의 구조적 한계를 해결하는 방식으로 발전해 왔다.
+
+### Naive RAG
+
+```
+질문 → 임베딩 → 벡터 검색 → top-k 문서 → LLM → 답변
+```
+
+단방향 선형 파이프라인이다. 흐름이 고정되어 있고, 되돌아가는 경로가 없다. 검색이 실패하면 답변도 실패하는 구조다. 보고서를 단 한 번의 시도로 완벽하게 작성해야 하는 것과 같다 — 피드백을 반영해 개선하는 과정이 존재하지 않는다.
+
+### Advanced RAG
+
+Naive RAG의 **기술적 품질 문제**를 파이프라인 안에서 해결한다. 흐름 자체는 여전히 선형이지만, 각 단계에 고도화 기법이 추가된다.
+
+| 단계 | Naive RAG | Advanced RAG |
+|------|-----------|--------------|
+| 쿼리 | 원문 그대로 | 쿼리 재작성(rewriting), 분해(decomposition), HyDE |
+| 검색 | 벡터만 | Hybrid(BM25 + Vector), Re-ranking (cross-encoder) |
+| 청킹 | 고정 크기 | 문장/의미 단위, Parent-Child 계층 청킹 |
+| 생성 전 | 없음 | 관련성 필터링, Fallback to model knowledge |
+
+Huyen(2026, Ch.6)은 이를 "검색 최적화 전략"으로 분류한다. 구조는 선형이되, 각 컴포넌트가 더 정교해진 것이다.
+
+### Modular RAG
+
+Modular RAG의 핵심은 **플로우 자체가 유동적**이라는 점이다. Naive/Advanced RAG와의 결정적 차이는 조건부 분기와 루프다.
+
+```
+                ┌───────────────────────────────────┐
+                ↓                                   │
+질문 → 검색 → [평가자: 문서 관련성?]                │
+                │ 낮음                               │
+                ├→ 웹 검색으로 보강 ──────────────→ 재검색
+                │ 모호한 질문
+                ├→ 질문 재작성 ──────────────────→ 재검색
+                │ 충분함
+                ↓
+            답변 생성 → [평가자: 답변 신뢰성?]
+                │ 낮음
+                ├→ 재검색 단계로 루프백
+                │ 불확실
+                ├→ Human-in-the-loop
+                │ 충분함
+                ↓
+            최종 답변
+```
+
+각 단계를 **독립 노드**로 분리하고, 노드 간 흐름을 **조건부 엣지**로 연결하는 것이 Modular RAG의 구현 방식이다. 노드는 독립적으로 개발·테스트·교체가 가능하여, 특정 컴포넌트만 업그레이드해도 전체 파이프라인에 영향이 최소화된다.
+
+LangGraph는 Modular RAG를 위한 플로우 엔지니어링 프레임워크다. LangGraph의 구성 요소가 Modular RAG의 개념과 직접 대응된다:
+
+| LangGraph 요소 | Modular RAG 개념 |
+|----------------|-----------------|
+| Node | 독립·교체 가능한 RAG 컴포넌트 |
+| Conditional Edge | 품질 평가 결과에 따른 조건부 분기 |
+| State | 쿼리 히스토리, 검색 결과 등 중간 결과 전달 |
+| Checkpointer | 특정 단계로 rewind 후 재실행 |
+| Human-in-the-loop | 자동화가 불확실할 때 사람 개입 |
+
+LangGraph 외에도 LlamaIndex Workflows, Haystack Pipelines 등으로 동일 개념을 구현할 수 있다. 핵심은 도구가 아니라 **"각 스텝이 독립 노드로 분리되어 조건에 따라 플로우가 동적으로 결정된다"**는 설계 철학이다.
+
+### 세 단계 비교
+
+| | Naive RAG | Advanced RAG | Modular RAG |
+|---|---|---|---|
+| **흐름** | 선형·단방향 | 선형·단방향 | 비선형·조건부·루프 |
+| **개선 방향** | — | 각 단계 기법 고도화 | 플로우 자체를 유연하게 |
+| **실패 시** | 그냥 실패 | 부분적 복구 (Fallback) | 루프백·재검색·보강 |
+| **구현 도구** | LangChain Chain | LangChain + 추가 컴포넌트 | LangGraph, LlamaIndex Workflows |
+| **핵심 질문** | "검색해서 답할 수 있나?" | "더 잘 검색할 수 있나?" | "언제 어디로 돌아갈 것인가?" |
+
+이 로드맵의 **Phase 1이 Naive RAG, Phase 2가 Modular RAG의 시작점, Phase 3이 Modular RAG의 완성 단계**에 해당한다. Advanced RAG의 기법들(Hybrid Search, Re-ranking, 쿼리 재작성 등)은 Phase 2~3의 각 노드 안에 내재된다.
+
+## 전체 로드맵 구조
+
+```
+Phase 1: 단방향 체인 (LangChain 중심)
+    ↓  파이프라인 안정성 + 데이터 품질 검증 완료
+Phase 2: 양방향 그래프 (LangGraph 중심)
+    ↓  노드 세분화 + 조건 분기·루프 구현 완료
+Phase 3: RAG 변형 점진 적용
+    3-1. Corrective RAG  ← 검색 보정 (최하위, 가장 먼저)
+    3-2. Self-RAG         ← 답변 검증
+    3-3. Auto-RAG         ← 파이프라인 파라미터 최적화
+    3-4. Agentic RAG      ← 자율 판단 (최상위, 가장 나중)
+```
+
+## Phase 1: 단방향 체인
+
+### 목표
+
+LangChain 기반의 단방향 RAG 파이프라인을 구축하고, **파이프라인 자체의 안정성과 데이터 품질을 검증**한다.
+
+### 구성
+
+```
+문서 → 청킹 → 임베딩 → 벡터 저장소
+                                ↓
+사용자 질의 → 임베딩 → 유사도 검색 → 상위 k개 문서 → LLM → 응답
+```
+
+### 핵심 체크리스트
+
+| 항목 | 확인 기준 |
+|------|----------|
+| 데이터 품질 | 소스 문서의 정제·청킹 전략이 결정되었는가 |
+| 검색 기반선 | BM25 또는 단순 임베딩 검색으로 기본 성능을 측정했는가 |
+| 평가 지표 | Context Precision, Context Recall 등 최소 지표가 설정되었는가 |
+| 에러 핸들링 | 검색 실패 시 fallback 경로가 있는가 |
+
+Huyen(2026, Ch.6)은 "BM25 같은 단순 term 기반 솔루션부터 시작하라. 벡터 데이터베이스로 바로 뛰어들지 마라"고 권고한다. Phase 1에서 기반선을 확보해야 이후 변형의 효과를 정량적으로 비교할 수 있다.
+
+### Phase 2 진입 조건
+
+- 단방향 파이프라인이 프로덕션 수준으로 안정화되었다
+- 조건 분기(예: 검색 결과가 부족하면 다른 경로)가 필요한 유즈케이스가 식별되었다
+- State 관리, 체크포인팅 등 LangGraph의 기능이 필요해졌다
+
+## Phase 2: 양방향 그래프
+
+### 목표
+
+LangGraph 기반으로 전환하여 **노드 세분화 + 조건 분기 + 루프**를 구현한다. 이 단계의 노드 구조가 Phase 3의 기반이 된다.
+
+### 구성
+
+```
+query_rewrite → retrieve → grade_documents → generate → grade_answer
+                    ↑                                        |
+                    └────── (불충분하면 재검색) ──────────────┘
+```
+
+### LangChain → LangGraph 전환의 핵심
+
+| LangChain (Phase 1) | LangGraph (Phase 2) |
+|---|---|
+| 단방향 체인 (LCEL) | 상태 그래프 (StateGraph) |
+| 고정된 실행 순서 | 조건부 엣지, 루프, 병렬 노드 |
+| 중간 상태 관리 어려움 | TypedDict 기반 상태 관리 |
+| 실패 시 전체 재실행 | 체크포인트에서 재개 가능 |
+
+이 전환은 LangChain 공식 권장 마이그레이션 경로와 일치한다.
+
+#### Phase 2 → Phase 3-1 구현 예시: LangGraph + Corrective RAG
+
+Phase 2의 노드 세분화가 Phase 3의 Corrective RAG 분기를 어떻게 가능하게 하는지 보여주는 코드다.
+
+```python
+from typing import TypedDict
+from langgraph.graph import StateGraph, END
+
+# --- State 정의 ---
+class RAGState(TypedDict):
+    question: str
+    documents: list[str]
+    relevance_scores: list[float]
+    generation: str
+    retry_count: int
+
+# --- Phase 2 노드: 세분화된 독립 컴포넌트 ---
+def retrieve(state: RAGState) -> RAGState:
+    """벡터 검색으로 문서 검색"""
+    # 실제 구현: vectorstore.similarity_search(state["question"])
+    return {**state, "documents": ["doc1", "doc2", "doc3"]}
+
+def grade_documents(state: RAGState) -> RAGState:
+    """검색 결과의 관련성 평가 (Corrective RAG 핵심)"""
+    # 실제 구현: LLM 기반 관련성 판단 또는 cross-encoder re-ranking
+    scores = [0.9, 0.3, 0.7]  # 예시
+    filtered = [d for d, s in zip(state["documents"], scores) if s >= 0.6]
+    return {**state, "documents": filtered, "relevance_scores": scores}
+
+def rewrite_query(state: RAGState) -> RAGState:
+    """관련 문서 부족 시 쿼리 재작성 (Corrective RAG 분기)"""
+    # 실제 구현: LLM에 쿼리 재작성 요청
+    return {**state, "question": f"(재작성) {state['question']}",
+            "retry_count": state.get("retry_count", 0) + 1}
+
+def generate(state: RAGState) -> RAGState:
+    """검색 결과 기반 답변 생성"""
+    # 실제 구현: LLM(context=documents, question=question)
+    return {**state, "generation": f"답변: {state['documents']}"}
+
+# --- Phase 3-1 조건부 엣지: 검색 품질에 따른 분기 ---
+def decide_after_grading(state: RAGState) -> str:
+    """Corrective RAG 핵심 분기 — 관련 문서 수에 따라 경로 결정"""
+    if len(state["documents"]) >= 2:
+        return "generate"          # 충분 → 생성
+    elif state.get("retry_count", 0) >= 2:
+        return "generate"          # 재시도 한도 → 있는 것으로 생성
+    else:
+        return "rewrite_query"     # 부족 → 쿼리 재작성 후 재검색
+
+# --- 그래프 구성 ---
+graph = StateGraph(RAGState)
+
+# 노드 등록 (Phase 2: 각 단계가 독립 노드)
+graph.add_node("retrieve", retrieve)
+graph.add_node("grade_documents", grade_documents)
+graph.add_node("rewrite_query", rewrite_query)
+graph.add_node("generate", generate)
+
+# 엣지 연결 (Phase 3-1: 조건부 분기 + 루프)
+graph.set_entry_point("retrieve")
+graph.add_edge("retrieve", "grade_documents")
+graph.add_conditional_edges("grade_documents", decide_after_grading)
+graph.add_edge("rewrite_query", "retrieve")  # 루프백
+graph.add_edge("generate", END)
+
+app = graph.compile()
+
+# 실행
+result = app.invoke({"question": "RAG 파이프라인의 진화 단계는?",
+                      "documents": [], "relevance_scores": [],
+                      "generation": "", "retry_count": 0})
+```
+
+핵심 포인트:
+
+- Phase 2의 노드 세분화(`retrieve`, `grade_documents`, `generate`)가 Phase 3-1의 조건부 분기(`decide_after_grading`)를 **삽입할 수 있는 구조**를 만든다
+- `grade_documents` → `rewrite_query` → `retrieve` 루프가 Corrective RAG의 핵심 메커니즘이다
+- 하나의 거대한 노드로 구성했다면 이 분기/루프를 삽입하기 위해 **전체를 다시 설계**해야 한다
+- Self-RAG(Phase 3-2)를 추가할 때는 `generate` 뒤에 `grade_answer` 노드와 조건부 엣지를 추가하면 된다 — 기존 구조를 건드리지 않는다
+
+### 노드 세분화가 핵심인 이유
+
+Phase 3의 Self-RAG는 "재검색 → 재생성" 루프를, Corrective RAG는 "검색 품질 판단 → 쿼리 재작성" 분기를 요구한다. 이 루프와 분기를 구현하려면 Phase 2에서 노드가 이미 세분화되어 있어야 한다. 하나의 거대한 노드로 파이프라인을 구성하면 Phase 3에서 다시 쪼개야 하므로, **Phase 2의 노드 설계가 Phase 3의 성공을 결정**한다.
+
+### Phase 3 진입 조건
+
+- `query_rewrite`, `retrieve`, `grade_documents`, `generate`, `grade_answer` 수준으로 노드가 분리되었다
+- 조건부 엣지로 분기/루프가 작동한다
+- 상태 관리와 체크포인팅이 안정적이다
+
+## Phase 3: RAG 변형 점진 적용
+
+Phase 3를 "한 덩어리"로 도입하지 않는다. 4가지 변형을 아래 순서로 **점진적으로** 쌓는다. 각 단계는 이전 단계 위에 레이어를 추가하는 구조다.
+
+```
+Agentic RAG  ← 자율 판단 (최상위)
+    ↑
+Auto-RAG     ← 파이프라인 파라미터 최적화 (기반 품질 확보)
+    ↑
+Self-RAG     ← 답변 검증
+    ↑
+Corrective   ← 검색 보정 (최하위, 가장 먼저)
+```
+
+### Phase 3-1: Corrective RAG
+
+**해결하는 문제**: 검색 결과의 품질이 낮을 때 부정확한 답변을 생성하는 문제.
+
+**메커니즘**: 검색된 문서의 관련성을 평가(grading)하고, 품질이 낮으면 쿼리를 재작성하거나 대체 소스(웹 검색 등)로 전환한다.
+
+```
+retrieve → grade_documents ──┬── 관련성 높음 → generate
+                             │
+                             └── 관련성 낮음 → query_rewrite → web_search → generate
+```
+
+**가장 먼저 도입하는 이유**: 검색 품질 보정은 **체감 효과가 가장 크다**. 검색이 잘못되면 이후의 모든 단계(생성, 검증, 최적화)가 무의미하다. 파이프라인의 최하위 레이어를 먼저 강화하는 것이 합리적이다.
+
+**필요 조건**:
+
+- 문서 관련성 판단 기준(임계값) 정의
+- Fallback 전략 설정 (웹 검색, 대체 데이터소스 등)
+- Phase 2의 `grade_documents` 노드가 이미 존재해야 함
+
+**구현 참조**: [LangGraph CRAG](../18-LangGraph/03-Use-Cases/03-LangGraph-CRAG.qmd)
+
+### Phase 3-2: Self-RAG
+
+**해결하는 문제**: 검색은 정확했지만, LLM이 검색 결과를 잘못 해석하거나 무시하여 부정확한 답변을 생성하는 문제.
+
+**메커니즘**: LLM이 생성한 답변이 근거 문서와 일치하는지 자체 검증(self-evaluation)하고, 불일치하면 재생성한다.
+
+```
+generate → grade_answer ──┬── 충분 → 최종 응답
+                          │
+                          └── 불충분 → retrieve (재검색) → generate (재생성)
+```
+
+**Corrective RAG 다음인 이유**: Corrective RAG로 검색 품질이 보정된 상태여야 Self-RAG의 자체 검증이 의미를 가진다. 검색 자체가 잘못되었는데 답변 검증만 하면, "잘못된 근거에 기반한 정확한 답변"이라는 모순이 발생한다.
+
+**필요 조건**:
+
+- 답변 평가 기준(grading criteria) 정의: hallucination 여부, 근거 충실도(faithfulness), 답변 관련성(answer relevancy)
+- Phase 2의 `grade_answer` 노드가 이미 존재해야 함
+
+**구현 참조**: [LangGraph Self-RAG](../18-LangGraph/03-Use-Cases/04-LangGraph-Self-RAG.qmd)
+
+### Phase 3-3: Auto-RAG
+
+**해결하는 문제**: RAG 파이프라인의 하이퍼파라미터(chunk size, overlap, top-k, similarity threshold 등)를 수동으로 튜닝해야 하는 문제.
+
+**메커니즘**: 파이프라인 파라미터를 자동으로 탐색·최적화한다. 검색과 생성의 품질 지표를 목적함수로 사용하여, 최적 파라미터 조합을 찾는다.
+
+| 파라미터 | 탐색 범위 예시 | 영향 |
+|----------|---------------|------|
+| chunk_size | 256, 512, 1024, 2048 | 청크가 작으면 다양성 ↑, 컨텍스트 ↓ |
+| chunk_overlap | 0, 50, 100, 200 | 경계 정보 손실 방지 |
+| top_k | 3, 5, 10, 20 | 많으면 recall ↑, precision ↓ |
+| similarity_threshold | 0.5, 0.6, 0.7, 0.8 | 높으면 precision ↑, recall ↓ |
+| embedding_model | text-embedding-3-small, large | 비용 vs 품질 trade-off |
+| reranker | none, cross-encoder, cohere | 정밀도 개선 |
+
+**Self-RAG 다음인 이유**: Corrective + Self-RAG로 "검색 보정 → 답변 검증" 루프가 작동하는 상태여야, Auto-RAG의 파라미터 최적화가 의미 있는 품질 지표 위에서 동작한다. 파라미터를 아무리 최적화해도 검색 보정과 답변 검증이 없으면 지표 자체가 신뢰할 수 없다.
+
+**필요 조건**:
+
+- 평가 지표 파이프라인이 자동화되어 있어야 함 (수동 평가로는 파라미터 탐색 불가)
+- 충분한 평가 데이터셋 (golden set) 확보
+
+### Phase 3-4: Agentic RAG
+
+**해결하는 문제**: 복잡한 질문을 다단계로 분해하고, 여러 도구와 데이터 소스를 자율적으로 선택해야 하는 문제.
+
+**메커니즘**: Agent가 도구 선택, 검색 전략, 응답 경로를 **자율 결정**한다. 계획(planning) → 실행(execution) → 반영(reflection) 루프를 수행한다.
+
+Huyen(2026, Ch.6)에 따르면 에이전트의 핵심 프로세스는 4단계다:
+
+1. **계획 생성** (task decomposition): 관리 가능한 액션 시퀀스를 도출한다
+2. **반영 및 오류 수정**: 계획을 평가하고, 문제가 있으면 새 계획을 생성한다
+3. **실행**: 계획에 따라 도구를 호출하고 액션을 수행한다
+4. **반영 및 오류 수정**: 실행 결과를 평가하고, 목표 달성 여부를 판단한다
+
+**가장 나중에 도입하는 이유**: Agentic RAG는 하위 레이어(Corrective + Self + Auto)를 **조합하는 최상위 레이어**다. Auto-RAG로 파라미터가 최적화된 파이프라인이 기반으로 깔려 있어야, Agent가 자율 판단할 때 품질이 보장된다. Huyen(2026, Ch.10)도 에이전트 패턴을 5단계 진화의 **마지막**에 배치한다.
+
+**필요 조건**:
+
+- Phase 3-1~3-3이 안정적으로 동작해야 함
+- Agent가 사용할 도구(tool) 목록이 정의되어 있어야 함
+- 실패 모드(invalid tool, invalid parameter, goal failure 등)에 대한 대응 전략이 있어야 함
+
+**구현 참조**: [LangGraph Agentic-RAG](../18-LangGraph/02-Structures/06-LangGraph-Agentic-RAG.qmd), [Agentic RAG](../16-Agent/06-Agentic-RAG.qmd)
+
+## 서비스별 RAG 전략 선택
+
+모든 서비스에 동일한 RAG 전략을 적용하는 것은 비효율적이다. 서비스의 특성에 따라 **필요한 레이어의 깊이가 다르다**.
+
+### 판단 기준
+
+| 특성 | Corrective까지 | Self까지 | Auto까지 | Agentic까지 |
+|------|:-:|:-:|:-:|:-:|
+| 정답이 명확 (규칙 기반) | O | — | — | — |
+| 정답이 모호 (주관 판단) | O | O | — | — |
+| 파라미터 튜닝 비용 높음 | O | O | O | — |
+| 멀티소스 자율 탐색 필요 | O | O | O | O |
+
+### 서비스 유형별 전략 예시
+
+| 서비스 유형 | 적합한 RAG 전략 | 이유 |
+|---|---|---|
+| QnA 챗봇 (고객 대면) | Corrective + Self-RAG | 검색·답변 품질 모두 보정해야 신뢰도를 확보할 수 있다 |
+| 데이터 표준화 도우미 | Corrective RAG + 규칙 엔진 고정 | 규칙 기반 확정 답변이 필요하므로, Agent의 자율 판단이 오히려 위험하다 |
+| 코드 분석 Agent | Agentic RAG | 코드·문서·메타데이터 등 멀티소스를 자율 탐색해야 한다 |
+| 사내 문서 검색 | Corrective + Auto-RAG | 문서량이 많으므로 파라미터 자동 최적화가 효과적이다 |
+| 연구 보조 Agent | Agentic RAG | 다단계 질문 분해 + 여러 학술 DB 교차 검색이 필요하다 |
+
+::: {.callout-warning}
+데이터 표준화처럼 규칙 기반 확정 답변이 필요한 서비스에 Agentic RAG를 적용하면, Agent의 자율 판단이 규칙과 충돌할 수 있다. **자율성이 높을수록 좋은 것이 아니라, 서비스 특성에 맞는 수준의 자율성을 선택해야 한다.**
+:::
+
+## 실패 모드와 대응
+
+Huyen(2026, Ch.6)이 정리한 Agent 실패 범주는 RAG 고도화 전반에 적용된다:
+
+| 실패 범주 | 예시 | 주로 발생하는 단계 |
+|---|---|---|
+| 계획 실패 | 존재하지 않는 도구 호출, 잘못된 파라미터 | Agentic RAG |
+| 도구 실패 | 검색은 실행되었지만 잘못된 결과 반환 | Corrective RAG |
+| 효율성 실패 | 목표 달성까지 너무 많은 단계·비용 소모 | 모든 단계 |
+| 반영 오류 | 실패했는데 성공했다고 판단 | Self-RAG, Agentic RAG |
+
+각 Phase에서 해당 실패 모드를 감지하고 대응하는 메커니즘을 함께 구축해야 한다. Phase를 올릴수록 실패 모드가 다양해지므로, **하위 Phase의 안정성이 상위 Phase의 전제 조건**이 된다.
+
+## 로드맵 요약
+
+```
+Phase 1 (Chain)
+  └─ 파이프라인 안정화, 기반선 측정
+       ↓ 조건 분기 필요
+
+Phase 2 (Graph)
+  └─ 노드 세분화, 조건부 엣지, 루프
+       ↓ 노드 분리 완료
+
+Phase 3-1 (Corrective RAG)
+  └─ 검색 품질 보정, fallback
+       ↓ 검색 품질 안정
+
+Phase 3-2 (Self-RAG)
+  └─ 답변 자체 검증, 재생성
+       ↓ 답변 품질 안정
+
+Phase 3-3 (Auto-RAG)
+  └─ 파이프라인 파라미터 자동 최적화
+       ↓ 최적화 기반 확보
+
+Phase 3-4 (Agentic RAG)
+  └─ 자율 판단, 멀티소스 탐색, 계획-실행-반영
+```
+
+각 단계 사이의 화살표는 "충족 조건"이다. 조건이 충족되지 않은 상태에서 다음 단계로 넘어가면, 복잡성만 증가하고 품질은 오히려 하락한다. Huyen(2026, Ch.10)의 표현을 빌리면, "복잡한 시스템은 더 많은 태스크를 해결할 수 있지만, 더 많은 실패 모드를 도입하여 디버깅을 어렵게 만든다."
+
+## 관련 주제
+
+**선행 지식**
+
+- [RAG 변형 비교: Self-RAG, Corrective RAG, AutoRAG, Agentic RAG](./11-RAG-Variants-Comparison.qmd) — 4가지 변형의 개념·아키텍처·비교
+- [Custom RAG vs Agent](./12-Custom-RAG-vs-Agent.qmd) — RAG와 Agent의 경계
+
+**구현 참조**
+
+- [LangGraph CRAG](../18-LangGraph/03-Use-Cases/03-LangGraph-CRAG.qmd) — Corrective RAG LangGraph 구현
+- [LangGraph Self-RAG](../18-LangGraph/03-Use-Cases/04-LangGraph-Self-RAG.qmd) — Self-RAG LangGraph 구현
+- [LangGraph Agentic-RAG](../18-LangGraph/02-Structures/06-LangGraph-Agentic-RAG.qmd) — Agentic RAG LangGraph 구현
+- [Agentic RAG](../16-Agent/06-Agentic-RAG.qmd) — Agent 기반 RAG 패턴
+- [LangGraph Adaptive-RAG](../18-LangGraph/02-Structures/07-LangGraph-Adaptive-RAG.qmd) — Adaptive RAG 패턴
+
+**교재 참조**
+
+- Huyen, C. (2026). *AI Engineering*. Ch.6: RAG and Agents, Ch.10: AI Pipeline Orchestration.

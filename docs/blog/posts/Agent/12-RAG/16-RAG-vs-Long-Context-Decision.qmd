@@ -1,0 +1,318 @@
+---
+title: "RAG vs Long Context: 유즈케이스별 선택 프레임워크"
+subtitle: "구조화된 RAG와 Long Context 모델, 언제 무엇을 선택하는가"
+description: |
+  구조화된 RAG와 Long Context 모델의 장단점을 유즈케이스별로 비교하고,
+  실무에서 어떤 접근법을 선택해야 하는지 판단 프레임워크를 제시한다.
+  단일 선택이 아닌 하이브리드 전략의 설계 원칙도 다룬다.
+categories:
+  - RAG
+  - GraphRAG
+  - Long Context
+  - Agent
+  - LLM
+author: Kwangmin Kim
+date: 03/22/2026
+---
+
+## 도입
+
+[Long Context 모델의 한계](./14-Long-Context-Limits.qmd)에서 LC 모델의 주장을 비판했고, [구조화된 RAG 아키텍처](./15-Structured-RAG-Architecture.qmd)에서 대안 설계를 제시했다. 이 글에서는 두 접근법을 **유즈케이스별로 비교**하여, 실무에서 어떤 선택이 적합한지 판단 프레임워크를 제공한다.
+
+핵심 전제: **"RAG vs LC"는 이분법이 아니다.** 대부분의 실무 시나리오에서 최적 해는 하이브리드이며, 문제는 "어느 쪽을 선택하느냐"가 아니라 **"어느 쪽에 무게를 두느냐"**이다.
+
+## 판단 프레임워크: 4가지 축
+
+RAG와 LC 모델 사이의 선택은 4가지 축으로 판단한다.
+
+### 축 1: 질의의 결정론성
+
+질의의 답이 **참/거짓으로 결정되는가**, 아니면 **해석이 필요한가**?
+
+| 결정론성 | 예시 | 적합한 접근법 |
+|---------|------|------------|
+| 높음 | "함수 A가 함수 B를 호출하는가?" | GraphRAG |
+| 높음 | "모듈 X의 모든 의존성 목록" | GraphRAG |
+| 중간 | "이 변경이 시스템에 미치는 영향은?" | GraphRAG + LLM 추론 |
+| 낮음 | "이 코드베이스의 설계 철학은?" | LC 모델 |
+| 낮음 | "이 코드의 품질을 평가해줘" | LC 모델 |
+
+**원칙**: 결정론적 질의를 확률적 모델에 맡기면 불필요한 불확실성이 도입된다.
+
+### 축 2: 데이터 규모
+
+| 규모 | 토큰 수 | 적합한 접근법 | 이유 |
+|------|---------|------------|------|
+| 소규모 | ~100K | LC 모델 | Full attention이 실제로 작동하는 범위 |
+| 중규모 | 100K~1M | 하이브리드 | LC 가능하지만 근사 기법의 영향 시작 |
+| 대규모 | 1M~10M | 구조화된 RAG | LC 윈도우를 초과하거나 근사 손실이 큼 |
+| 초대규모 | 10M+ | 구조화된 RAG 필수 | 물리적으로 LC 불가 |
+
+### 축 3: 반복성
+
+| 반복성 | 시나리오 | 적합한 접근법 | 이유 |
+|--------|---------|------------|------|
+| 일회성 | "이 코드 한번 분석해줘" | LC 모델 | 인프라 구축 비용 대비 효용 낮음 |
+| 반복적 | "매일 이 코드베이스를 모니터링" | 구조화된 RAG | 초기 구축 비용을 반복 사용으로 상각 |
+| 지속적 | "에이전트가 상시 운영" | 구조화된 RAG | 인프라 투자가 장기적으로 효율적 |
+
+### 축 4: 정확도 요구 수준
+
+| 요구 수준 | 시나리오 | 적합한 접근법 |
+|----------|---------|------------|
+| 탐색적 | "대충 어떤 구조인지 파악" | LC 모델 |
+| 업무용 | "보고서에 포함할 분석" | 하이브리드 |
+| 미션 크리티컬 | "프로덕션 배포 전 영향도 분석" | 구조화된 RAG |
+
+## 유즈케이스별 비교
+
+### 유즈케이스 1: 코드 분석 에이전트 (200K+ lines)
+
+```
+축 1: 결정론성 — 높음 (호출관계, 의존성 = 사실)
+축 2: 데이터 규모 — 대규모 (200K lines ≈ 6-8M tokens)
+축 3: 반복성 — 지속적 (에이전트 상시 운영)
+축 4: 정확도 — 미션 크리티컬 (프로덕션 영향)
+```
+
+**판정: 구조화된 RAG (GraphRAG + Agentic RAG 2-Layer)**
+
+LC 모델은 물리적으로 전체 코드를 수용할 수 없고(6-8M > 1-2M 윈도우), 수용 가능한 범위 내에서도 근사 기법에 의한 추론 품질 저하가 발생한다. AST 기반 온톨로지 + GraphRAG는 호출관계·의존성 같은 결정론적 관계를 정확하게 추적하며, Agentic RAG가 그 위에서 해석을 수행한다.
+
+### 유즈케이스 2: 대규모 문서 검색/요약 (500개 블로그)
+
+```
+축 1: 결정론성 — 낮음 (요약, 트렌드 파악 = 해석)
+축 2: 데이터 규모 — 중규모 (~1.25M tokens)
+축 3: 반복성 — 일회성~반복적
+축 4: 정확도 — 탐색적~업무용
+```
+
+**판정: LC 모델 우위 (단, 조건부)**
+
+500개 블로그의 전체 트렌드 파악, 공통 주제 추출 같은 작업은 **구조화할 대상이 명확하지 않다.** 문서 간 관계가 코드처럼 결정론적이지 않으므로 GraphRAG의 장점이 약해진다. LC 모델이 전체를 조망하는 능력이 유리하다.
+
+단, 1.25M 토큰은 대부분의 LC 모델 윈도우의 상한에 가깝다. 이 규모에서는 Attention 근사에 의한 중간 정보 유실(Lost in the Middle)이 발생할 수 있으므로, **구조화된 프롬프트**(Chain-of-Verification, 앵커링)로 보완해야 한다.
+
+### 유즈케이스 3: 사내 QnA 챗봇
+
+```
+축 1: 결정론성 — 중간 (사실 확인 + 해석)
+축 2: 데이터 규모 — 중규모~대규모
+축 3: 반복성 — 지속적
+축 4: 정확도 — 업무용~미션 크리티컬
+```
+
+**판정: 하이브리드**
+
+사실 확인("우리 회사 휴가 정책은?")은 RAG가, 해석("이 정책이 나에게 적용되는가?")은 LLM이 담당한다. [RAG 오케스트레이션 고도화 로드맵](./13-RAG-Orchestration-Roadmap.qmd)의 Corrective + Self-RAG 조합이 적합하다.
+
+### 유즈케이스 4: 탐색적 코드 이해 (새 프로젝트 온보딩)
+
+```
+축 1: 결정론성 — 낮음 ("대체 이 코드가 뭘 하는 거야?")
+축 2: 데이터 규모 — 중규모
+축 3: 반복성 — 일회성
+축 4: 정확도 — 탐색적
+```
+
+**판정: LC 모델**
+
+아직 코드의 구조를 모르는 상태에서 온톨로지를 설계할 수 없다. LC 모델에 코드를 통째로 넣고 "전체 구조를 설명해줘"라고 요청하는 것이 가장 효율적이다. 이 탐색의 결과를 바탕으로 이후 온톨로지를 설계할 수 있다.
+
+### 유즈케이스 5: 연구 보조 에이전트 (학술 논문 분석)
+
+```
+축 1: 결정론성 — 중간 (인용 관계 = 사실, 논점 비교 = 해석)
+축 2: 데이터 규모 — 중규모~대규모
+축 3: 반복성 — 반복적
+축 4: 정확도 — 업무용
+```
+
+**판정: 하이브리드**
+
+논문 간 인용 관계, 방법론 분류는 GraphRAG로 구조화할 수 있다. 논점 비교, 연구 격차 식별은 LLM의 해석이 필요하다. 2-Layer 구조가 적합하되, 코드 분석보다 도메인 메타데이터의 비중이 높다.
+
+## 의사결정 플로차트
+
+```
+질의의 답이 참/거짓으로 결정되는가?
+    ├── Yes → 데이터 규모가 1M 토큰 이내인가?
+    │         ├── Yes → 반복 사용인가?
+    │         │         ├── Yes → 구조화된 RAG
+    │         │         └── No  → LC 모델 (단, 그래프가 이미 있으면 RAG)
+    │         └── No  → 구조화된 RAG (필수)
+    │
+    └── No  → 데이터 규모가 1M 토큰 이내인가?
+              ├── Yes → LC 모델 (탐색적 분석에 적합)
+              └── No  → 하이브리드
+                        (RAG로 관련 데이터 추출 → LC로 해석)
+```
+
+## 하이브리드 설계 원칙
+
+대부분의 실무 시나리오에서 최적 해는 하이브리드이다. 설계 시 3가지 원칙을 따른다.
+
+### 원칙 1: RAG는 검색, LC는 추론
+
+```
+GraphRAG: "어디에 무엇이 있는가" (결정론적)
+    ↓
+LC 모델: "그것이 무슨 의미인가" (확률적, but 구조화된 입력)
+```
+
+LC 모델이 RAG를 대체하는 것이 아니라, RAG가 추출한 **구조화된 컨텍스트 위에서** LC 모델이 추론한다.
+
+#### 하이브리드 파이프라인 구현 예시
+
+GraphRAG가 결정론적 검색을 수행하고, 그 결과를 LC 모델에 구조화된 컨텍스트로 전달하는 파이프라인이다.
+
+```python
+from neo4j import GraphDatabase
+from openai import OpenAI
+
+# --- Layer 1: GraphRAG (결정론적 검색) ---
+def graph_search(driver, target_function: str) -> dict:
+    """GraphRAG로 함수의 호출관계·의존성을 결정론적으로 추출"""
+    with driver.session() as session:
+        # 직접 호출 관계
+        callees = session.run("""
+            MATCH (f:Function {name: $name})-[:CALLS]->(callee)
+            RETURN callee.name AS name, callee.module AS module
+        """, name=target_function).data()
+
+        # 역방향 의존성 (이 함수를 호출하는 함수들)
+        callers = session.run("""
+            MATCH (caller)-[:CALLS]->(f:Function {name: $name})
+            RETURN caller.name AS name, caller.module AS module
+        """, name=target_function).data()
+
+        # 설정 의존성
+        configs = session.run("""
+            MATCH (f:Function {name: $name})-[:READS]->(c:Config)
+            RETURN c.key AS key, c.source AS source
+        """, name=target_function).data()
+
+    return {"callees": callees, "callers": callers, "configs": configs}
+
+
+# --- Layer 2: LC 모델 (구조화된 입력 기반 추론) ---
+def analyze_impact(client, function_name: str, graph_context: dict) -> str:
+    """GraphRAG 결과를 구조화된 프롬프트로 변환 → LLM이 해석"""
+    prompt = f"""다음은 함수 `{function_name}`의 구조적 관계 정보이다.
+이 정보는 코드의 AST와 그래프 DB에서 결정론적으로 추출되었다.
+
+## 호출하는 함수 (callees)
+{graph_context['callees']}
+
+## 이 함수를 호출하는 함수 (callers)
+{graph_context['callers']}
+
+## 읽는 설정 (configs)
+{graph_context['configs']}
+
+위 관계를 기반으로 `{function_name}`을 수정할 때의 영향도를 분석하라.
+- 직접 영향을 받는 함수와 이유
+- 설정 변경 시 전파 경로
+- 수정 시 주의사항
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content
+
+
+# --- 하이브리드 파이프라인 실행 ---
+driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "password"))
+client = OpenAI()
+
+# Step 1: GraphRAG — "어디에 무엇이 있는가" (결정론적)
+context = graph_search(driver, "process_payment")
+
+# Step 2: LC 모델 — "그것이 무슨 의미인가" (확률적, but 구조화된 입력)
+analysis = analyze_impact(client, "process_payment", context)
+print(analysis)
+
+driver.close()
+```
+
+핵심 포인트:
+
+- `graph_search()`는 Cypher 쿼리로 **사실(fact)**을 추출한다 — 확률적 해석이 끼어들 여지가 없다
+- `analyze_impact()`는 그래프 결과를 **구조화된 프롬프트**로 변환하여 LLM에 전달한다
+- LLM은 "전체 코드를 읽고 관계를 추론"하는 것이 아니라, **이미 확인된 관계 위에서 해석**만 수행한다
+- 오류 발생 시 검색 실패(그래프)와 추론 오류(LLM)를 분리하여 진단할 수 있다 (원칙 3 참조)
+
+### 원칙 2: 확실한 것은 그래프에, 불확실한 것은 LLM에
+
+| 정보의 성격 | 처리 주체 | 이유 |
+|-----------|---------|------|
+| 함수 호출 관계 | GraphRAG | 참/거짓으로 결정 — 확률 불필요 |
+| 타입 관계 | GraphRAG | AST에서 결정론적 추출 가능 |
+| 코드의 의도 | LLM | 해석이 필요 — 구조적 검색 불가 |
+| 설계 품질 평가 | LLM | 주관적 판단 포함 |
+| 비즈니스 영향 | LLM + 도메인 메타데이터 | 도메인 지식 기반 해석 |
+
+### 원칙 3: 검증 가능성 확보
+
+하이브리드 시스템에서 오류가 발생했을 때, **어느 레이어에서 실패했는지 식별**할 수 있어야 한다.
+
+| 실패 유형 | 식별 방법 |
+|---------|---------|
+| 그래프 검색 실패 | 쿼리 결과가 비어 있음 → 온톨로지에 관계 누락 |
+| 그래프 검색 부정확 | 쿼리 결과를 코드와 대조 → 온톨로지 갱신 필요 |
+| LLM 추론 오류 | 입력(그래프 결과)은 정확한데 출력이 잘못됨 → 프롬프트 개선 |
+| 질의 분해 오류 | Agent가 잘못된 검색 요청을 보냄 → Agent 로직 수정 |
+
+## 비용-품질 트레이드오프
+
+| 접근법 | 초기 비용 | 운영 비용 | 결정론적 질의 품질 | 해석적 질의 품질 |
+|--------|---------|---------|:-:|:-:|
+| LC 모델 only | 낮음 | 토큰 비용 | 중 | 상 |
+| 벡터 RAG | 중간 | 인프라 + 토큰 | 중 | 중 |
+| GraphRAG only | 높음 | 인프라 | 상 | 하 |
+| **2-Layer 하이브리드** | **높음** | **인프라 + 토큰** | **상** | **상** |
+
+2-Layer 하이브리드는 비용이 가장 높지만, 두 종류의 질의 모두에서 최고 품질을 달성한다. 비용을 정당화할 수 있는 경우(미션 크리티컬, 반복 사용, 대규모 데이터)에 선택한다.
+
+## 정리
+
+| 판단 기준 | LC 모델 선택 | 구조화된 RAG 선택 | 하이브리드 선택 |
+|---------|:----------:|:--------------:|:------------:|
+| 결정론적 질의 | | O | |
+| 해석적 질의 | O | | |
+| 소규모 데이터 | O | | |
+| 대규모 데이터 | | O | |
+| 일회성 분석 | O | | |
+| 지속적 운영 | | O | |
+| 탐색적 정확도 | O | | |
+| 미션 크리티컬 | | O | |
+| 혼합 질의 유형 | | | O |
+
+**"RAG vs LC"는 기술 대결이 아니라 도구 선택이다.** 망치와 드라이버 중 어느 것이 더 나은지 묻는 것은 무의미하다. "지금 내 앞에 있는 것이 못인가 나사인가"가 진짜 질문이다.
+
+## 관련 주제
+
+**이 시리즈**
+
+- [Long Context 모델의 한계: NIAH에서 추론까지](./14-Long-Context-Limits.qmd) — LC 모델의 주장 비판
+- [구조화된 RAG 아키텍처: AST 온톨로지 + GraphRAG + Agentic RAG](./15-Structured-RAG-Architecture.qmd) — 2-Layer 설계
+
+**선행 지식**
+
+- [RAG 변형 비교](./11-RAG-Variants-Comparison.qmd) — Self-RAG, Corrective RAG, AutoRAG, Agentic RAG
+- [Custom RAG vs 범용 Agent 선택 전략](./12-Custom-RAG-vs-Agent.qmd) — RAG와 Agent의 경계
+- [RAG 오케스트레이션 고도화 로드맵](./13-RAG-Orchestration-Roadmap.qmd) — RAG 진화 단계
+
+**구현 참조**
+
+- [GraphRAG 시리즈](../21-GraphRAG/) — Neo4j 기반 지식 그래프 구축
+- [LangGraph Agentic-RAG](../18-LangGraph/02-Structures/06-LangGraph-Agentic-RAG.qmd) — Agentic RAG 구현
+
+**교재 참조**
+
+- Huyen, C. (2026). *AI Engineering*. Ch.6, Ch.10.
+- Robinson, I. et al. (2015). *Graph Databases*. 2nd Ed., O'Reilly.
+- Kejriwal, M. et al. (2021). *Knowledge Graphs*. MIT Press.
+- Keet, C.M. (2020). *An Introduction to Ontology Engineering*.
