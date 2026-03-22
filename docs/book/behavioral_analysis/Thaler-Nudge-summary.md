@@ -1,7 +1,7 @@
 ---
 name: "Nudge: The Final Edition"
 type: book-summary
-source_file: "Thaler-Nudge_full.md"
+source_file: "Thaler-Nudge_azure_full.md"
 authors: "Richard H. Thaler, Cass R. Sunstein"
 year: 2021
 total_pages: 400

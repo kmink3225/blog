@@ -1,7 +1,7 @@
 ---
 name: "Epidemiology: Study Design and Data Analysis"
 type: book-summary
-source_file: "Woodward-Epidemiology_full.md"
+source_file: "Woodward-Epidemiology_azure_full.md"
 authors: "Mark Woodward"
 year: 2014
 total_pages: 849

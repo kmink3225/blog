@@ -1,7 +1,7 @@
 ---
 name: "Probabilistic Machine Learning: An Introduction"
 type: book-summary
-source_file: "Murphy-PMLIntro_full.md"
+source_file: "Murphy-PMLIntro_azure_full.md"
 authors: "Kevin P. Murphy"
 year: 2022
 total_pages: 826
@@ -61,7 +61,7 @@ Appendix A: Notation
 
 **키워드**: `classification`, `regression`, `overfitting`, `no free lunch`, `self-supervised learning`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 1 (line 115)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 1 (line 115)
 
 ### Ch 2: Probability: Univariate Models (pp. 33-76)
 
@@ -69,7 +69,7 @@ Appendix A: Notation
 
 **키워드**: `Bayes rule`, `Bernoulli`, `categorical`, `Gaussian`, `softmax`, `Student-t`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 2 (line 139)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 2 (line 139)
 
 ### Ch 3: Probability: Multivariate Models (pp. 77-106)
 
@@ -77,7 +77,7 @@ Appendix A: Notation
 
 **키워드**: `joint distribution`, `multivariate Gaussian`, `mixture models`, `graphical models`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 3 (line 192)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 3 (line 192)
 
 ### Ch 4: Statistics (pp. 107-166)
 
@@ -85,7 +85,7 @@ Appendix A: Notation
 
 **키워드**: `MLE`, `ERM`, `Bayesian statistics`, `frequentist statistics`, `regularization`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 4 (line 224)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 4 (line 224)
 
 ### Ch 5: Decision Theory (pp. 167-206)
 
@@ -93,7 +93,7 @@ Appendix A: Notation
 
 **키워드**: `Bayesian decision theory`, `ROC`, `loss functions`, `proper scoring rules`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 5 (line 83)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 5 (line 83)
 
 ### Ch 6: Information Theory (pp. 207-228)
 
@@ -101,7 +101,7 @@ Appendix A: Notation
 
 **키워드**: `entropy`, `cross-entropy`, `KL divergence`, `mutual information`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 6 (line 84)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 6 (line 84)
 
 ### Ch 7: Linear Algebra (pp. 229-274)
 
@@ -109,7 +109,7 @@ Appendix A: Notation
 
 **키워드**: `eigendecomposition`, `SVD`, `matrix calculus`, `low-rank approximation`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 7 (line 340)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 7 (line 340)
 
 ### Ch 8: Optimization (pp. 275-320)
 
@@ -117,7 +117,7 @@ Appendix A: Notation
 
 **키워드**: `gradient descent`, `SGD`, `Adam`, `Newton method`, `convex optimization`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 8 (line 395)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 8 (line 395)
 
 ### Ch 9: Linear Discriminant Analysis (pp. 323-338)
 
@@ -125,7 +125,7 @@ Appendix A: Notation
 
 **키워드**: `GDA`, `QDA`, `Fisher discriminant`, `nearest shrunken centroids`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 9 (line 439)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 9 (line 439)
 
 ### Ch 10: Logistic Regression (pp. 339-370)
 
@@ -133,7 +133,7 @@ Appendix A: Notation
 
 **키워드**: `logistic regression`, `multinomial`, `regularization`, `Bayesian logistic regression`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 10 (line 458)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 10 (line 458)
 
 ### Ch 11: Linear Regression (pp. 371-414)
 
@@ -141,7 +141,7 @@ Appendix A: Notation
 
 **키워드**: `least squares`, `ridge`, `lasso`, `elastic net`, `Bayesian linear regression`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 11 (line 488)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 11 (line 488)
 
 ### Ch 12: Generalized Linear Models (pp. 415-424)
 
@@ -149,7 +149,7 @@ Appendix A: Notation
 
 **키워드**: `GLM`, `link function`, `exponential family`, `Poisson regression`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 12 (line 533)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 12 (line 533)
 
 ### Ch 13: Neural Networks for Tabular Data (pp. 425-466)
 
@@ -157,7 +157,7 @@ Appendix A: Notation
 
 **키워드**: `MLP`, `backpropagation`, `batch normalization`, `dropout`, `residual connections`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 13 (line 543)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 13 (line 543)
 
 ### Ch 14: Neural Networks for Images (pp. 467-502)
 
@@ -165,7 +165,7 @@ Appendix A: Notation
 
 **키워드**: `CNN`, `convolution`, `pooling`, `ResNet`, `object detection`, `semantic segmentation`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 14 (line 580)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 14 (line 580)
 
 ### Ch 15: Neural Networks for Sequences (pp. 503-544)
 
@@ -173,7 +173,7 @@ Appendix A: Notation
 
 **키워드**: `RNN`, `LSTM`, `GRU`, `attention`, `transformer`, `BERT`, `GPT`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 15 (line 95)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 15 (line 95)
 
 ### Ch 16: Exemplar-based Methods (pp. 547-566)
 
@@ -181,7 +181,7 @@ Appendix A: Notation
 
 **키워드**: `KNN`, `distance metric learning`, `kernel density estimation`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 16 (line 97)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 16 (line 97)
 
 ### Ch 17: Kernel Methods (pp. 567-602)
 
@@ -189,7 +189,7 @@ Appendix A: Notation
 
 **키워드**: `Mercer kernels`, `Gaussian processes`, `SVM`, `kernel trick`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 17 (line 98)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 17 (line 98)
 
 ### Ch 18: Trees, Forests, Bagging, and Boosting (pp. 603-624)
 
@@ -197,7 +197,7 @@ Appendix A: Notation
 
 **키워드**: `CART`, `random forests`, `gradient boosting`, `XGBoost`, `LightGBM`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 18 (line 99)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 18 (line 99)
 
 ### Ch 19: Learning with Fewer Labeled Examples (pp. 627-656)
 
@@ -205,7 +205,7 @@ Appendix A: Notation
 
 **키워드**: `data augmentation`, `transfer learning`, `semi-supervised`, `active learning`, `meta-learning`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 19 (line 105)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 19 (line 105)
 
 ### Ch 20: Dimensionality Reduction (pp. 657-714)
 
@@ -213,7 +213,7 @@ Appendix A: Notation
 
 **키워드**: `PCA`, `factor analysis`, `autoencoders`, `t-SNE`, `UMAP`, `manifold learning`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 20 (line 106)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 20 (line 106)
 
 ### Ch 21: Clustering (pp. 715-740)
 
@@ -221,7 +221,7 @@ Appendix A: Notation
 
 **키워드**: `K-means`, `GMM`, `EM algorithm`, `hierarchical clustering`, `spectral clustering`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 21 (line 107)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 21 (line 107)
 
 ### Ch 22: Recommender Systems (pp. 741-752)
 
@@ -229,7 +229,7 @@ Appendix A: Notation
 
 **키워드**: `collaborative filtering`, `matrix factorization`, `content-based filtering`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 22 (line 108)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 22 (line 108)
 
 ### Ch 23: Graph Embeddings (pp. 753-772)
 
@@ -237,4 +237,4 @@ Appendix A: Notation
 
 **키워드**: `GNN`, `graph embeddings`, `knowledge graphs`, `node embeddings`
 
-**상세**: → `Probabilistic Machine Learning An Introduction_full.md` Ch 23 (line 109)
+**상세**: → `Probabilistic Machine Learning An Introduction_azure_full.md` Ch 23 (line 109)

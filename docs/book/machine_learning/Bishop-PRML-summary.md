@@ -1,7 +1,7 @@
 ---
 name: "Pattern Recognition and Machine Learning"
 type: book-summary
-source_file: "Bishop-PRML_full.md"
+source_file: "Bishop-PRML_azure_full.md"
 authors: "Christopher M. Bishop"
 year: 2006
 total_pages: 738
@@ -46,7 +46,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `polynomial curve fitting`, `Bayesian probability`, `decision theory`, `information theory`, `curse of dimensionality`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 1 (line 513)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 1 (line 513)
 
 ### Ch 2: Probability Distributions (pp. 67-135)
 
@@ -54,7 +54,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `Gaussian`, `beta distribution`, `Dirichlet`, `exponential family`, `conjugate priors`, `nonparametric`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 2 (line 237)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 2 (line 237)
 
 ### Ch 3: Linear Models for Regression (pp. 137-177)
 
@@ -62,7 +62,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `Bayesian linear regression`, `evidence approximation`, `bias-variance`, `predictive distribution`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 3 (line 260)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 3 (line 260)
 
 ### Ch 4: Linear Models for Classification (pp. 179-224)
 
@@ -70,7 +70,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `Fisher discriminant`, `logistic regression`, `Laplace approximation`, `Bayesian classification`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 4 (line 281)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 4 (line 281)
 
 ### Ch 5: Neural Networks (pp. 225-284)
 
@@ -78,7 +78,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `backpropagation`, `Hessian`, `regularization`, `convolutional networks`, `mixture density networks`, `Bayesian neural networks`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 5 (line 308)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 5 (line 308)
 
 ### Ch 6: Kernel Methods (pp. 291-324)
 
@@ -86,7 +86,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `dual representation`, `kernel construction`, `Gaussian processes`, `ARD`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 6 (line 344)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 6 (line 344)
 
 ### Ch 7: Sparse Kernel Machines (pp. 325-357)
 
@@ -94,7 +94,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `SVM`, `maximum margin`, `RVM`, `sparsity`, `computational learning theory`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 7 (line 358)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 7 (line 358)
 
 ### Ch 8: Graphical Models (pp. 359-422)
 
@@ -102,7 +102,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `Bayesian networks`, `D-separation`, `MRF`, `factor graphs`, `sum-product`, `max-sum`, `belief propagation`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 8 (line 372)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 8 (line 372)
 
 ### Ch 9: Mixture Models and EM (pp. 423-458)
 
@@ -110,7 +110,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `K-means`, `Gaussian mixture`, `EM algorithm`, `maximum likelihood`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 9 (line 396)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 9 (line 396)
 
 ### Ch 10: Approximate Inference (pp. 461-522)
 
@@ -118,7 +118,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `variational inference`, `factorized distribution`, `variational mixture`, `expectation propagation`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 10 (line 409)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 10 (line 409)
 
 ### Ch 11: Sampling Methods (pp. 523-558)
 
@@ -126,7 +126,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `rejection sampling`, `importance sampling`, `MCMC`, `Metropolis-Hastings`, `Gibbs sampling`, `HMC`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 11 (line 438)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 11 (line 438)
 
 ### Ch 12: Continuous Latent Variables (pp. 559-604)
 
@@ -134,7 +134,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `PCA`, `probabilistic PCA`, `factor analysis`, `kernel PCA`, `ICA`, `autoencoders`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 12 (line 456)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 12 (line 456)
 
 ### Ch 13: Sequential Data (pp. 605-652)
 
@@ -142,7 +142,7 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `HMM`, `forward-backward`, `Viterbi`, `Kalman filter`, `particle filters`, `LDS`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 13 (line 475)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 13 (line 475)
 
 ### Ch 14: Combining Models (pp. 653-676)
 
@@ -150,4 +150,4 @@ Appendix E: Lagrange Multipliers
 
 **키워드**: `model averaging`, `boosting`, `committees`, `mixture of experts`, `decision trees`
 
-**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_full.md` Ch 14 (line 490)
+**상세**: → `Bishop-Pattern-Recognition-and-Machine-Learning-2006_azure_full.md` Ch 14 (line 490)

@@ -1,7 +1,7 @@
 ---
 name: "Probabilistic Machine Learning: Advanced Topics"
 type: book-summary
-source_file: "Murphy-PMLAdvanced_full.md"
+source_file: "Murphy-PMLAdvanced_azure_full.md"
 authors: "Kevin P. Murphy"
 year: 2023
 total_pages: 1211
@@ -74,7 +74,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `probabilistic ML`, `advanced topics`, `book overview`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 1 (line 97)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 1 (line 97)
 
 ### Ch 2: Probability (pp. 5-62)
 
@@ -82,7 +82,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `measure theory`, `multivariate Gaussian`, `Markov chains`, `probability inequalities`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 2 (line 1826)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 2 (line 1826)
 
 ### Ch 3: Statistics (pp. 63-142)
 
@@ -90,7 +90,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `Fisher information`, `hierarchical Bayes`, `empirical Bayes`, `asymptotic theory`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 3 (line 5800)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 3 (line 5800)
 
 ### Ch 4: Graphical models (pp. 143-218)
 
@@ -98,7 +98,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `DGM`, `UGM`, `CRF`, `factor graphs`, `structure learning`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 4 (line 12540)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 4 (line 12540)
 
 ### Ch 5: Information theory (pp. 219-260)
 
@@ -106,7 +106,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `maximum entropy`, `information geometry`, `optimal transport`, `rate-distortion`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 5 (line 52)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 5 (line 52)
 
 ### Ch 6: Optimization (pp. 261-342)
 
@@ -114,7 +114,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `natural gradient`, `mirror descent`, `proximal methods`, `distributed optimization`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 6 (line 19644)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 6 (line 19644)
 
 ### Ch 7: Inference algorithms: an overview (pp. 345-358)
 
@@ -122,7 +122,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `exact inference`, `approximate inference`, `deterministic`, `stochastic`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 7 (line 55)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 7 (line 55)
 
 ### Ch 8: Gaussian filtering and smoothing (pp. 359-400)
 
@@ -130,7 +130,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `Kalman filter`, `EKF`, `UKF`, `RTS smoother`, `Gaussian sum filter`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 8 (line 56)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 8 (line 56)
 
 ### Ch 9: Message passing algorithms (pp. 401-438)
 
@@ -138,7 +138,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `belief propagation`, `junction tree`, `variational message passing`, `expectation propagation`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 9 (line 57)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 9 (line 57)
 
 ### Ch 10: Variational inference (pp. 439-482)
 
@@ -146,7 +146,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `mean field`, `CAVI`, `SVI`, `reparameterization trick`, `ELBO`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 10 (line 58)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 10 (line 58)
 
 ### Ch 11: Monte Carlo methods (pp. 483-498)
 
@@ -154,7 +154,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `Monte Carlo integration`, `importance sampling`, `rejection sampling`, `bootstrap`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 11 (line 59)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 11 (line 59)
 
 ### Ch 12: Markov chain Monte Carlo (pp. 499-542)
 
@@ -162,7 +162,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `Metropolis-Hastings`, `Gibbs`, `HMC`, `NUTS`, `convergence diagnostics`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 12 (line 60)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 12 (line 60)
 
 ### Ch 13: Sequential Monte Carlo (pp. 543-572)
 
@@ -170,7 +170,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `particle filter`, `auxiliary particle filter`, `Rao-Blackwellization`, `SMC sampler`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 13 (line 61)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 13 (line 61)
 
 ### Ch 14: Predictive models: an overview (pp. 575-590)
 
@@ -178,7 +178,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `discriminative models`, `generative models`, `model selection`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 14 (line 63)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 14 (line 63)
 
 ### Ch 15: Generalized linear models (pp. 591-630)
 
@@ -186,7 +186,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `Bayesian GLM`, `probit`, `ordinal regression`, `multi-task learning`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 15 (line 64)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 15 (line 64)
 
 ### Ch 16: Deep neural networks (pp. 631-646)
 
@@ -194,7 +194,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `NAS`, `transformer variants`, `GNN`, `regularization`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 16 (line 65)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 16 (line 65)
 
 ### Ch 17: Bayesian neural networks (pp. 647-680)
 
@@ -202,7 +202,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `Bayesian neural networks`, `uncertainty quantification`, `NNGP`, `deep kernel learning`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 17 (line 66)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 17 (line 66)
 
 ### Ch 18: Gaussian processes (pp. 681-734)
 
@@ -210,7 +210,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `sparse GP`, `inducing points`, `deep GP`, `Bayesian optimization`, `multi-output GP`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 18 (line 47308)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 18 (line 47308)
 
 ### Ch 19: Beyond the iid assumption (pp. 735-770)
 
@@ -218,7 +218,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `distribution shift`, `domain adaptation`, `OOD detection`, `fairness`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 19 (line 68)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 19 (line 68)
 
 ### Ch 20: Generative models: an overview (pp. 773-790)
 
@@ -226,7 +226,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `density estimation`, `latent variable models`, `implicit generative models`, `score-based`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 20 (line 74)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 20 (line 74)
 
 ### Ch 21: Variational autoencoders (pp. 791-820)
 
@@ -234,7 +234,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `VAE`, `ELBO`, `reparameterization`, `beta-VAE`, `VQ-VAE`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 21 (line 75)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 21 (line 75)
 
 ### Ch 22: Autoregressive models (pp. 821-828)
 
@@ -242,7 +242,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `autoregressive`, `MADE`, `PixelCNN`, `WaveNet`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 22 (line 76)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 22 (line 76)
 
 ### Ch 23: Normalizing flows (pp. 829-848)
 
@@ -250,7 +250,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `normalizing flows`, `RealNVP`, `GLOW`, `neural ODE`, `continuous flows`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 23 (line 77)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 23 (line 77)
 
 ### Ch 24: Energy-based models (pp. 849-866)
 
@@ -258,7 +258,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `EBM`, `RBM`, `contrastive divergence`, `score matching`, `NCE`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 24 (line 78)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 24 (line 78)
 
 ### Ch 25: Diffusion models (pp. 867-892)
 
@@ -266,7 +266,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `DDPM`, `score-based`, `SDE`, `conditional generation`, `guidance`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 25 (line 58993)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 25 (line 58993)
 
 ### Ch 26: Generative adversarial networks (pp. 893-924)
 
@@ -274,7 +274,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `GAN`, `Wasserstein GAN`, `StyleGAN`, `mode collapse`, `conditional GAN`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 26 (line 80)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 26 (line 80)
 
 ### Ch 27: Discovery methods: an overview (pp. 927-928)
 
@@ -282,7 +282,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `discovery`, `structure learning`, `latent factors`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 27 (line 82)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 27 (line 82)
 
 ### Ch 28: Latent factor models (pp. 929-978)
 
@@ -290,7 +290,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `factor analysis`, `ICA`, `LDA`, `NMF`, `matrix factorization`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 28 (line 83)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 28 (line 83)
 
 ### Ch 29: State-space models (pp. 979-1042)
 
@@ -298,7 +298,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `SSM`, `linear Gaussian`, `switching SSM`, `deep SSM`, `S4`, `ODE`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 29 (line 84)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 29 (line 84)
 
 ### Ch 30: Graph learning (pp. 1043-1046)
 
@@ -306,7 +306,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `DAG learning`, `structure learning`, `causal discovery`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 30 (line 85)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 30 (line 85)
 
 ### Ch 31: Nonparametric Bayesian models (pp. 1047-1048)
 
@@ -314,7 +314,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `Dirichlet process`, `DP mixture`, `Indian buffet process`, `nonparametric Bayes`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 31 (line 86)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 31 (line 86)
 
 ### Ch 32: Representation learning (pp. 1049-1072)
 
@@ -322,7 +322,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `self-supervised learning`, `contrastive learning`, `SimCLR`, `disentangled representations`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 32 (line 87)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 32 (line 87)
 
 ### Ch 33: Interpretability (pp. 1073-1102)
 
@@ -330,7 +330,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `SHAP`, `LIME`, `feature attribution`, `counterfactual explanations`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 33 (line 88)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 33 (line 88)
 
 ### Ch 34: Decision making under uncertainty (pp. 1105-1144)
 
@@ -338,7 +338,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `Bayesian decision theory`, `bandit`, `Bayesian optimization`, `experimental design`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 34 (line 90)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 34 (line 90)
 
 ### Ch 35: Reinforcement learning (pp. 1145-1184)
 
@@ -346,7 +346,7 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `MDP`, `Q-learning`, `policy gradient`, `actor-critic`, `model-based RL`, `offline RL`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 35 (line 91)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 35 (line 91)
 
 ### Ch 36: Causality (pp. 1185-1211)
 
@@ -354,4 +354,4 @@ keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, ge
 
 **키워드**: `SCM`, `do-calculus`, `counterfactuals`, `instrumental variables`, `causal discovery`
 
-**상세**: → `Probabilistic Machine Learning Advanced_full.md` Ch 36 (line 78249)
+**상세**: → `Probabilistic Machine Learning Advanced_azure_full.md` Ch 36 (line 78249)

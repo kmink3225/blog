@@ -1,7 +1,7 @@
 ---
 name: "The Great Mental Models Volume 2: Physics, Chemistry, and Biology"
 type: book-summary
-source_file: "Parrish-GreatMentalModelsV2_full.md"
+source_file: "Parrish-GreatMentalModelsV2_azure_full.md"
 authors: "Tommy Tedford (adaptation)"
 year: 2020
 total_pages: 180

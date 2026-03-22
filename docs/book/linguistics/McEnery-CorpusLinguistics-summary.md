@@ -1,7 +1,6 @@
 ---
 name: "Corpus Linguistics: Method, Theory and Practice"
 type: book-summary
-source_file: "McEnery-CorpusLinguistics_full.md"
 authors: "Tony McEnery, Andrew Hardie"
 year: 2012
 total_pages: 294
@@ -32,47 +31,123 @@ keywords: [corpus-linguistics, concordance, annotation, collocation, frequency, 
 
 ## Chapter Summaries
 
+> Marker 원본: `McEnery-CorpusLinguistics_marker_full.md` | 총 ~3,772 라인 | `L:숫자`로 직접 접근 가능
+
+
 ### Ch 1: What is corpus linguistics? (pp. 1-24)
 **핵심**: 코퍼스 기반(corpus-based) vs. 코퍼스 주도(corpus-driven) 언어학의 구분을 정의한다. 의사소통 양식(구어/문어), 데이터 수집 체제(표본 코퍼스, 모니터 코퍼스 등), 주석 코퍼스 vs. 비주석 코퍼스의 차이를 설명한다. 전체 책임성(total accountability) vs. 데이터 선택, 단일 언어 vs. 다중 언어 코퍼스의 방법론적 쟁점을 다룬다.
 **키워드**: `corpus-based`, `corpus-driven`, `data-collection`, `annotation`, `total-accountability`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 1 (line 173)
+**상세**: → (삭제됨) Ch 1 (line 173)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 1 What is corpus linguistics? (p.18) `L:304`
+- 1.3 Corpus-based versus corpus-driven linguistics `L:349`
+- 1.4.5 'Opportunistic' corpora and minority and endangered languages `L:415`
+- 1.6 Total accountability versus data selection `L:440`
+- 1.7 Monolingual versus multilingual corpora `L:468`
+
 
 ### Ch 2: Accessing and analysing corpus data (pp. 25-55)
 **핵심**: 코퍼스 주석(POS 태깅, 구문 분석 등)의 종류와 방법을 설명하고, 콩코던스(concordance) 도구를 통한 코퍼스 접근 방법을 소개한다. 코퍼스가 모든 연구 질문에 답할 수 있는지의 한계를 논의하고, 코퍼스 분석 도구의 역사적 개관을 제시한다. 코퍼스 언어학에서의 통계 활용 기초를 다룬다.
 **키워드**: `concordance`, `POS-tagging`, `corpus-annotation`, `statistics`, `analysis-tools`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 2 (line 193)
+**상세**: → (삭제됨) Ch 2 (line 193)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 2 Accessing and analysing corpus data (p.42) `L:564`
+- 2.2 Are corpora the answer to all research questions in linguistics? `L:584`
+- 2.7 Summary `L:833`
+
 
 ### Ch 3: The web, laws and ethics (pp. 57-70)
 **핵심**: 웹을 코퍼스 자원으로 활용할 때의 법적 문제(저작권, 이용 조건 등)와 윤리적 문제(동의, 프라이버시, 데이터 보호)를 분석한다. 웹 코퍼스의 가능성과 한계, 법적·윤리적 준수 방안을 제시한다.
 **키워드**: `web-as-corpus`, `copyright`, `ethics`, `privacy`, `data-protection`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 3 (line 219)
+**상세**: → (삭제됨) Ch 3 (line 219)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 3 The web, laws and ethics (p.74) `L:871`
+- 3.1 Introduction `L:873`
+- 3.2 The web and legal issues `L:879`
+
 
 ### Ch 4: English Corpus Linguistics (pp. 71-92)
 **핵심**: 영어 코퍼스 언어학의 주요 연구 거점별 발전사를 정리한다. UCL(University College London), Lancaster University, University of Birmingham, Universite Catholique de Louvain, University of Nottingham, Northern Arizona University 등의 기여를 추적한다. 각 기관에서 개발한 주요 코퍼스와 방법론적 혁신을 소개한다.
 **키워드**: `English-corpora`, `Lancaster`, `Birmingham`, `Louvain`, `corpus-development`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 4 (line 273)
+**상세**: → (삭제됨) Ch 4 (line 273)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 4 English Corpus Linguistics (p.88) `L:1002`
+- 4.1 Introduction `L:1004`
+- 4.4 University of Birmingham `L:1074`
+- 4.5 Universite Catholique de Louvain ´ `L:1090`
+- 4.6 University of Nottingham `L:1118`
+- 4.7 Northern Arizona University and the USA `L:1204`
+
 
 ### Ch 5: Corpus-based studies of synchronic and diachronic variation (pp. 94-120)
 **핵심**: Biber의 다차원적(multi-dimensional) 변이 접근법을 설명하고, 고대 영어부터 현대 영어까지의 통시적 변화와 현대 영어 내 통시적 변이를 분석한다. 코퍼스와 변이주의 사회언어학(variationist sociolinguistics)의 접점을 다룬다.
 **키워드**: `multi-dimensional-analysis`, `Biber`, `diachronic-variation`, `sociolinguistics`, `register`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 5 (line 291)
+**상세**: → (삭제됨) Ch 5 (line 291)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 5 Corpus-based studies of synchronic and diachronic variation (p.111) `L:1246`
+- 5.2 Diachronic change from Old English to Modern English `L:1252`
+- 5.3 Diachronic variation in contemporary Modern English `L:1268`
+- 5.4.3 Criticisms of Biber's MD methodology `L:1419`
+- 5.5 Corpora and variationist sociolinguistics `L:1467`
+
 
 ### Ch 6: Neo-Firthian corpus linguistics (pp. 122-165)
 **핵심**: Sinclair의 신-Firth 전통에서의 코퍼스 언어학을 설명한다. 연어(collocation), 담화(discourse), 의미적 운율(semantic prosody)과 의미적 선호(semantic preference), 어휘와 문법의 관계를 분석한다. 코퍼스를 이론으로 보는 관점(corpus-as-theory)과 방법으로 보는 관점(corpus-as-method)을 비교하고, Sinclair의 기여를 정리한다.
 **키워드**: `Sinclair`, `collocation`, `semantic-prosody`, `lexis-grammar`, `corpus-as-theory`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 6 (line 310)
+**상세**: → (삭제됨) Ch 6 (line 310)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 6 Neo-Firthian corpus linguistics (p.139) `L:1538`
+- 6.4 Semantic prosody and semantic preference `L:1714`
+- 6.7 Summary: Sinclair's contribution to corpus linguistics `L:1960`
+
 
 ### Ch 7: Corpus methods and functionalist linguistics (pp. 167-191)
 **핵심**: 기능주의 언어학의 개관을 제시하고, 기능주의적 관점에서의 코퍼스 기반 연구를 소개한다. 코퍼스와 유형론(typology), 코퍼스와 인지적 접근(cognitive approaches), 코퍼스를 활용한 은유(metaphor) 분석을 다룬다.
 **키워드**: `functionalism`, `typology`, `cognitive-linguistics`, `metaphor`, `corpus-methods`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 7 (line 331)
+**상세**: → (삭제됨) Ch 7 (line 331)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 7 Corpus methods and functionalist linguistics (p.184) `L:2001`
+- 7.2 Functionalism in linguistics: a brief overview (p.185) `L:2011`
+- 7.3 Corpus-based research from a functionalist perspective `L:2033`
+- 7.4 Corpora and typology `L:2059`
+- 7.5 Corpora and cognitive approaches to linguistics `L:2079`
+- 7.6 Corpora in the analysis of metaphor `L:2119`
+- 7.7 Summary `L:2146`
+
 
 ### Ch 8: The convergence of corpus linguistics, psycholinguistics and functionalist linguistics (pp. 192-224)
 **핵심**: 코퍼스 방법론과 심리언어학의 수렴을 분석한다. 빈도 효과, 점화(priming), 처리(processing)와 관련된 코퍼스-심리언어학 연구를 소개한다. 신-Firth 코퍼스 언어학과 기능주의 언어학의 수렴 경향을 분석하고, 이들 분야 간 통합의 가능성을 탐구한다.
 **키워드**: `psycholinguistics`, `frequency-effects`, `priming`, `convergence`, `neo-Firthian`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 8 (line 404)
+**상세**: → (삭제됨) Ch 8 (line 404)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 8 The convergence of corpus linguistics, psycholinguistics and functionalist linguistics (p.209) `L:2184`
+- 8.2.3 Corpus data and the computational modelling of language acquisition `L:2274`
+- 8.3 The convergence of neo-Firthian corpus linguistics and functionalist linguistics (p.227) `L:2320`
+- 8.4 Summary `L:2414`
+
 
 ### Ch 9: Conclusion (pp. 225-236)
 **핵심**: 코퍼스 언어학의 과거부터 미래까지의 발전사를 요약한다. 전산 언어학(computational linguistics)과의 관계를 재검토하고, 인문학·사회과학의 텍스트 매개 세계에서의 역할을 논의한다. 코퍼스를 새로운 언어학 방법론과 통합하는 과제를 제시한다.
 **키워드**: `future-directions`, `computational-linguistics`, `digital-humanities`, `integration`
-**상세**: → `Corpus Linguistics Method Theory and Practice_full.md` Ch 9 (line 421)
+**상세**: → (삭제됨) Ch 9 (line 421)
+
+**Marker 세부 목차** (`McEnery-CorpusLinguistics_marker_full.md`):
+- 9 Conclusion (p.242) `L:2448`
+- 9.2 The story of corpus linguistics, from past to future `L:2454`
+- 9.3 Revisiting old friends: computational linguistics `L:2464`
+- 9.4 The textually mediated world: the humanities and social sciences `L:2480`
+- 9.5 The challenge ahead: integrating corpora with new methods in linguistics `L:2500`
+
+
+
+### 기타 섹션 (Marker)
+
+- Corpus Linguistics: Method, Theory and Practice `L:21`

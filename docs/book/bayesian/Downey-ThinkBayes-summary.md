@@ -1,7 +1,7 @@
 ---
 name: "Think Bayes: Bayesian Statistics in Python (2nd Edition)"
 type: book-summary
-source_file: "Downey-ThinkBayes_full.md"
+source_file: "Downey-ThinkBayes_azure_full.md"
 authors: "Allen B. Downey"
 year: 2021
 total_pages: 305

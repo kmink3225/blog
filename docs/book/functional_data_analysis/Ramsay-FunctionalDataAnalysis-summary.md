@@ -1,7 +1,7 @@
 ---
 name: "Functional Data Analysis"
 type: book-summary
-source_file: "Ramsay-FunctionalDataAnalysis_full.md"
+source_file: "Ramsay-FunctionalDataAnalysis_azure_full.md"
 authors: "J. O. Ramsay, B. W. Silverman"
 year: 1997
 total_pages: 310

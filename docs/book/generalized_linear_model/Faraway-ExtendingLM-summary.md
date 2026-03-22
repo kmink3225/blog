@@ -1,7 +1,7 @@
 ---
 name: "Extending the Linear Model with R"
 type: book-summary
-source_file: "Faraway-ExtendingLM_full.md"
+source_file: "Faraway-ExtendingLM_azure_full.md"
 authors: "Julian J. Faraway"
 year: 2006
 total_pages: 331

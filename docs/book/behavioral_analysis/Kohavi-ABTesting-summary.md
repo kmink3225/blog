@@ -1,7 +1,7 @@
 ---
 name: "Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing"
 type: book-summary
-source_file: "Kohavi-ABTesting_full.md"
+source_file: "Kohavi-ABTesting_azure_full.md"
 authors: "Ron Kohavi, Diane Tang, Ya Xu"
 year: 2020
 total_pages: 250

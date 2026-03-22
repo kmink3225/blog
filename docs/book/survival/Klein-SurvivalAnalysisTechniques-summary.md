@@ -1,7 +1,7 @@
 ---
 name: "Survival Analysis: Techniques for Censored and Truncated Data (2nd Ed.)"
 type: book-summary
-source_file: "Klein-SurvivalAnalysisTechniques_full.md"
+source_file: "Klein-SurvivalAnalysisTechniques_azure_full.md"
 authors: "John P. Klein, Melvin L. Moeschberger"
 year: 2003
 total_pages: 536

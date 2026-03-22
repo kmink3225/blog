@@ -1,7 +1,7 @@
 ---
 name: "Behavioral Data Analysis with R and Python"
 type: book-summary
-source_file: "Buisson-BehavioralDataAnalysis_full.md"
+source_file: "Buisson-BehavioralDataAnalysis_azure_full.md"
 authors: "Florent Buisson"
 year: 2021
 total_pages: 321

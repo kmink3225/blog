@@ -1,7 +1,6 @@
 ---
 name: "The Elements of Statistical Learning: Data Mining, Inference, and Prediction, 2nd Ed"
 type: book-summary
-source_file: "Hastie-ESL_full.md"
 authors: "Trevor Hastie, Robert Tibshirani, Jerome Friedman"
 year: 2009
 total_pages: 745
@@ -39,13 +38,16 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 ## Chapter Summaries
 
+> Marker 원본: `Hastie-ESL_marker_full.md` | 총 ~14,535 라인 | `L:숫자`로 직접 접근 가능
+
+
 ### Ch 1: Introduction (pp. 1-8)
 
 **핵심**: 통계적 학습의 기본 개념을 소개한다. 심장마비 예측, 주가 예측, 우편번호 인식, 전립선암 위험인자 식별 등 다양한 학습 문제 예시를 통해 데이터로부터 학습하는 과정을 설명한다. 입력 변수와 출력 변수의 관계를 모델링하는 것이 핵심 목표이다.
 
 **키워드**: `statistical learning`, `prediction`, `data mining`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 1 (line 1285)
+**상세**: → (삭제됨) Ch 1 (line 1285)
 
 ### Ch 2: Overview of Supervised Learning (pp. 9-41)
 
@@ -53,7 +55,12 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `least squares`, `nearest neighbors`, `bias-variance tradeoff`, `statistical decision theory`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 2 (line 8393)
+**상세**: → (삭제됨) Ch 2 (line 8393)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 2.3 Two Simple Approaches to Prediction: Least Squares and Nearest Neighbors `L:710`
+- 2.6 Statistical Models, Supervised Learning and Function Approximation `L:1020`
+
 
 ### Ch 3: Linear Methods for Regression (pp. 43-99)
 
@@ -61,7 +68,11 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `least squares`, `ridge regression`, `lasso`, `subset selection`, `LAR`, `PCR`, `PLS`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 3 (line 13015)
+**상세**: → (삭제됨) Ch 3 (line 13015)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 3.4.3 Discussion: Subset Selection, Ridge Regression and the Lasso `L:1869`
+
 
 ### Ch 4: Linear Methods for Classification (pp. 101-137)
 
@@ -69,7 +80,7 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `LDA`, `logistic regression`, `perceptron`, `separating hyperplanes`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 4 (line 19989)
+**상세**: → (삭제됨) Ch 4 (line 19989)
 
 ### Ch 5: Basis Expansions and Regularization (pp. 139-189)
 
@@ -77,7 +88,11 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `splines`, `smoothing splines`, `RKHS`, `wavelets`, `regularization`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 5 (line 48089)
+**상세**: → (삭제됨) Ch 5 (line 48089)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 5.5 Automatic Selection of the Smoothing Parameters `L:3486`
+
 
 ### Ch 6: Kernel Smoothing Methods (pp. 191-218)
 
@@ -85,7 +100,11 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `kernel smoothing`, `local regression`, `kernel density estimation`, `naive Bayes`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 6 (line 62726)
+**상세**: → (삭제됨) Ch 6 (line 62726)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 6.8 Mixture Models for Density Estimation and Classification `L:4552`
+
 
 ### Ch 7: Model Assessment and Selection (pp. 219-259)
 
@@ -93,7 +112,7 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `cross-validation`, `AIC`, `BIC`, `VC dimension`, `bootstrap`, `bias-variance`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 7 (line 67791)
+**상세**: → (삭제됨) Ch 7 (line 67791)
 
 ### Ch 8: Model Inference and Averaging (pp. 261-294)
 
@@ -101,7 +120,11 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `bootstrap`, `EM algorithm`, `MCMC`, `bagging`, `model averaging`, `stacking`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 8 (line 72673)
+**상세**: → (삭제됨) Ch 8 (line 72673)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 8.4 Relationship Between the Bootstrap and Bayesian Inference `L:5657`
+
 
 ### Ch 9: Additive Models, Trees, and Related Methods (pp. 295-336)
 
@@ -109,7 +132,7 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `GAM`, `CART`, `PRIM`, `MARS`, `decision trees`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 9 (line 78521)
+**상세**: → (삭제됨) Ch 9 (line 78521)
 
 ### Ch 10: Boosting and Additive Trees (pp. 337-386)
 
@@ -117,7 +140,11 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `AdaBoost`, `gradient boosting`, `exponential loss`, `variable importance`, `partial dependence`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 10 (line 85290)
+**상세**: → (삭제됨) Ch 10 (line 85290)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 10.10 Numerical Optimization via Gradient Boosting `L:7327`
+
 
 ### Ch 11: Neural Networks (pp. 389-416)
 
@@ -125,7 +152,7 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `neural networks`, `backpropagation`, `overfitting`, `Bayesian neural nets`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 11 (line 926)
+**상세**: → (삭제됨) Ch 11 (line 926)
 
 ### Ch 12: Support Vector Machines and Flexible Discriminants (pp. 417-458)
 
@@ -133,7 +160,7 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `SVM`, `kernels`, `FDA`, `PDA`, `MDA`, `RKHS`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 12 (line 959)
+**상세**: → (삭제됨) Ch 12 (line 959)
 
 ### Ch 13: Prototype Methods and Nearest-Neighbors (pp. 459-482)
 
@@ -141,7 +168,11 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `k-nearest neighbors`, `K-means`, `LVQ`, `tangent distance`, `adaptive neighbors`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 13 (line 107200)
+**상세**: → (삭제됨) Ch 13 (line 107200)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 13.3.2 Example: k-Nearest-Neighbors and Image Scene Classification `L:9362`
+
 
 ### Ch 14: Unsupervised Learning (pp. 485-584)
 
@@ -149,7 +180,11 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `PCA`, `clustering`, `SOM`, `NMF`, `ICA`, `spectral clustering`, `MDS`, `PageRank`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 14 (line 113778)
+**상세**: → (삭제됨) Ch 14 (line 113778)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 14.9 Nonlinear Dimension Reduction and Local Multidimensional Scaling `L:11147`
+
 
 ### Ch 15: Random Forests (pp. 587-604)
 
@@ -157,7 +192,7 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `random forests`, `OOB`, `variable importance`, `de-correlation`, `ensemble`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 15 (line 140142)
+**상세**: → (삭제됨) Ch 15 (line 140142)
 
 ### Ch 16: Ensemble Learning (pp. 605-624)
 
@@ -165,7 +200,7 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `ensemble learning`, `regularization paths`, `sparsity`, `rule ensembles`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 16 (line 142332)
+**상세**: → (삭제됨) Ch 16 (line 142332)
 
 ### Ch 17: Undirected Graphical Models (pp. 625-647)
 
@@ -173,7 +208,11 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `Markov random fields`, `graphical lasso`, `RBM`, `graph structure estimation`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 17 (line 144897)
+**상세**: → (삭제됨) Ch 17 (line 144897)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 17.3 Undirected Graphical Models for Continuous Variables `L:12192`
+
 
 ### Ch 18: High-Dimensional Problems: p >> N (pp. 649-698)
 
@@ -181,4 +220,17 @@ keywords: [statistical learning, supervised learning, unsupervised learning, reg
 
 **키워드**: `high-dimensional`, `L1 regularization`, `FDR`, `supervised PCA`, `multiple testing`
 
-**상세**: → `The Elements of Statistical Learning (ESL), 2nd Ed_full.md` Ch 18 (line 147309)
+**상세**: → (삭제됨) Ch 18 (line 147309)
+
+**Marker 세부 목차** (`Hastie-ESL_marker_full.md`):
+- 18.3 Linear Classifiers with Quadratic Regularization `L:12712`
+
+
+
+### 기타 섹션 (Marker)
+
+- The Elements of Statistical Learning `L:5`
+- Additive Models, Trees, and Related Methods `L:6131`
+- f1(x1) f2(x2) f3(x3) f4(x4) f5(x5) `L:7453`
+- Support Vector Machines and Flexible Discriminants `L:8341`
+- High-Dimensional Problems: p ≫ N `L:12617`

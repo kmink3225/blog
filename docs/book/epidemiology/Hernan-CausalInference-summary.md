@@ -1,7 +1,7 @@
 ---
 name: "Causal Inference: What If"
 type: book-summary
-source_file: "Hernan-CausalInference_full.md"
+source_file: "Hernan-CausalInference_azure_full.md"
 authors: "Miguel A. Hernan, James M. Robins"
 year: 2020
 total_pages: 352

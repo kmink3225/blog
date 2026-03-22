@@ -1,7 +1,7 @@
 ---
 name: "Introduction to Functional Data Analysis"
 type: book-summary
-source_file: "Kokoszka-IntroFDA_full.md"
+source_file: "Kokoszka-IntroFDA_azure_full.md"
 authors: "Piotr Kokoszka, Matthew Reimherr"
 year: 2017
 total_pages: 290

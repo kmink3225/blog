@@ -1,7 +1,7 @@
 ---
 name: "Longitudinal Data Analysis"
 type: book-summary
-source_file: "Hedeker-LongitudinalData_full.md"
+source_file: "Hedeker-LongitudinalData_azure_full.md"
 authors: "Donald Hedeker, Robert D. Gibbons"
 year: 2006
 total_pages: 360
