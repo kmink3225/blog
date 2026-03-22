@@ -669,6 +669,7 @@ agent의 사전지식은 너무 방대하여, 제약 없이 쓰면 불필요한 
 | `linguistics/` | Sidnell, Huang, McEnery | 대화분석, 화용론, 코퍼스 언어학 |
 | `governance/` | DAMA DMBOK | 데이터 거버넌스 |
 | `ontology/` | Robinson(GraphDB), Kejriwal(KG), Keet(Ontology), CodeQL, CPG, KR | 지식 그래프, 온톨로지, 코드 분석 |
+| `timeseries/` | Hyndman & Athanasopoulos(FPP3) | 시계열 예측, ARIMA, ETS, 동적 회귀 |
 
 ### 2-Layer 교재 참조 체계
 

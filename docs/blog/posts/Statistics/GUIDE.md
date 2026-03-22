@@ -16,6 +16,7 @@ book_sources:
   - docs/book/survival/
   - docs/book/functional_data_analysis/
   - docs/book/bayesian/
+  - docs/book/timeseries/
 cross_references:
   - docs/blog/posts/Math/GUIDE.md
   - docs/blog/posts/Experimentation/GUIDE.md
