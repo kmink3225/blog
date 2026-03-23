@@ -1,0 +1,333 @@
+---
+title: "Prompt Analytics - 발화 데이터 관리 및 분석 파이프라인"
+subtitle: "수집 → 저장 → 분석 → 세그먼테이션의 End-to-End 파이프라인 설계"
+description: |
+  AI Agent 서비스에서 사용자 발화 데이터를 체계적으로 수집, 저장, 분석하는 파이프라인을 설계한다.
+  코퍼스 언어학(McEnery)의 주석 체계, 대화 분석(Sidnell)의 턴테이킹/수리 구조,
+  화용론(Huang)의 화행 분류, 대화 시스템(Jurafsky)의 대화 행위 태깅을 통합하여
+  session → turn → utterance 3계층 스키마를 설계하고,
+  구조 분석 → 의도 분석 → 패턴 분석 → 세그먼테이션의 4단계 분석 파이프라인을 구축한다.
+categories:
+  - Prompt Engineering
+  - AI
+  - Agent
+  - Data Engineering
+author: Kwangmin Kim
+date: 03/23/2026
+---
+
+## 배경
+
+AI Agent 서비스에서 사용자 발화 데이터는 프롬프트 최적화, 사용자 세그먼테이션, 서비스 품질 개선의 핵심 자산이다.
+그러나 발화 데이터는 비정형이며, 체계적인 수집·저장·분석 체계 없이는 활용이 어렵다.
+
+이 글에서는 발화 데이터의 전체 생명주기(수집 → 저장 → 분석 → 활용)를 하나의 파이프라인으로 설계한다.
+
+::: {.callout-note}
+## 이 글의 위치
+
+이 글은 Prompt Analytics 시리즈의 발화 데이터 인프라 편이다.
+발화 데이터를 분석하는 **기준**(Turn, Action, Structure, Stance)은 [대화 분석 4대 기준](13-PromptAnalytics-conversation-analysis2.qmd)에서,
+분석 결과를 **세그먼테이션에 적용**하는 방법은 [사용자 세그먼테이션](14-PromptAnalytics-segmentation.qmd)에서 다룬다.
+이 글은 그 사이의 **데이터 파이프라인** — 어떻게 수집하고, 어떻게 저장하고, 어떻게 분석 가능한 형태로 가공하는가 — 를 다룬다.
+:::
+
+## 수집 설계
+
+### 메타데이터 사전 정의
+
+발화 데이터 수집 전에 **어떤 정보를 함께 기록할지** 먼저 결정한다.
+코퍼스 언어학에서 주석(annotation)의 품질은 설계 단계에서 결정된다 (McEnery & Hardie, 2012, Ch.2).
+
+| 필드 | 설명 | 예시 |
+|------|------|------|
+| `session_id` | 대화 세션 고유 식별자 | `sess_20260323_001` |
+| `user_id` | 사용자 식별자 (익명화) | `usr_a1b2c3` |
+| `timestamp` | 발화 시각 (UTC) | `2026-03-23T14:30:00Z` |
+| `turn_index` | 세션 내 턴 순서 (0-based) | `0`, `1`, `2` |
+| `role` | 발화자 역할 | `user`, `assistant` |
+| `channel` | 입력 채널 | `text`, `voice`, `api` |
+
+### 수집 동의와 익명화
+
+코퍼스 구축의 윤리적 원칙을 따른다 (McEnery & Hardie, 2012, Ch.3):
+
+- **사전 동의**: 서비스 이용약관에 발화 데이터 수집·분석 목적을 명시한다
+- **익명화**: `user_id`는 해시 처리하고, 발화 내 개인정보(이름, 전화번호 등)는 마스킹한다
+- **보존 정책**: 원문과 익명화본을 분리 저장하고, 원문 접근에는 별도 권한을 요구한다
+
+### 전사(Transcription)
+
+| 입력 유형 | 처리 | 참조 |
+|-----------|------|------|
+| 텍스트 채팅 | 원문 보존 + 정규화(줄바꿈, 특수문자) 분리 저장 | — |
+| 음성 입력 | ASR → 텍스트 변환. 원본 오디오와 전사본 모두 보존 | (Jurafsky & Martin, 2024, Ch.15) |
+| 혼합(음성+텍스트) | 채널별 분리 저장, `channel` 필드로 구분 | (Sidnell, 2009, Ch.1) |
+
+::: {.callout-tip}
+## 전사 품질 관리
+
+ASR 전사의 오류율(WER)을 모니터링한다.
+WER이 높은 세션은 분석 결과의 신뢰도가 낮으므로, 분석 시 가중치를 조정하거나 수동 검수 대상으로 분류한다.
+:::
+
+## 저장 구조
+
+### Session → Turn → Utterance 3계층 스키마
+
+발화 데이터를 3계층으로 구조화한다.
+대화 분석(CA)의 턴테이킹 구조와 코퍼스 언어학의 주석 레이어 분리 원칙을 반영한다.
+
+```
+Session (세션)
+├── session_id: string
+├── user_id: string
+├── start_time: timestamp
+├── end_time: timestamp
+├── channel: string
+├── metadata: json          # 서비스 버전, A/B 테스트 그룹 등
+│
+└── Turn[] (턴 배열)
+    ├── turn_index: int
+    ├── role: enum(user, assistant)
+    ├── timestamp: timestamp
+    │
+    └── Utterance[] (발화 배열)
+        ├── utterance_id: string
+        ├── raw_text: string        # 원문
+        ├── normalized_text: string # 정규화본
+        └── Annotation{}            # 주석 레이어 (분리 저장)
+```
+
+### 주석(Annotation) 레이어 분리
+
+주석은 원문과 **별도 테이블/컬렉션**으로 저장한다 (McEnery & Hardie, 2012, Ch.2).
+이유: 주석 스키마가 변경되어도 원문에 영향을 주지 않고, 여러 주석 체계를 동시에 적용할 수 있다.
+
+| 주석 레이어 | 필드 | 설명 | 참조 |
+|------------|------|------|------|
+| intent | `intent_tag` | 정보검색(I), 요청(R), 불만(C), 확인(A) 등 | (Huang, 2017, Ch.4) |
+| sentiment | `sentiment_score` | -1.0 ~ 1.0 연속값 또는 범주형 | — |
+| dialog_act | `act_tag` | SUGGEST, ACCEPT, REJECT, CLARIFY 등 | (Jurafsky & Martin, 2024, Ch.25) |
+| turn_type | `turn_tag` | 싱글턴(S) vs 멀티턴(M) | [대화 분석 4대 기준](13-PromptAnalytics-conversation-analysis2.qmd) |
+| structure | `structure_tag` | 선호(P) vs 비선호(U) | (Sidnell, 2009, Ch.5) |
+| repair | `repair_flag` | 수리 발생 여부 및 유형 | (Sidnell, 2009, Ch.2-4) |
+
+```sql
+-- 주석 테이블 예시 (RDB)
+CREATE TABLE utterance_annotations (
+    annotation_id   SERIAL PRIMARY KEY,
+    utterance_id    VARCHAR REFERENCES utterances(utterance_id),
+    schema_version  VARCHAR NOT NULL,  -- 'v1.0', 'v1.1' 등
+    intent_tag      VARCHAR,
+    sentiment_score FLOAT,
+    dialog_act      VARCHAR,
+    turn_tag        VARCHAR,
+    structure_tag   VARCHAR,
+    repair_flag     BOOLEAN,
+    annotator       VARCHAR,           -- 'llm-gpt4o', 'human-reviewer1'
+    created_at      TIMESTAMP DEFAULT NOW()
+);
+```
+
+### 스키마 버전 관리
+
+주석 스키마는 서비스 발전에 따라 변경된다.
+`schema_version` 필드를 필수로 두어, 같은 발화에 대해 서로 다른 버전의 주석이 공존할 수 있도록 한다.
+
+| 버전 | 변경 내용 | 호환성 |
+|------|----------|--------|
+| v1.0 | 초기 스키마: intent, sentiment | — |
+| v1.1 | dialog_act, turn_tag 추가 | v1.0과 하위 호환 |
+| v2.0 | intent 분류 체계 변경 (세분화) | v1.x와 비호환 → 재주석 필요 |
+
+비호환 변경 시에는 **재주석 파이프라인**을 실행하여 기존 데이터를 새 스키마로 마이그레이션한다.
+
+## 분석 파이프라인
+
+수집·저장된 발화 데이터를 4단계로 분석한다.
+
+```
+1단계: 구조 분석 (정량)
+    ↓
+2단계: 의도 분석 (정성 → 정량)
+    ↓
+3단계: 패턴 분석
+    ↓
+4단계: 세그먼테이션 & 활용
+```
+
+### 1단계 — 구조 분석 (정량)
+
+세션과 턴의 **구조적 특성**을 정량화한다.
+
+| 지표 | 계산 | 해석 |
+|------|------|------|
+| 세션당 턴 수 분포 | `COUNT(turn) GROUP BY session_id` | 중앙값 3 이하 → 대부분 싱글턴 사용자 |
+| 싱글턴 vs 멀티턴 비율 | 턴 수 1인 세션 / 전체 세션 | 싱글턴 비율 70% 이상 → 리텐션 문제 가능 |
+| 세션 길이 분위수 | P25, P50, P75, P95 | P95 지점이 이탈 지점의 후보 |
+| 턴 간 시간 간격 | `timestamp[n+1] - timestamp[n]` | 간격 급증 지점 → 사용자 혼란 또는 이탈 시점 |
+
+::: {.callout-tip}
+## 구조 분석만으로도 알 수 있는 것
+
+싱글턴 비율이 높고 세션 길이가 짧다면, 사용자가 원하는 답을 못 얻고 떠나는 것이다.
+이 경우 **의도 분석 이전에** 프롬프트의 초기 응답 품질을 점검해야 한다.
+:::
+
+### 2단계 — 의도 분석 (정성 → 정량)
+
+각 발화의 **의도(intent)**와 **화행(speech act)**을 태깅한다.
+
+**태깅 방법**:
+
+| 방법 | 장점 | 단점 | 적합 상황 |
+|------|------|------|----------|
+| 규칙 기반 | 빠름, 해석 가능 | 커버리지 한계 | 초기 MVP, 도메인 명확 |
+| LLM 기반 자동 태깅 | 유연, 확장 가능 | 비용, 일관성 변동 | 대규모 데이터, 다양한 의도 |
+| 수동 태깅 | 높은 정확도 | 비용과 시간 | 골드 셋 구축, 평가용 |
+
+**LLM 기반 자동 태깅 예시**:
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+tagging_prompt = ChatPromptTemplate.from_messages([
+    ("system", """사용자 발화를 분석하여 다음 4가지 기준으로 분류한다.
+- Turn: singleton(S) 또는 multi-turn(M)
+- Action: information-seeking(I) 또는 other(O)
+- Structure: preferred(P) 또는 dispreferred(U)
+- Stance: emotional(E) 또는 non-emotional(N)
+
+JSON 형식으로 응답한다: {{"turn": "S|M", "action": "I|O", "structure": "P|U", "stance": "E|N"}}"""),
+    ("human", "발화: {utterance}\n컨텍스트(이전 턴): {context}")
+])
+
+chain = tagging_prompt | llm
+```
+
+**화행 분류 체계** (Huang, 2017, Ch.4; Jurafsky & Martin, 2024, Ch.25):
+
+| 화행 | 설명 | 예시 |
+|------|------|------|
+| 질문 (Question) | 정보 요청 | "이 약의 부작용은?" |
+| 요청 (Request) | 행위 요청 | "보고서를 만들어 줘" |
+| 확인 (Confirm) | 정보 확인 | "그러면 3일 걸린다는 거지?" |
+| 불만 (Complaint) | 불만족 표현 | "아까 답변이 틀렸잖아" |
+| 수락 (Accept) | 제안 수락 | "좋아, 그렇게 하자" |
+| 거부 (Reject) | 제안 거부 | "아니, 다른 방법으로 해 줘" |
+
+### 3단계 — 패턴 분석
+
+태깅된 데이터에서 **대화 구조 패턴**을 추출한다.
+
+**인접 쌍(Adjacency Pair) 분석** (Sidnell, 2009, Ch.1):
+
+대화는 인접 쌍 — 질문→답변, 요청→수락/거부, 인사→인사 — 으로 구성된다.
+인접 쌍의 **완결률**(두 번째 파트가 적절히 제공된 비율)은 Agent의 응답 품질을 직접 반영한다.
+
+| 인접 쌍 유형 | 완결률 | 해석 |
+|-------------|--------|------|
+| 질문 → 답변 | 95% | 양호 |
+| 요청 → 수행 | 72% | 요청 이행 실패 28% → 프롬프트 개선 필요 |
+| 확인 → 확인 | 88% | 양호하나 12% 미확인 → 모호한 응답 존재 |
+
+**수리(Repair) 분석** (Sidnell, 2009, Ch.2-4):
+
+수리는 대화 중 오해나 오류를 교정하는 메커니즘이다.
+사용자가 재질문하거나 "아니 그게 아니라"와 같은 수리 개시(repair initiation)를 하면, 이전 Agent 응답에 문제가 있었다는 신호다.
+
+| 수리 유형 | 의미 | Agent 관점 |
+|-----------|------|-----------|
+| 자기 수리 (self-repair) | 사용자가 자신의 질문을 수정 | 질문 의도 파악이 어려운 영역 |
+| 타자 수리 (other-repair) | 사용자가 Agent 응답을 수정 요청 | **Agent 실패 지표** — 우선 개선 대상 |
+
+수리 빈도가 높은 주제·의도 조합을 식별하면, 해당 영역의 프롬프트를 집중 개선할 수 있다.
+
+**선호/비선호 구조 분석**:
+
+| 구조 | 비율 | 해석 |
+|------|------|------|
+| 선호 응답 (수락, 동의) | 65% | — |
+| 비선호 응답 (거부, 회피) | 35% | 비선호 비율이 30% 이상이면 사용자 불만족 신호 |
+
+### 4단계 — 세그먼테이션 & 활용
+
+[대화 분석 4대 기준](13-PromptAnalytics-conversation-analysis2.qmd)의 Turn, Action, Structure, Stance를 조합하여 세그먼트 코드를 부여한다.
+
+| 세그먼트 | 코드 | 특성 | 프롬프트 전략 |
+|----------|------|------|-------------|
+| 정보검색형 싱글턴 | SI | 한 번 묻고 떠남, 정보 목적 | 첫 응답에 핵심 정보 집중, 후속 질문 유도 |
+| 사교형 멀티턴 | MISP | 여러 턴, 감정적, 선호 구조 | 공감 표현 + 대화 흐름 유지 |
+| 탐색형 멀티턴 | MISU | 여러 턴, 비선호 구조 | 대안 제시 + 재질문 유도 + 명확화 요청 |
+
+세그먼트별로 다음을 비교 분석한다:
+
+- **실패 패턴**: 어떤 세그먼트에서 수리 빈도가 높은가?
+- **만족도**: 세그먼트별 세션 완결률, 재방문율
+- **이탈률**: 어떤 세그먼트가 싱글턴으로 이탈하는가?
+
+이 분석 결과가 [세그먼테이션 전략](15-1-PromptAnalytics-segmentation-strategy.qmd)과 [사용자 데이터 전략](15-2-PromptAnalytics-user-data-strategy.qmd)의 입력이 된다.
+
+## 파이프라인 운영
+
+### 자동화 구조
+
+```
+[수집]                    [저장]                [분석]              [활용]
+사용자 발화 → 메타데이터   → DB (3계층 스키마)  → 배치/스트리밍     → 대시보드
+              + 전사       → 주석 레이어 (분리)  → LLM 자동 태깅    → 세그먼트별 전략
+              + 익명화                           → 패턴 분석         → A/B 테스트 설계
+```
+
+### 품질 관리 체크리스트
+
+| 점검 항목 | 주기 | 기준 |
+|-----------|------|------|
+| 주석 일관성 (IAA) | 월 1회 | Cohen's κ ≥ 0.7 |
+| ASR 오류율 (WER) | 주 1회 | WER < 10% |
+| 자동 태깅 정확도 | 월 1회 | 골드 셋 대비 F1 ≥ 0.85 |
+| 스키마 버전 커버리지 | 분기 1회 | 최신 스키마로 주석된 비율 ≥ 90% |
+| 익명화 누락 | 상시 | PII 탐지 파이프라인 자동 실행 |
+
+## 블로그에 아직 없는 부분 (gap)
+
+| gap | 내용 | 후속 작업 |
+|-----|------|----------|
+| 저장소 기술 선택 | RDB vs Document DB vs Data Lake 비교 | Engineering 카테고리 포스트 |
+| 코퍼스 구축 실무 | 샘플링 전략, 균형성/대표성 확보 방법 | (McEnery & Hardie, 2012, Ch.1-2) 기반 |
+| 자동 분석 파이프라인 코드 | LLM 태깅 + 평가 지표 구현 | Agent 카테고리 포스트 |
+| Experimentation 연결 | 세그먼트별 A/B 테스트 설계 | Experimentation 카테고리 |
+
+## 관련 주제
+
+**선행 지식**
+
+- [대화 분석 기초](12-PromptAnalytics-conversation-analysis1.qmd) — 언어분석 3계층
+- [대화 분석 4대 기준](13-PromptAnalytics-conversation-analysis2.qmd) — Turn/Action/Structure/Stance
+
+**같은 시리즈**
+
+- [사용자 세그먼테이션](14-PromptAnalytics-segmentation.qmd) — 세그먼트 분류와 프롬프트 전략
+- [세그먼테이션 전략](15-1-PromptAnalytics-segmentation-strategy.qmd) — 발화 데이터 정량화
+- [사용자 데이터 전략](15-2-PromptAnalytics-user-data-strategy.qmd) — Hard Example Mining
+
+**후속 주제**
+
+- [LLM 기반 자동 태깅](../../Agent/22-Personalization/01-agent-segmentation.qmd) — Agent 기반 세그먼트 자동 분류
+
+**다른 카테고리 연결**
+
+- [A/B 테스트 핵심 메커니즘](../../Experimentation/01-ab-test-mechanism.qmd) — 세그먼트별 실험 설계
+
+**교재 참조**
+
+| 교재 | 역할 | 핵심 챕터 |
+|------|------|-----------|
+| McEnery & Hardie — Corpus Linguistics (2012) | 코퍼스 수집, 주석, 연어 분석 | Ch 1-3 |
+| Sidnell — Conversation Analysis (2009) | 턴테이킹, 인접 쌍, 수리 | Ch 1-4 |
+| Huang — Pragmatics (2017) | 화행, 대화 함축, 공손성 | Ch 1, 2, 4 |
+| Jurafsky & Martin — SLP 3e (2024) | ASR, 대화 행위, 대화 시스템 | Ch 14-16, 25 |

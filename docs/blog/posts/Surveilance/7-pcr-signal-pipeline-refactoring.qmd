@@ -1,0 +1,363 @@
+---
+title: "PCR 신호 처리 파이프라인 리팩토링"
+subtitle: "Rule Explosion에서 Feature 기반 Semi-Joint 아키텍처로"
+description: |
+  PCR 진단 알고리즘에서 Sequential 추정 구조가 위양성/위음성을 유발하는 메커니즘을 분석하고,
+  전처리에 누적된 분기(rule explosion)가 pseudo black box를 형성하는 문제를 진단한다.
+  전처리(f) → Feature 추출(φ) → 판정(g)의 3계층 Semi-Joint 아키텍처로 리팩토링하는 전략을 제시하고,
+  Feature contribution 기반 해석 프레임으로 규제(FDA) 요건의 traceability를 확보하는 방법을 설명한다.
+categories:
+  - Surveilance
+  - Regulation
+  - AI
+author: Kwangmin Kim
+date: 03/23/2026
+execute:
+  eval: false
+bibliography: references.bib
+---
+
+## 왜 이 글이 Surveilance 카테고리에 있는가
+
+이 글의 핵심 문제는 "PCR 신호 처리 알고리즘의 위양성/위음성을 어떻게 줄이는가"이다.
+이것은 단순한 신호 처리 문제가 아니라, **의료기기 소프트웨어의 판정 정확도** 문제이며, FDA/MFDS 규제 하에서의 알고리즘 변경은 validation 전략과 직결된다.
+리팩토링 설계 자체도 **해석 가능성(explainability)**과 **추적 가능성(traceability)**을 확보해야 규제 대응이 가능하므로, 순수 엔지니어링이 아닌 규제 맥락에서 다뤄야 한다.
+
+수학적 배경 — 함수의 합 vs 합성함수, Sequential vs Joint 추정의 차이 — 은 [함수의 합과 합성함수](../Math/function/function_addition_vs_composition.qmd)에서 다룬다.
+
+## 일상 비유: 왜 전처리가 판정을 망치는가
+
+카페 원두 품질 검사를 생각해 보자.
+
+1. **원두를 세척한다** (전처리 $f$) — 이물질을 제거한다
+2. **세척된 원두를 검사한다** (판정 $g$) — 색상, 크기, 균열 여부로 등급을 매긴다
+
+세척이 너무 강하면 원두 표면의 미세한 균열 흔적이 씻겨 나가서 불량품을 양품으로 판정한다 (**위음성**).
+세척 과정에서 원두에 얼룩이 생기면 정상 원두를 불량으로 판정한다 (**위양성**).
+
+핵심은: **세척(전처리)이 검사(판정)의 결과를 결정하는데, 세척 담당자는 검사 기준을 모른다.**
+PCR 신호 처리에서 벌어지는 일이 정확히 이것이다.
+
+---
+
+## 현재 구조: Sequential 추정의 한계
+
+### 파이프라인 수식
+
+PCR 진단 파이프라인을 단순화하면 다음과 같다:
+
+$$x \xrightarrow{f} z \xrightarrow{g} y$$
+
+- $f$: baseline correction, smoothing, normalization 등 전처리
+- $g$: thresholding / curve fitting / Ct 추정 / classification
+
+현재는 **완전한 Sequential 구조**이다:
+
+- $f$ 의 파라미터를 데이터 기반으로 먼저 고정한다
+- $g$ 는 그 위에서 학습하거나 규칙을 적용한다
+
+### 왜 이 구조에서 오류가 발생하는가
+
+핵심은 하나다:
+
+> $f$ 가 신호를 왜곡할 수 있는데, 그 왜곡이 $g$ 에서 복구 불가능하다
+
+**위양성(False Positive) 발생 메커니즘**:
+
+1. $f$: smoothing/보정 과정에서 노이즈나 baseline drift가 "증폭 곡선처럼" 변형된다
+2. $g$: threshold 기반 판단 → 실제 amplification이 아닌데 positive 판단
+
+본질: $f$ 가 **false structure를 생성**하고, $g$ 는 그것을 진짜로 믿는다
+
+**위음성(False Negative) 발생 메커니즘**:
+
+1. $f$: smoothing/normalization 과정에서 약한 신호(low viral load, late amplification)를 제거하거나 flatten한다
+2. $g$: threshold 미도달 → negative 판단
+
+본질: $f$ 가 **signal을 죽이고**, $g$ 는 복구할 수 없다
+
+### 근본 원인
+
+Sequential 구조의 본질적 한계:
+
+> $f$ 는 "일반적인 신호 기준"으로 최적화되고,
+> $g$ 는 "classification 성능" 기준으로 최적화된다.
+> **목표 함수가 다르다.**
+
+$f$ 가 실제로 classification 성능을 기준으로 설계된 것이 아니라면, 발생하는 현상은 다음과 같다:
+
+- $f$: 보기 좋은 곡선을 생성한다
+- $g$: 그것을 기준으로 판단한다
+- 결과: 실제 biology와 mismatch가 발생한다
+
+---
+
+## Rule Explosion 문제
+
+### 현재 레거시 구조의 본질
+
+현재는 $f$ 내부에 이미 여러 조건 분기가 존재한다:
+
+$$x \xrightarrow{f_1, f_2, f_3 \dots} \text{(분기)} \rightarrow g$$
+
+예외 케이스가 나올 때마다 rule을 추가하는 구조다.
+결과적으로 **$f$ 자체가 하나의 거대한 decision tree처럼 변질**되었다.
+
+### 왜 분기가 계속 추가되는가
+
+비유하면: 집에 빗물이 새는데, **지붕을 고치지 않고 양동이를 하나씩 추가하는 것**이다.
+양동이 3개까지는 관리할 수 있지만, 10개가 넘으면 양동이끼리 부딪치고, 어디서 새는지도 모르게 된다.
+지금 PCR 파이프라인이 이 상태다.
+
+| 원인 | 설명 | 비유 |
+|------|------|------|
+| 전처리가 판단 역할까지 수행 | 원래 $f$ 는 신호 변환인데, 지금은 "이건 노이즈다/이건 진짜다" 판단까지 수행한다. 이미 $g$ 의 역할을 침범한 상태다 | 세척 담당자가 등급까지 매기는 것 |
+| 국소 최적화의 누적 | "이 케이스 틀리니까 예외 하나 추가" — 전체 최적이 아니라 **케이스별 패치** | 양동이 추가 |
+| 사람이 모델 역할을 대신하는 구조 | 모델이 일반화해야 할 패턴을 사람이 rule로 encode하고 있다. 확장 불가능하다 | 사람이 모든 빗물 패턴을 외우는 것 |
+
+### 이 구조의 위험
+
+**유지보수 붕괴**: 분기 간 충돌이 발생하고 우선순위가 꼬인다
+
+**Explainability 착각**: "rule 기반이라 설명 가능하다" → 실제로는 rule interaction이 너무 많아 **pseudo black box**(사람이 만든 블랙박스)가 된다. rule이 5개일 때는 "왜 이 결과가 나왔는지" 설명할 수 있지만, 20개가 넘으면 rule 간 상호작용을 사람도 추적할 수 없다. 딥러닝 블랙박스와 다를 바 없는 상태가, 아이러니하게도 "설명 가능성을 위해" 만든 rule 시스템에서 발생한다
+
+**성능 ceiling**: 새로운 케이스가 나올 때마다 또 분기가 필요하다. 끝이 없다.
+
+::: {.callout-important}
+## 핵심 통찰
+
+지금 상황을 한 줄로 정리하면:
+
+> "rule 기반으로 Joint optimization을 흉내 내고 있다"
+
+분기를 계속 추가하는 것은 사실상 사람이 joint optimization을 대신하는 것이다. 그래서 끝이 없다.
+:::
+
+---
+
+## 해결 전략: Semi-Joint 아키텍처
+
+### 왜 완전 Joint가 아닌가
+
+완전한 end-to-end Joint 모델은 이론적으로 최적이지만, PCR/FDA 맥락에서는 현실적으로 과하다:
+
+- **해석 가능성 필요**: 규제 기관에 "왜 이 판정이 나왔는지" 설명해야 한다
+- **Validation 요구**: IEC 62304, ISO 14971 기반의 체계적 검증이 필요하다
+
+따라서 **Semi-Joint 구조**가 최적이다.
+
+### 3계층 아키텍처
+
+$$x \rightarrow f(x) \rightarrow \phi(x) \rightarrow g(\phi(x))$$
+
+| 계층 | 역할 | 원칙 |
+|------|------|------|
+| $f$ (전처리) | baseline correction, normalization, smoothing | **절대 판단하지 않는다.** label-independent 해야 한다 |
+| $\phi$ (Feature 추출) | Ct, slope, curvature, jump score, noise metric 등 | 판단에 필요한 정보를 **수치로 표현**한다 |
+| $g$ (판정) | Logistic Regression / Tree / Rule-light hybrid | feature를 종합하여 **모델이 판단**한다 |
+
+### 역할 분리 복구
+
+**BEFORE (현재)**:
+
+- $f$: 전처리 + 판단 + 예외처리
+- $g$: 약한 classifier
+
+**AFTER (제안)**:
+
+- $f$: 순수 신호 처리
+- $\phi$: feature extraction
+- $g$: 판단 (모델 or 통계)
+
+**핵심 변화**: 새로운 케이스가 나오면 **rule을 추가하는 것이 아니라 feature를 추가**한다. 모델이 자동으로 weight를 조정한다.
+
+::: {.callout-tip}
+## 비유: 의사의 진단 과정
+
+현재 구조는 간호사가 "혈압 높으면 고혈압", "체온 높으면 감염"이라고 진단까지 내리는 것과 같다.
+제안 구조는 간호사가 **혈압, 체온, 맥박, 산소포화도를 측정만** 하고, 의사가 이 수치들을 **종합하여 진단**을 내리는 것이다.
+
+- $f$ (간호사) = 측정 (판단하지 않는다)
+- $\phi$ (검사 결과표) = 수치화된 정보
+- $g$ (의사) = 종합 판단
+
+간호사가 "이 수치 이상하니까 무시하겠다"고 하면 위험하다. 그것이 지금 전처리가 하고 있는 일이다.
+:::
+
+---
+
+## 기존 기능별 리팩토링
+
+### 유지해야 할 것 ($f$ 에 남는 것)
+
+| 기능 | $f$ 에 유지 | 조건 |
+|------|-----------|------|
+| 베이스라인 차감 | O | label-independent 해야 함 |
+| 신호 정규화 | O | positive/negative 구분을 고려하면 안 됨 |
+| Smoothing | O | 과도한 smoothing으로 signal을 죽이지 않아야 함 |
+
+### Feature로 변환해야 할 것 ($\phi$ 로 이동)
+
+| 현재 기능 | 현재 방식 | 변환 후 Feature |
+|-----------|----------|-----------------|
+| 중첩신호 분리 | 분리 실패 시 분기 추가 | `multi_peak_flag`, `dominant_peak_ratio` |
+| Jumping 신호 탐지 | "jump면 제외" rule | `jump_magnitude`, `jump_frequency`, `derivative_spike` |
+| 선형적 증폭 탐지 | "선형이면 노이즈" rule | `r_squared` (선형 적합도), `exponential_fit_residual` |
+
+::: {.callout-warning}
+## Rule을 완전히 없애면 안 된다
+
+Hard rule → Soft feature로 바꾸는 것이 핵심이다.
+
+- "jump 있으면 무조건 negative" → **잘못된 접근**
+- "jump score 높으면 negative 확률 증가" → **올바른 접근**
+:::
+
+### 충돌 위험이 높은 기능
+
+중첩신호 분리 + 선형 탐지 + jump 탐지 — 이 3개는 거의 확실하게 **서로 충돌하는 rule을 만들 가능성이 높다.** Feature 기반으로 전환하면 모델이 이 충돌을 자동으로 해결한다.
+
+**충돌 예시**: 한 샘플에서 jump가 탐지되면서 동시에 선형 구간도 존재하는 경우.
+Rule A("jump면 제외")와 Rule B("선형이면 노이즈")가 동시에 발동하지만, 실제로는 late amplification의 초기 구간일 수 있다.
+Rule 기반에서는 어느 rule이 이기는지 우선순위로 결정해야 하고, 이 우선순위가 다른 케이스에서는 또 틀릴 수 있다.
+Feature 기반에서는 `jump_score = 0.4`, `r_squared = 0.7`, `slope = 0.3` 이라는 수치를 모델이 종합하여 "약한 positive 가능성"이라고 판단한다. 충돌이 아니라 **정보의 조합**이 된다.
+
+---
+
+## 해석 가능성 확보
+
+### 기존 vs 제안 구조의 해석 차이
+
+| 항목 | 기존 (rule 기반) | 제안 (feature 기반) |
+|------|----------------|-------------------|
+| 설명 방식 | "jump가 있어서 제외했다" | "noise score 0.82, slope 낮음, curvature 부족 → negative 확률 93%" |
+| 복합 케이스 | 설명 불가능 (rule 충돌) | **다차원 근거 기반 설명** |
+| 정밀도 | 단일 이유 (불완전) | 여러 feature의 기여도 (정확 + 확장 가능) |
+
+### 해석 가능하게 만드는 3가지 장치
+
+**장치 1: Feature 자체를 의미 있게 설계한다**
+
+| Feature | 의미 |
+|---------|------|
+| Ct | 증폭 시작 시점 |
+| slope | 증폭 속도 |
+| curvature | exponential 형태 여부 |
+| jump score | 비정상 급변 |
+| noise metric | baseline 안정성 |
+
+이미 domain 의미가 있으므로 설명이 바로 가능하다.
+
+**장치 2: 모델을 해석 가능한 형태로 제한한다**
+
+초기에는 Logistic Regression, Decision Tree (깊이 제한), GAM 등을 사용한다.
+
+Logistic Regression 예시:
+
+$$\text{logit}(p) = w_1 \cdot Ct + w_2 \cdot slope + w_3 \cdot noise$$
+
+각 feature의 계수($w$)가 곧 기여도이므로, "Ct가 낮아서 positive 기여, noise가 높아서 negative 기여"라는 설명이 가능하다.
+
+**장치 3: Feature contribution으로 샘플별 설명을 제공한다**
+
+각 샘플에 대해 "이 결과가 나온 이유"를 분해한다:
+
+```
+Ct:     +0.8  (positive 기여)
+slope:  +0.5  (positive 기여)
+noise:  -1.2  (negative 기여, 가장 큰 영향)
+────────────
+최종:   negative (확률 87%)
+```
+
+rule 기반보다 훨씬 정교한 설명이다.
+
+### 실제 PCR 해석 예시 비교
+
+**기존**: "jump 있어서 false positive" → 너무 단순하고 오류 가능
+
+**개선 후**:
+
+> - Ct: 31 (weak positive 신호)
+> - slope: 낮음 (증폭 약함)
+> - jump score: 높음 (artifact 가능성)
+> - noise: 높음
+> - → 종합적으로 negative (확률 87%)
+
+사람이 봐도 납득 가능한 설명이다.
+
+---
+
+## 규제(FDA) 관점에서의 이점
+
+의외로 제안 구조가 규제 대응에 더 유리하다.
+
+| 항목 | 기존 (rule 기반) | 제안 (feature 기반) |
+|------|----------------|-------------------|
+| Validation case | rule 많음 → case 폭증 | feature 정의 명확 → 체계적 검증 가능 |
+| Interaction 설명 | 어려움 | 모델 수식으로 명확 |
+| Traceability | rule 간 우선순위 불명확 | 각 feature 영향 정량화 가능 |
+
+### 해석 보고서 구조 (규제 제출용)
+
+| 계층 | 보고 항목 |
+|------|----------|
+| Signal level | baseline 안정성, noise 수준 |
+| Amplification level | Ct, slope, curvature |
+| Artifact level | jump score, irregularity |
+| Final decision | probability, **주요 기여 feature 3개** |
+
+---
+
+## 실행 전략
+
+### Step 1: 기존 rule을 역할 기준으로 분류
+
+각 rule에 대해 질문한다: **"이건 signal transformation인가, decision인가?"**
+
+- Transformation → $f$ 에 유지
+- Decision → 전부 제거 후보
+
+### Step 2: 에러 케이스를 feature로 변환
+
+- "노이즈 때문에 false positive" → noise metric 추가
+- "late amplification miss" → slope, second derivative 추가
+
+### Step 3: $g$ 를 강화
+
+- Logistic Regression / Tree / LightGBM
+- rule 대신 decision boundary로 해결
+
+### Step 4: $f$ 파라미터 sensitivity 분석
+
+- smoothing 강도 vs classification 결과 변화 분석
+- task-aware preprocessing으로 전환 (Weak Joint Optimization)
+
+### Step 5: 검증 및 비교
+
+- 기존 rule 기반 vs 제안 feature 기반의 성능 비교
+- 위양성/위음성 감소율 정량화
+
+---
+
+## 한 줄 결론
+
+- 지금 구조: **전처리가 classifier 역할까지 하고 있다 (rule이 모델을 대신하는 구조)**
+- 해결 방향: **"판단을 전부 $g$ 로 몰고, $f$ 는 순수하게 만든다"**
+- Sequential 자체가 문제가 아니라, **전처리에 decision을 집어넣은 구조**가 문제다
+
+## 관련 주제
+
+**선행 지식**
+
+- [함수의 합과 합성함수](../Math/function/function_addition_vs_composition.qmd) — $f(x)+g(x)$ vs $g(f(x))$, Sequential vs Joint 추정의 수학적 차이
+
+**카테고리 내 연결**
+
+- [RT-PCR 진단 알고리즘과 딥러닝](./5-regulation-pcr-example.qmd) — 제한된 신호 공간에서의 딥러닝 설계 원칙
+- [RT-PCR Sigmoid Fitting](./6-regulation-pcr-sigmoid.qmd) — 4PL 모델 기반 curve fitting
+
+**다른 카테고리 연결**
+
+- [Taylor Series](../Math/taylor_series.qmd) — curvature(곡률) feature의 수학적 배경
+- [모델 성능 지표](../Data_Science/performance-index.qmd) — 민감도, 특이도, ROC 기반 성능 평가

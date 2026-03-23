@@ -1,0 +1,283 @@
+---
+title: "시스템 프롬프트 평가 — AGENT_GUIDE.md 사례 분석"
+subtitle: "프로덕션 Agent 시스템 프롬프트에 적용된 프롬프트 엔지니어링 기법 역분석"
+description: |
+  실제 프로덕션 수준의 Agent 시스템 프롬프트(AGENT_GUIDE.md)를 프롬프트 엔지니어링 관점에서 분석한다.
+  WRONG/CORRECT 패턴, XML 태그 분리, Chain-of-Action, Decision Matrix, Progressive Deepening,
+  Boundary 설정 등 6가지 강점 기법을 식별하고, 우선순위 부재, 검증 단계 약화,
+  피드백 루프 부재 등 개선 가능 지점을 구체적으로 진단한다.
+  12개 프롬프트 엔지니어링 기법에 대한 체크리스트 평가를 통해
+  시스템 프롬프트 설계의 best practice를 정리한다.
+categories:
+  - Prompt Engineering
+  - Agent
+  - Architecture
+author: Kwangmin Kim
+date: 03/23/2026
+---
+
+## 배경
+
+LLM Agent의 행동을 제어하는 가장 직접적인 수단은 **시스템 프롬프트**다.
+그러나 시스템 프롬프트가 길어지고 규칙이 복잡해질수록, 프롬프트 자체의 설계 품질이 Agent 성능을 좌우한다.
+
+이 글에서는 실제 블로그 관리용 Agent의 마스터 가이드인 `AGENT_GUIDE.md` (약 940줄, v3.0)를 대상으로,
+어떤 프롬프트 엔지니어링 기법이 사용되었는지 역분석하고, 강점과 개선점을 진단한다.
+
+::: {.callout-note}
+## 분석 대상
+
+- **파일**: `AGENT_GUIDE.md` (프로젝트 루트)
+- **버전**: v3.0
+- **용도**: Quarto 블로그 포스트 작성, 질문 응답, 교재 참조, 카테고리 관리를 담당하는 Agent의 마스터 가이드
+- **규모**: 10개 섹션, 12개 카테고리 GUIDE 연동, 20+ 교재 소스 참조
+:::
+
+## 강점 분석
+
+### Few-shot with Negative Examples (WRONG/CORRECT 패턴)
+
+AGENT_GUIDE.md에서 가장 빈번하게 사용된 기법이다.
+`<fix-*>` XML 태그로 감싸진 WRONG/CORRECT 쌍이 6회 이상 등장한다.
+
+| 규칙 | 태그 | 방지하는 실패 |
+|------|------|-------------|
+| 한다 체 사용 | `<fix-honorific-style>` | 경어체 혼입 |
+| 수동 번호 금지 | `<fix-manual-section-number>` | `## 1. 제목` → 이중 번호 |
+| 줄 개행 | `<fix-line-break>` | trailing 공백 누락 → 줄바꿈 실패 |
+| 주장-근거 | `<fix-claim-without-why>` | 근거 없는 주장 |
+| 숫자-해석 | `<fix-number-without-interpretation>` | 해석 없는 숫자 나열 |
+| 교재 원문 복붙 금지 | `<fix-book-source-misuse>` | 영어 원문 그대로 사용 |
+
+**왜 효과적인가**:
+
+- LLM은 "~하지 마라"라는 부정 지시보다, **구체적으로 틀린 예시를 보여주는 것**에 훨씬 잘 반응한다
+- WRONG 예시가 Agent의 가장 흔한 실패 모드를 정면으로 보여주므로, Agent가 자기 출력과 WRONG 패턴을 비교 검증할 수 있다
+- 이 기법은 Few-shot prompting의 변형으로, positive example만 제공하는 것보다 **negative example을 함께 제공**할 때 준수율이 높다는 연구 결과와 일치한다
+
+### XML 태그를 활용한 구조적 분리
+
+```xml
+<fix-honorific-style>
+  WRONG: ...
+  CORRECT: ...
+</fix-honorific-style>
+
+<boundaries>
+  할 수 있는 것 / 할 수 없는 것
+</boundaries>
+```
+
+- `<fix-*>`, `<boundaries>` 등 의미 단위별 태그로 규칙을 감싼다
+- Claude 계열 모델은 XML 태그 경계를 명확히 인식하므로, 규칙 간 혼동이 줄어든다
+- 사람이 읽을 때도 규칙의 시작과 끝이 명확하여 유지보수가 용이하다
+
+::: {.callout-tip}
+## XML 태그 vs Markdown 헤딩
+
+Markdown 헤딩(`##`)은 문서 구조를 나타내지만, LLM이 "이 규칙의 범위가 여기까지"라고 인식하기 어렵다.
+XML 태그의 열림/닫힘 구조가 규칙의 **스코프(scope)**를 명시적으로 전달한다.
+:::
+
+### 절차적 체크리스트 (Chain-of-Action)
+
+§3의 Step 1~6, §6의 병렬 탐색 프로토콜이 대표적이다.
+
+```
+사용자 요청 수신
+    ↓
+주제 키워드 추출
+    ↓
+┌─────────────────────────────┐
+│  동시 탐색 — 3개 레이어     │
+│  Layer 1: 블로그 포스트      │
+│  Layer 2: 교재 소스          │
+│  Layer 3: agent 사전지식     │
+└─────────────────────────────┘
+    ↓
+탐색 결과 통합 → 태스크별 실행
+```
+
+**왜 효과적인가**:
+
+- "잘 해라"가 아니라 **"이 순서로 해라"** → hallucination과 step-skipping을 동시에 방지한다
+- 각 단계의 입력과 출력이 명확하여, Agent가 현재 어느 단계에 있는지 자기 추적(self-tracking)이 가능하다
+- Chain-of-Thought(CoT)가 **추론 과정**을 단계화한다면, Chain-of-Action은 **행동 과정**을 단계화한다
+
+### 판단 기준표 (Decision Matrix)
+
+상황 → 조치를 테이블로 매핑하여 Agent의 자의적 판단 영역을 줄인다.
+
+대표적 예시:
+
+| 상황 | 조치 |
+|------|------|
+| 동일 주제 파일이 이미 존재하고 내용이 겹침 | 새 파일 생성 금지 — 기존 파일 보강 |
+| 기존 파일이 있지만 관점·깊이·범위가 다름 | 기존 파일에 섹션 추가 또는 별도 파일 + 상호 링크 |
+| 해당 주제 포스트가 전혀 없음 | 새 파일 생성 |
+
+이 테이블이 없으면 Agent는 매번 자체 판단을 해야 하고, 판단 기준이 세션마다 달라질 수 있다.
+Decision Matrix는 **판단의 일관성**을 보장한다.
+
+### 토큰 절약 전략 — Progressive Deepening
+
+```
+파일명 → YAML 헤더 → 마크다운 헤더 → (필요시) 본문
+```
+
+- 정보 탐색 시 모든 파일의 본문을 읽지 않고, **점진적으로 깊이를 확장**한다
+- long context 세션에서 컨텍스트 소진을 방지한다
+- 이 전략은 검색 엔진의 cascade ranking(후보 축소 → 정밀 랭킹)과 동일한 원리다
+
+### Boundary 설정 (§10)
+
+"할 수 있는 것"과 "할 수 없는 것"을 명시적으로 분리한다.
+
+**CAN (허용)**:
+
+- 블로그 포스트 작성, 수정, 보강
+- 교재 소스 참조 및 재작성
+- placeholder 링크로 미래 콘텐츠 설계
+
+**CANNOT (금지)**:
+
+- Summary만 읽고 블로그 작성 (Full MD 확인 필수)
+- 읽지 않은 구간의 내용을 원문에서 확인한 것처럼 서술
+- 기존 포스트의 내용 삭제 또는 축소
+
+**왜 효과적인가**:
+
+- LLM의 가장 흔한 실패 모드인 **confident hallucination** — 읽지 않은 내용을 읽은 것처럼 서술하는 것 — 을 정면으로 차단한다
+- "하지 말 것"을 명시하는 것은 "할 것"을 명시하는 것보다 더 강한 행동 제약으로 작용한다
+- Boundary 설정은 Agent의 **역할 범위(scope of authority)**를 정의하는 것으로, 멀티 에이전트 시스템에서 Agent 간 책임 분리의 기반이 된다
+
+## 개선 가능 지점
+
+### 우선순위/가중치 부재
+
+**현재 상태**: 모든 규칙이 동등한 무게로 나열된다.
+
+**문제**: 규칙 간 충돌 시 어느 쪽을 우선할지 불명확하다. 일부 우선순위 언급("토큰 절약보다 정확성이 우선")이 있으나 체계적이지 않다.
+
+**개선안**: MUST / SHOULD / MAY 등급 분류, 또는 충돌 시 우선순위 원칙을 상단에 명시한다.
+
+```
+# 우선순위 원칙 (예시)
+1. 정확성 > 토큰 절약 > 응답 속도
+2. 사용자 명시 지시 > AGENT_GUIDE 규칙 > 카테고리 GUIDE 규칙
+3. 규칙 충돌 시: MUST > SHOULD > MAY
+```
+
+### 검증 단계(Step 6)가 약함
+
+**현재 상태**: Step 1~5는 매우 구체적인데, Step 6(검증)은 3줄이다.
+
+```
+- 상대경로가 올바른지 확인한다
+- YAML 헤더의 필수 필드가 빠지지 않았는지 확인한다
+- 링크 형식이 기존 패턴과 일치하는지 확인한다
+```
+
+**문제**: 콘텐츠 품질(주장-근거-해석, 수동 번호, 한다 체 등)에 대한 검증이 빠져 있다.
+
+**개선안**: 작성 규칙(§4)의 자기 점검표를 Step 6에 통합하여 체크리스트 테이블로 구체화한다.
+
+| 점검 항목 | 확인 방법 |
+|-----------|----------|
+| 한다 체 일관성 | `~합니다`, `~입니다` 패턴 검색 |
+| 수동 번호 부재 | `## 숫자.` 패턴 검색 |
+| 주장-근거-해석 | 주장 문장 뒤에 근거/해석이 있는지 확인 |
+| 수식 후 직관 설명 | `$$` 블록 뒤에 설명 문단이 있는지 확인 |
+| trailing 공백 | 본문 줄 끝에 공백 2칸 존재 확인 |
+
+### 피드백 루프 / 자기 교정 메커니즘 없음
+
+**현재 상태**: "자기 점검표"는 작성 **중** 점검이다. 작성 **후** 검증 메커니즘이 없다.
+
+**문제**: Agent가 규칙을 위반한 출력을 생성했을 때, 스스로 감지하고 교정하는 절차가 없다.
+
+**개선안**: post-generation review step을 추가한다.
+
+```
+Step 7 (신규): 자기 검증
+    작성 완료 후, 다음 항목을 역순으로 확인한다:
+    1. Boundary 위반 여부 (§10)
+    2. 작성 규칙 준수 (§4 체크리스트)
+    3. 출처 명시 여부 (§6 통합 원칙)
+    4. index.qmd 링크 정합성 (§5)
+
+    위반 발견 시: 수정 후 다시 Step 7 실행 (최대 2회)
+```
+
+### 병렬 탐색의 실행 비용
+
+**현재 상태**: 모든 태스크에 동일한 3-레이어 풀스캔을 적용한다.
+
+**문제**: 간단한 사실 확인에도 전체 교재 스캔은 토큰과 시간 낭비다.
+
+**개선안**: 질문 복잡도별 탐색 깊이 티어링을 도입한다.
+
+| 복잡도 | 탐색 깊이 | 예시 |
+|--------|----------|------|
+| 단순 사실 확인 | Layer 1만 (블로그 검색) | "이 포스트의 날짜가 맞나?" |
+| 개념 설명 | Layer 1 + Layer 2 (교재) | "MLE가 뭔가?" |
+| 분석/비교/작성 | 3개 레이어 전수 | "생존 분석과 A/B 테스트의 관계를 포스트로 작성해 줘" |
+
+### YAML frontmatter 활용도 낮음
+
+**현재 상태**: `category_guides` 목록이 YAML frontmatter에 있지만, Agent가 프로그래밍적으로 파싱하라는 지시가 없다.
+
+**개선안**: frontmatter를 구조화된 라우팅 테이블로 활용하는 지시를 추가한다.
+
+```yaml
+# 예시: Agent가 카테고리 매칭 시 frontmatter를 직접 파싱
+category_guides:
+  - path: docs/blog/posts/Statistics/GUIDE.md
+    category: Statistics
+    keywords: [분포, 검정, 회귀, 종단, FDA]  # 라우팅용 키워드 추가
+```
+
+## 프롬프트 엔지니어링 기법 체크리스트
+
+12개 기법에 대한 종합 평가:
+
+| 기법 | 사용 여부 | 평가 |
+|------|----------|------|
+| Few-shot examples (WRONG/CORRECT) | O | 6개 이상, 매우 효과적 |
+| Negative examples | O | WRONG 패턴으로 명시 |
+| Chain-of-thought / Chain-of-action | O | 절차적 순서도 다수 |
+| Role assignment | △ | 암묵적 역할만, 명시적 "너는 ~이다" 정의 없음 |
+| Decision matrix | O | 4개 이상 판단 기준표 |
+| Boundary setting | O | §10에서 CAN/CANNOT 명시적 분리 |
+| XML/structured tags | O | `<fix-*>`, `<boundaries>` 등 |
+| Progressive disclosure | O | 토큰 절약을 위한 점진적 읽기 |
+| Priority/conflict resolution | △ | 일부만 있음 ("정확성 > 토큰 절약") |
+| Self-verification | △ | 자기 점검표 있으나 post-generation 검증 약함 |
+| Tiered complexity | X | 모든 태스크에 동일 탐색 깊이 |
+| Feedback loop / error recovery | X | 위반 시 자기 교정 메커니즘 없음 |
+
+**범례**: O = 잘 구현됨, △ = 부분적, X = 미구현
+
+## 결론
+
+AGENT_GUIDE.md는 프로덕션 수준의 Agent 시스템 프롬프트다.
+
+**핵심 강점**: WRONG/CORRECT 패턴, XML 태그 분리, Chain-of-Action, Decision Matrix, Progressive Deepening, Boundary 설정의 조합이 체계적으로 설계되어 있다. 특히 WRONG/CORRECT 패턴은 LLM의 가장 흔한 실패 모드를 정면으로 차단하는 점에서 높은 실용성을 보인다.
+
+**핵심 개선 여지**: 규칙 간 우선순위 체계(MUST/SHOULD/MAY), 작성 후 자기 검증 루프(Step 7), 태스크 복잡도별 탐색 깊이 티어링이 추가되면, 규칙 충돌 시의 일관성과 출력 품질의 안정성이 더 높아질 것이다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [시스템 프롬프트 작성법](36-PromptWriting-SystemPrompt.qmd) — 시스템 프롬프트의 기본 구조
+- [도메인 특화 프롬프트](38-PromptWriting-DomainSpecificPrompt.qmd) — 도메인별 프롬프트 설계
+- [Agent 스킬 프롬프트](40-PromptWriting-AgentSkillPrompt.qmd) — 스킬 기반 프롬프트 패턴
+
+**같은 시리즈**
+
+- [스킬 기반 프롬프트 아키텍처 실전 적용](42-prompt-architecture-practice.qmd) — 모놀리식 → 스킬 시스템 진화
+
+**다른 카테고리 연결**
+
+- [스킬 패턴의 실전 적용: 블로그 지식 관리 시스템](../24-Agent-Architecture/07-skill-pattern-applied-blog-knowledge-system.qmd) — AGENT_GUIDE를 활용한 스킬 시스템 구현
