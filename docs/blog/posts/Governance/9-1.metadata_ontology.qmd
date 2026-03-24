@@ -1,0 +1,254 @@
+---
+title: "온톨로지와 메타데이터 저장소 설계"
+subtitle: "개념 설계(Ontology)와 구현 기술(RDB vs GraphDB)의 구분"
+description: |
+  온톨로지는 특정 구현 기술이 아니라 개념과 관계를 정의하는 설계 사상이다.
+  RDB와 GraphDB는 이 설계를 물리적으로 구현하는 서로 다른 방법일 뿐이다.
+  코드베이스 메타데이터(구조 정보 + 도메인 용어)를 예시로, 온톨로지 설계부터
+  구현 기술 선택까지의 의사결정 과정을 정리한다.
+author: Kwangmin Kim
+categories:
+  - Data Governance
+  - Data Engineering
+  - AI
+  - Agent
+date: 03/24/2026
+format:
+  html:
+    number-depth: 3
+    grid:
+      sidebar-width: 200px
+      body-width: 1150px
+      margin-width: 300px
+---
+
+## 온톨로지란 무엇인가
+
+온톨로지(Ontology)는 특정 도메인의 **개념(entity), 관계(relation), 속성(property)** 을 체계적으로 정의한 지식 표현 모델이다.
+
+원래 철학에서 "존재하는 것은 무엇인가"를 탐구하는 형이상학의 한 분야였으나, 정보과학에서는 기계가 데이터의 의미를 이해하고 추론할 수 있도록 도메인 지식을 형식적으로 명세하는 것을 뜻한다.
+
+::: {.callout-tip}
+## 직관적 이해
+
+온톨로지는 **"어떤 종류의 것들이 존재하고, 어떻게 연결되는가"** 를 정의하는 설계도이다.
+건축에서 도면이 건물의 구조를 정의하듯, 온톨로지는 데이터의 구조를 정의한다.
+도면은 콘크리트로도, 목재로도 구현할 수 있는 것처럼, 온톨로지도 RDB로든 GraphDB로든 구현할 수 있다.
+:::
+
+### 온톨로지의 구성 요소
+
+| 구성 요소 | 정의 | 예시 (의료 도메인) |
+|---|---|---|
+| 클래스(Class) | 개념의 집합 | 질병, 증상, 치료법 |
+| 속성(Property) | 개념의 특징 | 질병명, 증상 강도 |
+| 관계(Relation) | 개념 간 연결 | `has_symptom`, `treated_by` |
+| 개체(Instance) | 구체적 데이터 | 폐렴, 기침, 항생제 |
+
+의료 도메인을 예로 들면 다음과 같은 관계가 정의된다:
+
+```
+[질병] --has_symptom--> [증상]
+[질병] --treated_by--> [치료법]
+[환자] --diagnosed_with--> [질병]
+
+예: "폐렴" --has_symptom--> "기침", "발열"
+    "폐렴" --treated_by--> "항생제"
+```
+
+## 온톨로지와 지식 그래프의 관계
+
+온톨로지와 지식 그래프는 자주 혼동되지만, 역할이 다르다.
+
+| 구분 | 온톨로지 | 지식 그래프 |
+|---|---|---|
+| 역할 | 스키마 (구조/규칙 정의) | 인스턴스 (실제 데이터) |
+| 비유 | 데이터베이스의 스키마 | 데이터베이스의 레코드 |
+| 질문 | "어떤 종류의 것들이 존재하는가?" | "구체적으로 어떤 데이터가 있는가?" |
+
+온톨로지가 틀(frame)을 정의하면, 지식 그래프는 그 틀 위에 실제 데이터를 채운 것이다.
+따라서 `온톨로지 → 지식 그래프 → GraphDB → GraphRAG`라는 등식은 학술적으로 맞는 흐름이지만, 온톨로지의 구현이 반드시 지식 그래프여야 하는 것은 아니다.
+
+## 온톨로지의 구현: RDB vs GraphDB
+
+온톨로지는 특정 구현 기술에 종속되지 않는다. 동일한 온톨로지를 여러 방식으로 구현할 수 있다.
+
+### 구현 방식 비교
+
+| 구현 방식 | 적합도 | 특징 |
+|---|---|---|
+| 트리플 스토어 (RDF/OWL) | 가장 자연스러움 | 주어-술어-목적어 구조, 추론 엔진 내장 |
+| GraphDB (Neo4j 등) | 높음 | 관계 탐색에 최적화 |
+| RDB (PostgreSQL 등) | 가능하지만 제약 있음 | 가장 익숙하고 성숙한 인프라 |
+| Document DB (MongoDB 등) | 부분적 | 유연한 스키마, 추론은 어려움 |
+
+### 예시: 데이터 표준화 메타데이터
+
+표준 용어 메타데이터의 관계를 온톨로지로 정의하면 다음과 같다:
+
+```
+[용어] ──belongs_to──▶ [도메인]
+  │                      │
+  has_rule               has_parent
+  │                      │
+  ▼                      ▼
+[명명규칙]             [상위도메인]
+```
+
+#### GraphDB로 구현한 경우 (Neo4j / Cypher)
+
+```cypher
+// 노드 생성
+CREATE (t:Term {name: '고객번호', physical_name: 'CUST_NO'})
+CREATE (d:Domain {name: '고객도메인'})
+CREATE (r:NamingRule {name: '영문약어규칙'})
+
+// 관계 생성
+(t)-[:BELONGS_TO]->(d)
+(t)-[:HAS_RULE]->(r)
+```
+
+#### RDB로 구현한 경우 (SQL)
+
+```sql
+-- 개체 테이블
+CREATE TABLE terms (
+    id            INT PRIMARY KEY,
+    logical_name  VARCHAR(100) NOT NULL,
+    physical_name VARCHAR(100) NOT NULL,
+    domain_id     INT REFERENCES domains(id)
+);
+
+CREATE TABLE domains (
+    id               INT PRIMARY KEY,
+    name             VARCHAR(100) NOT NULL,
+    parent_domain_id INT REFERENCES domains(id)
+);
+
+CREATE TABLE naming_rules (
+    id          INT PRIMARY KEY,
+    rule_name   VARCHAR(100) NOT NULL,
+    description TEXT
+);
+
+-- 관계는 FK로 표현
+-- terms.domain_id → domains.id
+-- domains.parent_domain_id → domains.id (자기 참조)
+```
+
+동일한 온톨로지 구조를 FK와 조인으로 표현한 것이다.
+즉, 잘 설계된 RDB 스키마 자체가 이미 일종의 온톨로지 구현이다.
+
+### RDB와 GraphDB의 트레이드오프
+
+| 기준 | RDB | GraphDB (Neo4j) |
+|---|---|---|
+| 인프라 | 대부분 이미 보유 | 별도 구축 필요 |
+| 학습 비용 | SQL (대부분 숙련) | Cypher 쿼리 언어 학습 필요 |
+| 인력 | 범용적 | 경험자가 상대적으로 적음 |
+| 관계 탐색 | 2~3단계는 JOIN으로 충분 | 5단계 이상 깊은 탐색에 강점 |
+| 스키마 유연성 | ALTER TABLE 부담 | 노드/엣지 자유롭게 추가 |
+| 추론(Reasoning) | 애플리케이션 레벨에서 직접 구현 | 그래프 알고리즘 내장 |
+| LLM 연동 | SQLDatabase 바로 사용 가능 | GraphRAG 파이프라인 직접 설계 필요 |
+| 운영/유지보수 | 사내 DBA 지원 가능 | 별도 운영 노하우 필요 |
+| 모델링 도구 | ERD 도구 풍부 | 상대적으로 부족 |
+
+::: {.callout-important}
+## 초기 비용 판단
+
+GraphDB가 압도적으로 초기 비용이 높다.
+인프라 구축, 쿼리 언어 학습, 운영 노하우 확보까지 고려하면 RDB 대비 2~3배 이상의 초기 투자가 필요하다.
+관계가 2~3단계 수준이면 RDB로 시작하고, 관계 탐색이 복잡해지는 시점에 GraphDB를 검토하는 것이 현실적이다.
+:::
+
+## 실무 사례: 코드베이스 메타데이터 설계
+
+코드베이스 메타데이터는 크게 두 축으로 구성된다:
+
+```
+코드베이스 메타데이터
+  ├─ 구조 정보: 메서드 호출 관계, 파일 경로, API 의존성
+  └─ 도메인 용어: 업무 전문 용어, 약어, 정의
+```
+
+이 두 축이 **연결되어야** Agent가 의미 있는 답변을 생성할 수 있다.
+
+### 왜 연결이 필요한가
+
+Agent가 "고객번호 검증 로직이 어디 있어?"라는 질문에 답하려면 다음 정보가 모두 필요하다:
+
+```
+도메인 용어: 고객번호 = CUST_NO (물리명)
+     +
+구조 정보: CUST_NO → validate_customer_id() → /src/validators/customer.py
+     +
+호출 관계: customer.py → db_client.query() → /src/db/client.py
+```
+
+도메인 용어만 알면 "고객번호는 CUST_NO이다"까지만 답할 수 있고, 구조 정보만 알면 "validate_customer_id()가 있다"까지만 답할 수 있다.
+내용(도메인 용어)과 구조(호출/경로)가 연결되어야 "고객번호 검증은 /src/validators/customer.py의 validate_customer_id()에서 수행되며, 이 함수는 db_client.query()를 호출한다"라는 완결된 답변이 가능하다.
+
+### 온톨로지 설계
+
+이 연결 구조를 온톨로지로 정의하면 다음과 같다:
+
+```
+[도메인 용어: 고객번호]
+    ↕ maps_to
+[코드 엔티티: CUST_NO]
+    ↕ used_in
+[메서드: validate_customer_id()]
+    ↕ located_in
+[파일: /src/validators/customer.py]
+    ↕ calls
+[메서드: db_client.query()]
+```
+
+### 데이터 모델링: 공통 출발점
+
+RDB로 구현하든 GraphDB로 구현하든, 데이터 모델링은 동일한 질문에서 시작한다:
+
+1. **어떤 엔티티가 있는가?** — 용어, 메서드, 파일, API 등
+2. **엔티티 간 관계가 무엇인가?** — `belongs_to`, `calls`, `located_in` 등
+3. **각 엔티티에 어떤 속성이 있는가?** — 이름, 경로, 타입 등
+
+이 분석이 끝나면 RDB로 가든 GraphDB로 가든 구현만 다를 뿐 설계 사고는 같다.
+
+| 항목 | RDB | GraphDB |
+|---|---|---|
+| 모델링 방법 | ERD (Entity-Relationship Diagram) | 노드-엣지 다이어그램 |
+| 핵심 질문 | "어떤 테이블과 컬럼이 필요한가?" | "어떤 노드와 관계가 필요한가?" |
+| 관계 표현 | FK, 조인 테이블 | 엣지 (직접 연결) |
+| 설계 산출물 | 테이블 스키마 (DDL) | 노드/엣지 스키마 |
+
+::: {.callout-note}
+## 핵심 정리
+
+"온톨로지적 사고로 설계하되, 구현은 상황에 맞게 선택한다"가 올바른 접근이다.
+
+```
+[개념 레이어]   온톨로지: "이 도메인에는 어떤 개념과 관계가 있는가"
+                    ↓
+[논리 레이어]   ERD / 스키마 설계: 테이블·컬럼·FK 또는 노드·엣지 정의
+                    ↓
+[물리 레이어]   RDB 또는 GraphDB: 실제 저장소에 테이블/그래프 생성
+```
+
+온톨로지 없이 바로 테이블부터 만들면 도메인 의미가 유실되고 스키마가 임의적으로 된다.
+"먼저 개념과 관계를 엄밀하게 정의하고, 그것을 기반으로 저장소를 설계하라"는 것이 온톨로지 기반 설계의 핵심이다.
+:::
+
+## 관련 주제
+
+**카테고리 내 연결**
+
+- [온톨로지 개론](./9-0.ontology_overview.qmd)
+- [Data Model (1) - Basic Concept](./4-0.data_model.qmd)
+- [Data Standardization - Basic Concept](./5-0-0.data_standard.qmd)
+- [Data Standardization - 용어 정리](./5-0-2.terminology_hierarchy.qmd)
+
+**다른 카테고리 연결**
+
+- [GraphRAG 개념과 최근 트렌드](../Agent/21-GraphRAG/00.GraphRAG-ontology.qmd)
+- [GraphRAG 메타데이터 접근법](../Agent/21-GraphRAG/02.GraphRAG-metadata-approach.qmd)
+- [코드베이스 분석기 아키텍처 비교](../Agent/24-Agent-Architecture/08-codebase-analyzer-architecture-comparison.qmd)
