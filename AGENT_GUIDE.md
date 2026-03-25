@@ -1,7 +1,9 @@
 ---
 name: AGENT_GUIDE
 type: master
-version: 4.0
+version: 6.2
+last_updated: 2026-03-25
+changelog: "v6.3 (2026-03-25): E2E 예시·Common Mistakes를 별도 파일로 분리, changelog 압축"
 description: >
   LOAD at the START of any blog-related task. 공통 규칙(스타일, YAML, index 패턴 등)을
   담은 코어 가이드. 태스크별 상세 절차는 guides/ 폴더의 스킬 파일을 로드한다.
@@ -43,78 +45,103 @@ skill_guides:
     skill: 시리즈 정리
   - path: guides/answer-question.md
     skill: 질문 응답
+  - path: guides/retrofit-post.md
+    skill: 기존 포스트 교정
+  - path: guides/audit.md
+    skill: 콘텐츠 품질 감사
+  - path: guides/common-mistakes.md
+    skill: 오류 패턴 참조
+  - path: guides/examples.md
+    skill: E2E 실행 흐름 예시
 ---
 
 # AGENT_GUIDE.md — Blog Repository Instructions (공통 코어)
 
 ---
 
-## 1. Project Overview
+<always-on-rules>
+
+## 절대 규칙 (Always-On Rules)
+
+> 가이드 전체를 읽지 못하더라도 아래 5개는 반드시 지킨다.
+
+1. **한다 체** — 모든 콘텐츠는 `~한다/~이다/~된다`로 작성. 경어체(`~합니다`) 금지.
+2. **수동 번호 금지** — 섹션 헤더에 `## 1. 개요` 식 번호를 절대 붙이지 않는다 (`number-sections: true`로 자동 부여).
+3. **Category GUIDE 필수 로드** — 해당 카테고리 포스트를 작성·수정하기 전에 반드시 그 카테고리의 `GUIDE.md`를 읽는다.
+4. **index.qmd 업데이트** — 새 포스트 작성 후 반드시 해당 카테고리 `index.qmd`에 링크를 추가한다.
+5. **이모지 사용 금지** — `.qmd` 콘텐츠에 이모지를 넣지 않는다.
+
+</always-on-rules>
+
+---
+
+<rule-precedence>
+
+## 규칙 우선순위 (Rule Precedence)
+
+규칙이 충돌할 경우 아래 순서를 따른다 (위가 우선).
+
+```
+카테고리 GUIDE.md  >  AGENT_GUIDE.md (이 파일)  >  에이전트 자체 판단
+```
+
+- 카테고리 GUIDE가 AGENT_GUIDE와 다른 패턴을 명시하면 카테고리 GUIDE를 따른다.
+- 어느 가이드에도 언급이 없는 사항은 에이전트가 판단하되, 불확실하면 사용자에게 확인한다.
+
+</rule-precedence>
+
+---
+
+## Project Overview
 
 Quarto 기반 기술 블로그. `.qmd` 파일로 콘텐츠 작성, `quarto render`로 정적 HTML 생성, Netlify 배포.
 
 - **Site**: https://kk3225.netlify.app
 - **Author**: Kwangmin Kim
 - **Language**: 한국어 (한다 체)
-
-### Commands
-
-```bash
-quarto preview    # 로컬 미리보기
-quarto render     # 빌드
-```
+- **Commands**: `quarto preview` (로컬 미리보기), `quarto render` (빌드)
 
 ### Key Files
 
 | 파일 | 역할 |
 |------|------|
-| `_quarto.yml` | 프로젝트 설정, navbar, sidebar |
+| `_quarto.yml` | 프로젝트 설정, navbar, sidebar, `number-sections: true` |
 | `docs/blog/posts/_metadata.yml` | 포스트 공통 설정 (댓글, TOC, 배너, 날짜형식) |
-| `styles.css` | 커스텀 CSS |
-| `theme.scss` / `theme-dark.scss` | 테마 정의 |
 
 ### 메타데이터 상속 구조
 
 ```
-_quarto.yml          ← 전체 프로젝트 설정 (navbar, sidebar, toc: true 등)
-  └── docs/blog/posts/_metadata.yml  ← 포스트 공통 설정
-        - 댓글: giscus (repo: kmink3225/blog)
-        - 배너: #EDF3F9 배경, 검정 글씨
-        - TOC: 우측, 3단계 깊이
-        - 날짜 형식: "YYYY년 MM월 DD일"
-        - 언어: ko
-        - freeze: auto
-      └── 각 .qmd 파일의 YAML 헤더  ← 파일별 설정 (우선순위 가장 높음)
+_quarto.yml → docs/blog/posts/_metadata.yml → 각 .qmd YAML 헤더 (우선순위 최고)
 ```
 
 따라서 개별 `.qmd` 파일에는 `title`, `subtitle`, `description`, `categories`, `author`, `date`만 넣으면 된다.
 
 ---
 
-## 2. 카테고리 구조
+## 카테고리 구조
 
 `docs/blog/posts/` 아래에 다음 카테고리 폴더가 존재한다. 각 폴더에는 `index.qmd`(목차)와 `GUIDE.md`(작성 규칙)가 있다.
 
-| 카테고리 폴더 | 주제 | GUIDE |
-|---|---|---|
-| `Agent/` | RAG, LangChain, LangGraph, Agent 개발 | O |
-| `Code_Test/` | 알고리즘, SQL 문제 풀이 | O |
-| `Data_Science/` | CRISP-DM, EDA, Feature Engineering | O |
-| `Deep_Learning/` | CNN, RNN, Transformer, NLP, GAN | O |
-| `Engineering/` | DevOps, Python, Infra, Data Engineering | O |
-| `Experimentation/` | A/B Test, 인과추론, MAB | O |
-| `Governance/` | 데이터 거버넌스, 품질, 표준화 | O |
-| `Machine_Learning/` | 분류, 회귀, 앙상블, 비지도학습 | O |
-| `Math/` | 선형대수, 미적분, 최적화 | O |
-| `Statistics/` | 분포, 검정, 회귀, 종단분석, FDA | O |
-| `Strategy_Frameworks/` | 비즈니스 분석, 전략 프레임워크 | O |
-| `Surveilance/` | 의료기기 규제, FDA/EMA 가이드라인 | O |
+| 카테고리 폴더 | 주제 |
+|---|---|
+| `Agent/` | RAG, LangChain, LangGraph, Agent 개발 |
+| `Code_Test/` | 알고리즘, SQL 문제 풀이 |
+| `Data_Science/` | CRISP-DM, EDA, Feature Engineering |
+| `Deep_Learning/` | CNN, RNN, Transformer, NLP, GAN |
+| `Engineering/` | DevOps, Python, Infra, Data Engineering |
+| `Experimentation/` | A/B Test, 인과추론, MAB |
+| `Governance/` | 데이터 거버넌스, 품질, 표준화 |
+| `Machine_Learning/` | 분류, 회귀, 앙상블, 비지도학습 |
+| `Math/` | 선형대수, 미적분, 최적화 |
+| `Statistics/` | 분포, 검정, 회귀, 종단분석, FDA |
+| `Strategy_Frameworks/` | 비즈니스 분석, 전략 프레임워크 |
+| `Surveilance/` | 의료기기 규제, FDA/EMA 가이드라인 |
 
-> **하위 폴더 구조와 파일 배치는 각 카테고리의 `index.qmd`와 실제 폴더를 직접 확인한다.** AGENT_GUIDE에 폴더 트리를 중복 관리하지 않는다.
+> **하위 폴더 구조와 파일 배치는 각 카테고리의 `index.qmd`와 실제 폴더를 직접 확인한다.**
 
 ---
 
-## 3. 작성 규칙
+## 작성 규칙
 
 ### YAML 헤더 (필수)
 
@@ -123,7 +150,7 @@ _quarto.yml          ← 전체 프로젝트 설정 (navbar, sidebar, toc: true 
 title: "제목"
 subtitle: "부제목"
 description: |
-  1-3문장 설명. 이 글에서 다루는 핵심 내용을 요약한다.
+  1-3문장 설명.
 categories:
   - Category1
   - Category2
@@ -133,421 +160,122 @@ date: MM/DD/YYYY
 ```
 
 - `title`, `description`, `categories`, `author`, `date`는 필수
-- `format`, `toc`, `code-fold` 등은 `_metadata.yml`과 `_quarto.yml`에서 상속되므로 개별 파일에 넣지 않아도 됨
-- `date`는 `MM/DD/YYYY` 형식 사용 (예: `03/18/2026`)
-- 아직 작성하지 않은 예정 글의 date는 `1111-11-11` placeholder 사용
+- `date`는 `MM/DD/YYYY` 형식 (예: `03/18/2026`). 미작성 글은 `1111-11-11`
+- `format`, `toc`, `code-fold` 등은 `_metadata.yml`에서 상속되므로 생략
 
 ### 파일명 규칙
 
-카테고리별로 파일명 패턴이 다르다. **같은 폴더 내에서는 기존 패턴을 따른다.**
-
-| 패턴 | 예시 | 사용처 |
-|------|------|--------|
-| `번호-토픽명.qmd` | `01-TopicName.qmd` | Agent, Engineering/DevOps, Statistics |
-| `번호.토픽명.qmd` | `01.topic-name.qmd` | Engineering/Data_Engineering |
-| `날짜_토픽명.qmd` | `2023-01-17_topic.qmd` | 일부 카테고리 |
-| `유형_난이도_문제명.qmd` | `hash_level1_pocketmon.qmd` | Code_Test |
-
-**패턴 결정 방법**: 새 포스트를 넣을 폴더의 기존 파일명을 확인하고 동일한 패턴을 사용한다. 각 카테고리 GUIDE.md에 상세 패턴이 정의되어 있다.
+같은 폴더 내 기존 패턴을 따른다. 각 카테고리 GUIDE.md에 상세 패턴이 정의되어 있다.
 
 ### 콘텐츠 스타일
 
-- **한다 체 사용** (설명체): `~한다`, `~이다`, `~된다`
+- **한다 체 사용**: `~한다`, `~이다`, `~된다` (O: `Git은 분산형 버전 관리 시스템이다` / X: `~입니다`)
 - **경어체 금지**: `~합니다`, `~입니다`, `~하세요` 사용하지 않음
 - **이모지 사용 금지**
-- **섹션 헤더에 수동 번호 절대 금지**: `_quarto.yml`에서 `number-sections: true`가 전역 설정되어 있으므로, 수동 번호를 붙이면 이중 번호가 생긴다. **`##`, `###`, `####` 등 모든 수준의 마크다운 헤더에 숫자+마침표(`1.`, `2.` 등)를 접두사로 붙이지 않는다.** 이 규칙은 예외 없이 적용된다.
+- **섹션 헤더에 수동 번호 절대 금지**: `number-sections: true` 전역 설정으로 자동 부여됨. 수동 번호 시 이중 번호 발생 (O: `## 개요` / X: `## 1. 개요`)
 
-<fix-honorific-style>
+### 자주 발생하는 오류 패턴
 
-```
-# WRONG: 경어체
-Git은 분산형 버전 관리 시스템입니다.
+> 상세 Bad → Corrected 예시는 `guides/common-mistakes.md` 참조. 대표 4가지: 경어체 혼입, 수동 번호 붙이기, 수식 공백 누락, 콘텐츠 축소.
 
-# CORRECT: 한다 체
-Git은 분산형 버전 관리 시스템이다.
-```
+### 콘텐츠 분량 기본값
 
-</fix-honorific-style>
+| 항목 | 기본값 | 비고 |
+|------|--------|------|
+| 포스트 전체 길이 | **500줄 내외** (400~600줄) | 카테고리 GUIDE에 별도 지침이 있으면 그것을 따른다 |
+| 섹션 수 | 4~8개 (`##` 수준) | 주제 복잡도에 따라 조정 |
+| 코드 블록 포함 시 | 코드 + 설명 합쳐 500줄 | 코드가 길면 기능 단위로 분할하고 사이에 설명 |
+| description (YAML) | 1~3문장 | 50~150자 |
 
-<fix-manual-section-number>
-
-```
-# WRONG: 모든 수준에서 수동 번호 금지
-## 1. 개요                    ← 렌더링 시 "1. 1. 개요"로 이중 표시
-### 2. 평가의 주관성           ← 렌더링 시 "1.2. 2. 평가의 주관성"
-#### 3. 세부 항목              ← 동일 문제
-
-# CORRECT: 번호 없이 제목만 작성
-## 개요
-### 평가의 주관성
-#### 세부 항목
-```
-
-</fix-manual-section-number>
+너무 짧으면(200줄 미만) 깊이가 부족하고, 너무 길면(800줄 이상) 독자가 이탈한다. 500줄은 "하나의 주제를 충분히 설명하되 집중력이 유지되는" 분량이다.
 
 ### 줄 개행 규칙
 
-Quarto(Markdown)에서 단순 줄바꿈은 렌더링 시 무시된다. **줄 끝에 공백 2칸(`  `)을 반드시 추가**하여 `<br>` 개행을 보장한다.
+문단 내 줄바꿈이 필요한 곳에 **줄 끝 공백 2칸**을 붙인다. 빈 줄(`\n\n`) 문단 구분, 코드 블록, YAML, callout 내부, bullet list에서는 불필요하다.
 
-<fix-line-break>
+### 콘텐츠 품질 원칙
 
-```
-# WRONG: 줄 끝에 공백 없음 → 렌더링 시 한 줄로 합쳐짐
-첫 번째 줄
-두 번째 줄
-
-# CORRECT: 줄 끝에 공백 2칸 추가
-첫 번째 줄
-두 번째 줄
-```
-
-</fix-line-break>
-
-- 본문의 모든 줄(문단 내 줄바꿈이 필요한 곳)에 trailing 공백 2칸을 붙인다
-- 빈 줄(`\n\n`)로 구분되는 문단 사이에는 불필요하다
-- 코드 블록, YAML 헤더, callout 내부에서는 적용하지 않는다
-- bullet list(`- `, `* `) 항목은 자체 블록이므로 trailing 공백이 불필요하다
-
-### 주장-근거-해석 원칙
-
-모든 서술은 **주장(claim) → 근거(evidence) → 해석(interpretation)** 구조를 따른다. 어느 하나라도 빠지면 독자의 신뢰를 잃는다.
-
-**규칙 1: 주장에는 반드시 "왜"가 한 문장 이상 붙어야 한다**
-
-<fix-claim-without-why>
-
-```
-# WRONG: 주장만 있고 왜가 없다
-동일한 질의에 동일한 설정을 적용해도 LLM 출력이 달라진다.
-따라서 복수 회 반복이 필요하다.
-
-# CORRECT: 왜 문제인지 구체적 시나리오로 보여준다
-동일한 질의에 동일한 설정을 적용해도 LLM 출력이 달라진다.
-BM25 가중치 0.3 vs 0.5를 비교하는 실험에서, 각 설정을 1회만 실행하면
-0.3이 우연히 좋은 응답을 뽑고 0.5가 나쁜 응답을 뽑는 경우를
-처치 효과로 오인할 수 있다. 반복 없이 내린 결론은 동전 한 번 던져서
-정책을 결정하는 것과 구조적으로 같다.
-```
-
-</fix-claim-without-why>
-
-**규칙 2: 숫자는 반드시 해석과 붙어야 한다. 숫자 단독은 정보가 아니라 소음이다**
-
-<fix-number-without-interpretation>
-
-```
-# WRONG: 숫자만 나열
-| 기업 내부 Agent | 수백 건 | 수개월 이상 |
-
-# CORRECT: 숫자 → 해석 → 시사점 (so what)
-| 기업 내부 Agent | 수백 건 | 수개월 이상 |
-
-하루 50건의 질의를 받는 Agent에서 MDE=10% 실험을 설계하면,
-그룹당 약 1,500건이 필요하고 이는 편도 30일이 걸린다.
-이 기간 동안 프롬프트나 문서가 업데이트되면 실험 자체가 오염되므로,
-Sequential Testing이나 오프라인 선스크리닝이 선택이 아닌 필수가 된다.
-```
-
-</fix-number-without-interpretation>
-
-**규칙 3: 구체적 사례(프로젝트, 도메인)는 일반론을 증명하는 구조로 배치한다. 일반론 옆에 병렬로 나열하지 않는다**
-
-<fix-example-without-connection>
-
-```
-# WRONG: 일반론과 사례가 병렬 나열 — 왜 여기 있는지 불명확
-Agent는 모델 × 프롬프트 × top-k × 청킹 등 다층 파라미터가 상호작용한다.
-
-| Agent | 도메인 | 태스크 |
-| QnA Chatbot | 표준화 | Q&A |
-| Data Std Helper | 메타데이터 | 추천 |
-
-# CORRECT: 일반론 → 사례가 일반론을 구체화 → 시사점
-Agent는 모델 × 프롬프트 × top-k × 청킹 등 다층 파라미터가 상호작용한다.
-3 × 4 × 3 × 2 = 72개 조합을 모두 실험하려면, 그룹당 200건 기준으로
-72 × 200 = 14,400건이 필요하다. 하루 50건이면 288일, 거의 1년이다.
-이것이 Fractional factorial이나 Thompson Sampling이 선택이 아닌 필수인 이유다.
-
-| Agent | 도메인 | 태스크 | 실험 설계 차이 |
-| QnA Chatbot | 표준화 | Q&A | 정답이 명확 → Hit Rate로 실험 가능 |
-| Insilico | 코드 | 분석·설명 | 주관 판단 → 자동 지표만으로 불충분 |
-
-같은 A/B 프레임이어도 Agent마다 실험 설계가 달라지는 이유가 여기 있다.
-```
-
-</fix-example-without-connection>
-
-**규칙 4: 추상적 개념에는 반드시 직관적 설명(비유, 반사실, 일상 대응)을 붙인다**
-
-수식이나 정의만으로는 "왜 이것이 의미 있는가"를 전달할 수 없다. 도메인 지식이 없는 독자도 핵심 아이디어를 파악할 수 있도록, 추상적 개념이 등장하는 **바로 그 위치에** 직관적 설명을 삽입한다.
-
-직관적 설명이 **필수**인 경우:
-
-| 상황 | 직관적 설명 유형 | 배치 위치 |
-|------|-----------------|-----------|
-| 수식이 처음 등장할 때 | 수식이 **뜻하는 바**를 일상어로 1~2문장 | 수식 직후 |
-| 통계적 가정 (SUTVA, positivity 등) | "이 가정이 깨지면 무슨 일이 생기는가" 반사실 시나리오 | 가정 정의 직후 |
-| 알고리즘의 핵심 메커니즘 | 일상적 비유 (예: 식당 선택, 동전 던지기 등) | 알고리즘 설명 시작부 |
-| 보정 방법 (Bonferroni, Alpha Spending 등) | "보정하지 않으면 어떻게 되는가" 반사실 + "보정이 하는 일"을 비유로 | 보정 소개 직후 |
-| 지표/점수 (κ, ICC, Cohen's d 등) | 해당 값이 실무에서 **체감되는 차이**로 번역 | 점수 정의 직후 |
-
-<fix-abstract-without-intuition>
-
-```
-# WRONG: 수식/정의만 있고 직관 없음
-Alpha spending function α*(t)는 정보 분율 t에서 누적으로 소비된 α의 양을 정의한다.
-α*(t): [0,1] → [0,α]
-
-# CORRECT: 수식 + 직관을 바로 붙인다
-Alpha spending function α*(t)는 정보 분율 t에서 누적으로 소비된 α의 양을 정의한다.
-α*(t): [0,1] → [0,α]
-
-직관적으로, α는 실험 전체에서 쓸 수 있는 "오판 허용 예산"이다.
-한정된 예산(α=0.05)을 중간 분석마다 조금씩 꺼내 쓰는 구조이므로,
-일찍 많이 쓰면 나중에 남는 예산이 줄어든다. O'Brien-Fleming은
-초반에 거의 쓰지 않고 마지막에 몰아 쓰는 "절약형" 전략이다.
-```
-
-</fix-abstract-without-intuition>
-
-**자기 점검**: 수식, 가정, 알고리즘, 보정 방법, 지표가 등장할 때마다 "도메인 비전문 독자가 이 단락만 읽고 핵심 아이디어를 말할 수 있는가?"를 확인한다. 말할 수 없으면 비유 또는 반사실 시나리오를 추가한다.
-
-**요약: 모든 서술 블록에 대한 자기 점검**
+모든 서술은 **주장 → 근거 → 해석** 구조를 따른다.
 
 | 점검 항목 | 질문 | 미충족 시 조치 |
 |-----------|------|---------------|
-| 주장 → 왜 | "왜 그게 문제인가?"에 답하는가 | 시나리오 또는 반사실적 비교를 추가한다 |
-| 숫자 → 해석 | 숫자 뒤에 "so what"이 있는가 | 실무적 임팩트(기간, 비용, 위험)로 번역한다 |
-| 사례 → 연결 | 이 사례가 왜 여기 있는지 독자가 알 수 있는가 | 사례가 일반론을 증명하는 구조로 재배치한다 |
-| 나열 → 흐름 | 목록이 단순 나열인가, 논리 흐름인가 | 항목 간 인과·순서 관계를 명시한다 |
-| 추상 → 직관 | 수식·가정·알고리즘 뒤에 비유 또는 반사실이 있는가 | 일상어 비유 또는 "이것이 없으면?" 시나리오를 추가한다 |
+| 주장 → 왜 | "왜 그게 문제인가?"에 답하는가 | 시나리오 또는 반사실적 비교를 추가 |
+| 숫자 → 해석 | 숫자 뒤에 "so what"이 있는가 | 실무적 임팩트로 번역 |
+| 사례 → 연결 | 이 사례가 왜 여기 있는지 독자가 아는가 | 일반론을 증명하는 구조로 재배치 |
+| 나열 → 흐름 | 목록이 단순 나열인가, 논리 흐름인가 | 항목 간 인과·순서 관계를 명시 |
+| 추상 → 직관 | 수식·가정·알고리즘 뒤에 비유가 있는가 | 일상어 비유 또는 반사실 시나리오 추가 |
 
 ### 수식 (LaTeX)
 
-<fix-latex-spacing>
-
-```
-# WRONG: $ 양쪽에 공백 없음 → Quarto가 LaTeX로 인식 못 함
-모수$\theta$를 추정한다
-
-# CORRECT: $ 양쪽에 공백
-모수 $\theta$ 를 추정한다
-
-# 예외: 구두점은 공백 없이 붙어도 됨
-($\theta$), $\theta$,
-```
-
-</fix-latex-spacing>
-
-- 인라인 수식: `$수식$` — **`$` 양쪽에 반드시 공백을 둔다**
-- 블록 수식: `$$수식$$`
-- 교재 소스에서 가져온 수식 중 깨진 것이 있을 수 있다. 의미가 불명확한 수식은 교과서 맥락에서 재구성한다
-- 교재 인용 시 `(저자, 연도, Ch.N)` 형식을 사용한다 (예: `(Casella & Berger, 2002, Ch.5)`)
-
-### 코드 블록
-
-````markdown
-```bash
-# shell 명령
-poetry install
-```
-
-```python
-# Python 코드
-import pandas as pd
-```
-
-```toml
-# 설정 파일
-[tool.poetry]
-name = "my-project"
-```
-````
-
-실행 가능한 코드 블록이 필요한 경우:
-
-````markdown
-```{python}
-#| eval: true
-import pandas as pd
-```
-````
-
-### Quarto Callout 블록
-
-```markdown
-::: {.callout-tip}
-팁 내용
-:::
-
-::: {.callout-warning}
-경고 내용
-:::
-
-::: {.callout-important}
-중요 내용
-:::
-
-::: {.callout-note}
-참고 내용
-:::
-```
+- 인라인: `$수식$` — **`$` 양쪽에 반드시 공백** (O: `모수 $\theta$ 를` / X: `모수$\theta$를`)
+- 블록: `$$수식$$`
+- 교재 인용 시 `(저자, 연도, Ch.N)` 형식
 
 ---
 
-## 4. index.qmd 업데이트 규칙
+## index.qmd 업데이트 규칙
 
-**새 포스트를 작성한 후 반드시 해당 카테고리의 `index.qmd`에 링크를 추가해야 한다.**
+**새 포스트 작성 후 반드시 해당 카테고리의 `index.qmd`에 링크를 추가한다.**
 
-### 링크 추가 패턴
+### 링크 패턴
 
-index.qmd마다 링크 형식이 다르다. **기존 패턴을 반드시 따른다.**
+index.qmd마다 형식이 다르다. **기존 패턴을 반드시 따른다.** 대상 index.qmd를 읽고 기존 항목의 형식을 확인한 후 동일하게 작성한다.
 
-#### 패턴 A: 번호 목록 + 상대경로 (Agent)
+| 패턴 | 사용처 | 형식 요약 |
+|------|--------|----------|
+| A: 번호 목록 | Agent | `1.  [텍스트](./서브폴더/파일.qmd)` |
+| B: 날짜 + bullet | Engineering, Statistics, Governance | `* YYYY-MM-DD, [텍스트](./서브폴더/파일.qmd)` |
+| C: 순수 목록 | Math, Deep_Learning | 링크 있는 항목과 없는 항목 혼재 |
+| D: 구조화된 학습 경로 | Experimentation, Machine_Learning | 설명 문단 + 중첩 bullet + `1111-11-11` 미작성 항목 |
 
-```markdown
-### 섹션 제목
+- 상대경로: 같은 폴더 `./파일.qmd`, 서브폴더 `./서브폴더/파일.qmd`, 다른 카테고리 `../Other/파일.qmd`
+- index.qmd 날짜는 `YYYY-MM-DD` (YAML 헤더의 `MM/DD/YYYY`와 다름에 주의)
 
-1.  [링크텍스트](./서브폴더/파일명.qmd)
-2.  [링크텍스트](./서브폴더/파일명.qmd)
-```
+### Placeholder 링크
 
-- 번호는 `1.  ` (숫자+마침표+공백2칸)
-- 상대경로는 `./`로 시작
-- 계층 구조: `##` → `###` → `####` 순서로 섹션 분류
-
-#### 패턴 B: 날짜 + bullet list (Engineering, Statistics, Governance)
-
-```markdown
-## 섹션 제목
-
-* YYYY-MM-DD, [링크텍스트](./서브폴더/파일명.qmd)
-* YYYY-MM-DD, [링크텍스트](./서브폴더/파일명.qmd)
-```
-
-- `* ` (별표+공백)으로 시작
-- 날짜는 `YYYY-MM-DD` 형식 (YAML 헤더의 `MM/DD/YYYY`와 다름에 주의)
-- 하위 항목은 `  * ` (공백2칸+별표+공백)으로 들여쓰기
-
-#### 패턴 C: 순수 목록 (Math, Deep_Learning)
-
-```markdown
-## 섹션 제목
-
-* YYYY-MM-DD, [링크텍스트](./서브폴더/파일명.qmd)
-1.  링크 없는 텍스트 항목
-```
-
-- 링크가 있는 항목과 없는 항목(미작성)이 혼재
-
-#### 패턴 D: 구조화된 학습 경로 (Experimentation, Machine_Learning)
-
-```markdown
-## 섹션 제목
-
-설명 텍스트
-
-* [링크텍스트](./서브폴더/파일명.qmd)
-  * YYYY-MM-DD, [하위 링크](./서브폴더/파일명.qmd)
-  * 1111-11-11, [미작성 항목](./서브폴더/파일명.qmd)
-```
-
-- 설명 문단 포함
-- 중첩 bullet 사용
-- 미작성 항목은 `1111-11-11` 날짜 사용
-
-### 상대경로 규칙
-
-| 포스트 위치 | index.qmd 위치 | 상대경로 |
-|---|---|---|
-| 같은 폴더 | `Category/index.qmd` | `./파일명.qmd` |
-| 서브폴더 | `Category/index.qmd` | `./서브폴더/파일명.qmd` |
-| 다른 카테고리 | `Category/index.qmd` | `../OtherCategory/파일명.qmd` |
-
-<fix-index-link-pattern>
-
-```
-# WRONG: 기존 패턴이 * 인데 - 로 작성
-- 2026-03-21, [제목](./파일명.qmd)
-
-# CORRECT: 기존 패턴을 그대로 따름
-* 2026-03-21, [제목](./파일명.qmd)
-
-# WRONG: index.qmd에 날짜가 YAML 형식(MM/DD/YYYY)
-* 03/21/2026, [제목](./파일명.qmd)
-
-# CORRECT: index.qmd 날짜는 YYYY-MM-DD 형식
-* 2026-03-21, [제목](./파일명.qmd)
-```
-
-</fix-index-link-pattern>
-
-### Placeholder 링크 원칙
-
-**파일이 아직 존재하지 않더라도 논리적으로 필요한 주제는 placeholder 링크로 포함한다.** 포스트의 "관련 주제" 섹션에서도 선행/후속 지식으로 필요하지만 아직 작성되지 않은 포스트의 경로를 미리 지정해 둔다. 파일이 생성되면 링크가 자연스럽게 연결된다.
+파일이 아직 없어도 논리적으로 필요한 주제는 placeholder 링크로 포함한다. 파일 생성 시 자동 연결된다.
 
 ### 크로스 카테고리 링크
 
-**하나의 .qmd 파일이 여러 index.qmd에 중복으로 링크될 수 있다.** 파일은 물리적으로 한 폴더에만 존재하지만, 논리적으로 관련된 모든 카테고리의 index.qmd에서 참조한다. 크로스 카테고리 링크 시 `../OtherCategory/파일명.qmd` 형식을 사용한다.
+하나의 `.qmd`가 여러 `index.qmd`에 링크될 수 있다. 물리적 위치는 주 카테고리에 두되, 관련 카테고리의 index.qmd에도 `../OtherCategory/파일.qmd`로 크로스 링크를 건다. YAML `categories`에 관련 카테고리를 모두 나열한다.
 
-### 복수 카테고리 태깅
+### Multi-disciplinary 주제
 
-**하나의 포스트는 여러 카테고리에 동시에 속할 수 있다.** 포스트의 내용이 여러 분야에 걸쳐 있으면 YAML 헤더의 `categories` 필드에 관련 카테고리를 모두 나열한다. 포스트는 반드시 하나의 카테고리 폴더에만 물리적으로 존재해야 한다는 제약은 없다 — 물리적 위치는 **주 카테고리** 폴더에 두되, 논리적으로 관련된 모든 카테고리를 태깅하고 각 카테고리의 index.qmd에 크로스 링크를 건다.
-
-```yaml
-# 예시: Math 폴더에 물리적으로 존재하지만, ML/DS/Statistics에도 관련
-categories:
-  - Mathematics          # 주 카테고리 (물리적 위치)
-  - Machine Learning     # 관련 카테고리
-  - Data Science         # 관련 카테고리
-  - Statistics           # 관련 카테고리
-```
-
-| 항목 | 규칙 |
-|------|------|
-| 물리적 위치 | 주 카테고리 폴더에 둔다 |
-| YAML `categories` | 관련된 모든 카테고리를 나열한다 |
-| index.qmd 링크 | 주 카테고리 + 관련 카테고리의 index.qmd **모두**에 크로스 링크를 건다 |
-| 주 카테고리 판단 기준 | 포스트의 **출발점이 되는 개념**이 속한 분야. 응용이 아닌 핵심 원리 기준 |
-
-### Multi-disciplinary 주제 작성 원칙
-
-여러 분야가 융합되는 주제를 작성할 때는 해당 주제와 관련된 **모든 카테고리의 GUIDE.md를 함께 참조**한다.
-
-| 주제 | 주 카테고리 | 함께 참조할 GUIDE |
-|---|---|---|
-| A/B 테스트 | Experimentation | Statistics, Engineering, Data_Science |
-| 생존 분석 | Statistics | Experimentation, Machine_Learning, Deep_Learning |
-| 종단 데이터 | Statistics | Machine_Learning, Deep_Learning, Experimentation |
-| RAG 시스템 | Agent | Engineering, Math |
-| 모델 배포 | Engineering | Machine_Learning, Data_Science, Experimentation |
-| 데이터 품질 | Governance | Statistics, Engineering |
-| 의료 AI 규제 | Surveilance | Statistics, Deep_Learning |
-| 함수 구조와 추정 | Math | Machine_Learning, Data_Science, Statistics |
-
-포스트 작성 시:
-
-1. 주 카테고리의 GUIDE에서 콘텐츠 구조를 따른다
-2. 관련 카테고리의 GUIDE에서 해당 분야의 용어, 표기법, 참조 교재를 확인한다
-3. YAML `categories`에 관련 카테고리를 모두 나열한다
-4. "관련 주제" 섹션에서 모든 관련 카테고리의 포스트를 크로스 링크한다
-5. 관련 카테고리의 index.qmd에도 크로스 링크를 추가한다
+여러 분야가 융합되는 주제를 작성할 때는 **관련된 모든 카테고리의 GUIDE.md를 함께 참조**한다. 주 카테고리 GUIDE에서 콘텐츠 구조를 따르고, 관련 카테고리 GUIDE에서 용어·표기법·교재를 확인한다.
 
 ---
 
-## 5. 태스크 라우팅
+<task-routing>
+
+## 태스크 라우팅
+
+### 스킬 간 의존성
+
+```
+info-search.md (공통 전처리)
+    │
+    ├──→ write-post.md ──→ audit.md (후처리)
+    │
+    ├──→ convert-tbd.md ──→ audit.md
+    │
+    ├──→ answer-question.md (독립 — audit 불필요)
+    │
+    ├──→ organize-series.md ──→ audit.md
+    │
+    └──→ retrofit-post.md ──→ audit.md (내장)
+                │
+                └── retrofit-post는 내부 Step 마지막에 audit 항목을 자체 포함
+
+[호출 관계 요약]
+- info-search.md: 모든 태스크의 전처리 (1:N)
+- audit.md: write-post, convert-tbd, organize-series의 후처리 (N:1)
+- retrofit-post.md: audit 항목을 내부에 포함 (자체 완결)
+- answer-question.md: info-search만 선행, 후처리 없음 (독립)
+```
 
 ### 공통 선행: 통합 정보 탐색 (모든 태스크)
 
-**태스크 유형에 관계없이**, 사용자 요청을 받으면 `guides/info-search.md`의 병렬 탐색 프로토콜을 먼저 실행한다. 탐색 결과를 확보한 상태에서 아래 태스크별 절차를 진행한다.
-
-```
-사용자 요청
-    ↓
-guides/info-search.md 실행 (블로그 + 교재 + 사전지식, 병렬)
-    ↓
-태스크 유형 판별 + 해당 스킬 가이드 로드
-```
+**태스크 유형에 관계없이**, 사용자 요청을 받으면 `guides/info-search.md`의 병렬 탐색 프로토콜을 먼저 실행한다.
 
 > **예외**: GUIDE.md 자체 수정처럼 콘텐츠 탐색이 불필요한 태스크는 info-search를 생략할 수 있다.
 
@@ -560,11 +288,49 @@ guides/info-search.md 실행 (블로그 + 교재 + 사전지식, 병렬)
 | 주제에 대한 질문 답변 | `guides/answer-question.md` | info-search → 3개 레이어 통합 답변 |
 | 시리즈 정리/재구성 | `guides/organize-series.md` + Category GUIDE | info-search → 전체 읽기 → 진단 → 설계 → 파일 처리 |
 | TBD.qmd 전환 | `guides/convert-tbd.md` + 대상 Category GUIDE | info-search → 분류 → 재작성 → index 업데이트 → 초기화 |
+| 기존 포스트 교정 | `guides/retrofit-post.md` + 해당 Category GUIDE | 형식 → 구조 → 콘텐츠 보강 → audit 실행 |
+| 콘텐츠 품질 감사 | `guides/audit.md` + 해당 Category GUIDE | 태스크 완료 직후 → 스캔 → 보강 → 재검증 |
 | GUIDE.md 자체 수정 | AGENT_GUIDE.md (이 파일) | 기존 규칙 보존, 추가/구조화만 (info-search 생략 가능) |
+
+</task-routing>
 
 ---
 
-## 6. Boundaries
+<stop-and-ask>
+
+## 중단 및 확인 트리거 (Stop-and-Ask)
+
+아래 상황에서는 **즉시 작업을 멈추고 사용자에게 확인**을 받는다.
+
+| 트리거 | 임계값 / 조건 |
+|--------|---------------|
+| 파일 생성 | 한 태스크에서 **3개 이상** 파일을 새로 생성해야 할 때 → 생성 예정 파일 목록을 먼저 보여주고 승인 후 진행 |
+| 파일 삭제/이동 | **1개라도** 삭제·이동이 필요할 때 → 대상 목록과 사유를 보여주고 승인 후 진행 |
+| index.qmd 패턴 판별 불가 | 기존 항목이 없거나 패턴(A/B/C/D)을 특정할 수 없을 때 → 판단 근거와 함께 사용자에게 질문 |
+| 카테고리 분류 모호 | 포스트가 2개 이상 카테고리에 동등하게 해당할 때 → 후보 카테고리를 나열하고 사용자에게 선택 요청 |
+| 가이드 파일 부재 | 로드해야 할 Category GUIDE.md 또는 skill guide가 존재하지 않을 때 → 로드 생략 후 사용자에게 알림 |
+
+</stop-and-ask>
+
+---
+
+<fallback>
+
+## 에러 및 예외 처리 (Fallback)
+
+| 상황 | 대응 |
+|------|------|
+| 참조해야 할 파일(GUIDE.md, index.qmd 등)이 존재하지 않음 | 해당 로드를 생략하고, 생략 사실과 영향 범위를 사용자에게 알린다 |
+| index.qmd의 링크 패턴을 자동 판별할 수 없음 | 기존 항목 2~3개를 인용하며 사용자에게 패턴 확인을 요청한다 |
+| 교재 파일(`docs/book/`)이 경로에 없음 | 교재 참조 없이 진행하되, 교재 미참조임을 포스트 상단 주석 또는 사용자 메시지로 명시한다 |
+| 카테고리 GUIDE.md에 파일명 규칙이 정의되지 않음 | 같은 폴더 내 기존 파일명에서 패턴을 추론하되, 추론 결과를 사용자에게 확인받는다 |
+| 판단 불가 (위 어디에도 해당하지 않는 예외) | 작업을 중단하고 상황을 설명한 뒤 사용자에게 지시를 요청한다 |
+
+</fallback>
+
+---
+
+## Boundaries
 
 <boundaries>
 
@@ -578,16 +344,68 @@ guides/info-search.md 실행 (블로그 + 교재 + 사전지식, 병렬)
 - placeholder 링크로 미래 콘텐츠 경로 사전 설계
 - 크로스 카테고리 링크 추가
 
-### 할 수 없는 것
+### 행동 규칙 (하면 안 되는 것)
 
 - 기존 포스트의 내용을 삭제하거나 축소
 - 교재 원문을 그대로 복붙 (반드시 한다 체로 재작성)
 - 블로그에 없는 내용을 블로그에서 읽은 것처럼 인용
-- 사용자 확인 없이 대량 파일 생성
-- `_quarto.yml`, `_metadata.yml`, `styles.css` 등 프로젝트 설정 파일 수정
 - Category GUIDE.md를 읽지 않고 해당 카테고리 포스트 작성
 - Summary MD만 읽고 블로그 작성 (Full MD 확인 필수)
 - 읽지 않은 교재 구간의 내용을 원문에서 확인한 것처럼 서술
-- 마크다운 헤더(`##`, `###`, `####`)에 수동 번호 붙이기 (`## 1. 제목`, `### 2. 제목` 등 — `number-sections: true` 전역 설정과 충돌)
+- 마크다운 헤더에 수동 번호 붙이기
+
+### 권한 제한 (접근/수정이 금지된 것)
+
+- `_quarto.yml`, `_metadata.yml`, `styles.css` 등 프로젝트 설정 파일 수정
+- 사용자 확인 없이 대량 파일 생성 (3개 이상 → Stop-and-Ask)
 
 </boundaries>
+
+---
+
+<output-format>
+
+## 작업 완료 보고 형식 (Output Format)
+
+모든 태스크 완료 시, 아래 형식으로 사용자에게 결과를 보고한다.
+
+```
+### 작업 결과
+
+- **태스크**: (수행한 태스크 유형)
+- **생성/수정 파일**:
+  - `경로/파일명.qmd` — (변경 요약)
+  - `경로/index.qmd` — (링크 추가 등)
+- **주요 판단**: (에이전트가 자체 판단한 사항이 있으면 기술)
+- **미완료/후속 작업**: (남은 작업이 있으면 기술, 없으면 "없음")
+```
+
+- 파일을 변경하지 않은 태스크(질문 답변 등)는 파일 목록 대신 답변 요약을 넣는다.
+- 보고는 간결하게. 불필요한 반복 설명을 하지 않는다.
+
+</output-format>
+
+---
+
+<self-check>
+
+## 셀프 체크리스트 (Self-Check)
+
+**모든 태스크 완료 직후**, 아래 항목을 에이전트 스스로 점검한다. 위반 항목이 있으면 보고 전에 수정한다.
+
+- [ ] **절대 규칙(Always-On Rules) 5개 전체 준수** — 한다 체, 수동 번호 금지, Category GUIDE 로드, index.qmd 업데이트, 이모지 금지
+- [ ] YAML 헤더 필수 필드(`title`, `description`, `categories`, `author`, `date`)가 모두 있는가?
+- [ ] `date` 형식이 `MM/DD/YYYY`인가?
+- [ ] index.qmd 링크 패턴이 기존 항목과 동일한가?
+- [ ] 수식 `$...$` 양쪽에 공백이 있는가?
+- [ ] 포스트 분량이 기본값(500줄 내외) 범위 안인가?
+
+> `guides/audit.md`의 심층 감사는 별도 태스크로 실행한다. 위 체크리스트는 모든 태스크에 내장된 최소 검증이다.
+
+</self-check>
+
+---
+
+## End-to-End 예시
+
+> Happy Path 및 Stop-and-Ask 발동 예시는 `guides/examples.md` 참조.
