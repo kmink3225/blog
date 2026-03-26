@@ -3,7 +3,7 @@ name: changelog-summary
 type: skill
 description: >
   git 히스토리 기반으로 블로그 포스트의 생성/수정/삭제 이력을 요약한다.
-  기간별(오늘, 이번주, 최근 N일) 조회를 지원한다.
+  임의 기간(오늘, 이번주, 최근 N일, N개월, N년, 전체) 조회를 지원한다.
 prerequisite:
   - AGENT_GUIDE.md (공통 코어)
 ---
@@ -21,7 +21,9 @@ prerequisite:
 - "오늘 변경된 포스트 요약해줘"
 - "이번주 포스트 정리해줘"
 - "최근 N일간 뭐 만들었지"
-- "어떤 포스트가 생성/수정되었는지 보고싶어"
+- "지난달 포스트 요약"
+- "올해 뭐 만들었지" / "2025년 포스트 요약"
+- "블로그 전체 현황 보여줘"
 
 ## 조회 절차
 
@@ -50,7 +52,29 @@ git log --since="이번주 월요일 날짜" --name-status --pretty=format:"%h %
 
 # 최근 N일
 git log --since="N days ago" --name-status --pretty=format:"%h %ad %s" --date=short -- "docs/blog/posts/**/*.qmd"
+
+# 최근 N개월
+git log --since="N months ago" --name-status --pretty=format:"%h %ad %s" --date=short -- "docs/blog/posts/**/*.qmd"
+
+# 특정 연도
+git log --since="2025-01-01" --until="2025-12-31" --name-status --pretty=format:"%h %ad %s" --date=short -- "docs/blog/posts/**/*.qmd"
+
+# 전체 이력
+git log --name-status --pretty=format:"%h %ad %s" --date=short -- "docs/blog/posts/**/*.qmd"
 ```
+
+### 장기간 조회 시 축약 규칙
+
+1개월 이상 기간을 조회하면 개별 파일 나열이 과도해질 수 있다. 아래 기준으로 축약 수준을 조정한다.
+
+| 기간 | 출력 방식 |
+|------|----------|
+| 1주 이내 | 커밋별 개별 파일 나열 |
+| 1주 ~ 1개월 | 주 단위로 묶어 카테고리별 편수 요약 |
+| 1개월 초과 | 월 단위로 묶어 카테고리별 편수 요약 |
+| 1년 초과 / 전체 | 연-월 단위로 묶어 카테고리별 편수 + 총계 |
+
+축약 시에도 사용자가 "상세히" 요청하면 개별 파일을 나열한다.
 
 ### Step 3: 결과 분류
 
