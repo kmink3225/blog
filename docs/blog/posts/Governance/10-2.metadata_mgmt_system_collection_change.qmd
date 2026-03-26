@@ -1,0 +1,319 @@
+---
+title: "메타데이터 관리 시스템 설계 — 수집과 변경 관리"
+subtitle: "DBMS별 수집 아키텍처, 변경 요청-승인 워크플로, DDL 자동 생성"
+description: |
+  메타데이터 자동 수집 아키텍처(DBMS별 시스템 카탈로그 쿼리, 수집기 설계),
+  변경 관리 워크플로(상태 머신, 결재, 작업 규칙 검증),
+  DDL/DML 자동 생성, 데이터 변경 전후 값 암호화 저장을 다룬다.
+author: Kwangmin Kim
+categories:
+  - Data Governance
+date: 03/26/2026
+format:
+  html:
+    number-depth: 3
+    grid:
+      sidebar-width: 200px
+      body-width: 1150px
+      margin-width: 300px
+---
+
+## 메타데이터 수집 아키텍처
+
+### 수집 대상과 수집 방식
+
+메타데이터 수집은 대상에 따라 수집 방식이 달라진다.
+
+| 수집 대상 | 수집 방식 | 수집 주기 |
+|----------|----------|----------|
+| 스키마 구조 | 시스템 카탈로그 쿼리 | 변경 감지 시 또는 주기적(1일 1회) |
+| 테이블 행 수 | `COUNT(*)` 쿼리 | 주기적(1일 1회, 야간 배치) |
+| 칼럼 프로파일링 | 통계 쿼리(MIN/MAX/COUNT) | 수동 또는 주기적(1주 1회) |
+| 공통 코드 값 | 실제 코드 테이블 SELECT | 변경 감지 시 또는 주기적 |
+| 품질 진단 | 규칙 기반 SELECT 쿼리 | 주기적 또는 수동 실행 |
+
+### DBMS별 시스템 카탈로그 쿼리
+
+각 DBMS에서 스키마 정보를 수집하는 쿼리는 DBMS마다 다르다. 멀티 DBMS를 지원하려면 DBMS 타입별 수집 쿼리 집합을 별도로 관리해야 한다.
+
+**Oracle**
+
+```sql
+-- 테이블 목록
+SELECT owner, table_name, num_rows, last_analyzed
+FROM all_tables
+WHERE owner = :schema_name;
+
+-- 칼럼 목록
+SELECT owner, table_name, column_name, column_id,
+       data_type, data_length, data_precision, data_scale,
+       nullable, data_default, comments
+FROM all_tab_cols atc
+LEFT JOIN all_col_comments acc
+  ON atc.owner = acc.owner
+ AND atc.table_name = acc.table_name
+ AND atc.column_name = acc.column_name
+WHERE atc.owner = :schema_name;
+```
+
+**PostgreSQL**
+
+```sql
+-- 테이블 목록
+SELECT schemaname, tablename,
+       pg_total_relation_size(quote_ident(tablename)) AS data_size
+FROM pg_tables
+WHERE schemaname = :schema_name;
+
+-- 칼럼 목록
+SELECT c.table_schema, c.table_name, c.column_name, c.ordinal_position,
+       c.data_type, c.character_maximum_length,
+       c.numeric_precision, c.numeric_scale,
+       c.is_nullable, c.column_default,
+       pgd.description AS column_comment
+FROM information_schema.columns c
+LEFT JOIN pg_catalog.pg_statio_all_tables st
+  ON c.table_schema = st.schemaname AND c.table_name = st.relname
+LEFT JOIN pg_catalog.pg_description pgd
+  ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
+WHERE c.table_schema = :schema_name;
+```
+
+**MySQL / MariaDB**
+
+```sql
+SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION,
+       DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
+       NUMERIC_PRECISION, NUMERIC_SCALE,
+       IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = :schema_name;
+```
+
+### 수집기 설계 원칙
+
+**추상화 레이어**
+
+DBMS별 수집 쿼리는 추상화 인터페이스 뒤에 숨긴다. 새로운 DBMS 타입을 추가할 때 기존 코드를 수정하지 않고 구현 클래스만 추가할 수 있어야 한다.
+
+```
+IMetaCollector (인터페이스)
+├── collectTables(connId) -> List<TableMeta>
+├── collectColumns(connId, tableId) -> List<ColumnMeta>
+├── collectIndexes(connId, tableId) -> List<IndexMeta>
+└── collectRowCount(connId, tableId) -> Long
+
+OracleMetaCollector implements IMetaCollector
+MySQLMetaCollector implements IMetaCollector
+PostgreSQLMetaCollector implements IMetaCollector
+MSSQLMetaCollector implements IMetaCollector
+TiberoMetaCollector implements IMetaCollector
+```
+
+**변경 감지 방식**
+
+매번 전체 스키마를 수집하면 운영 DB에 불필요한 부하를 준다. 효율적인 방식은 이전 수집 결과와 비교해서 실제로 변경된 항목만 저장소 DB에 반영하는 것이다.
+
+```
+수집 프로세스:
+1. DBMS에서 현재 스키마 정보 수집 (시스템 카탈로그 쿼리)
+2. 저장소 DB에서 이전 수집 결과 로드
+3. 두 결과를 비교 (추가/변경/삭제 항목 식별)
+4. 변경사항만 저장소 DB에 반영
+5. 변경 이력(TB_META_COLUMN_HIS 등)에 기록
+6. 갭 분석 결과 테이블 갱신
+```
+
+**운영 서버 부하 최소화**
+
+행 수 계산(`COUNT(*)`)과 프로파일링은 I/O가 많은 작업이므로 반드시 운영 서버의 업무 시간 외(야간/주말)에 실행해야 한다. 스케줄러에 실행 시간대 제한을 설정한다.
+
+---
+
+## 변경 관리 워크플로 설계
+
+변경 관리는 메타데이터 시스템에서 가장 복잡한 부분이다. 변경의 대상에 따라 워크플로가 다르지만, 기본 구조는 동일하다.
+
+### 변경 관리 대상의 분류
+
+| 변경 관리 대상 | 변경 언어 | 승인 단계 (예시) |
+|---------------|----------|-----------------|
+| DB 스키마 변경 | DDL | 개발자 요청 -> DA 검토 -> DBA 승인 -> 배포 |
+| 공통코드 변경 | DML | 개발자 요청 -> 업무 담당자 승인 -> 배포 |
+| 마스터 데이터 변경 | DML | 사용자 요청 -> 담당자 승인 -> 배포 |
+| 비즈니스 메타 변경 | 없음(UI) | DA 직접 입력 또는 검토자 승인 |
+| 표준 변경 | 없음(UI) | DA 요청 -> 표준 관리자 승인 |
+| 중요데이터 등급 변경 | 없음(UI) | 보안 관리자 승인 |
+
+### 변경 요청 상태 머신
+
+```
+[작성 중] -> [제출됨] -> [검토 중] -> [승인됨] -> [배포 완료]
+                |            |
+            [취소됨]     [반려됨]
+                             |
+                         [재작성 중] -> [제출됨]
+```
+
+### 변경 관리 데이터 모델
+
+```
+TB_CHANGE_REQUEST (변경 요청 마스터)
+├── req_id           BIGINT PK
+├── req_no           VARCHAR         요청 번호 (예: REQ-2024-00123)
+├── req_type         VARCHAR         SCHEMA/CODE/MDM/BIZ_META/STANDARD/SENSITIVE
+├── title            VARCHAR         요청 제목
+├── description      TEXT            변경 사유 및 상세 내용
+├── status           VARCHAR         DRAFT/SUBMITTED/REVIEWING/APPROVED/DEPLOYED/CANCELLED/REJECTED
+├── requester_id     VARCHAR         요청자
+├── req_dt           DATETIME        요청 일시
+├── deploy_env       VARCHAR         배포 대상 환경 (DEV/STAGING/PROD)
+├── expected_deploy_dt DATE          배포 예정일
+└── actual_deploy_dt   DATETIME      실제 배포 일시
+
+TB_CHANGE_DETAIL (변경 상세 - 변경 요청 1개에 N개의 변경 항목)
+├── detail_id        BIGINT PK
+├── req_id           BIGINT FK
+├── object_type      VARCHAR         TABLE/COLUMN/INDEX/CODE/MASTER_DATA
+├── object_id        BIGINT          변경 대상 객체 ID
+├── change_action    VARCHAR         ADD/MODIFY/DROP
+├── before_value     TEXT            변경 전 값 (JSON 형태로 저장)
+├── after_value      TEXT            변경 후 값 (JSON 형태로 저장)
+├── generated_sql    TEXT            자동 생성된 DDL/DML
+└── execute_result   TEXT            실행 결과 (성공/실패 메시지)
+
+TB_APPROVAL_HISTORY (결재 이력)
+├── approval_id      BIGINT PK
+├── req_id           BIGINT FK
+├── step_order       INTEGER         결재 단계 (1, 2, 3...)
+├── approver_id      VARCHAR         결재자
+├── approval_role    VARCHAR         결재 역할 (DA/DBA/SECURITY_ADMIN/BUSINESS)
+├── action           VARCHAR         APPROVE/REJECT/RETURN
+├── comment          TEXT            결재 의견
+└── action_dt        DATETIME        결재 일시
+
+TB_WORK_RULE (작업 규칙 - 변경 요청 제출 시 자동 검증)
+├── rule_id          BIGINT PK
+├── rule_name        VARCHAR         규칙명
+├── req_type         VARCHAR         적용 대상 요청 타입
+├── rule_expression  TEXT            규칙 표현식 (SQL 또는 스크립트)
+├── error_message    VARCHAR         위반 시 메시지
+└── is_blocking      CHAR(1)         위반 시 제출 차단 여부
+```
+
+### 작업 규칙(Work Rule) 검증
+
+변경 요청이 제출될 때 자동으로 실행되는 규칙 검증이다. 이 기능이 있으면 표준 위반, 코드 도메인 미매핑 등의 오류가 승인 단계까지 넘어가지 않는다.
+
+**스키마 변경 요청에 대한 작업 규칙 예시**
+
+| 규칙 | 검증 내용 | 위반 시 |
+|------|----------|---------|
+| 칼럼명 표준 검증 | 칼럼명을 단어 단위로 분리, 각 단어가 `TB_STANDARD_WORD`에 존재하는지 확인 | 경고 (non-blocking) |
+| NOT NULL 기본값 | `nullable_yn='N'`이면서 `default_value IS NULL`인 경우 | 제출 차단 (blocking) |
+| PK 칼럼 삭제 방지 | 삭제 대상 칼럼이 `IS_PK='Y'`인지 확인 | 제출 차단 (blocking) |
+| 도메인 타입 일치 | `TB_BIZ_COLUMN`의 `domain_id`로 도메인 조인, `data_type` 비교 | 경고 (non-blocking) |
+
+**코드 변경 요청에 대한 작업 규칙 예시**
+
+| 규칙 | 검증 내용 | 위반 시 |
+|------|----------|---------|
+| 도메인 매핑 확인 | `TB_CODE_GROUP`의 `domain_id`가 NULL인 경우 | 경고 |
+| 환경 간 코드 갭 | 개발/운영 코드 갭이 존재하는데 배포 요청이 없는 경우 | 경고 |
+
+---
+
+## DDL/DML 자동 생성
+
+변경 상세(`TB_CHANGE_DETAIL`)의 `before_value`와 `after_value`를 비교해서 실행할 SQL을 자동으로 생성한다. 이 기능은 개발자의 실수를 줄이고 배포 프로세스를 표준화하는 핵심 기능이다.
+
+### DDL 자동 생성 로직 (칼럼 추가 예시)
+
+변경 상세 입력:
+
+```json
+{
+  "object_type": "COLUMN",
+  "change_action": "ADD",
+  "after_value": {
+    "table_name": "TB_ORDER",
+    "column_name": "CANCEL_REASON",
+    "data_type": "VARCHAR",
+    "data_length": 500,
+    "nullable_yn": "Y",
+    "column_comment": "취소 사유"
+  }
+}
+```
+
+DBMS 타입별 DDL 생성:
+
+```sql
+-- Oracle
+ALTER TABLE TB_ORDER ADD (CANCEL_REASON VARCHAR2(500));
+COMMENT ON COLUMN TB_ORDER.CANCEL_REASON IS '취소 사유';
+
+-- MySQL
+ALTER TABLE TB_ORDER ADD COLUMN CANCEL_REASON VARCHAR(500) COMMENT '취소 사유';
+
+-- PostgreSQL
+ALTER TABLE TB_ORDER ADD COLUMN CANCEL_REASON VARCHAR(500);
+COMMENT ON COLUMN TB_ORDER.CANCEL_REASON IS '취소 사유';
+```
+
+### 갭 분석에서 변경 요청 자동 생성
+
+갭 분석 결과(`TB_GAP_RESULT`)에서 불일치 항목을 선택하면, 해당 불일치를 해소하는 변경 요청을 자동으로 생성할 수 있어야 한다.
+
+```
+갭 분석 결과:
+  개발 DB의 TB_ORDER 테이블에 CANCEL_REASON 칼럼이 있지만
+  운영 DB에는 없음
+
+-> 자동 생성된 변경 요청:
+  req_type: SCHEMA
+  title: "[개발->운영] TB_ORDER.CANCEL_REASON 칼럼 추가"
+  generated_sql: "ALTER TABLE TB_ORDER ADD CANCEL_REASON VARCHAR2(500);"
+  deploy_env: PROD
+```
+
+---
+
+## 데이터 변경 전후 값 저장 (암호화)
+
+실제 데이터 값을 변경할 때(DML 실행 시)는 변경 전/후 값을 **암호화해서 저장**해야 한다. 이것은 감사(Audit) 요구사항을 충족하는 동시에, 잘못된 변경이 발생했을 때 롤백의 근거가 된다.
+
+```
+TB_DATA_CHANGE_LOG (데이터 변경 전후 로그)
+├── log_id           BIGINT PK
+├── req_id           BIGINT FK       변경 요청 ID
+├── table_id         BIGINT FK       변경 테이블
+├── pk_value         TEXT            PK 값 (암호화)
+├── before_row       TEXT            변경 전 전체 행 데이터 (JSON, 암호화)
+├── after_row        TEXT            변경 후 전체 행 데이터 (JSON, 암호화)
+├── executed_sql     TEXT            실행된 SQL (암호화)
+├── executor_id      VARCHAR         실행자
+└── execute_dt       DATETIME        실행 일시
+```
+
+::: {.callout-warning}
+중요데이터(`TB_SENSITIVE_COLUMN`에 등록된 칼럼)가 포함된 행의 변경 로그는 반드시 암호화되어야 한다. 암호화 키 관리는 메타데이터 시스템 외부의 별도 키 관리 서비스(KMS)에 위임하는 것이 보안 원칙상 바람직하다.
+:::
+
+---
+
+## 관련 주제
+
+**시리즈 연결**
+
+- [Part 1: 개념과 범위 정의](./10-0.metadata_mgmt_system_concept.qmd)
+- [Part 2: 저장소 데이터 모델](./10-1.metadata_mgmt_system_data_model.qmd)
+- [Part 4: 품질과 보안]() — 품질 진단 규칙, 중요데이터 비식별화
+- [Part 5: 아키텍처와 우선순위]() — 전체 시스템 아키텍처, 구축 우선순위
+
+**카테고리 내 연결**
+
+- [데이터 표준화](./5-0-0.data_standard.qmd)
+- [데이터 등록 프로세스](./6-0.data_registration_process.qmd)
+- [데이터 검토 프로세스](./6-1.data_review_process.qmd)
+- [데이터 품질 측정](./8-0.data_quality_measures.qmd)

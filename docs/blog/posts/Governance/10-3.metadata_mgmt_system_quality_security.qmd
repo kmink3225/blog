@@ -1,0 +1,259 @@
+---
+title: "메타데이터 관리 시스템 설계 — 품질 관리와 데이터 보안"
+subtitle: "프로파일링, 도메인/업무 규칙 진단, 비식별화, ISMS 대응"
+description: |
+  데이터 품질 관리의 3단계(프로파일링, 도메인 규칙, 업무 규칙) 설계와
+  중요데이터 등급 체계, 비식별화 규칙, 조회 권한 설계, ISMS 인증 대응을 다룬다.
+author: Kwangmin Kim
+categories:
+  - Data Governance
+date: 03/26/2026
+format:
+  html:
+    number-depth: 3
+    grid:
+      sidebar-width: 200px
+      body-width: 1150px
+      margin-width: 300px
+---
+
+## 데이터 품질 관리 설계
+
+품질 관리는 메타데이터에 정의된 규칙을 실제 데이터에 대해 검증하는 기능이다. 메타데이터 없이는 품질 진단 규칙을 정의할 수 없고, 품질 진단 없이는 메타데이터의 정합성을 검증할 수 없다. 두 기능은 순환 관계에 있다.
+
+### 품질 진단의 3단계
+
+#### 프로파일링 (Profiling)
+
+실제 데이터의 분포와 특성을 파악하는 사전 단계다. 프로파일링 결과는 도메인 규칙 설정의 근거가 된다.
+
+```
+TB_PROFILE_RESULT (프로파일링 결과)
+├── profile_id       BIGINT PK
+├── column_id        BIGINT FK
+├── env_type         VARCHAR         환경
+├── row_count        BIGINT          전체 행 수
+├── null_count       BIGINT          NULL 값 수
+├── distinct_count   BIGINT          고유값 수
+├── min_value        VARCHAR         최솟값
+├── max_value        VARCHAR         최댓값
+├── avg_value        VARCHAR         평균값 (숫자형인 경우)
+├── min_length       INTEGER         최소 길이
+├── max_length       INTEGER         최대 길이
+├── top_values       TEXT            상위 빈도 값 목록 (JSON)
+├── pattern_sample   TEXT            패턴 샘플 (예: 전화번호 패턴 분포)
+├── profile_dt       DATETIME        프로파일링 실행 일시
+└── job_id           BIGINT FK       실행 작업 ID
+```
+
+프로파일링 쿼리 예시 (단일 칼럼):
+
+```sql
+SELECT
+    COUNT(*)                              AS row_count,
+    COUNT(*) - COUNT({column_name})       AS null_count,
+    COUNT(DISTINCT {column_name})         AS distinct_count,
+    MIN({column_name})                    AS min_value,
+    MAX({column_name})                    AS max_value,
+    MIN(LENGTH({column_name}))            AS min_length,
+    MAX(LENGTH({column_name}))            AS max_length
+FROM {schema}.{table_name};
+```
+
+::: {.callout-warning}
+프로파일링 쿼리는 테이블 풀 스캔을 유발한다. 대용량 테이블에서는 SAMPLE 절(Oracle) 또는 TABLESAMPLE(PostgreSQL)을 사용해 샘플링 방식으로 실행해야 운영 서버 부하를 최소화할 수 있다.
+:::
+
+---
+
+#### 도메인 규칙 진단 (Domain Rule Validation)
+
+표준 도메인에 정의된 규칙을 칼럼 단위로 검증한다. 칼럼에 도메인이 매핑되어 있어야 실행 가능하다.
+
+| 규칙 타입 | 도메인 설정 예시 | 진단 쿼리 패턴 |
+|----------|-----------------|---------------|
+| RANGE | min=0, max=150 (나이) | `WHERE {col} < 0 OR {col} > 150` |
+| REGEX | `^[0-9]{2,3}-[0-9]{3,4}-[0-9]{4}$` (전화번호) | `WHERE {col} NOT REGEXP '패턴'` |
+| CODE | code_group_id='GENDER' | `WHERE {col} NOT IN (SELECT code_key FROM TB_CODE_VALUE ...)` |
+| NULL | nullable=FALSE | `WHERE {col} IS NULL` |
+
+---
+
+#### 업무 규칙 진단 (Business Rule Validation)
+
+도메인 규칙이 칼럼 단위 규칙이라면, 업무 규칙은 여러 칼럼 간의 관계를 검증하는 테이블 단위 또는 교차 테이블 규칙이다.
+
+```
+TB_BUSINESS_RULE (업무 규칙)
+├── rule_id          BIGINT PK
+├── rule_name        VARCHAR         규칙명
+├── rule_type        VARCHAR         COLUMN_CROSS/TABLE/CROSS_TABLE
+├── target_table_id  BIGINT FK       대상 테이블
+├── rule_sql         TEXT            진단 SQL (오류 건수 또는 오류 행을 반환)
+├── error_threshold  DECIMAL         허용 오류율 (예: 0.01 = 1% 이하)
+├── severity         VARCHAR         CRITICAL/WARNING/INFO
+├── owner_id         VARCHAR         규칙 관리 담당자
+├── status           VARCHAR         ACTIVE/INACTIVE
+└── last_run_dt      DATETIME        마지막 실행 일시
+```
+
+업무 규칙 SQL 예시 — "주문 완료 상태인 주문은 반드시 결제 정보가 있어야 한다":
+
+```sql
+SELECT COUNT(*) AS error_cnt
+FROM TB_ORDER o
+WHERE o.ORDER_STATUS = 'COMPLETED'
+  AND NOT EXISTS (
+    SELECT 1 FROM TB_PAYMENT p
+    WHERE p.ORDER_ID = o.ORDER_ID
+  );
+```
+
+---
+
+### 품질 진단 결과 저장
+
+```
+TB_QUALITY_RESULT (품질 진단 결과)
+├── result_id        BIGINT PK
+├── job_id           BIGINT FK       진단 작업 ID
+├── rule_type        VARCHAR         DOMAIN/BUSINESS
+├── rule_id          BIGINT          도메인 규칙 ID 또는 업무 규칙 ID
+├── column_id        BIGINT FK       대상 칼럼 (도메인 규칙인 경우)
+├── table_id         BIGINT FK       대상 테이블
+├── total_count      BIGINT          전체 검증 건수
+├── error_count      BIGINT          오류 건수
+├── error_rate       DECIMAL         오류율 (error_count / total_count)
+├── status           VARCHAR         PASS/FAIL/WARNING
+├── run_dt           DATETIME        실행 일시
+└── duration_sec     INTEGER         실행 소요 시간(초)
+```
+
+### 품질 점수 계산 방식
+
+품질 모니터링 대시보드에서 "전체 품질 점수"를 단일 지표로 표현하려면 집계 방식을 정의해야 한다.
+
+```
+칼럼 품질 점수 = 1 - (오류 건수 / 전체 건수)
+테이블 품질 점수 = AVG(도메인 규칙 점수) x 가중치 + AVG(업무 규칙 점수) x 가중치
+전체 품질 점수 = 지정한 데이터 모델 범위의 테이블 품질 점수 평균
+```
+
+::: {.callout-tip}
+도메인 규칙 오류율보다 업무 규칙 오류율이 높은 것이 일반적이다. 업무 규칙은 여러 테이블 간 정합성을 검증하므로 위반이 더 많이 발생한다.
+:::
+
+---
+
+## 데이터 보안 설계: 중요데이터 관리와 비식별화
+
+### 중요데이터 등급 체계 설계
+
+5등급 체계가 표준적이지만, 조직 특성에 따라 달라질 수 있다. 중요한 것은 등급의 개수보다 **등급 분류 기준을 명문화**하는 것이다.
+
+| 등급 | 명칭 | 예시 데이터 |
+|------|------|-----------|
+| 1 | 극비 | 내부 영업 전략, 미공개 재무 정보 |
+| 2 | 대외비 | 고객 계약 정보, 직원 급여 정보 |
+| 3 | 내부용 | 고객 연락처, 주문 이력 |
+| 4 | 제한 | 집계된 고객 통계, 일반 업무 데이터 |
+| 5 | 공개 | 공개 카탈로그, 일반 공지 내용 |
+| PI | 개인정보 | 이름, 주민번호, 이메일 (등급과 별도 관리) |
+
+개인정보(PI)는 법적 규제(개인정보보호법, GDPR 등)의 적용을 받으므로 1~5등급 체계와 별도로 관리한다.
+
+### 비식별화 규칙 설계
+
+비식별화(De-identification)는 개인을 식별할 수 있는 속성을 제거하거나 변환하는 과정이다. 목적에 따라 두 가지 시나리오가 있다.
+
+**시나리오 1: 데이터 조회 시 실시간 마스킹**
+
+중요데이터로 등록된 칼럼을 조회할 때 원본 값 대신 마스킹된 값을 보여주는 방식이다. 권한이 있는 사용자에게만 원본 값을 보여준다.
+
+| 데이터 유형 | 원본 | 마스킹 결과 |
+|------------|------|-----------|
+| 주민등록번호 | 850101-1234567 | 850101-1****** |
+| 전화번호 | 010-1234-5678 | 010-****-5678 |
+| 이메일 | user01@gmail.com | us****@gmail.com |
+| 이름 | 김철수 | 김** |
+| 카드번호 | 1234 5678 9012 3456 | **** **** **** 3456 |
+
+구현 방식: 데이터 조회 레이어에서 `TB_SENSITIVE_COLUMN` 조회 -> 마스킹 대상 칼럼 여부 확인 -> 사용자 권한 확인 -> 마스킹 함수 적용.
+
+**시나리오 2: 테스트 데이터 생성을 위한 비식별화**
+
+운영 데이터를 개발/테스트 환경에 제공할 때 개인정보를 완전히 비식별화하는 방식이다.
+
+| 기법 | 설명 | 적용 예시 |
+|------|------|----------|
+| 마스킹 (Masking) | 특정 자리를 *로 치환 | 010-1234-5678 -> 010-****-**** |
+| 일반화 (Generalization) | 구체적 값을 범주로 변환 | 1985-03-15 -> 1980년대생 |
+| 삭제 (Suppression) | 완전 삭제 또는 NULL 처리 | 주민번호 -> NULL |
+| 잡음 추가 (Noise) | 숫자에 임의 오차 추가 | 123,456 -> 121,890 |
+| 가명화 (Pseudonymization) | 일관된 가짜값 대체 | 홍길동 -> 박민수 |
+
+::: {.callout-tip}
+가명화는 동일 원본 값이 항상 동일한 가명으로 변환되어야 한다. 그렇지 않으면 JOIN 관계가 깨진다. 이를 위해 원본-가명 매핑 테이블을 별도 관리한다. 단, 이 매핑 테이블 자체가 민감 정보이므로 엄격하게 접근 통제해야 한다.
+:::
+
+### 데이터 조회 권한 설계
+
+```
+TB_VIEW_PERMISSION (데이터 조회 권한)
+├── perm_id          BIGINT PK
+├── user_id          VARCHAR         사용자 ID
+├── table_id         BIGINT FK       대상 테이블 (NULL이면 전체)
+├── env_type         VARCHAR         조회 허용 환경
+├── include_sensitive CHAR(1)        중요데이터 원본 조회 허용 여부 (Y: 원본, N: 마스킹)
+├── approved_by      VARCHAR         승인자
+├── approved_dt      DATETIME        승인 일시
+├── expire_dt        DATE            만료일 (NULL이면 무기한)
+└── purpose          TEXT            조회 목적 (감사용)
+
+TB_VIEW_LOG (데이터 조회 로그)
+├── log_id           BIGINT PK
+├── user_id          VARCHAR
+├── table_id         BIGINT FK
+├── env_type         VARCHAR
+├── executed_sql     TEXT            실행된 SQL
+├── row_count        INTEGER         반환된 행 수
+├── was_masked       CHAR(1)         마스킹 적용 여부
+└── log_dt           DATETIME
+```
+
+::: {.callout-warning}
+데이터 조회 기능은 운영 DBMS에 직접 접근하므로, 인덱스를 타지 않는 Full Scan 쿼리가 실행되면 운영 서버에 심각한 부하를 준다. 반드시 인덱스 칼럼 기반의 조건을 필수 입력으로 요구하고, 최대 1,000행으로 결과를 제한해야 한다.
+:::
+
+---
+
+## ISMS 인증 대응
+
+정보보호관리체계(ISMS) 인증은 중요데이터 관리 기능의 주요 도입 동기 중 하나다.
+
+| ISMS 통제 요구사항 | 메타데이터 시스템 대응 기능 |
+|-------------------|--------------------------|
+| 중요정보 식별 및 분류 | `TB_SENSITIVE_COLUMN` 등급 체계 관리 |
+| 접근권한 관리 | `TB_VIEW_PERMISSION` 조회 권한 승인 프로세스 |
+| 접근 로그 관리 | `TB_VIEW_LOG` SQL 로깅 |
+| 개인정보 처리 현황 파악 | 개인정보 칼럼 목록 조회 (`is_personal_info='Y'`) |
+| 개인정보 비식별화 | `TB_MASK_RULE` 비식별화 규칙 관리 |
+| DB 스키마 변경 이력 | `TB_META_COLUMN_HIS` 이력 테이블 |
+| 취약점 점검 (비표준 칼럼) | 갭 분석 및 표준 준수율 모니터링 |
+
+---
+
+## 관련 주제
+
+**시리즈 연결**
+
+- [Part 1: 개념과 범위 정의](./10-0.metadata_mgmt_system_concept.qmd)
+- [Part 2: 저장소 데이터 모델](./10-1.metadata_mgmt_system_data_model.qmd)
+- [Part 3: 수집과 변경 관리](./10-2.metadata_mgmt_system_collection_change.qmd)
+- [Part 5: 아키텍처와 우선순위]() — 전체 시스템 아키텍처, 구축 우선순위
+
+**카테고리 내 연결**
+
+- [데이터 품질 측정](./8-0.data_quality_measures.qmd)
+- [데이터 표준화](./5-0-0.data_standard.qmd)
+- [데이터 코드 관리](./5-4.data_code.qmd)

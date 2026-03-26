@@ -1,0 +1,303 @@
+---
+title: "메타데이터 관리 시스템 설계 — 아키텍처와 구축 우선순위"
+subtitle: "전체 시스템 아키텍처, ERD 통합, Data Lineage, 단계별 구현 계획"
+description: |
+  메타데이터 관리 시스템의 전체 아키텍처(프레젠테이션/애플리케이션/데이터 레이어),
+  ERD 모델링 통합, Data Lineage 설계, 5단계 구현 우선순위를 다룬다.
+author: Kwangmin Kim
+categories:
+  - Data Governance
+date: 03/26/2026
+format:
+  html:
+    number-depth: 3
+    grid:
+      sidebar-width: 200px
+      body-width: 1150px
+      margin-width: 300px
+---
+
+## 전체 시스템 아키텍처
+
+### 컴포넌트 구성
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    프레젠테이션 레이어                        │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │ 웹 UI    │  │ 모바일   │  │ API      │  │ 배치 UI  │   │
+│  │ (역할별  │  │ (간편    │  │ (외부    │  │ (스케줄  │   │
+│  │  화면)   │  │  조회)   │  │  연동)   │  │  관리)   │   │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                            |
+┌─────────────────────────────────────────────────────────────┐
+│                    애플리케이션 레이어                        │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              API Gateway / Auth                       │   │
+│  └──────────────────────────────────────────────────────┘   │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │메타데이터 │  │ 표준/    │  │ 품질     │  │ 변경     │   │
+│  │ 수집     │  │ 코드     │  │ 관리     │  │ 관리     │   │
+│  │ 서비스   │  │ 관리     │  │ 서비스   │  │ 서비스   │   │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │ 보안/    │  │ ERD/     │  │ 데이터   │  │ 알림/    │   │
+│  │ 권한     │  │ 모델링   │  │ 조회     │  │ 결재     │   │
+│  │ 서비스   │  │ 서비스   │  │ 서비스   │  │ 서비스   │   │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                            |
+┌─────────────────────────────────────────────────────────────┐
+│                    데이터 레이어                              │
+│  ┌──────────────────────────┐  ┌───────────────────────┐   │
+│  │   메타데이터 저장소 DB    │  │  파일 저장소           │   │
+│  │ (MySQL/PostgreSQL/Oracle) │  │  (ERD 파일, 첨부파일)  │   │
+│  └──────────────────────────┘  └───────────────────────┘   │
+│  ┌──────────────────────────┐  ┌───────────────────────┐   │
+│  │   캐시 (Redis)            │  │  검색 인덱스           │   │
+│  │ (코드, 표준 데이터 캐싱)  │  │  (ElasticSearch 옵션)  │   │
+│  └──────────────────────────┘  └───────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                            |
+┌─────────────────────────────────────────────────────────────┐
+│                    대상 DBMS 레이어                           │
+│  Oracle  MySQL  PostgreSQL  MSSQL  DB2  Tibero  Sybase      │
+│  (개발/스테이징/운영/DW 각 환경별)                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 캐시 전략
+
+공통코드와 표준 데이터는 변경 빈도가 낮고 조회 빈도가 높다. 이 데이터를 매번 DB에서 조회하면 불필요한 부하가 발생한다.
+
+| 항목 | 설정 |
+|------|------|
+| 캐시 대상 | `TB_CODE_VALUE`, `TB_STANDARD_DOMAIN`, `TB_MASK_RULE` |
+| 캐시 키 | `{cache_type}:{env_type}:{id}` |
+| TTL | 코드/표준: 1시간, 마스킹 규칙: 30분 |
+| 무효화 시점 | 변경 요청이 배포 완료 상태로 전환될 때 |
+
+---
+
+## ERD 모델링 툴 통합
+
+ERD 모델링 기능을 메타데이터 시스템에 통합하면 모델-DBMS 갭 분석이 가능해진다. 완전한 ERD 편집기를 직접 구현하는 것은 매우 복잡하므로, 단계별 접근이 현실적이다.
+
+### ERD 데이터 모델
+
+```
+TB_ERD_DIAGRAM (ERD 다이어그램)
+├── diagram_id       BIGINT PK
+├── diagram_name     VARCHAR         다이어그램명
+├── conn_id          VARCHAR FK      기준 연결 (어떤 DB를 표현하는가)
+├── diagram_type     VARCHAR         LOGICAL/PHYSICAL/CONCEPTUAL
+├── version          INTEGER         버전 번호
+├── is_latest        CHAR(1)         최신 버전 여부
+├── created_by       VARCHAR
+├── create_dt        DATETIME
+└── update_dt        DATETIME
+
+TB_ERD_TABLE (ERD에 배치된 테이블)
+├── erd_table_id     BIGINT PK
+├── diagram_id       BIGINT FK
+├── table_id         BIGINT FK       TB_META_TABLE 참조 (연결된 실제 테이블)
+├── display_x        INTEGER         ERD 캔버스 X 좌표
+├── display_y        INTEGER         ERD 캔버스 Y 좌표
+├── display_width    INTEGER         표시 너비
+└── display_height   INTEGER         표시 높이
+
+TB_ERD_RELATION (ERD 관계선)
+├── relation_id      BIGINT PK
+├── diagram_id       BIGINT FK
+├── parent_erd_table_id  BIGINT FK   부모 테이블
+├── child_erd_table_id   BIGINT FK   자식 테이블
+├── parent_column_id     BIGINT FK   부모 테이블의 PK 칼럼
+├── child_column_id      BIGINT FK   자식 테이블의 FK 칼럼
+├── relation_type        VARCHAR     ONE_TO_ONE/ONE_TO_MANY/MANY_TO_MANY
+└── identifying_yn       CHAR(1)     식별 관계 여부
+```
+
+ERD에서 모델링한 내용을 실제 DBMS에 적용하려면, ERD의 테이블/칼럼 정보를 `TB_META_TABLE`/`TB_META_COLUMN`에 적재하고, 갭 분석을 통해 실제 DBMS와의 불일치를 확인한 다음 DDL을 생성해서 변경 요청으로 처리한다.
+
+---
+
+## 데이터 흐름 관리 (Data Lineage)
+
+데이터 흐름 관리는 "이 칼럼의 데이터는 어디서 왔는가", "이 테이블이 변경되면 어떤 테이블들이 영향을 받는가"를 추적하는 기능이다.
+
+```
+TB_DATA_FLOW (데이터 흐름)
+├── flow_id          BIGINT PK
+├── flow_name        VARCHAR         흐름 명칭
+├── flow_type        VARCHAR         ETL/API/BATCH/REAL_TIME
+├── source_table_id  BIGINT FK       소스 테이블
+├── target_table_id  BIGINT FK       타겟 테이블
+├── transform_rule   TEXT            변환 규칙 설명
+├── owner_id         VARCHAR         흐름 관리 담당자
+└── status           VARCHAR
+
+TB_DATA_FLOW_COLUMN (칼럼 단위 흐름)
+├── col_flow_id      BIGINT PK
+├── flow_id          BIGINT FK
+├── source_column_id BIGINT FK       소스 칼럼
+├── target_column_id BIGINT FK       타겟 칼럼
+└── transform_expr   TEXT            칼럼 변환 수식
+```
+
+### 영향도 분석 (Impact Analysis)
+
+특정 테이블 또는 칼럼이 변경될 때 영향받는 하위 객체를 재귀적으로 추적한다.
+
+```sql
+-- 특정 테이블 변경 시 영향받는 모든 다운스트림 테이블 재귀 조회
+WITH RECURSIVE downstream AS (
+    -- 초기: 직접 영향
+    SELECT flow_id, target_table_id AS affected_table_id, 1 AS depth
+    FROM TB_DATA_FLOW
+    WHERE source_table_id = :changed_table_id
+
+    UNION ALL
+
+    -- 재귀: 간접 영향
+    SELECT f.flow_id, f.target_table_id, d.depth + 1
+    FROM TB_DATA_FLOW f
+    INNER JOIN downstream d ON f.source_table_id = d.affected_table_id
+    WHERE d.depth < 10  -- 무한 루프 방지
+)
+SELECT DISTINCT affected_table_id, MIN(depth) AS min_depth
+FROM downstream
+GROUP BY affected_table_id
+ORDER BY min_depth;
+```
+
+---
+
+## 기능 우선순위와 단계별 구현 계획
+
+메타데이터 관리 시스템을 한 번에 모두 구현하는 것은 비현실적이다. 핵심 가치를 제공하는 기능부터 단계적으로 구현하고, 각 단계에서 실제 사용 가치를 검증하면서 확장하는 것이 현실적인 접근이다.
+
+### 단계별 구현 로드맵
+
+**1단계: 메타데이터 카탈로그 (핵심 기반)**
+
+"우리 DB에 어떤 테이블과 칼럼이 있는가"를 한 곳에서 볼 수 있게 한다.
+
+| 기능 | 관련 테이블 |
+|------|-----------|
+| DBMS 연결 관리 | `TB_CONNECTION` |
+| 스키마 자동 수집 | `TB_META_TABLE`, `TB_META_COLUMN`, `TB_META_INDEX` |
+| 기술 메타데이터 조회 UI | - |
+| 비즈니스 메타데이터 입력 UI | `TB_BIZ_TABLE`, `TB_BIZ_COLUMN` |
+| 테이블/칼럼 검색 | - |
+
+기대 효과: 개발자가 "이 테이블이 뭐 하는 테이블인지" 시스템에서 즉시 확인 가능. DB 스키마 문서화 비용 제거.
+
+---
+
+**2단계: 표준 관리와 연결**
+
+"우리 DB의 명명 규칙이 얼마나 지켜지고 있는가"를 측정한다.
+
+| 기능 | 관련 테이블 |
+|------|-----------|
+| 표준 용어/단어/도메인 관리 | `TB_STANDARD_SET`, `TB_STANDARD_TERM` 등 |
+| 칼럼-도메인 매핑 | `TB_BIZ_COLUMN.domain_id` |
+| 표준 준수율 통계 | - |
+| 공통코드 관리 | `TB_CODE_GROUP`, `TB_CODE_VALUE` |
+| 코드-도메인 연결 | - |
+
+기대 효과: 표준 적용률 수치화. 신규 개발 시 표준 참조 경로 확립.
+
+---
+
+**3단계: 갭 분석과 변경 관리**
+
+"개발과 운영 환경의 차이가 무엇인지" 자동으로 탐지하고, 변경을 관리한다.
+
+| 기능 | 관련 테이블 |
+|------|-----------|
+| 환경 간 갭 분석 | `TB_GAP_RESULT` |
+| 변경 요청 워크플로 | `TB_CHANGE_REQUEST`, `TB_APPROVAL_HISTORY` |
+| DDL/DML 자동 생성 | `TB_CHANGE_DETAIL` |
+| 작업 규칙 검증 | `TB_WORK_RULE` |
+| 변경 이력 관리 | `TB_META_COLUMN_HIS` 등 |
+
+기대 효과: 배포 누락으로 인한 운영 장애 감소. 무허가 스키마 변경 감지.
+
+---
+
+**4단계: 품질 관리**
+
+"실제 데이터가 정의한 규칙을 얼마나 지키고 있는가"를 측정한다.
+
+| 기능 | 관련 테이블 |
+|------|-----------|
+| 테이블 프로파일링 | `TB_PROFILE_RESULT` |
+| 도메인 규칙 진단 | `TB_QUALITY_RESULT` |
+| 업무 규칙 관리 및 진단 | `TB_BUSINESS_RULE` |
+| 품질 모니터링 대시보드 | - |
+| 품질 개선 요청 연동 | 품질 오류 -> 변경 요청 자동 생성 |
+
+기대 효과: 데이터 품질 수치화. 데이터 오염 조기 발견.
+
+---
+
+**5단계: 보안과 활용**
+
+"중요데이터를 안전하게 보호하면서 활용도를 높인다."
+
+| 기능 | 관련 테이블 |
+|------|-----------|
+| 중요데이터 등급 관리 | `TB_SENSITIVE_COLUMN` |
+| 비식별화 규칙 관리 | `TB_MASK_RULE` |
+| 데이터 조회 권한 관리 | `TB_VIEW_PERMISSION` |
+| 조회 로그 | `TB_VIEW_LOG` |
+| 데이터 흐름 관리 | `TB_DATA_FLOW` |
+
+기대 효과: ISMS 인증 대응 기반 확립. 분석가의 데이터 접근 안전화.
+
+---
+
+## 핵심 설계 결정 요약
+
+메타데이터 관리 시스템을 설계하면서 반드시 명시적으로 결정해야 하는 항목들이다.
+
+| 결정 항목 | 결정해야 할 내용 |
+|----------|-----------------|
+| 지원 DBMS 종류 | Oracle/MySQL/PostgreSQL/MSSQL/DB2/Tibero/Sybase 중 선택 |
+| 지원 환경 수 | 개발/스테이징/운영/DW 각각을 별도 연결로 관리할지 |
+| 표준 복수 관리 여부 | 전사 표준만 관리할지, 로컬/비표준도 지원할지 |
+| 변경 관리 포함 여부 | 조회 전용 카탈로그로 시작할지, 변경 워크플로를 포함할지 |
+| 품질 진단 포함 여부 | 1단계에 포함할지, 나중으로 미룰지 |
+| ERD 편집기 포함 여부 | 내장 ERD 툴을 만들지, 외부 툴과 연동할지 |
+| 결재 단계 수 | 몇 단계 결재를 지원할지, 조직 구조에 따라 결정 |
+| 암호화 방식 | 데이터 변경 로그 암호화에 어떤 알고리즘/키 관리를 쓸지 |
+| 캐시 인프라 | Redis를 쓸지, 애플리케이션 내장 캐시를 쓸지 |
+| 검색 인프라 | ElasticSearch를 도입해 전문 검색을 지원할지 |
+| 멀티 테넌시 | 여러 조직이 하나의 시스템을 공유할지 (SaaS 형태) |
+
+::: {.callout-warning}
+이 결정들은 서로 의존 관계가 있다. 예를 들어 "변경 관리 포함 여부"를 Yes로 결정하면 결재 단계 수, 암호화 방식, 이력 테이블 설계가 연쇄적으로 영향을 받는다. 초기 설계 단계에서 스테이크홀더들과 이 결정들을 명시적으로 합의해두지 않으면, 구현 도중 범위가 계속 확장되는 스코프 크리프(scope creep)가 발생한다.
+:::
+
+---
+
+## 관련 주제
+
+**시리즈 연결**
+
+- [Part 1: 개념과 범위 정의](./10-0.metadata_mgmt_system_concept.qmd)
+- [Part 2: 저장소 데이터 모델](./10-1.metadata_mgmt_system_data_model.qmd)
+- [Part 3: 수집과 변경 관리](./10-2.metadata_mgmt_system_collection_change.qmd)
+- [Part 4: 품질과 보안](./10-3.metadata_mgmt_system_quality_security.qmd)
+
+**카테고리 내 연결**
+
+- [데이터 거버넌스 아키텍처](./3.architetucre.qmd)
+- [데이터 모델링](./4-0.data_model.qmd)
+- [온톨로지와 메타데이터 저장소 설계](./9-1.metadata_ontology.qmd)
+
+**다른 카테고리 연결**
+
+- [데이터 파이프라인 (Airflow)](../Engineering/Data_Engineering/airflow/01.intro.qmd)
