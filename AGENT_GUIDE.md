@@ -53,6 +53,8 @@ skill_guides:
     skill: 오류 패턴 참조
   - path: guides/examples.md
     skill: E2E 실행 흐름 예시
+  - path: guides/changelog-summary.md
+    skill: 변경 이력 요약
 ---
 
 # AGENT_GUIDE.md — Blog Repository Instructions (공통 코어)
@@ -271,6 +273,7 @@ info-search.md (공통 전처리)
 - audit.md: write-post, convert-tbd, organize-series의 후처리 (N:1)
 - retrofit-post.md: audit 항목을 내부에 포함 (자체 완결)
 - answer-question.md: info-search만 선행, 후처리 없음 (독립)
+- changelog-summary.md: 선행/후처리 없음 (git 조회 독립 태스크)
 ```
 
 ### 공통 선행: 통합 정보 탐색 (모든 태스크)
@@ -290,6 +293,7 @@ info-search.md (공통 전처리)
 | TBD.qmd 전환 | `guides/convert-tbd.md` + 대상 Category GUIDE | info-search → 분류 → 재작성 → index 업데이트 → 초기화 |
 | 기존 포스트 교정 | `guides/retrofit-post.md` + 해당 Category GUIDE | 형식 → 구조 → 콘텐츠 보강 → audit 실행 |
 | 콘텐츠 품질 감사 | `guides/audit.md` + 해당 Category GUIDE | 태스크 완료 직후 → 스캔 → 보강 → 재검증 |
+| 변경 이력 요약 | `guides/changelog-summary.md` | git log/diff 조회 → 기간별 분류 → 요약 보고 (info-search 생략) |
 | GUIDE.md 자체 수정 | AGENT_GUIDE.md (이 파일) | 기존 규칙 보존, 추가/구조화만 (info-search 생략 가능) |
 
 </task-routing>
