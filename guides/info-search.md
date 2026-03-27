@@ -80,26 +80,7 @@ agent의 사전지식은 너무 방대하여, 제약 없이 쓰면 불필요한 
 
 ### 그룹 구조
 
-| 폴더 | 교재 | 분야 |
-|------|------|------|
-| `statistics/` | Casella & Berger | 수리통계 |
-| `linear_algebra/` | Strang, Magnus, Matrix Cookbook | 선형대수, 행렬 미분 |
-| `generalized_linear_model/` | McCullagh & Nelder, Faraway | GLM, 회귀 |
-| `mixed_model/` | Hedeker & Gibbons | 종단 데이터, 반복측정 |
-| `survival/` | Kleinbaum, Klein, Hosmer, Collett | 생존 분석 |
-| `epidemiology/` | Hernan, Woodward, Schulz, Maxwell, Buisson | 인과추론, 역학, 실험설계, AB test |
-| `bayesian/` | Gelman, Downey | 베이지안 |
-| `functional_data_analysis/` | Ramsay×2, Kokoszka | 함수형 데이터 분석 |
-| `machine_learning/` | Hastie(ESL), James(ISLR), Bishop(PRML), Murphy(PMLIntro/Advanced/Supp) | 기계학습 |
-| `deep_learning/` | Goodfellow, Zhang(D2L), Raschka, Sutton(RL), Jurafsky(SLP) | 딥러닝, NLP, RL |
-| `data_science/` | Huyen(AIEng/DesigningML), Provost | 데이터 사이언스, ML 시스템, AI 엔지니어링 |
-| `strategy_frameworks/` | Porter, Rumelt, Kahneman, Hurley, Lipton, Parrish×3, Dixit, Lafley | 전략, 논리, 멘탈 모델, 게임이론 |
-| `behavioral_analysis/` | Cooper(ABA), Kohavi(ABTest), Montgomery(DOE), Thaler(Nudge) | 행동분석, A/B 테스트, 실험설계 |
-| `psychology/` | Eysenck, Cialdini, Morling, PAIR, HAX | 인지심리, 설득, 연구방법, AI UX |
-| `linguistics/` | Sidnell, Huang, McEnery | 대화분석, 화용론, 코퍼스 언어학 |
-| `governance/` | DAMA DMBOK | 데이터 거버넌스 |
-| `ontology/` | Robinson(GraphDB), Kejriwal(KG), Keet(Ontology), CodeQL, CPG, KR | 지식 그래프, 온톨로지, 코드 분석 |
-| `timeseries/` | Hyndman & Athanasopoulos(FPP3) | 시계열 예측, ARIMA, ETS, 동적 회귀 |
+`docs/book/` 하위 폴더별 교재 목록은 `ls docs/book/`으로 확인한다. 각 카테고리 GUIDE.md에 해당 카테고리가 참조하는 교재가 명시되어 있다.
 
 ### 2-Layer 교재 참조 체계
 
@@ -112,28 +93,7 @@ agent의 사전지식은 너무 방대하여, 제약 없이 쓰면 불필요한 
 
 ### Summary MD 구조
 
-각 Summary MD는 다음 구조를 따른다:
-
-```yaml
----
-name: "책 제목"
-type: book-summary
-authors: "저자"
-year: 2024
-sources:                                    # 변환 소스 정보
-  - file: "Author-Book_marker_full.md"
-    tool: Marker
-  - file: "Author-Book_azure_full.md"
-    tool: Document Intelligence
----
-```
-
-각 챕터 항목:
-- **핵심**: 2~3문장 핵심 요약
-- **키워드**: 검색용 태그
-- **상세**: → `Full MD 파일명` Ch N (L:라인번호) + 10~15문장 한국어 요약 (Full MD 본문 기반)
-
-파일 끝에 `## Marker 세부 목차` 섹션이 있는 경우, `L:숫자`로 Full MD의 세부 섹션 라인을 직접 참조할 수 있다.
+각 Summary MD는 YAML frontmatter(`name`, `type: book-summary`, `authors`, `year`, `sources`) + 챕터별 항목(**핵심** 2~3문장, **키워드**, **상세** → `Full MD 파일명` Ch N (L:라인번호) + 10~15문장 요약)으로 구성된다. 파일 끝에 `## Marker 세부 목차`가 있으면 `L:숫자`로 Full MD 세부 섹션을 직접 참조할 수 있다.
 
 ### 교재 참조 절차
 
@@ -181,30 +141,7 @@ Full MD 읽기 (선택적 구간 or 챕터 전체)
 
 ### Book Source 유지보수
 
-교재 소스는 정적 자산이 아니라 지속적으로 관리해야 한다. 다음 상황에서 유지보수가 필요하다:
-
-#### 새 교재 추가 시
-
-새 PDF 변환 파일(`_full.md`)이 `docs/book/`에 추가되면:
-1. 해당 책의 `*-summary.md`를 생성한다 (YAML frontmatter + 챕터별 핵심/키워드/상세)
-2. `sources:` 필드에 변환 파일 정보를 추가한다
-3. Marker 변환본이 있으면 `## Marker 세부 목차` 섹션을 추가한다
-4. 이 파일(AGENT_GUIDE.md)의 그룹 구조 테이블을 업데이트한다
-5. 해당 카테고리의 `GUIDE.md`에 교재 레퍼런스를 추가한다
-
-#### 기존 교재의 변환 품질 개선 시
-
-더 좋은 변환 도구로 재변환한 경우(예: Azure → Marker):
-1. 새 `_full.md` 파일을 추가하고, summary의 `sources:`에 추가한다
-2. 상세 요약의 라인 참조(`L:숫자`)를 새 파일 기준으로 업데이트한다
-3. Marker 세부 목차를 추가/갱신한다
-
-#### 정기 점검
-
-새 세션 시작 시 사용자가 요청하면, 다음을 확인한다:
-- `_full.md`가 있지만 대응하는 `*-summary.md`가 없는 파일 (누락된 summary)
-- `*-summary.md`의 `**상세**` 필드에 요약 텍스트가 없는 챕터 (미보강)
-- `sources:` 필드가 누락된 summary
+교재 추가·변환 품질 개선·정기 점검 절차는 `guides/maintain-book.md`를 참조한다.
 
 <fix-book-source-misuse>
 

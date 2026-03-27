@@ -55,6 +55,10 @@ skill_guides:
     skill: E2E 실행 흐름 예시
   - path: guides/changelog-summary.md
     skill: 변경 이력 요약
+  - path: guides/maintain-book.md
+    skill: 교재 소스 유지보수
+  - path: guides/reorganize-index.md
+    skill: index.qmd 재구성
 ---
 
 # AGENT_GUIDE.md — Blog Repository Instructions (공통 코어)
@@ -67,8 +71,8 @@ skill_guides:
 
 > 가이드 전체를 읽지 못하더라도 아래 5개는 반드시 지킨다.
 
-1. **한다 체** — 모든 콘텐츠는 `~한다/~이다/~된다`로 작성. 경어체(`~합니다`) 금지.
-2. **수동 번호 금지** — 섹션 헤더에 `## 1. 개요` 식 번호를 절대 붙이지 않는다 (`number-sections: true`로 자동 부여).
+1. **한다 체** — `~한다/~이다/~된다` (O: `MLE는 로그가능도를 최대화하여 구한다` / X: `~로 구합니다`)
+2. **수동 번호 금지** — `number-sections: true`가 자동 부여 (O: `## 개요` / X: `## 1. 개요`)
 3. **Category GUIDE 필수 로드** — 해당 카테고리 포스트를 작성·수정하기 전에 반드시 그 카테고리의 `GUIDE.md`를 읽는다.
 4. **index.qmd 업데이트** — 새 포스트 작성 후 반드시 해당 카테고리 `index.qmd`에 링크를 추가한다.
 5. **이모지 사용 금지** — `.qmd` 콘텐츠에 이모지를 넣지 않는다.
@@ -274,6 +278,7 @@ info-search.md (공통 전처리)
 - retrofit-post.md: audit 항목을 내부에 포함 (자체 완결)
 - answer-question.md: info-search만 선행, 후처리 없음 (독립)
 - changelog-summary.md: 선행/후처리 없음 (git 조회 독립 태스크)
+- reorganize-index.md: 선행/후처리 없음 (index.qmd 전수 분석 독립 태스크)
 ```
 
 ### 공통 선행: 통합 정보 탐색 (모든 태스크)
@@ -294,6 +299,7 @@ info-search.md (공통 전처리)
 | 기존 포스트 교정 | `guides/retrofit-post.md` + 해당 Category GUIDE | 형식 → 구조 → 콘텐츠 보강 → audit 실행 |
 | 콘텐츠 품질 감사 | `guides/audit.md` + 해당 Category GUIDE | 태스크 완료 직후 → 스캔 → 보강 → 재검증 |
 | 변경 이력 요약 | `guides/changelog-summary.md` | git log/diff 조회 → 기간별 분류 → 요약 보고 (info-search 생략) |
+| index.qmd 재구성 | `guides/reorganize-index.md` + 해당 Category GUIDE | GUIDE.md 읽기 → 메타데이터 전수 수집 → 진단 → 재구성안 → 승인 → 적용 (info-search 생략) |
 | GUIDE.md 자체 수정 | AGENT_GUIDE.md (이 파일) | 기존 규칙 보존, 추가/구조화만 (info-search 생략 가능) |
 
 </task-routing>
@@ -403,6 +409,7 @@ info-search.md (공통 전처리)
 - [ ] index.qmd 링크 패턴이 기존 항목과 동일한가?
 - [ ] 수식 `$...$` 양쪽에 공백이 있는가?
 - [ ] 포스트 분량이 기본값(500줄 내외) 범위 안인가?
+- [ ] 모든 주장·숫자·수식 뒤에 "왜/so what/직관" 해석이 있는가?
 
 > `guides/audit.md`의 심층 감사는 별도 태스크로 실행한다. 위 체크리스트는 모든 태스크에 내장된 최소 검증이다.
 

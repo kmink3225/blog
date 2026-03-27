@@ -1,0 +1,316 @@
+---
+title: "MCP 기반 도구 통합"
+subtitle: "Agent와 외부 서비스를 연결하는 표준 프로토콜"
+description: |
+  MCP(Model Context Protocol)의 개념과 아키텍처를 설명하고,
+  Agent가 외부 도구와 연동하는 세 가지 연결 방식(웹, 커스텀, 로컬)의
+  특징과 실전 적용 기준을 정리한다.
+categories:
+  - Agent
+  - Architecture
+  - MCP
+author: Kwangmin Kim
+date: 03/27/2026
+---
+
+## MCP란
+
+MCP(Model Context Protocol)는 AI 모델이 외부의 다양한 소프트웨어 및 서비스와 상호작용할 수 있도록 **통신 규격을 하나로 통일한 개방형 표준 프로토콜**이다.
+
+::: {.callout-note}
+## 정의: MCP (Model Context Protocol)
+
+Anthropic이 제안한 범용 표준으로, AI Agent가 외부 시스템의 도구(Tool)를 발견(discover)하고
+호출(invoke)하는 방식을 표준화한다. 서비스마다 다른 API 규격을 개별적으로 연결하는 대신,
+MCP라는 단일 인터페이스로 모든 외부 도구에 접근할 수 있다.
+:::
+
+### 왜 MCP가 필요한가
+
+업무에서 사용하는 수많은 서비스(GitHub, Slack, Notion, 데이터베이스 등)는 각각 고유한 API를 가지고 있다. 문제는 이 API들의 규격과 통신 방식이 서비스마다 제각각이라는 점이다.
+
+```
+[MCP 이전]
+Agent ──→ GitHub API (규격 A)
+Agent ──→ Slack API  (규격 B)     ← 서비스마다 개별 연동 코드 필요
+Agent ──→ Notion API (규격 C)
+Agent ──→ DB API     (규격 D)
+
+[MCP 이후]
+Agent ──→ MCP ──→ GitHub MCP Server
+                ──→ Slack MCP Server    ← 단일 프로토콜로 통일
+                ──→ Notion MCP Server
+                ──→ DB MCP Server
+```
+
+MCP 이전에는 Agent가 10개의 서비스와 연동하려면 10개의 서로 다른 API 규격을 개별적으로 연결하는 코드를 작성해야 했다. MCP는 이 비효율을 해결한다. 각 서비스 앞에 MCP 규격만 적용해 두면, Agent가 어떤 서비스의 API를 사용하든 동일한 프로토콜로 통신할 수 있다.
+
+비유하자면, 형태가 제각각인 각국의 전기 콘센트 규격에 **여행용 멀티 어댑터**를 꽂아 어디서든 같은 플러그를 사용할 수 있게 만든 것과 같다.
+
+> MCP의 아키텍처 상세(Tools, Resources, Prompts 계층)와 기존 커스텀 래퍼 대비 장점은 [Agent 기술 스택의 진화](./06-agent-tech-stack-evolution.qmd)에서 다룬다. 본 포스트는 **연결 방식의 분류와 실전 적용 기준**에 초점을 맞춘다.
+
+## MCP 아키텍처
+
+MCP는 세 계층의 역할로 구성된다.
+
+```
+┌──────────────────────────────────────────────┐
+│  Host (호스트)                                │
+│  Claude Code, IDE 확장, 웹 앱 등              │
+│  Agent가 실행되는 환경                        │
+│                                              │
+│  ┌────────────────────────────────────────┐  │
+│  │  Client (클라이언트)                    │  │
+│  │  Host 내부에서 MCP Server와 1:1 연결    │  │
+│  │  프로토콜 핸들링, 요청/응답 중계         │  │
+│  └───────────┬────────────────────────────┘  │
+└──────────────┼───────────────────────────────┘
+               │ MCP Protocol (JSON-RPC)
+               ▼
+┌──────────────────────────────────────────────┐
+│  Server (서버)                                │
+│  외부 서비스의 기능을 MCP 규격으로 노출        │
+│                                              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐     │
+│  │  Tools   │ │Resources │ │ Prompts  │     │
+│  │ (도구)   │ │ (자원)   │ │(프롬프트)│     │
+│  └──────────┘ └──────────┘ └──────────┘     │
+└──────────────────────────────────────────────┘
+```
+
+| 계층 | 역할 | 예시 |
+|------|------|------|
+| **Host** | Agent가 실행되는 환경. 하나 이상의 Client를 관리한다 | Claude Code, Cursor, VS Code 확장, 웹 앱 |
+| **Client** | Host 내부에서 특정 MCP Server와 1:1 연결을 유지한다 | 각 외부 서비스별 연결 핸들러 |
+| **Server** | 외부 서비스의 기능을 Tools, Resources, Prompts로 노출한다 | GitHub MCP Server, Slack MCP Server |
+
+Server가 노출하는 세 가지 프리미티브(primitive)는 각각 다른 역할을 수행한다.
+
+| 프리미티브 | 역할 | 예시 |
+|-----------|------|------|
+| **Tools** | Agent가 호출할 수 있는 실행 가능한 함수 | `create_issue()`, `send_message()`, `query_db()` |
+| **Resources** | Agent가 읽을 수 있는 데이터 소스 | 파일 내용, DB 스키마, API 응답 캐시 |
+| **Prompts** | 특정 태스크에 최적화된 프롬프트 템플릿 | 코드 리뷰 프롬프트, 번역 프롬프트 |
+
+Agent 입장에서 MCP Server는 "이 서비스에서 무엇을 할 수 있는가"를 표준화된 형식으로 알려주는 **도구 카탈로그**이다. Agent는 Server가 노출한 Tools 목록을 탐색하고, 현재 태스크에 필요한 도구를 선택하여 호출한다.
+
+## 연결 방식의 분류
+
+MCP Server는 실행 위치와 데이터 처리 방식에 따라 세 가지로 분류된다. 이 분류를 이해하면 프로젝트 요구사항에 맞는 연결 방식을 선택할 수 있다.
+
+### 리모트 서버 (Remote Server)
+
+외부 클라우드에서 실행되는 MCP Server이다. 인터넷을 통해 접근하며, 서비스 제공자가 호스팅과 관리를 담당한다.
+
+| 항목 | 내용 |
+|------|------|
+| **실행 위치** | 외부 클라우드 서버 |
+| **접근 방식** | URL 엔드포인트를 통한 HTTP/WebSocket 연결 |
+| **인증** | OAuth, API Key 등 서비스별 인증 |
+| **대표 서비스** | GitHub, Slack, Notion, Google Calendar, Gmail |
+| **장점** | 설치 불필요, 어디서든 접근 가능, 서비스 제공자가 관리 |
+| **제약** | 인터넷 연결 필수, 데이터가 외부 서버를 경유 |
+
+```python
+# 리모트 MCP Server 연결 예시 (개념적 코드)
+mcp_config = {
+    "github": {
+        "url": "https://mcp.github.com/sse",
+        "auth": {"type": "oauth", "token": "${GITHUB_TOKEN}"}
+    },
+    "slack": {
+        "url": "https://mcp.slack.com/sse",
+        "auth": {"type": "oauth", "token": "${SLACK_TOKEN}"}
+    }
+}
+```
+
+서비스 제공자가 공식적으로 MCP Server를 운영하는 경우, 별도의 설치 없이 인증 정보만 설정하면 즉시 연동할 수 있다.
+
+### 커스텀 서버 (Custom Remote Server)
+
+공식 MCP Server가 존재하지 않는 서비스를 연동하기 위해 **직접 구축하는** 리모트 MCP Server이다.
+
+| 항목 | 내용 |
+|------|------|
+| **실행 위치** | 자체 클라우드 서버 또는 서버리스 환경 |
+| **접근 방식** | 직접 배포한 URL 엔드포인트 |
+| **대표 사례** | 사내 DB 연동, 레거시 시스템 API 래핑, 공공 데이터 API 연동 |
+| **장점** | 어떤 서비스든 MCP로 래핑 가능, 자체 로직 추가 가능 |
+| **제약** | 직접 개발-배포-관리 필요, 보안 설정 책임 |
+
+```python
+# 커스텀 MCP Server 구현 예시 (FastMCP 기반)
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("internal-db")
+
+@mcp.tool()
+def query_sales_data(quarter: str, region: str) -> str:
+    """분기별 지역 매출 데이터를 조회한다."""
+    result = db.execute(
+        "SELECT * FROM sales WHERE quarter = ? AND region = ?",
+        (quarter, region)
+    )
+    return format_result(result)
+
+@mcp.tool()
+def get_employee_info(employee_id: str) -> str:
+    """사번으로 직원 정보를 조회한다."""
+    return db.get_employee(employee_id)
+```
+
+커스텀 서버의 핵심 가치는 **MCP가 지원하지 않는 서비스를 표준 프로토콜로 편입**시키는 것이다. 사내 레거시 시스템, 국내 공공 데이터 API(DART 전자공시 등), 자체 데이터베이스 등을 MCP Server로 래핑하면 Agent가 동일한 방식으로 접근할 수 있다.
+
+### 로컬 서버 (Local Server)
+
+데이터가 외부 서버나 인터넷으로 나가지 않고, **사용자의 로컬 환경에서만 실행**되는 MCP Server이다.
+
+| 항목 | 내용 |
+|------|------|
+| **실행 위치** | 사용자 PC / 로컬 네트워크 |
+| **접근 방식** | stdio (표준 입출력) 또는 로컬 포트 |
+| **대표 사례** | 로컬 파일시스템 접근, 로컬 DB 조회, 로컬 Git 저장소 조작 |
+| **장점** | 데이터가 외부로 유출되지 않음, 네트워크 지연 없음, 민감 데이터 처리에 적합 |
+| **제약** | 해당 머신에서만 작동, 웹 기반 환경에서 사용 불가 |
+
+```json
+// Claude Code 설정 예시 (claude_desktop_config.json)
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
+    },
+    "sqlite": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "./data/local.db"]
+    }
+  }
+}
+```
+
+로컬 서버는 `stdio` 통신을 사용하여 프로세스 간 직접 데이터를 주고받는다. 네트워크를 경유하지 않으므로 보안에 민감한 데이터를 다룰 때 적합하다.
+
+### 연결 방식 비교와 선택 기준
+
+| 기준 | 리모트 서버 | 커스텀 서버 | 로컬 서버 |
+|------|-----------|-----------|----------|
+| 설치/배포 | 불필요 | 직접 배포 | 로컬 설치 |
+| 인터넷 필요 | 필수 | 필수 | 불필요 |
+| 데이터 보안 | 외부 경유 | 자체 관리 | 로컬 격리 |
+| 확장성 | 높음 (클라우드) | 높음 (자체 인프라) | 낮음 (단일 머신) |
+| 팀 공유 | 계정 연동으로 즉시 공유 | URL 공유로 팀 사용 | 개인 환경에 한정 |
+| 웹 환경 지원 | 가능 | 가능 | 불가 |
+
+**선택 가이드:**
+
+- 공식 MCP Server가 존재하는 SaaS → **리모트 서버**
+- 사내 시스템, 레거시 API, 공공 데이터 → **커스텀 서버**
+- 민감 데이터, 로컬 파일, 개인 개발 환경 → **로컬 서버**
+
+실무에서는 이 세 가지를 혼합하여 사용하는 경우가 일반적이다. GitHub, Slack 등은 리모트 서버로 연결하고, 사내 DB는 커스텀 서버로, 로컬 파일시스템은 로컬 서버로 구성하는 식이다.
+
+## MCP Server 구축 실전 가이드
+
+커스텀 서버를 직접 구축하는 기본 절차를 정리한다.
+
+### 기본 구현 패턴
+
+MCP Server는 **도구(Tool) 정의 → 서버 실행** 두 단계로 구현한다.
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+# 1. 서버 인스턴스 생성
+mcp = FastMCP(
+    name="my-tools",
+    instructions="프로젝트 관리 도구 모음. 이슈 생성, 상태 조회, 보고서 생성을 지원한다."
+)
+
+# 2. 도구 정의 - docstring이 Agent에게 도구 설명으로 전달된다
+@mcp.tool()
+def create_issue(title: str, body: str, priority: str = "medium") -> str:
+    """새 이슈를 생성한다.
+
+    Args:
+        title: 이슈 제목
+        body: 이슈 본문 설명
+        priority: 우선순위 (low, medium, high). 기본값은 medium
+    """
+    issue = issue_tracker.create(title=title, body=body, priority=priority)
+    return f"이슈 #{issue.id} 생성 완료: {title}"
+
+@mcp.tool()
+def get_status(issue_id: int) -> str:
+    """이슈의 현재 상태를 조회한다."""
+    issue = issue_tracker.get(issue_id)
+    return f"#{issue_id}: {issue.status} (담당: {issue.assignee})"
+
+# 3. 리소스 정의 - Agent가 읽을 수 있는 데이터 소스
+@mcp.resource("project://stats")
+def project_stats() -> str:
+    """프로젝트 현황 통계를 반환한다."""
+    stats = issue_tracker.get_stats()
+    return f"총 이슈: {stats.total}, 진행 중: {stats.in_progress}, 완료: {stats.done}"
+```
+
+핵심은 **도구 함수의 docstring**이다. Agent는 이 docstring을 읽고 "이 도구가 무엇을 하는가", "어떤 인자가 필요한가"를 판단한다. 따라서 docstring을 명확하고 구체적으로 작성하는 것이 도구 활용 정확도를 높이는 핵심이다.
+
+### 도구 설계 원칙
+
+| 원칙 | 설명 | 예시 |
+|------|------|------|
+| 단일 책임 | 하나의 도구는 하나의 작업만 수행한다 | `create_and_assign_issue()` 대신 `create_issue()` + `assign_issue()`로 분리 |
+| 명확한 이름 | 도구 이름만으로 기능을 추측할 수 있어야 한다 | `process()` 대신 `query_sales_data()` |
+| 구체적 docstring | Agent가 도구를 올바르게 선택할 수 있도록 용도와 인자를 상세히 기술한다 | "매출 데이터 조회" 대신 "분기별, 지역별 매출 데이터를 DB에서 조회한다" |
+| 안전한 기본값 | 필수가 아닌 인자에는 합리적인 기본값을 제공한다 | `priority: str = "medium"` |
+| 에러 메시지 포함 | 실패 시 Agent가 원인을 파악하고 재시도할 수 있는 메시지를 반환한다 | "이슈를 찾을 수 없음" 대신 "이슈 #123이 존재하지 않습니다. ID를 확인해 주세요" |
+
+::: {.callout-tip}
+## 스킬과 MCP의 결합
+
+스킬(SKILL.md)이 Agent의 **지식과 절차**를 제공한다면, MCP는 Agent의 **실행 능력**을 확장한다. 예를 들어 "데이터 분석 보고서 생성" 스킬은 분석 절차를 정의하고, MCP를 통해 DB 조회 도구, 차트 생성 도구, Slack 전송 도구를 호출하여 실제로 보고서를 생성하고 공유할 수 있다.
+
+```
+SKILL.md (절차 정의)
+├── Step 1: DB에서 데이터 조회    ← MCP Tool: query_db()
+├── Step 2: 통계 분석 수행        ← 로컬 스크립트 실행
+├── Step 3: 보고서 생성           ← MCP Resource: report_template
+└── Step 4: Slack에 공유          ← MCP Tool: send_message()
+```
+
+스킬이 "무엇을, 어떤 순서로 할 것인가"를 정의하고, MCP가 "실제로 외부 시스템과 어떻게 소통할 것인가"를 담당하는 관계이다.
+:::
+
+## MCP 도입 시 고려사항
+
+### 보안
+
+| 고려사항 | 권장 사항 |
+|---------|----------|
+| 인증 토큰 관리 | 환경변수 또는 시크릿 매니저로 관리한다. 코드에 직접 포함하지 않는다 |
+| 권한 범위(Scope) | 최소 권한 원칙을 적용한다. 읽기만 필요하면 쓰기 권한을 부여하지 않는다 |
+| 도구 실행 승인 | 위험한 도구(삭제, 전송 등)에는 Human-in-the-Loop 승인 절차를 적용한다 |
+| 데이터 분류 | 민감 데이터는 로컬 서버, 일반 데이터는 리모트/커스텀 서버로 분리한다 |
+
+### 디버깅
+
+MCP Server와의 통신이 실패할 때 확인할 사항이다.
+
+1. **연결 확인**: Server가 정상 실행 중인지 확인한다 (로컬: 프로세스 상태, 리모트: URL 접근 가능 여부)
+2. **인증 확인**: 토큰 만료, 권한 범위 부족 여부를 점검한다
+3. **도구 목록 확인**: Agent가 올바른 도구를 인식하고 있는지 확인한다
+4. **입출력 로그**: 요청/응답 페이로드를 로그로 남겨 문제 구간을 특정한다
+
+## 관련 주제
+
+**선행 지식**
+
+- [Agent 기술 스택의 진화](./06-agent-tech-stack-evolution.qmd) -- MCP 아키텍처 상세, 기존 방식 대비 장점, LangGraph와의 통합
+- [Agent 스킬 설계와 생성](./14-skill-design-and-creation.qmd) -- 스킬과 MCP의 역할 분담 이해
+
+**후속 주제**
+
+- [Multi-Agent Design Patterns](./05-multi-agent-design-patterns.qmd) -- 여러 Agent가 MCP 도구를 공유하는 설계 패턴
+- [LangGraph Agent](../18-LangGraph/01-Core-Features/03-LangGraph-Agent.qmd) -- LangGraph에서 도구를 Agent에 바인딩하는 구현

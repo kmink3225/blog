@@ -1,0 +1,298 @@
+---
+title: "ReAct Agent와 Playwright 브라우저 자동화"
+subtitle: "브라우저 조작으로 웹 검색과 데이터 수집을 자동화하는 Agent"
+description: |
+  Playwright 브라우저 툴킷을 ReAct Agent에 통합하여
+  웹 검색, 페이지 탐색, 동적 사이트 상호작용을 자동화하는 방법을 다룬다.
+  LangChain v1 create_agent 기반 구현과 실전 프롬프트 설계를 포함한다.
+categories:
+  - Agent
+  - LangChain
+  - Playwright
+author: Kwangmin Kim
+date: 03/27/2026
+---
+
+## 브라우저를 조작하는 Agent
+
+[ReAct Agent](./15-ReAct-Agent-LangChain-v1.qmd)는 추론-행동-관찰 루프를 통해 다양한 도구를 자율적으로 활용한다. 이 도구를 **웹 브라우저**로 확장하면 Agent가 직접 웹 페이지를 탐색하고, 동적으로 렌더링된 콘텐츠와 상호작용할 수 있다.
+
+::: {.callout-note}
+## Playwright 브라우저 툴킷
+
+Microsoft가 개발한 Playwright 자동화 프레임워크를 LangChain 도구로 래핑한 것이다.
+Agent가 URL 이동, 요소 클릭, 텍스트 추출, 하이퍼링크 수집 등
+브라우저 조작을 프로그래밍 방식으로 수행할 수 있게 한다.
+:::
+
+### 왜 브라우저 도구인가
+
+일반적인 HTTP 요청(`requests`) 기반 도구는 정적 HTML만 처리할 수 있다. JavaScript로 렌더링되는 SPA(Single Page Application), 로그인이 필요한 페이지, 동적 콘텐츠에는 한계가 있다.
+
+| 방식 | 정적 사이트 | 동적 사이트(JS 렌더링) | 로그인 필요 | 사용자 상호작용 |
+|------|-----------|---------------------|-----------|--------------|
+| HTTP 요청 (`requests`) | O | X | 제한적 | X |
+| Playwright 브라우저 | O | O | O | O |
+
+Playwright는 실제 브라우저(Chromium, Firefox, WebKit)를 프로그래밍으로 제어하므로, JavaScript 렌더링, 쿠키 기반 인증, 클릭/입력 등 사용자와 동일한 수준의 웹 상호작용이 가능하다.
+
+## 환경 설정
+
+### 의존성 설치
+
+```bash
+pip install langchain langchain-community langchain-openai \
+    playwright lxml beautifulsoup4 \
+    python-dotenv rich nest_asyncio
+```
+
+Playwright 브라우저 바이너리를 설치한다.
+
+```bash
+playwright install
+```
+
+::: {.callout-warning}
+## playwright install 필수
+
+`pip install playwright`만으로는 브라우저 바이너리가 설치되지 않는다.
+반드시 `playwright install`을 실행하여 Chromium, Firefox, WebKit 바이너리를 다운로드해야 한다.
+:::
+
+### Playwright 브라우저 툴킷의 도구 목록
+
+`PlayWrightBrowserToolkit`이 제공하는 도구이다.
+
+| 도구 클래스 | 메서드명 | 기능 |
+|-----------|---------|------|
+| `NavigateTool` | `navigate_browser` | 지정된 URL로 이동한다 |
+| `NavigateBackTool` | `previous_page` | 이전 페이지로 되돌아간다 |
+| `ClickTool` | `click_element` | CSS 셀렉터로 요소를 클릭한다 |
+| `ExtractTextTool` | `extract_text` | 현재 페이지에서 텍스트를 추출한다 |
+| `ExtractHyperlinksTool` | `extract_hyperlinks` | 하이퍼링크 목록을 추출한다 |
+| `GetElementsTool` | `get_elements` | CSS 셀렉터로 요소를 선택한다 |
+| `CurrentPageTool` | `current_page` | 현재 페이지 URL을 반환한다 |
+
+Agent는 이 도구들을 조합하여 "URL로 이동 -> 텍스트 추출 -> 링크 수집 -> 다음 페이지 이동"과 같은 복합적인 브라우저 조작 흐름을 자율적으로 수행한다.
+
+## 구현
+
+### 브라우저 생성
+
+Playwright의 비동기 API로 브라우저를 생성한다.
+
+```python
+from playwright.async_api import ViewportSize, async_playwright
+
+
+async def create_browser():
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.launch(headless=False)
+    viewport_size: ViewportSize = {"width": 1280, "height": 800}
+    context = await browser.new_context(
+        viewport=viewport_size,
+        locale="ko-KR",
+    )
+    return browser, context
+```
+
+| 파라미터 | 설명 |
+|---------|------|
+| `headless=False` | 브라우저 창을 화면에 표시한다. 디버깅과 시연에 유용하다. `True`로 설정하면 백그라운드 실행 |
+| `viewport` | 브라우저 창 크기를 지정한다. 반응형 사이트에서 레이아웃에 영향을 미친다 |
+| `locale="ko-KR"` | 브라우저 로케일을 한국어로 설정한다. 검색 결과 언어에 영향 |
+
+### Agent 생성
+
+브라우저 인스턴스를 `PlayWrightBrowserToolkit`에 전달하고, 추출된 도구로 Agent를 생성한다.
+
+```python
+import asyncio
+
+import nest_asyncio
+from dotenv import load_dotenv
+from langchain.agents import create_agent
+from langchain_openai import ChatOpenAI
+from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
+from langchain_core.runnables import RunnableConfig
+
+nest_asyncio.apply()
+load_dotenv()
+
+llm = ChatOpenAI(model="gpt-4o", temperature=0.5)
+
+
+async def main():
+    # 브라우저 생성
+    browser, context = await create_browser()
+
+    # 툴킷에서 도구 리스트 추출
+    toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=browser)
+    tools = toolkit.get_tools()
+
+    # Agent 생성
+    agent = create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt="""
+        You are a web assistant that navigates browsers to complete tasks.
+        When extracting information from web pages, be thorough and systematic.
+        If a page requires user interaction (e.g., login), wait and retry
+        by refetching the page at intervals of at least 5 seconds.
+        """,
+    )
+
+    # 프롬프트 정의
+    command = {
+        "messages": [
+            {"role": "user", "content": search_prompt}
+        ]
+    }
+    config: RunnableConfig = {"recursion_limit": 1000}
+
+    # 스트리밍 실행
+    final_answer = ""
+    async for event in agent.astream_events(command, config=config):
+        kind = event["event"]
+        name = event.get("name", "")
+        data = event.get("data")
+
+        if kind == "on_chat_model_start":
+            print("--- Agent is Thinking ---")
+        elif kind == "on_tool_start":
+            print(f"[Tool Call] {name}")
+        elif kind == "on_tool_end":
+            output = str(data.get("output", ""))[:200]
+            print(f"[Tool Result] {output}")
+        elif kind == "on_chain_end" and name == "LangGraph":
+            messages = data.get("output", {}).get("messages", [])
+            if messages:
+                final_answer = messages[-1].content
+
+    print(f"\n[Final Answer]\n{final_answer}")
+
+
+asyncio.run(main())
+```
+
+`recursion_limit`을 높게 설정한 이유는 브라우저 조작이 여러 단계의 도구 호출을 필요로 하기 때문이다. 하나의 웹 검색 태스크에도 "URL 이동 -> 텍스트 추출 -> 링크 수집 -> 다음 URL 이동 -> ..." 같은 반복이 수십 회 발생할 수 있다.
+
+## 실전 프롬프트 설계
+
+### 웹 검색 프롬프트
+
+```python
+search_prompt = """
+1. 구글에서 "LangChain ReAct Agent" 키워드로 검색한다.
+2. 검색 결과 중 상위 3개 사이트에 방문한다.
+3. 각 사이트의 핵심 내용을 요약한다.
+4. 최종적으로 3개 사이트의 내용을 비교 정리하여 보고한다.
+"""
+```
+
+이 프롬프트를 받은 Agent는 다음과 같은 추론-행동-관찰 루프를 수행한다.
+
+```
+[Reason] 구글 검색을 수행해야 한다
+[Act]    navigate_browser → https://www.google.com/search?q=LangChain+ReAct+Agent
+[Observe] 검색 결과 페이지 로드 완료
+
+[Reason] 검색 결과에서 상위 링크를 추출해야 한다
+[Act]    extract_hyperlinks
+[Observe] 10개 링크 추출 완료
+
+[Reason] 첫 번째 링크에 방문해야 한다
+[Act]    navigate_browser → (첫 번째 URL)
+[Observe] 페이지 로드 완료
+
+[Reason] 페이지 내용을 추출해야 한다
+[Act]    extract_text
+[Observe] 텍스트 추출 완료
+
+... (2번째, 3번째 사이트 반복)
+
+[Reason] 3개 사이트의 내용을 비교 정리할 수 있다
+[Final Answer] 비교 정리 보고서 출력
+```
+
+### 사용자 상호작용이 필요한 프롬프트
+
+Agent가 스스로 처리할 수 없는 작업(로그인 등)은 사용자에게 위임하고, 완료를 감지한 후 이어서 처리하는 패턴이다.
+
+```python
+email_prompt = """
+1. 네이버 로그인 화면으로 이동한다. 사용자의 로그인을 기다린다.
+2. 로그인 완료를 확인한 후 메일 화면으로 이동한다.
+3. 보이는 메일들을 하나씩 열어서 읽는다.
+4. 메일 내용을 요약하여 보고한다.
+"""
+```
+
+이 프롬프트가 작동하려면 `system_prompt`에 "사용자 행동을 기다려야 할 때 프로세스를 종료하지 말고, 페이지를 주기적으로 다시 확인하라"는 지시가 포함되어야 한다. 앞서 Agent 생성 코드의 `system_prompt`가 이 역할을 한다.
+
+### 프롬프트 설계 원칙
+
+| 원칙 | 설명 | 예시 |
+|------|------|------|
+| **단계 명시** | 수행할 작업을 번호로 나열한다 | "1. 검색한다 2. 방문한다 3. 요약한다" |
+| **종료 조건 명시** | Agent가 언제 멈춰야 하는지 명확히 한다 | "상위 3개 사이트까지만 방문한다" |
+| **출력 형식 지정** | 최종 답변의 형태를 지시한다 | "비교표로 정리하여 보고한다" |
+| **대기 패턴 정의** | 사용자 행동이 필요한 시점을 명시한다 | "로그인을 기다린다" |
+
+## 주의사항과 한계
+
+### 토큰 소비
+
+브라우저 도구를 사용하는 Agent는 일반 도구보다 토큰 소비가 크다. `extract_text`가 전체 페이지 텍스트를 반환하므로, 긴 웹 페이지에서는 수천 토큰이 한 번에 소비될 수 있다.
+
+| 최적화 방법 | 설명 |
+|-----------|------|
+| CSS 셀렉터 활용 | `get_elements`로 필요한 영역만 선택하여 추출한다 |
+| 텍스트 길이 제한 | 도구 결과를 잘라서(truncate) 전달한다 |
+| recursion_limit 적절 설정 | 무한 반복을 방지한다 |
+
+### 동적 페이지 대응
+
+JavaScript로 지연 렌더링되는 페이지는 `navigate_browser` 직후 `extract_text`를 호출하면 빈 결과가 반환될 수 있다. 이 경우 Agent가 "텍스트가 비어 있으므로 재시도해야 한다"고 추론하여 자동으로 재시도하는 것이 이상적이지만, `system_prompt`에 이 상황을 명시적으로 안내하면 더 안정적이다.
+
+### 보안 고려사항
+
+| 항목 | 권장 사항 |
+|------|----------|
+| 인증 정보 | Agent에게 비밀번호를 프롬프트로 전달하지 않는다. 사용자가 직접 로그인하도록 한다 |
+| 방문 범위 | 신뢰할 수 있는 도메인만 방문하도록 `system_prompt`에 제한을 건다 |
+| 실행 환경 | `headless=True`로 운영할 때 브라우저 세션이 외부에 노출되지 않도록 한다 |
+| 데이터 수집 | 수집한 데이터의 개인정보 포함 여부를 확인한다 |
+
+## Playwright MCP Server와의 비교
+
+Agent가 브라우저를 제어하는 방법은 Playwright 브라우저 툴킷 외에 [MCP 기반 Playwright Server](../24-Agent-Architecture/15-mcp-tool-integration.qmd)를 사용하는 방법도 있다.
+
+| 항목 | Playwright 브라우저 툴킷 | Playwright MCP Server |
+|------|------------------------|---------------------|
+| 통합 방식 | LangChain 도구로 직접 바인딩 | MCP 프로토콜을 통한 간접 연결 |
+| 설정 난이도 | `pip install` + 코드 내 초기화 | MCP Server 설치 + 설정 파일 |
+| 사용 환경 | LangChain/LangGraph Agent | Claude Code, Cursor, 모든 MCP 호환 Host |
+| 도구 세트 | 7개 고정 도구 | MCP Server가 노출하는 도구에 따라 다름 |
+| 적합한 상황 | LangChain 기반 Agent 개발 | 다양한 AI Host에서 범용적으로 사용 |
+
+LangChain Agent를 개발 중이라면 브라우저 툴킷이 설정이 간편하고 코드 내에서 직접 제어할 수 있어 적합하다. 다양한 AI 도구에서 범용적으로 브라우저를 제어하려면 MCP Server가 더 유연하다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [ReAct Agent: LangChain v1 create_agent](./15-ReAct-Agent-LangChain-v1.qmd) -- ReAct 패턴 개념, create_agent 기본 사용법
+- [Tools](./01-Tools.qmd) -- LangChain 도구 정의와 활용
+- [Agent-Toolkits-File-Management](./08-Agent-Toolkits-File-Management.qmd) -- 다른 Toolkit 사용 사례
+
+**후속 주제**
+
+- [MCP 기반 도구 통합](../24-Agent-Architecture/15-mcp-tool-integration.qmd) -- MCP를 통한 외부 도구 표준화 연결
+- [Multi-Agent-System](./14-Multi-Agent-System.qmd) -- 여러 Agent가 협업하는 시스템 구축
+
+**참고 자료**
+
+- [LangChain Playwright Browser Toolkit](https://docs.langchain.com/oss/python/integrations/providers/microsoft#playwright-browser-toolkit)
+- [Playwright 공식 문서](https://playwright.dev/python/)
+- [LangChain v1 create_agent API](https://reference.langchain.com/python/langchain/agents/factory/create_agent)

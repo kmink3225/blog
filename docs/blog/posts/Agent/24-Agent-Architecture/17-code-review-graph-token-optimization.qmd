@@ -1,0 +1,290 @@
+---
+title: "code-review-graph: 로컬 지식 그래프 기반 토큰 최적화"
+subtitle: "Tree-sitter AST 파싱과 블래스트 반경 분석으로 Claude Code 토큰 사용량을 줄이는 방법"
+description: |
+  code-review-graph는 코드베이스를 Tree-sitter로 파싱하여 로컬 SQLite 지식 그래프를 구축하고,
+  변경 영향 범위(blast radius)만 Claude에 전달하여 토큰 사용량을 평균 8.2배 절감하는 도구이다.
+  아키텍처, 핵심 메커니즘, 벤치마크, 실전 활용법을 정리한다.
+categories:
+  - Agent
+  - Architecture
+  - Code Review
+author: Kwangmin Kim
+date: 03/27/2026
+---
+
+## 문제: 대규모 코드베이스에서의 토큰 낭비
+
+Claude Code로 코드 리뷰나 기능 추가를 수행할 때, Agent는 전체 코드베이스의 문맥을 파악하기 위해 수많은 파일을 읽어들인다. 문제는 대부분의 파일이 현재 변경과 무관하다는 점이다.
+
+| 프로젝트 | 파일 수 | 문제 |
+|----------|--------|------|
+| FastAPI | ~2,915 | 하나의 엔드포인트 수정에 수천 개 파일을 스캔 |
+| Next.js | ~27,732 | 컴포넌트 하나 변경에 전체 코드베이스를 탐색 |
+
+이 비효율은 두 가지 결과를 초래한다. 첫째, 토큰이 기하급수적으로 낭비된다. 둘째, 무관한 파일의 노이즈로 인해 리뷰 품질이 저하된다. Agent가 "무엇이 변경되었는가"보다 "코드베이스 전체가 어떻게 생겼는가"를 파악하는 데 토큰을 소비하기 때문이다.
+
+## code-review-graph의 접근
+
+[code-review-graph](https://github.com/tirth8205/code-review-graph)는 코드베이스의 **구조적 지식 그래프**를 로컬에 구축하여 이 문제를 해결한다. 핵심 아이디어는 단순하다: 변경된 파일과 그 **영향 범위(blast radius)**에 해당하는 파일만 Claude에 전달하는 것이다.
+
+```
+[기존 방식]
+코드 변경 → Claude가 전체 코드베이스 스캔 → 토큰 대량 소비
+
+[code-review-graph]
+코드 변경 → 그래프에서 영향 범위 계산 → 관련 파일만 전달 → 토큰 절감
+```
+
+### 성능 요약
+
+| 지표 | 수치 |
+|------|------|
+| 토큰 절감 (코드 리뷰) | 평균 **8.2배** |
+| 코드 리뷰 품질 점수 | 7.2 -> 8.8점 |
+| 인크리멘탈 업데이트 속도 | ~2,900 파일 프로젝트에서 **2초 이내** |
+| 초기 빌드 시간 | 500 파일 프로젝트 기준 ~10초 |
+
+모든 데이터는 로컬 SQLite에 저장되며, 외부 서버나 클라우드로 코드가 전송되지 않는다.
+
+## 아키텍처
+
+code-review-graph는 **파싱 -> 저장 -> 분석 -> 전달**의 파이프라인으로 작동한다.
+
+```
+Repository
+    │
+    ▼
+Tree-sitter Parser ─── 18개 언어 AST 파싱
+    │                   함수, 클래스, import, 호출 관계 추출
+    │                   정규화된 식별자 (src/auth.py::AuthService.login)
+    ▼
+SQLite Graph ────────── .code-review-graph/ 디렉토리
+    │                   노드(함수, 클래스) + 엣지(호출, 상속, 테스트)
+    │                   WAL 모드, 단일 파일, 외부 의존성 없음
+    ▼
+Blast Radius Analysis ─ NetworkX BFS로 영향 범위 계산
+    │                   호출자, 의존 파일, 관련 테스트 식별
+    │                   최대 500 노드 제한
+    ▼
+Minimal Review Set ──── Claude에 전달할 최소 파일 집합
+```
+
+### Tree-sitter 기반 다중 언어 AST 파싱
+
+Tree-sitter는 증분(incremental) 파싱을 지원하는 파서 생성기이다. code-review-graph는 이를 활용하여 소스 파일을 AST(Abstract Syntax Tree)로 파싱하고, 코드의 구조적 엔티티와 관계를 추출한다.
+
+**지원 언어 (18종)**: Python, TypeScript/TSX, JavaScript, Vue, Go, Rust, Java, Scala, C#, Ruby, Kotlin, Swift, PHP, Solidity, C/C++, Dart, R, Perl
+
+추출하는 정보는 다음과 같다.
+
+| 엔티티 (노드) | 관계 (엣지) |
+|--------------|------------|
+| 함수 정의 | 함수 호출 (caller -> callee) |
+| 클래스 정의 | 클래스 상속 (child -> parent) |
+| 메서드 정의 | import 의존성 |
+| import 선언 | 테스트 커버리지 (test -> target) |
+
+식별자는 **정규화된 이름(qualified name)**으로 저장된다. 예를 들어 `src/auth.py` 파일의 `AuthService` 클래스 내 `login` 메서드는 `src/auth.py::AuthService.login`으로 표현된다. 이를 통해 서로 다른 파일에 동일한 이름의 함수가 존재하더라도 충돌이 발생하지 않는다.
+
+### 블래스트 반경(Blast Radius) 분석
+
+블래스트 반경 분석은 code-review-graph의 핵심 메커니즘이다. 파일이 변경되면 그래프를 순회하여 **영향을 받을 수 있는 모든 코드**를 식별한다.
+
+```
+login() 함수 변경 시 블래스트 반경 예시:
+
+login()
+  ├── 호출자: authenticate(), handle_login_request()
+  ├── 의존 파일: session_manager.py, token_service.py
+  ├── 상속 관계: BaseAuthService
+  └── 관련 테스트: test_login.py, test_auth_integration.py
+```
+
+분석에는 NetworkX 라이브러리의 **너비 우선 탐색(BFS)**을 사용한다. 변경된 노드에서 출발하여 호출자(caller), 의존 파일(dependent), 관련 테스트를 모두 추적한다.
+
+| 설계 결정 | 이유 |
+|----------|------|
+| 최대 500 노드 제한 | 대규모 의존성 그래프에서 리소스 고갈을 방지한다 |
+| 보수적(conservative) 분석 | 실제 영향 파일을 놓치지 않는 것을 우선한다. 일부 오탐(false positive)을 허용하되 미탐(false negative)은 0% |
+
+벤치마크에서 측정된 정확도이다.
+
+| 레포지토리 | F1 | Precision | Recall |
+|-----------|-----|----------|--------|
+| express | 0.667 | 0.50 | 100% |
+| fastapi | 0.584 | 0.42 | 100% |
+| flask | 0.475 | 0.34 | 100% |
+| gin | 0.429 | 0.29 | 100% |
+| httpx | 0.762 | 0.63 | 100% |
+| nextjs | 0.331 | 0.20 | 100% |
+
+Recall이 100%라는 것은 실제로 영향받는 파일을 절대 놓치지 않는다는 뜻이다. Precision이 낮은 것은 불필요한 파일이 일부 포함된다는 의미이지만, 코드 리뷰에서는 놓치는 것보다 더 보는 것이 안전하므로 의도적인 트레이드오프이다.
+
+### SHA-256 기반 인크리멘탈 업데이트
+
+초기 빌드 이후에는 변경된 파일만 다시 파싱하는 인크리멘탈 방식으로 동작한다.
+
+1. 파일 저장 또는 git commit 시 훅(hook)이 자동 트리거된다
+2. 각 파일의 SHA-256 해시를 이전 값과 비교한다
+3. 해시가 동일한 파일은 파싱을 건너뛴다
+4. 변경된 파일과 그 의존 파일만 다시 파싱한다
+
+이 메커니즘 덕분에 ~2,900 파일 프로젝트에서도 **2초 이내**에 업데이트가 완료된다.
+
+### SQLite 로컬 저장소
+
+모든 데이터는 프로젝트의 `.code-review-graph/` 디렉토리에 단일 SQLite 파일로 저장된다.
+
+| 설계 결정 | 이유 |
+|----------|------|
+| 단일 SQLite 파일 | 외부 데이터베이스 의존성 제거. 설치 즉시 사용 가능 |
+| WAL(Write-Ahead Logging) 모드 | 동시 읽기를 지원하여 Agent가 그래프를 읽는 동안 업데이트 가능 |
+| 벡터 임베딩 저장 | 선택적으로 시맨틱 검색용 벡터를 바이너리 blob으로 동일 DB에 저장 |
+| 로컬 전용 | 코드가 외부 서버로 전송되지 않음 |
+
+## 토큰 절감 벤치마크
+
+6개 오픈소스 프로젝트, 13개 커밋에 대한 실측 결과이다.
+
+| 레포지토리 | 커밋 수 | Naive 토큰 (평균) | Graph 토큰 (평균) | 절감 배율 |
+|-----------|--------|-------------------|-------------------|----------|
+| express | 2 | 693 | 983 | 0.7x |
+| fastapi | 2 | 4,944 | 614 | **8.1x** |
+| flask | 2 | 44,751 | 4,252 | **9.1x** |
+| gin | 3 | 21,972 | 1,153 | **16.4x** |
+| httpx | 2 | 12,044 | 1,728 | **6.9x** |
+| nextjs | 2 | 9,882 | 1,249 | **8.0x** |
+| **평균** | **13** | -- | -- | **8.2x** |
+
+express에서 절감이 발생하지 않은 이유는 프로젝트 규모가 작아(141 파일) 그래프 메타데이터 오버헤드가 단순 파일 읽기보다 큰 경우이다. 파일 수가 많을수록 절감 효과가 커진다.
+
+그래프가 전체 소스 파일 읽기를 대체하는 원리는, 파일 내용 대신 **구조적 컨텍스트**(블래스트 반경, 의존성 체인, 테스트 커버리지 갭)를 압축된 형태로 전달하기 때문이다.
+
+### 빌드 성능
+
+| 레포지토리 | 파일 수 | 노드 수 | 엣지 수 | Flow 감지 | 검색 지연 |
+|-----------|--------|--------|--------|----------|----------|
+| express | 141 | 1,910 | 17,553 | 106ms | 0.7ms |
+| fastapi | 1,122 | 6,285 | 27,117 | 128ms | 1.5ms |
+| flask | 83 | 1,446 | 7,974 | 95ms | 0.7ms |
+| gin | 99 | 1,286 | 16,762 | 111ms | 0.5ms |
+| httpx | 60 | 1,253 | 7,896 | 96ms | 0.4ms |
+
+검색 지연(Search Latency)이 1ms 이하로, Agent가 그래프를 쿼리하는 데 거의 시간이 소요되지 않는다.
+
+## 설치와 사용
+
+### 설치
+
+```bash
+# pip 설치
+pip install code-review-graph
+code-review-graph install    # 지원 플랫폼 자동 감지 및 설정
+code-review-graph build      # 코드베이스 파싱
+```
+
+```bash
+# Claude Code 플러그인 설치
+claude plugin marketplace add tirth8205/code-review-graph
+claude plugin install code-review-graph@code-review-graph
+```
+
+설치 후 Claude Code를 재시작하면 자동으로 활성화된다.
+
+### 지원 플랫폼
+
+| 플랫폼 | 설정 파일 | 자동 감지 |
+|--------|----------|----------|
+| Claude Code | `.mcp.json` | O |
+| Cursor | `.cursor/mcp.json` | O |
+| Windsurf | `.windsurf/mcp.json` | O |
+| Zed | `.zed/settings.json` | O |
+| Continue | `.continue/config.json` | O |
+| OpenCode | `.opencode/config.json` | O |
+
+특정 플랫폼만 설정하려면 `--platform` 옵션을 사용한다.
+
+```bash
+code-review-graph install --platform claude-code
+code-review-graph install --platform cursor
+```
+
+### 주요 CLI 명령어
+
+| 명령어 | 용도 |
+|--------|------|
+| `build` | 전체 코드베이스를 파싱하여 그래프를 구축한다 |
+| `update` | 변경된 파일만 인크리멘탈 업데이트한다 |
+| `watch` | 파일 변경을 감시하여 자동으로 업데이트한다 |
+| `status` | 그래프 통계(노드 수, 엣지 수 등)를 표시한다 |
+| `visualize` | D3.js 기반 인터랙티브 HTML 그래프를 생성한다 |
+| `detect-changes` | 리스크 점수가 부여된 변경 영향 분석을 수행한다 |
+
+### 슬래시 명령어 (Claude/Cursor 내)
+
+| 명령어 | 용도 |
+|--------|------|
+| `/code-review-graph:build-graph` | 코드 그래프를 빌드하거나 리빌드한다 |
+| `/code-review-graph:review-delta` | 마지막 커밋 이후 변경 사항을 리뷰한다 |
+| `/code-review-graph:review-pr` | 블래스트 반경 분석을 포함한 전체 PR 리뷰를 수행한다 |
+
+### 제외 설정
+
+특정 파일/디렉토리를 파싱에서 제외하려면 프로젝트 루트에 `.code-review-graphignore` 파일을 생성한다.
+
+```
+generated/**
+*.generated.ts
+vendor/**
+node_modules/**
+```
+
+## MCP 도구 목록
+
+그래프가 구축되면 Claude가 자동으로 사용하는 MCP 도구이다.
+
+| 카테고리 | 도구 | 용도 |
+|---------|------|------|
+| **그래프 관리** | `build_or_update_graph_tool` | 그래프 빌드/인크리멘탈 업데이트 |
+| | `list_graph_stats_tool` | 그래프 크기와 상태 조회 |
+| **영향 분석** | `get_impact_radius_tool` | 변경 파일의 블래스트 반경 계산 |
+| | `detect_changes_tool` | 리스크 점수 기반 변경 영향 분석 |
+| **리뷰** | `get_review_context_tool` | 토큰 최적화된 리뷰 컨텍스트 생성 |
+| **그래프 쿼리** | `query_graph_tool` | 호출자, 피호출자, 테스트, import, 상속 관계 쿼리 |
+| | `semantic_search_nodes_tool` | 이름 또는 의미 기반 코드 엔티티 검색 |
+| **실행 흐름** | `list_flows_tool` | 중요도 순으로 정렬된 실행 흐름 목록 |
+| | `get_affected_flows_tool` | 변경 파일이 영향을 미치는 흐름 식별 |
+| **리팩토링** | `refactor_tool` | 이름 변경 미리보기, 데드 코드 감지 |
+| | `apply_refactor_tool` | 미리보기된 리팩토링 적용 |
+| **아키텍처** | `list_communities_tool` | 감지된 코드 커뮤니티 목록 |
+| | `get_architecture_overview_tool` | 커뮤니티 구조 기반 아키텍처 개요 |
+
+## 알려진 한계
+
+| 한계 | 상세 |
+|------|------|
+| 소규모 단일 파일 변경 | 단순 편집에서는 그래프 메타데이터 오버헤드가 순수 파일 읽기보다 클 수 있다 (express 사례) |
+| 검색 품질 (MRR 0.35) | 키워드 검색이 대부분 상위 4위 내에서 결과를 찾지만, 순위 정확도 개선이 필요하다 |
+| Flow 감지 (Recall 33%) | Python 프로젝트(FastAPI, httpx)에서만 프레임워크 패턴을 안정적으로 감지한다. JavaScript, Go의 Flow 감지는 개선이 필요하다 |
+| Precision 낮음 | 보수적 분석으로 불필요한 파일이 포함될 수 있다. 코드 리뷰에서는 안전하지만 토큰 절감 효과가 이론적 최대치보다 낮을 수 있다 |
+
+## 관련 주제
+
+**선행 지식**
+
+- [Context Management](./02-context-management.qmd) -- Agent의 컨텍스트 관리 전략
+- [Agent 기술 스택의 진화](./06-agent-tech-stack-evolution.qmd) -- MCP 기반 도구 통합 아키텍처
+- [MCP 기반 도구 통합](./15-mcp-tool-integration.qmd) -- MCP Server 구축과 도구 설계 원칙
+
+**후속 주제**
+
+- [어텐션 희석과 2-Pass 워크플로우](./12-attention-dilution-and-2pass-workflow.qmd) -- 컨텍스트 과부하가 Agent 성능에 미치는 영향
+- [코드베이스 분석 Agent의 스킬 설계](./13-codebase-analyzer-skill-design.qmd) -- 코드 분석 도메인에 스킬 패턴을 적용한 설계
+
+**참고 자료**
+
+- [code-review-graph GitHub](https://github.com/tirth8205/code-review-graph) -- 소스 코드, 설치 가이드, 벤치마크 데이터
+- [PyTorch Korea 소개 글](https://discuss.pytorch.kr/t/code-review-graph-claude-code/9331) -- 박정환(9bow) 정리
+- [Agent Skills 오픈 표준](https://agentskills.io) -- code-review-graph가 따르는 스킬 표준
+- 라이선스: MIT (상업적 사용 및 수정 허용)
