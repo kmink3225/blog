@@ -1,0 +1,443 @@
+---
+title: "변경 관리 워크플로"
+subtitle: "변경 관리가 없으면 통제가 없다"
+description: |
+  데이터 거버넌스에서 변경 관리의 역할, 5가지 변경 유형(스키마, 코드, 마스터, 데이터 정정,
+  비즈메타)의 공통 워크플로, 결재 단계 메타데이터 설계, 변경 전후 값 암호화, 영향도 분석
+  재귀 쿼리, 분야별 응용 사례를 다룬다.
+categories:
+  - Data Governance
+author: Kwangmin Kim
+date: 03/27/2026
+---
+
+::: {.callout-note}
+## 정의: 변경 관리 (Change Management)
+
+변경 관리는 데이터 자산(스키마, 코드, 마스터 데이터, 비즈니스 메타데이터 등)에 대한 모든
+수정을 사전 검증, 승인, 실행, 추적하는 체계적 통제 프로세스다.
+
+- 범위: 스키마 변경(DDL), 코드/마스터 데이터 변경(DML), 데이터 정정(DML), 비즈메타 변경
+- 핵심 원칙: 모든 변경은 시스템을 통해 수행되어야 하며, 변경 전 영향도를 파악하고, 변경 이력을 추적할 수 있어야 한다
+- 참조: DAMA-DMBOK2 Chapter 3, 6
+:::
+
+---
+
+## 변경 관리의 위치: 거버넌스 프레임워크에서의 역할
+
+데이터 거버넌스에서 변경 관리는 종종 간과된다. 표준을 만들고, 메타데이터를 등록하고, 품질을 진단했더라도, 변경이 통제되지 않으면 이 모든 노력이 시간이 지나면서 현실과 멀어진다. [라이프사이클 설계](./11-1.data_lifecycle_design.qmd)에서 다룬 순환 구조가 작동하려면 각 단계 사이의 전환이 통제되어야 한다. 변경 관리는 그 전환을 통제하는 메커니즘이다.
+
+DMBOK은 변경 관리를 데이터 거버넌스의 핵심 활동 중 하나로 분류하며, "조직의 데이터 자산을 관리하는 모든 정책, 절차, 표준, 규칙 및 책임을 정의하고 관리하는 프레임워크"의 실행 수단으로 설명한다 (DAMA International, 2017, Ch.3). 변경 관리가 없는 거버넌스는 규칙은 있지만 집행은 없는 상태와 같다.
+
+변경 관리가 효과적으로 작동하려면 세 가지 조건이 갖춰져야 한다.
+
+| 조건 | 설명 | 부재 시 결과 |
+|---|---|---|
+| 기술적 강제 | 모든 변경이 시스템을 통해 이루어지도록 강제한다 | 비공식 채널(메신저, 직접 DB 접속)로 변경이 우회된다 |
+| 자동 검증 | 변경 전 영향도 파악과 표준 검증이 자동화된다 | 검증 누락이 빈번해지고, 검증 부담이 사람에게 집중된다 |
+| 이력 추적 | 변경 전후 값, 변경자, 시점이 기록된다 | 장애 원인 추적이 불가능하고 감사 대응이 안 된다 |
+
+이 세 조건은 [구조 관리](./11-3.data_structure_mgmt.qmd)에서 다룬 스키마 변경 통제와 [공통코드 관리](./11-4.code_master_data_mgmt.qmd)에서 다룬 코드 변경 워크플로의 공통 기반이다. 이 글에서는 이 개별 워크플로들을 관통하는 **통합 변경 관리 패턴**을 설계한다.
+
+---
+
+## 5가지 변경 유형과 공통 워크플로
+
+### 변경 유형의 분류
+
+데이터 거버넌스에서 관리해야 하는 변경은 5가지 유형으로 분류된다. 각 유형은 변경 대상과 실행 방식이 다르지만, 워크플로의 기본 구조는 동일하다.
+
+| 유형 | 대상 | 실행 방식 | 예시 |
+|---|---|---|---|
+| 스키마 변경 | 테이블, 칼럼, 인덱스 구조 | DDL | `ALTER TABLE ADD COLUMN` |
+| 코드 변경 | 공통코드 값 | DML | 주문상태 코드에 `REFUNDING` 추가 |
+| 마스터 데이터 변경 | 비즈니스 엔티티 정본 | DML | 고객 마스터의 주소 변경 |
+| 데이터 정정 | 오류 데이터 수정 | DML | 잘못 입력된 금액 값 수정 |
+| 비즈메타 변경 | 메타데이터 정의 | 메타 시스템 API | 칼럼 설명 변경, 데이터 등급 재분류 |
+
+이 5가지를 동일한 유형으로 다루면 안 되는 이유는 각각의 **위험도와 영향 범위가 다르기 때문**이다. 스키마 변경은 해당 테이블을 참조하는 모든 ETL, 뷰, 애플리케이션에 영향을 준다. 코드 변경은 해당 코드를 참조하는 칼럼의 데이터 무결성에 영향을 준다. 데이터 정정은 특정 레코드만 영향을 받지만, 금액이나 계약 조건 같은 핵심 데이터라면 법적 리스크까지 수반한다.
+
+### 공통 워크플로 패턴
+
+5가지 유형 모두 동일한 6단계 워크플로를 따른다. 변경 유형에 따라 각 단계의 세부 동작만 달라진다.
+
+```
+요청 작성 (Request)
+    |
+    v
+자동 검증 (Validation)
+    |
+    v
+검토/승인 (Review & Approval)
+    |
+    v
+실행 (Execution)
+    |
+    v
+결과 기록 (Result Logging)
+    |
+    v
+메타데이터 갱신 (Metadata Refresh)
+```
+
+**요청 작성** 단계에서는 변경 대상, 변경 내용, 변경 사유를 기술한다. 스키마 변경이면 DDL이 첨부되고, 데이터 정정이면 변경 전/후 값이 명시된다.
+
+**자동 검증** 단계에서는 시스템이 작업 규칙을 실행한다. 표준 명명 규칙 위반, PK 삭제 시도, 사용 중인 코드 삭제 같은 명백한 위반을 사전 차단한다. [구조 관리](./11-3.data_structure_mgmt.qmd)에서 다룬 blocking/non-blocking 규칙이 여기에 적용된다.
+
+**검토/승인** 단계에서는 변경 유형에 따라 결재 라인이 달라진다. 이 부분은 다음 섹션에서 상세히 다룬다.
+
+**실행** 단계에서는 승인된 변경이 대상 환경에 적용된다. DDL 실행, DML 실행, 메타데이터 API 호출이 변경 유형에 따라 구분된다.
+
+**결과 기록** 단계에서는 실행 성공/실패, 영향받은 행 수, 실행 시간이 기록된다. 데이터 정정의 경우 변경 전/후 값이 암호화되어 저장된다.
+
+**메타데이터 갱신** 단계에서는 변경에 의해 영향받은 메타데이터가 자동으로 업데이트된다. 스키마 변경이면 칼럼 메타가, 코드 변경이면 코드 도메인이, 비즈메타 변경이면 카탈로그 정보가 갱신된다.
+
+---
+
+## 왜 변경 관리가 필요한가
+
+### 부재 시 비용과 리스크
+
+변경 관리가 없는 조직에서 발생하는 문제는 기술적 장애만이 아니다. 비용과 리스크가 복합적으로 누적된다.
+
+| 리스크 유형 | 구체적 시나리오 | 비용 영향 |
+|---|---|---|
+| 데이터 불일치 | 운영 DB 스키마를 직접 변경, DW ETL 실패 | 복구 작업 인건비, 보고서 지연 |
+| 감사 실패 | 금융 감독원이 데이터 변경 이력을 요구, 이력 없음 | 과태료, 시정 명령, 신뢰 손실 |
+| 품질 저하 | 코드 값 삭제로 기존 데이터 참조 무결성 깨짐 | 품질 진단 오류율 상승, 수동 정제 비용 |
+| 보안 사고 | 개인정보 칼럼 추가를 비공식으로 처리, 암호화 누락 | 개인정보보호법 위반 과징금 (매출의 최대 3%) |
+| 운영 장애 | 동시에 복수 개발자가 같은 테이블에 DDL 실행 | 서비스 중단, 데이터 손실 |
+
+DMBOK은 저품질 데이터의 비용을 매출의 10~30%로 추정하며, 이 비용의 상당 부분이 "변경 통제 부재로 인한 정합성 파괴"에서 비롯된다고 설명한다 (DAMA International, 2017, Ch.1). 변경 관리는 이 비용을 사전에 차단하는 예방적 통제다.
+
+### 규제 준수 관점
+
+금융, 의료, 공공 분야에서 변경 관리는 선택이 아니라 규제 요건이다.
+
+| 규제 | 요구 사항 | 변경 관리와의 연결 |
+|---|---|---|
+| 금융 감독 규정 | 핵심 데이터 변경 이력 보존 | 모든 변경의 전/후 값, 변경자, 승인자 기록 |
+| 개인정보보호법 | 개인정보 처리 내역 기록 | 개인정보 칼럼 변경 시 보안 등급 재검토 자동화 |
+| ISO 8000 | 데이터 품질 관리 체계 | 변경 요청-검증-승인 프로세스의 문서화 |
+| SOX (Sarbanes-Oxley) | IT 통제 환경 감사 | 재무 데이터 변경의 분리된 승인 경로 |
+
+규제 대응은 변경 관리 시스템이 이미 갖추어져 있으면 메타데이터 조회만으로 충족된다. 변경 관리가 없으면 감사 때마다 수작업으로 이력을 재구성해야 하고, 이는 비용과 리스크를 동시에 키운다.
+
+---
+
+## 응용 분야
+
+변경 관리의 구체적 적용은 산업별로 차이가 있다. 핵심 변경 대상과 통제 강도가 다르기 때문이다.
+
+| 분야 | 주요 변경 관리 대상 | 통제 강도 | 구체적 시나리오 |
+|---|---|---|---|
+| 금융 | 계좌, 거래, 리스크 데이터 스키마 | 최고 (이중 승인 필수) | Basel III 보고 테이블 칼럼 변경 시 감독원 사전 보고 |
+| 의료 | 환자 기록, 진단 코드 | 최고 (변경 전후 값 영구 보존) | ICD-11 코드 체계 전환 시 매핑 테이블 변경 관리 |
+| 제조 | 제품 마스터, BOM(Bill of Materials) | 높음 (품질 영향 분석 필수) | 부품 코드 변경 시 생산 라인 전체 영향도 추적 |
+| 공공 | 행정 코드, 주소 체계 | 높음 (시행일 기반 변경) | 행정구역 코드 변경 시 전 시스템 동시 적용 |
+| 이커머스 | 상품 카테고리, 결제 코드 | 중간 (빠른 배포 우선) | 새 결제수단 추가 시 코드-스키마-앱 배포 묶음 관리 |
+| 통신 | 요금제, 서비스 코드 | 높음 (과금 영향 분석) | 요금제 코드 변경이 청구 시스템에 미치는 영향 사전 분석 |
+
+각 분야에서 공통적으로 필요한 것은 **변경 전 영향도 분석**과 **변경 후 이력 보존**이다. 통제 강도와 결재 단계만 분야별로 조정하면 동일한 워크플로 엔진을 재사용할 수 있다.
+
+---
+
+## 결재 단계 설계: 메타데이터로 관리하는 승인 경로
+
+### 변경 유형별 결재 단계
+
+결재 단계는 변경 유형과 위험도에 따라 달라진다. 모든 변경에 동일한 결재를 요구하면 경미한 변경이 병목에 걸리고, 결재 없이 처리하면 위험한 변경이 통제를 벗어난다.
+
+| 변경 유형 | 결재 단계 | 결재자 | 근거 |
+|---|---|---|---|
+| 스키마 변경 (DDL) | 2단계 | DA (표준/모델 검토) -> DBA (성능/운영 검토) | 구조 변경은 전체 시스템에 영향 |
+| 코드 변경 (DML) | 1단계 | 업무 담당자 | 코드 값 추가/수정은 비즈니스 판단 |
+| 마스터 데이터 변경 (DML) | 1단계 | 업무 담당자 | 정본 갱신은 데이터 소유자 판단 |
+| 데이터 정정 (DML) - 소량 | 1단계 | 업무 담당자 | 10건 미만, 비핵심 데이터 |
+| 데이터 정정 (DML) - 대량/핵심 | 2단계 | 업무 담당자 -> DBA/DA | 100건 이상 또는 금액/개인정보 관련 |
+| 비즈메타 변경 | 1단계 | DA | 메타데이터 정의 변경은 DA 소관 |
+
+데이터 정정의 결재 단계가 건수와 중요도에 따라 분기되는 것이 핵심이다. 10건 미만의 일반 데이터 수정은 1단계로 빠르게 처리하되, 100건 이상이거나 금액/개인정보 칼럼이 포함된 정정은 2단계 승인을 거친다. 이 분기 기준 자체를 메타데이터로 관리해야 한다.
+
+### 결재 규칙의 메타데이터 관리
+
+결재 단계를 코드에 하드코딩하면 정책이 바뀔 때마다 시스템을 수정해야 한다. 결재 규칙을 메타데이터로 분리하면 시스템 변경 없이 정책만 업데이트할 수 있다.
+
+```
+결재 규칙 메타데이터 구조:
+
+변경 유형: SCHEMA_CHANGE
+  -> 결재 단계: 2
+  -> 1단계 결재자 역할: DA
+  -> 2단계 결재자 역할: DBA
+  -> 조건: 없음 (무조건 2단계)
+
+변경 유형: DATA_CORRECTION
+  -> 결재 단계: 동적 (조건부)
+  -> 조건 1: 변경 건수 < 10 AND 대상 칼럼이 핵심 데이터가 아님
+     -> 1단계, 결재자: BUSINESS_OWNER
+  -> 조건 2: 변경 건수 >= 100 OR 대상 칼럼이 핵심 데이터
+     -> 2단계, 결재자: BUSINESS_OWNER -> DA
+  -> 조건 3: 대상 칼럼이 개인정보 등급
+     -> 2단계, 결재자: BUSINESS_OWNER -> PRIVACY_OFFICER
+```
+
+이 메타데이터를 워크플로 엔진이 읽어서 결재 라인을 동적으로 결정한다. [중요데이터 관리](./11-5.sensitive_data_mgmt.qmd)에서 다룬 데이터 등급 분류가 여기서 결재 조건으로 활용된다. 개인정보 등급 칼럼의 변경은 자동으로 개인정보보호 담당자(Privacy Officer) 결재가 추가되는 구조다.
+
+---
+
+## 예시: 변경 관리의 Before/After
+
+### 변경 관리가 없는 경우 (Before)
+
+```
+1. 개발자 A: "DBA님, TB_ORDER에 DISCOUNT_RATE 칼럼 추가해주세요"
+   (메신저로 요청)
+
+2. DBA: "타입이 뭐예요?"
+   개발자 A: "DECIMAL(5,2)요"
+   (메신저에서 타입 확인)
+
+3. DBA가 운영 DB에서 직접 실행:
+   ALTER TABLE TB_ORDER ADD DISCOUNT_RATE DECIMAL(5,2);
+
+4. 2주 후: DW ETL 실패
+   - 원인 조사에 2일 소요
+   - "누가 언제 이 칼럼을 추가했지?"
+   - 메신저 로그 뒤지기
+
+5. 3개월 후: 감사팀 요청
+   "DISCOUNT_RATE 칼럼이 언제 추가되었고 누가 승인했는지 증빙하세요"
+   -> 증빙 불가
+```
+
+이 시나리오에서 발생한 비용은 ETL 복구 인건비, 원인 조사 시간, 감사 대응 실패에 따른 리스크다. 변경 자체는 정당했지만, 통제되지 않은 방식으로 실행되어 추적과 검증이 불가능해졌다.
+
+### 변경 관리가 있는 경우 (After)
+
+```
+1. 개발자 A: 변경 관리 시스템에서 요청 작성
+   - 유형: 스키마 변경
+   - 대상: TB_ORDER
+   - 내용: DISCOUNT_RATE DECIMAL(5,2) 칼럼 추가
+   - 사유: 주문별 할인율 관리 기능 추가
+
+2. 자동 검증 실행:
+   - 칼럼명 표준 검증: DISCOUNT(할인) + RATE(비율) -> 표준 단어 확인 완료
+   - 도메인 자동 추론: RATE -> 비율 도메인 (DECIMAL(5,2)) -> 일치
+   - 영향도 분석: TB_ORDER를 참조하는 다운스트림 3건 표시
+     (DW_ORDER_FACT, RPT_DAILY_ORDER, VW_ORDER_SUMMARY)
+
+3. DA 검토 -> 승인: 표준 준수 확인
+   DBA 검토 -> 승인: 인덱스 불필요 확인, 기본값 NULL 허용
+
+4. 실행: 개발 환경 적용 -> 스테이징 검증 -> 운영 배포
+   실행 결과 자동 기록
+
+5. 메타데이터 자동 갱신:
+   - 칼럼 메타 등록
+   - 데이터 흐름(lineage) 업데이트
+   - DW ETL 매핑 검토 알림 자동 발송
+
+6. 감사 대응: 변경 요청 ID로 전체 이력 즉시 조회 가능
+```
+
+Before와 After의 차이는 변경 내용이 아니라 **변경 과정의 가시성과 추적성**이다. 동일한 칼럼 추가이지만, 통제된 워크플로를 거치면 영향도 사전 파악, 표준 검증, 이력 보존, 감사 대응이 모두 자동화된다.
+
+### 암호화: 변경 전후 값의 보호
+
+데이터 정정 시 변경 전/후 값이 이력에 저장된다. 이 값에 개인정보나 금융 정보가 포함될 수 있으므로 평문 저장은 허용되지 않는다.
+
+| 구분 | 평문 저장 | 암호화 저장 |
+|---|---|---|
+| 저장 방식 | `old_value = '홍길동'` | `old_value_enc = 'aGVsbG8...'` (AES-256-GCM) |
+| 키 관리 | 없음 | KMS(Key Management Service)에 위임 |
+| 복호화 | 누구나 조회 가능 | 복호화 시 감사 로그 자동 기록 |
+| 규제 대응 | 개인정보보호법 위반 가능 | 암호화 의무 충족 |
+
+변경 이력 테이블의 `old_value`와 `new_value`를 AES-256-GCM으로 암호화하여 저장한다. 암호화 키는 애플리케이션이 직접 관리하지 않고 KMS에 위임한다. 복호화가 필요한 경우(장애 분석, 감사 대응) 복호화 요청 자체가 감사 로그에 기록된다. 이 구조는 "누가 언제 어떤 변경 이력을 열람했는가"까지 추적할 수 있게 한다.
+
+---
+
+## 코드/도구 예시
+
+### 결재 단계 메타데이터 테이블
+
+```sql
+-- 변경 유형 정의
+CREATE TABLE TB_CHANGE_TYPE (
+    change_type_cd    VARCHAR(30)   NOT NULL,
+    change_type_nm    VARCHAR(100)  NOT NULL,
+    exec_method       VARCHAR(10)   NOT NULL,   -- DDL, DML, API
+    description       VARCHAR(500),
+    PRIMARY KEY (change_type_cd)
+);
+
+INSERT INTO TB_CHANGE_TYPE VALUES
+  ('SCHEMA_CHANGE',   '스키마 변경',       'DDL',  '테이블/칼럼/인덱스 구조 변경'),
+  ('CODE_CHANGE',     '코드 변경',         'DML',  '공통코드 값 추가/수정/비활성화'),
+  ('MASTER_CHANGE',   '마스터 데이터 변경', 'DML',  '비즈니스 엔티티 정본 갱신'),
+  ('DATA_CORRECTION', '데이터 정정',       'DML',  '오류 데이터 수정'),
+  ('BIZMETA_CHANGE',  '비즈메타 변경',     'API',  '메타데이터 정의 변경');
+
+-- 결재 규칙 정의
+CREATE TABLE TB_APPROVAL_RULE (
+    rule_id           INT           NOT NULL,
+    change_type_cd    VARCHAR(30)   NOT NULL,
+    condition_expr    VARCHAR(500),             -- 조건식 (NULL이면 무조건 적용)
+    approval_steps    INT           NOT NULL,   -- 결재 단계 수
+    priority          INT           NOT NULL,   -- 조건 평가 우선순위
+    PRIMARY KEY (rule_id)
+);
+
+-- 결재 단계별 역할 정의
+CREATE TABLE TB_APPROVAL_STEP (
+    rule_id           INT           NOT NULL,
+    step_seq          INT           NOT NULL,
+    approver_role     VARCHAR(30)   NOT NULL,   -- DA, DBA, BUSINESS_OWNER 등
+    PRIMARY KEY (rule_id, step_seq)
+);
+
+-- 스키마 변경: 무조건 2단계 (DA -> DBA)
+INSERT INTO TB_APPROVAL_RULE VALUES (1, 'SCHEMA_CHANGE', NULL, 2, 1);
+INSERT INTO TB_APPROVAL_STEP VALUES (1, 1, 'DA');
+INSERT INTO TB_APPROVAL_STEP VALUES (1, 2, 'DBA');
+
+-- 데이터 정정 (소량): 1단계
+INSERT INTO TB_APPROVAL_RULE
+VALUES (2, 'DATA_CORRECTION', 'row_count < 10 AND sensitivity_level = ''NORMAL''', 1, 1);
+INSERT INTO TB_APPROVAL_STEP VALUES (2, 1, 'BUSINESS_OWNER');
+
+-- 데이터 정정 (대량 또는 핵심): 2단계
+INSERT INTO TB_APPROVAL_RULE
+VALUES (3, 'DATA_CORRECTION', 'row_count >= 100 OR sensitivity_level = ''HIGH''', 2, 2);
+INSERT INTO TB_APPROVAL_STEP VALUES (3, 1, 'BUSINESS_OWNER');
+INSERT INTO TB_APPROVAL_STEP VALUES (3, 2, 'DA');
+
+-- 데이터 정정 (개인정보): 2단계 (개인정보보호 담당자)
+INSERT INTO TB_APPROVAL_RULE
+VALUES (4, 'DATA_CORRECTION', 'sensitivity_level = ''PII''', 2, 3);
+INSERT INTO TB_APPROVAL_STEP VALUES (4, 1, 'BUSINESS_OWNER');
+INSERT INTO TB_APPROVAL_STEP VALUES (4, 2, 'PRIVACY_OFFICER');
+```
+
+### 변경 로그 테이블
+
+```sql
+-- 변경 요청 테이블
+CREATE TABLE TB_CHANGE_REQUEST (
+    request_id        BIGINT        NOT NULL,
+    change_type_cd    VARCHAR(30)   NOT NULL,
+    request_title     VARCHAR(200)  NOT NULL,
+    request_desc      VARCHAR(2000),
+    target_schema     VARCHAR(50),
+    target_table      VARCHAR(100),
+    target_column     VARCHAR(100),
+    status            VARCHAR(20)   NOT NULL DEFAULT 'DRAFT',
+    requested_by      VARCHAR(50)   NOT NULL,
+    requested_at      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    approved_at       TIMESTAMP,
+    executed_at       TIMESTAMP,
+    PRIMARY KEY (request_id)
+);
+
+-- 변경 전후 값 저장 (암호화)
+CREATE TABLE TB_CHANGE_DETAIL (
+    detail_id         BIGINT        NOT NULL,
+    request_id        BIGINT        NOT NULL,
+    target_pk_value   VARCHAR(200)  NOT NULL,   -- 변경 대상 레코드의 PK
+    column_name       VARCHAR(100)  NOT NULL,
+    old_value_enc     VARBINARY(4000),           -- AES-256-GCM 암호화
+    new_value_enc     VARBINARY(4000),           -- AES-256-GCM 암호화
+    encryption_key_id VARCHAR(100)  NOT NULL,    -- KMS 키 식별자
+    PRIMARY KEY (detail_id)
+);
+
+-- 복호화 감사 로그
+CREATE TABLE TB_DECRYPTION_AUDIT (
+    audit_id          BIGINT        NOT NULL,
+    detail_id         BIGINT        NOT NULL,
+    decrypted_by      VARCHAR(50)   NOT NULL,
+    decrypted_at      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    purpose           VARCHAR(200)  NOT NULL,    -- 복호화 사유
+    PRIMARY KEY (audit_id)
+);
+```
+
+### 영향도 분석 재귀 쿼리
+
+변경 요청을 작성할 때 해당 변경이 영향을 미치는 다운스트림 객체를 자동으로 표시해야 한다. [라이프사이클 설계](./11-1.data_lifecycle_design.qmd)에서 다룬 데이터 흐름 테이블(`TB_DATA_FLOW_COLUMN`)에서 재귀 쿼리로 다운스트림 영향을 파악한다.
+
+```sql
+-- TB_DATA_FLOW_COLUMN: 칼럼 수준의 데이터 흐름 정보
+-- source_schema, source_table, source_column
+-- target_schema, target_table, target_column
+
+-- 특정 칼럼 변경 시 영향받는 다운스트림 전체 조회
+WITH RECURSIVE downstream AS (
+    -- 시작점: 변경 대상 칼럼을 소스로 참조하는 직접 다운스트림
+    SELECT
+        target_schema,
+        target_table,
+        target_column,
+        1 AS depth,
+        CAST(CONCAT(source_table, '.', source_column, ' -> ',
+             target_table, '.', target_column) AS VARCHAR(4000)) AS path
+    FROM TB_DATA_FLOW_COLUMN
+    WHERE source_schema = 'ORDER_DB'
+      AND source_table  = 'TB_ORDER'
+      AND source_column = 'DISCOUNT_RATE'
+
+    UNION ALL
+
+    -- 재귀: 다운스트림의 다운스트림
+    SELECT
+        f.target_schema,
+        f.target_table,
+        f.target_column,
+        d.depth + 1,
+        CAST(CONCAT(d.path, ' -> ',
+             f.target_table, '.', f.target_column) AS VARCHAR(4000))
+    FROM TB_DATA_FLOW_COLUMN f
+    JOIN downstream d
+      ON f.source_schema = d.target_schema
+     AND f.source_table  = d.target_table
+     AND f.source_column = d.target_column
+    WHERE d.depth < 10   -- 무한 루프 방지
+)
+SELECT
+    target_schema,
+    target_table,
+    target_column,
+    depth,
+    path
+FROM downstream
+ORDER BY depth, target_schema, target_table;
+```
+
+이 쿼리의 결과가 변경 요청 화면에 자동으로 표시된다. 개발자가 `TB_ORDER.DISCOUNT_RATE` 칼럼 변경을 요청하면, 이 칼럼에서 파생된 DW 팩트 테이블, 리포팅 뷰, BI 대시보드 소스까지 전체 영향 경로를 한눈에 확인할 수 있다. DA와 DBA는 이 영향도 분석 결과를 보고 승인 여부를 판단한다.
+
+영향도가 `depth >= 3` 이상이면 변경의 파급 범위가 넓다는 의미이므로, 결재 규칙에 "영향도 깊이 3 이상이면 DBA 추가 결재" 같은 조건을 메타데이터로 설정할 수 있다.
+
+---
+
+## 관련 주제
+
+**카테고리 내 연결**
+
+- [데이터 거버넌스란 무엇인가 - DAMA 프레임워크 개론](./11-0.dama_framework_overview.qmd)
+- [데이터 라이프사이클 설계](./11-1.data_lifecycle_design.qmd)
+- [데이터 표준 관리](./11-2.data_standard_design.qmd)
+- [데이터 구조 관리](./11-3.data_structure_mgmt.qmd)
+- [공통코드와 마스터 데이터 관리](./11-4.code_master_data_mgmt.qmd)
+- [중요데이터 관리와 비식별화](./11-5.sensitive_data_mgmt.qmd)
+- [데이터 품질 관리](./11-6.data_quality_lifecycle.qmd)
+- [데이터 활용 - Federation과 BI](./11-7.data_utilization_federation.qmd)
+- [통합 아키텍처](./11-9.integrated_architecture.qmd)
+- [데이터 품질 측정](./8-0.data_quality_measures.qmd)
+- [메타데이터 관리 시스템 - 수집과 변경 관리](./10-2.metadata_mgmt_system_collection_change.qmd)
+
+**다른 카테고리 연결**
+
+- [데이터 파이프라인](../Engineering/Data_Engineering/airflow/)

@@ -25,7 +25,7 @@ cross_references:
 - **업무 프로세스 중심**: 기술적 구현보다 거버넌스 체계, 절차, 표준을 다룬다
 - **순차적 학습 경로**: 기초(1) → 업무절차(2) → 아키텍처(3) → 데이터 모델(4) → 표준화(5) → 등록/검토(6) → 규칙(7) → 품질(8) 순서
 - **실무 문서 스타일**: 정책 문서, 가이드라인, 체크리스트 형태가 많다
-- **커스텀 레이아웃**: `sidebar: 200px, body: 1150px, margin: 300px` 설정을 사용한다
+- **레이아웃**: `_quarto.yml` 전역 설정을 상속한다 (개별 포스트에서 format 생략)
 - **파일명 패턴**: `번호.토픽명.qmd` (예: `4-0.data_model.qmd`, `5-0-0.data_standard.qmd`)
 
 ---
@@ -128,24 +128,17 @@ CREATE TABLE std_code (
 
 ## YAML 헤더 특이사항
 
-Governance 카테고리는 커스텀 레이아웃을 사용한다. 새 포스트에도 동일하게 적용한다:
+`_quarto.yml`에서 `format`, `grid`, `number-sections` 등이 전역으로 상속되므로 개별 포스트에서는 생략한다.
 
 ```yaml
 ---
 title: "제목"
 subtitle: "부제목"
 description: "설명"
-author: Kwangmin Kim
 categories:
   - Data Governance
+author: Kwangmin Kim
 date: MM/DD/YYYY
-format:
-  html:
-    number-depth: 3
-    grid:
-      sidebar-width: 200px
-      body-width: 1150px
-      margin-width: 300px
 ---
 ```
 

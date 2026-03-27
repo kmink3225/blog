@@ -1,0 +1,514 @@
+---
+title: "통합 아키텍처 설계"
+subtitle: "단일 패키지 vs 컴포넌트 방식, 멀티 DBMS 추상화, RBAC, 스케줄러"
+description: |
+  데이터 거버넌스 시스템의 아키텍처 선택(단일 패키지 vs 컴포넌트 방식), 멀티 DBMS
+  추상화를 위한 Strategy Pattern 설계, 커넥션 풀 분리 전략, RBAC 역할 체계,
+  스케줄러 설계와 시간 분산 전략을 다룬다.
+categories:
+  - Data Governance
+author: Kwangmin Kim
+date: 03/27/2026
+---
+
+## 왜 아키텍처 결정이 먼저인가
+
+데이터 거버넌스 시스템을 구축하겠다고 결정한 조직이 가장 먼저 부딪히는 질문은 "어떤 도구를 쓸 것인가"다. IBM InfoSphere, Informatica Axon, Collibra 같은 상용 솔루션을 도입할 것인가, 아니면 개별 컴포넌트를 자체 개발하여 조합할 것인가. 이 질문은 단순한 도구 선택이 아니라 **조직의 거버넌스 역량을 어디에 귀속시킬 것인가**에 대한 전략적 결정이다.
+
+[DAMA 프레임워크 개론](./11-0.dama_framework_overview.qmd)에서 통합 프레임워크의 설계 철학을 설명했다. 개별 솔루션 방식은 도구별 메타데이터 저장소가 분리되어 통합 비용이 발생하고, 통합 프레임워크 방식은 단일 저장소를 공유하여 현행화 비용을 최소화한다. 이 글에서는 그 통합 프레임워크를 실제 시스템으로 구현할 때의 아키텍처 결정과 기술 설계를 구체적으로 다룬다.
+
+---
+
+::: {.callout-note}
+## 정의: 통합 아키텍처 (Integrated Architecture)
+
+통합 아키텍처는 데이터 거버넌스의 각 기능(표준 관리, 구조 관리, 품질 진단, 메타데이터 관리 등)이 **단일 메타데이터 저장소를 공유**하면서 독립적으로 동작하는 시스템 구성 방식이다.
+
+- 핵심 원칙: 한 곳에서 정의하면 전체가 참조한다 (Single Source of Truth)
+- 구성: 공유 저장소(Repository DB) + 기능별 컴포넌트(표준, 구조, 품질, 보안, 활용)
+- 참조: DAMA-DMBOK2 Chapter 3, Chapter 13
+:::
+
+---
+
+## 단일 패키지 vs 컴포넌트 방식
+
+### 두 가지 접근의 본질적 차이
+
+데이터 거버넌스 시스템 구축에는 크게 두 가지 접근이 있다. 하나는 상용 솔루션 하나를 도입하여 전체 기능을 한 번에 확보하는 **단일 패키지(Single Package)** 방식이고, 다른 하나는 각 기능 영역을 별도 컴포넌트로 설계하고 단일 저장소 위에서 연결하는 **컴포넌트(Component)** 방식이다.
+
+| 구분 | 단일 패키지 | 컴포넌트 방식 |
+|---|---|---|
+| 대표 솔루션 | IBM InfoSphere, Informatica Axon, Collibra | 자체 개발 또는 오픈소스 조합 |
+| 초기 도입 비용 | 높음 (라이선스 + 구축) | 낮음~중간 (점진적 개발) |
+| 커스터마이징 | 벤더 제공 범위 내 제한적 | 조직 요구에 맞게 자유롭게 설계 |
+| 기능 간 통합 | 벤더가 보장 (같은 제품군) | 단일 저장소 DB 공유로 직접 보장 |
+| 벤더 종속성 | 높음 (마이그레이션 비용 극대) | 낮음 (표준 기술 스택) |
+| 유지보수 | 벤더 지원에 의존 | 내부 역량에 의존 |
+| 조직 학습 곡선 | 벤더 교육 프로그램 제공 | 내부 개발팀이 직접 설계하므로 깊은 이해 |
+
+### 단일 패키지의 매력과 함정
+
+IBM InfoSphere Information Governance Catalog, Informatica Axon Data Governance, Collibra Data Intelligence Cloud 같은 솔루션은 메타데이터 관리, 데이터 카탈로그, 데이터 리니지, 데이터 품질, 비즈니스 용어 사전을 하나의 플랫폼에서 제공한다. 초기 도입 시에는 빠르게 가시적 성과를 낼 수 있다.
+
+그러나 함정이 있다. **조직의 거버넌스 규칙은 조직마다 다르다.** 표준 단어 사전의 구성 방식, 변경 승인 워크플로, 품질 진단 규칙의 우선순위, 보안 등급 분류 기준은 조직의 업종, 규모, 규제 환경에 따라 크게 달라진다. 상용 솔루션이 제공하는 기본 워크플로가 조직의 거버넌스 프로세스와 맞지 않으면, 솔루션을 커스터마이징하거나 조직의 프로세스를 솔루션에 맞추어야 한다. 전자는 비용이 크고, 후자는 거버넌스의 본래 목적을 훼손한다.
+
+벤더 종속성의 실질적 리스크는 **데이터 포터빌리티**에서 나타난다. 수년간 축적한 메타데이터, 품질 규칙, 리니지 정보를 다른 시스템으로 옮기는 것은 기술적으로 가능하더라도 비용이 막대하다. 이는 사실상 거버넌스 자산이 벤더에 귀속되는 결과를 만든다.
+
+### 컴포넌트 방식의 핵심: 단일 저장소 DB 공유
+
+컴포넌트 방식에서 가장 중요한 설계 원칙은 **모든 컴포넌트가 하나의 Repository DB를 공유**한다는 것이다. 표준 관리, 구조 관리, 품질 진단, 코드 관리, 보안 관리가 각각 독립된 기능 모듈이지만, 모두 같은 데이터베이스의 테이블을 참조한다.
+
+```
+                  +---------------------------+
+                  |     Repository DB         |
+                  | (메타데이터 단일 저장소)    |
+                  +---------------------------+
+                    |    |    |    |    |
+            +-------+    |    |    |    +-------+
+            |        +---+    |    +---+        |
+            v        v        v        v        v
+        [표준관리] [구조관리] [품질진단] [코드관리] [보안관리]
+        컴포넌트   컴포넌트   컴포넌트   컴포넌트   컴포넌트
+```
+
+이 구조의 효과는 [표준 관리](./11-2.data_standard_design.qmd)에서 정의한 도메인 규칙을 품질 진단 엔진이 **별도 연동 개발 없이** 직접 참조할 수 있다는 것이다. [구조 관리](./11-3.data_structure_mgmt.qmd)에서 수집한 스키마 메타데이터를 품질 진단이 즉시 대상으로 삼을 수 있다. [코드 관리](./11-4.code_master_data_mgmt.qmd)에서 정의한 코드 그룹을 품질 진단의 코드 도메인 검증에서 바로 사용할 수 있다.
+
+### 선택 기준: 언제 어떤 방식을 택하는가
+
+| 조건 | 권장 방식 | 근거 |
+|---|---|---|
+| IT 내부 개발 역량이 약하고 빠른 도입이 필요 | 단일 패키지 | 개발 리스크보다 시간 가치가 높다 |
+| 표준화된 거버넌스 프로세스가 아직 없음 | 단일 패키지 | 솔루션의 베스트 프랙티스를 참조하여 프로세스 수립 |
+| 조직 고유의 복잡한 거버넌스 규칙이 있음 | 컴포넌트 | 커스터마이징 자유도가 필수 |
+| 다양한 DBMS를 사용 (Oracle + PostgreSQL + MySQL 등) | 컴포넌트 | 상용 솔루션의 DBMS 지원 범위가 제한적일 수 있다 |
+| 장기적으로 내부 역량 축적이 목표 | 컴포넌트 | 시스템 설계 역량이 조직에 귀속 |
+| 규제 환경이 빈번하게 변화 | 컴포넌트 | 변경 대응 속도가 벤더 의존보다 빠르다 |
+
+---
+
+## 멀티 DBMS 추상화: Strategy Pattern
+
+### 왜 추상화가 필요한가
+
+현실의 조직은 단일 DBMS를 사용하지 않는다. Oracle을 주력으로 쓰면서 일부 시스템은 PostgreSQL로 운영하고, 레거시 시스템은 Tibero나 Sybase를 사용한다. 데이터 거버넌스 시스템이 이 모든 DBMS의 메타데이터를 수집하고 품질을 진단하려면 DBMS별 차이를 추상화하는 계층이 필수다.
+
+DBMS별로 세 가지 영역에서 결정적 차이가 존재한다.
+
+**시스템 카탈로그 차이.** 스키마 메타데이터를 조회하는 쿼리가 DBMS마다 전혀 다르다.
+
+| DBMS | 칼럼 메타데이터 조회 |
+|---|---|
+| Oracle | `SELECT * FROM ALL_TAB_COLS WHERE owner = :schema` |
+| PostgreSQL | `SELECT * FROM information_schema.columns WHERE table_schema = :schema` |
+| MySQL | `SELECT * FROM information_schema.columns WHERE table_schema = :schema` |
+| SQL Server | `SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = :schema` |
+| Tibero | `SELECT * FROM ALL_TAB_COLUMNS WHERE owner = :schema` |
+
+**DDL 생성 차이.** 동일한 논리적 변경(칼럼 추가)이라도 생성되는 DDL 문법이 다르다. Oracle은 `ALTER TABLE t ADD (col VARCHAR2(100))`, PostgreSQL은 `ALTER TABLE t ADD COLUMN col VARCHAR(100)`, MySQL은 `ALTER TABLE t ADD COLUMN col VARCHAR(100)` 형태를 사용한다.
+
+**진단 쿼리 함수 차이.** 문자열 길이를 구하는 함수가 Oracle은 `LENGTH()`, SQL Server는 `LEN()`이다. 날짜 변환 함수, NULL 처리 함수 등도 DBMS마다 다르다.
+
+### Strategy Pattern으로 IDialect 인터페이스 설계
+
+이 차이를 다루는 가장 구조적인 방법은 **Strategy Pattern**이다. DBMS별 차이를 캡슐화하는 인터페이스를 정의하고, 각 DBMS에 대한 구현체를 제공한다. 런타임에 접속 대상 DBMS에 맞는 구현체를 선택하여 사용한다.
+
+```
+         +------------------+
+         |   IDialect       |  <-- 인터페이스
+         +------------------+
+         | getColumns()     |
+         | getTables()      |
+         | generateDDL()    |
+         | lengthFunction() |
+         | nullFunction()   |
+         +------------------+
+              ^    ^    ^
+              |    |    |
+    +---------+    |    +---------+
+    |              |              |
++--------+  +----------+  +----------+
+| Oracle |  | Postgres |  | MySQL    |
+| Dialect|  | Dialect  |  | Dialect  |
++--------+  +----------+  +----------+
+```
+
+이 패턴의 장점은 **새 DBMS 지원을 추가할 때 기존 코드를 수정하지 않아도 된다**는 것이다. Tibero 지원이 필요하면 `TiberoDialect`를 새로 구현하고 등록만 하면 된다. 이것이 개방-폐쇄 원칙(Open-Closed Principle)의 전형적 적용이다.
+
+```python
+# IDialect 인터페이스 정의
+from abc import ABC, abstractmethod
+
+class IDialect(ABC):
+    """DBMS별 차이를 추상화하는 인터페이스"""
+
+    @abstractmethod
+    def get_columns_query(self, schema: str) -> str:
+        """칼럼 메타데이터 조회 SQL 반환"""
+
+    @abstractmethod
+    def get_tables_query(self, schema: str) -> str:
+        """테이블 목록 조회 SQL 반환"""
+
+    @abstractmethod
+    def get_constraints_query(self, schema: str) -> str:
+        """제약조건 조회 SQL 반환"""
+
+    @abstractmethod
+    def add_column_ddl(self, table: str, col_name: str,
+                       col_type: str) -> str:
+        """칼럼 추가 DDL 반환"""
+
+    @abstractmethod
+    def length_function(self, column: str) -> str:
+        """문자열 길이 함수 반환"""
+
+    @abstractmethod
+    def null_function(self, column: str, default: str) -> str:
+        """NULL 대체 함수 반환"""
+```
+
+### DBMS별 Dialect 구현 범위
+
+각 Dialect가 구현해야 하는 메서드를 기능 영역별로 분류하면 다음과 같다.
+
+| 기능 영역 | 메서드 | Oracle 구현 예시 | PostgreSQL 구현 예시 |
+|---|---|---|---|
+| 스키마 수집 | `getColumns(schema)` | `ALL_TAB_COLS` 조회 | `information_schema.columns` 조회 |
+| 스키마 수집 | `getTables(schema)` | `ALL_TABLES` 조회 | `information_schema.tables` 조회 |
+| 스키마 수집 | `getConstraints(schema)` | `ALL_CONSTRAINTS` 조회 | `pg_constraint` 조회 |
+| DDL 생성 | `addColumnDDL(table, col)` | `ADD (col TYPE)` | `ADD COLUMN col TYPE` |
+| DDL 생성 | `modifyColumnDDL(table, col)` | `MODIFY (col TYPE)` | `ALTER COLUMN col TYPE TYPE` |
+| 진단 함수 | `lengthFunction(col)` | `LENGTH(col)` | `LENGTH(col)` |
+| 진단 함수 | `nullIfFunction(col, val)` | `NVL(col, val)` | `COALESCE(col, val)` |
+| 진단 함수 | `substringFunction(col, s, e)` | `SUBSTR(col, s, e)` | `SUBSTRING(col FROM s FOR e)` |
+
+현재 지원이 필요한 주요 DBMS와 각각의 특이사항은 다음과 같다.
+
+| DBMS | 주요 특이사항 |
+|---|---|
+| OracleDialect | `VARCHAR2` 타입, `ALL_*` 딕셔너리 뷰, `NVL()` 함수 |
+| PostgreSQLDialect | `information_schema` 표준 뷰, `COALESCE()`, 스키마 네임스페이스 |
+| MySQLDialect | `information_schema`, 데이터베이스 = 스키마, `IFNULL()` |
+| MSSQLDialect | `INFORMATION_SCHEMA` + `sys.*` 카탈로그, `ISNULL()`, `LEN()` |
+| TiberoDialect | Oracle 호환이지만 일부 딕셔너리 뷰 차이 |
+| SybaseDialect | `syscolumns`/`sysobjects` 레거시 카탈로그 |
+
+---
+
+## 커넥션 풀 설계
+
+### 목적별 커넥션 분리
+
+데이터 거버넌스 시스템은 관리 대상 DBMS에 직접 접속하여 메타데이터를 수집하고 품질을 진단한다. 이때 모든 작업이 하나의 커넥션 풀을 공유하면 문제가 발생한다. 프로파일링처럼 대량 데이터를 스캔하는 작업이 풀을 점유하면 스키마 수집 같은 가벼운 작업이 대기해야 한다.
+
+커넥션 풀을 **목적별로 분리**하면 이 간섭을 제거할 수 있다.
+
+| 풀 유형 | 용도 | 특성 |
+|---|---|---|
+| 스키마 수집 풀 | 시스템 카탈로그 조회 | 가벼운 쿼리, 짧은 실행 시간, 소규모 풀 |
+| 품질 진단 풀 | 프로파일링, 행 수 카운트, 규칙 진단 | 대량 스캔 가능, 긴 실행 시간, 중간 규모 풀 |
+| 데이터 조회 풀 | 샘플 데이터 조회, 미리보기 | 사용자 요청 기반, 짧은 실행, 소규모 풀 |
+
+### Readonly User 원칙
+
+거버넌스 시스템이 관리 대상 DB에 접속할 때 사용하는 계정은 **반드시 읽기 전용(Readonly)**이어야 한다. 거버넌스 시스템의 목적은 메타데이터를 수집하고 데이터를 진단하는 것이지, 데이터를 변경하는 것이 아니다. 읽기 전용 계정을 사용하면 거버넌스 시스템의 버그나 오작동이 운영 데이터를 오염시킬 수 없다.
+
+```sql
+-- Oracle: 거버넌스 전용 읽기 계정 생성 예시
+CREATE USER gov_reader IDENTIFIED BY ****;
+GRANT CREATE SESSION TO gov_reader;
+GRANT SELECT ANY DICTIONARY TO gov_reader;
+GRANT SELECT ANY TABLE TO gov_reader;
+-- DML/DDL 권한은 부여하지 않는다
+
+-- PostgreSQL: 거버넌스 전용 읽기 계정 생성 예시
+CREATE ROLE gov_reader LOGIN PASSWORD '****';
+GRANT USAGE ON SCHEMA public TO gov_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO gov_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON TABLES TO gov_reader;
+```
+
+이 원칙은 [데이터 보안](./11-5.sensitive_data_mgmt.qmd)에서 다룬 접근 통제의 최소 권한 원칙과 직접 연결된다.
+
+커넥션 풀 설정은 대상 DBMS 등록 시 함께 구성한다. 대상 DBMS 1개당 최대 3개의 풀이 생성되므로, 관리 대상이 10개 DBMS라면 최대 30개 풀이 운영된다. 풀 크기는 DBMS의 최대 접속 수(max_connections)와 거버넌스 시스템 외 다른 애플리케이션의 접속 수를 고려하여 보수적으로 설정해야 한다. 거버넌스 시스템이 운영 DB의 접속 자원을 과도하게 점유하면 운영 서비스에 영향을 줄 수 있다.
+
+---
+
+## RBAC: 역할 기반 접근 통제
+
+### 왜 RBAC인가
+
+데이터 거버넌스 시스템은 다양한 이해관계자가 사용한다. DA(Data Architect)는 표준과 구조를 관리하고, DBA는 물리 스키마를 운영하고, 개발자는 변경을 요청하고, 분석가는 메타데이터를 조회한다. 각 역할이 수행할 수 있는 작업의 범위가 다르다.
+
+사용자 개인에게 권한을 직접 부여하면 사람이 늘어날수록 관리가 불가능해진다. **역할(Role)에 권한을 부여하고, 사용자를 역할에 매핑**하는 RBAC(Role-Based Access Control) 구조가 필수다.
+
+### 역할 정의
+
+| 역할 | 책임 | 주요 권한 |
+|---|---|---|
+| ADMIN | 시스템 전체 설정, 사용자/역할 관리 | 전체 권한 |
+| DA | 표준 정의, 구조 승인, 품질 규칙 설계 | 표준/구조/품질 규칙의 생성/수정/승인 |
+| DBA | 물리 스키마 관리, DDL 실행 | 구조 변경 요청의 실행, 스키마 수집 설정 |
+| DEVELOPER | 변경 요청 작성, 코드 등록 요청 | 변경 요청 생성, 메타데이터 조회 |
+| ANALYST | 메타데이터 조회, 품질 현황 조회 | 읽기 전용 접근 |
+| SECURITY_ADMIN | 중요데이터 등급 관리, 마스킹 규칙 설정 | 보안 등급/마스킹 설정, 접근 로그 조회 |
+
+### 데이터 오너십과 스튜어드십
+
+RBAC의 역할 구조 위에 **데이터 오너십(Ownership)**과 **스튜어드십(Stewardship)** 개념이 추가된다. DMBOK은 Data Steward를 조직 내 여러 수준으로 분화하여 정의한다 (DAMA International, 2017, Ch.3).
+
+| 개념 | 정의 | 예시 |
+|---|---|---|
+| 데이터 오너 | 특정 데이터 영역의 최종 책임자 (비즈니스 측) | 고객 데이터 오너 = CRM 팀장 |
+| 데이터 스튜어드 | 데이터 오너를 대리하여 일상적 관리를 수행 | 고객 데이터 스튜어드 = CRM 담당자 |
+| 기술 스튜어드 | 데이터의 물리적 관리(DB, ETL)를 수행 | DBA, 데이터 엔지니어 |
+
+거버넌스 시스템에서 이 관계는 **테이블/칼럼 단위로 오너와 스튜어드를 지정**하는 메타데이터로 관리된다. 변경 요청이 들어오면 해당 데이터의 오너/스튜어드에게 승인 요청이 자동으로 라우팅된다. 오너십이 지정되지 않은 테이블에 대한 변경 요청은 DA에게 라우팅되어, 오너 미지정 상태를 시스템이 자연스럽게 드러내도록 설계한다.
+
+```sql
+-- 데이터 오너십 테이블 DDL 예시
+CREATE TABLE tb_data_ownership (
+    ownership_id      BIGINT       PRIMARY KEY AUTO_INCREMENT,
+    schema_name       VARCHAR(128) NOT NULL,
+    table_name        VARCHAR(128) NOT NULL,
+    column_name       VARCHAR(128),          -- NULL이면 테이블 수준 오너십
+    owner_role        VARCHAR(50)  NOT NULL,  -- 오너 역할
+    owner_user_id     VARCHAR(50)  NOT NULL,  -- 오너 사용자 ID
+    steward_user_id   VARCHAR(50),            -- 스튜어드 사용자 ID
+    effective_from    DATE         NOT NULL,
+    effective_to      DATE,
+    created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- RBAC 역할-권한 매핑 DDL 예시
+CREATE TABLE tb_role_permission (
+    role_id           VARCHAR(30)  NOT NULL,
+    permission_code   VARCHAR(50)  NOT NULL,  -- 예: STD_CREATE, STD_APPROVE, CHG_EXECUTE
+    resource_type     VARCHAR(30)  NOT NULL,  -- 예: STANDARD, STRUCTURE, QUALITY, CODE
+    PRIMARY KEY (role_id, permission_code, resource_type)
+);
+```
+
+---
+
+## 스케줄러 설계
+
+### 거버넌스 작업의 자동화 주기
+
+데이터 거버넌스 시스템의 핵심 가치 중 하나는 **수동 작업의 자동화**다. 스키마 수집, 행 수 카운트, 프로파일링, 품질 진단은 사람이 매번 실행하는 것이 아니라 스케줄러가 주기적으로 실행한다.
+
+각 작업의 특성에 따라 적절한 실행 주기가 다르다.
+
+| 작업 유형 | 권장 주기 | 근거 |
+|---|---|---|
+| 스키마 수집 | 일 1회 | DDL 변경은 보통 업무 시간에 발생, 야간에 수집하면 전일 변경분 반영 |
+| 행 수 카운트 | 일~주 1회 | 테이블 크기 추세 파악, 이상 증감 탐지 |
+| 프로파일링 | 주~월 1회 | 전수 스캔이므로 부하가 큼, 빈도를 낮추되 주기적으로 실행 |
+| 품질 진단 | 일 1회 | 데이터 오류의 조기 탐지, 스키마 수집 후 실행 |
+| 갭 분석 | 스키마 수집 직후 | 수집된 현행 메타데이터와 표준/이전 버전 비교 |
+
+### 시간 분산 전략
+
+모든 작업을 같은 시각에 실행하면 관리 대상 DB에 부하가 집중된다. 작업 간의 의존 관계와 부하 특성을 고려하여 시간대를 분산해야 한다.
+
+```
+00:00-01:00  [스키마 수집]    -- 가벼운 카탈로그 조회, 모든 DBMS 대상
+01:00-01:30  [갭 분석]        -- 수집 직후 실행, Repository DB 내부 비교
+01:30-03:00  [행 수 카운트]   -- 테이블별 COUNT, 대상 DB 부하 중간
+03:00-05:00  [품질 진단]      -- 규칙별 진단 쿼리, 대상 DB 부하 중간~높음
+(주말)       [프로파일링]     -- 전수 스캔, 대상 DB 부하 최고, 업무 비활성 시간에 실행
+```
+
+핵심은 **의존 관계의 순서 보장**이다. 스키마 수집이 완료되어야 갭 분석이 의미가 있다. 갭 분석에서 발견된 새 칼럼이 품질 진단 대상에 포함되어야 한다. 따라서 스키마 수집 -> 갭 분석 -> 품질 진단의 순서가 보장되어야 한다.
+
+### 작업 실패 시 대응 전략
+
+스케줄러가 자동 실행하는 작업은 실패할 수 있다. 관리 대상 DB가 점검 중이거나, 네트워크 장애가 있거나, 쿼리 타임아웃이 발생할 수 있다. 실패 대응 전략은 작업 유형별로 다르게 설정한다.
+
+| 작업 유형 | 재시도 정책 | 실패 시 영향 |
+|---|---|---|
+| 스키마 수집 | 최대 3회 재시도, 30분 간격 | 갭 분석과 품질 진단 대상에 전일 변경분 미반영 |
+| 행 수 카운트 | 재시도 없음, 다음 주기에 재실행 | 추세 데이터 1건 누락, 큰 영향 없음 |
+| 프로파일링 | 테이블 단위 재시도, 실패 테이블만 다음 실행 시 우선 처리 | 해당 테이블의 프로파일 데이터 미갱신 |
+| 품질 진단 | 규칙 단위 재시도, 실패 규칙 목록 별도 관리 | 해당 규칙의 진단 결과 부재, 대시보드에 경고 표시 |
+
+실패 이력은 `tb_schedule_history`에 `FAILED` 상태로 기록되고, 담당자에게 알림이 발송된다. 연속 3회 이상 실패하면 해당 작업을 자동 비활성화하고 관리자 개입을 요청한다.
+
+### 스케줄러 설정 관리
+
+스케줄러 설정은 Repository DB에 테이블로 관리하여, 운영 중에 주기를 변경하거나 특정 작업을 비활성화할 수 있도록 한다.
+
+```sql
+-- 스케줄러 작업 정의 DDL
+CREATE TABLE tb_schedule_job (
+    job_id            VARCHAR(50)  PRIMARY KEY,
+    job_name          VARCHAR(200) NOT NULL,
+    job_type          VARCHAR(30)  NOT NULL,  -- SCHEMA_COLLECT, ROW_COUNT, PROFILE, QUALITY, GAP
+    cron_expression   VARCHAR(50)  NOT NULL,  -- 예: '0 0 * * *' (매일 자정)
+    target_dbms_id    VARCHAR(50),            -- NULL이면 전체 대상
+    is_active         CHAR(1)      DEFAULT 'Y',
+    depends_on_job_id VARCHAR(50),            -- 선행 작업 ID (의존 관계)
+    timeout_minutes   INT          DEFAULT 120,
+    created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP
+);
+
+-- 스케줄러 실행 이력 DDL
+CREATE TABLE tb_schedule_history (
+    history_id        BIGINT       PRIMARY KEY AUTO_INCREMENT,
+    job_id            VARCHAR(50)  NOT NULL,
+    start_time        TIMESTAMP    NOT NULL,
+    end_time          TIMESTAMP,
+    status            VARCHAR(20)  NOT NULL,  -- RUNNING, SUCCESS, FAILED, TIMEOUT
+    affected_count    INT,                    -- 수집/진단 건수
+    error_message     TEXT,
+    created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+`depends_on_job_id`를 통해 작업 간 의존 관계를 선언적으로 관리한다. 스케줄러는 선행 작업이 `SUCCESS` 상태일 때만 후행 작업을 시작한다. 선행 작업이 실패하면 후행 작업을 건너뛰고 알림을 발생시킨다.
+
+---
+
+## 왜 필요한가: 아키텍처 부재의 비용
+
+통합 아키텍처 없이 거버넌스 시스템을 구축하면 다음과 같은 비용이 발생한다.
+
+| 부재 요소 | 발생 비용 | 실무 시나리오 |
+|---|---|---|
+| 단일 저장소 부재 | 도구 간 메타데이터 불일치, 수동 동기화 비용 | 표준 관리 도구에서 변경한 도메인 규칙이 품질 도구에 반영되지 않아 진단 결과가 부정확 |
+| DBMS 추상화 부재 | DBMS 추가 시 전체 코드 수정, 수집/진단 로직 중복 | 신규 시스템이 PostgreSQL을 쓰는데 기존 시스템이 Oracle만 지원하여 수집 불가 |
+| 커넥션 풀 미분리 | 프로파일링이 스키마 수집을 차단, 사용자 조회 대기 | 야간 프로파일링 중 긴급 메타데이터 조회가 타임아웃 |
+| RBAC 부재 | 개발자가 표준을 무단 변경, 승인 없는 DDL 실행 | 신입 개발자가 운영 DB에 칼럼을 추가하여 서비스 장애 |
+| 스케줄러 부재 | 수집/진단을 수동 실행, 누락 발생, 시간 비일관 | 담당자 휴가 시 2주간 품질 진단이 실행되지 않아 오류 누적 |
+| 벤더 종속 | 라이선스 갱신 시 비용 협상력 상실 | 3년 계약 만료 후 라이선스 비용 40% 인상, 대안이 없어 수용 |
+
+이 비용들은 시스템 초기에는 보이지 않지만 운영 2~3년 차에 누적되어 나타난다. 아키텍처 결정은 "지금의 편리함"이 아니라 "3년 후의 유지보수 비용"으로 판단해야 한다.
+
+### 벤더 종속성의 구체적 리스크
+
+벤더 종속성은 단순히 라이선스 비용의 문제가 아니다. 더 심각한 리스크는 다음 세 가지다.
+
+**기능 로드맵의 통제력 상실.** 조직이 필요로 하는 기능이 벤더의 로드맵에 없으면 기다리거나 우회 개발해야 한다. 예를 들어 조직이 Tibero DBMS에 대한 메타데이터 수집이 필요한데 상용 솔루션이 Tibero를 지원하지 않으면, 수집 어댑터를 자체 개발하거나 벤더에 기능 요청을 하고 다음 메이저 릴리스까지 기다려야 한다.
+
+**업그레이드 강제.** 벤더가 구버전 지원을 종료하면 조직은 업그레이드해야 한다. 업그레이드 시 기존에 커스터마이징한 부분이 호환되지 않을 수 있다. 메이저 버전 업그레이드는 사실상 재구축에 가까운 작업이 되기도 한다.
+
+**데이터 이전 비용.** 수년간 축적한 품질 진단 이력, 변경 요청 이력, 메타데이터 버전 이력을 다른 시스템으로 마이그레이션하는 비용은 초기 구축 비용에 맞먹을 수 있다. 이 비용이 벤더 교체를 사실상 불가능하게 만든다.
+
+---
+
+## 응용 분야
+
+통합 아키텍처 설계가 적용되는 주요 산업별 맥락은 다음과 같다.
+
+| 분야 | 아키텍처 특이사항 | 멀티 DBMS 시나리오 | RBAC 핵심 역할 |
+|---|---|---|---|
+| 금융 | 규제 보고(Basel III, IFRS 17) 데이터 리니지 추적 필수 | Oracle(코어뱅킹) + PostgreSQL(분석) | SECURITY_ADMIN이 고객 금융정보 접근 통제 |
+| 의료 | HIPAA/개인정보보호법 준수, 비식별화 규칙 자동 적용 | Oracle(EMR) + MySQL(연구) | DA가 의료 용어 표준(HL7 FHIR) 관리 |
+| 제조 | 설비 데이터와 ERP 데이터의 실시간 통합 | Oracle(ERP) + Tibero(MES) + MSSQL(SCADA) | DBA가 다중 DBMS 스키마 통합 관리 |
+| 공공 | 공공데이터 개방 의무, 범정부 표준 코드 연계 | Oracle(행정 시스템) + PostgreSQL(개방 플랫폼) | DA가 범정부 표준 코드 매핑 관리 |
+| 유통 | 옴니채널 고객 마스터 통합, 상품 코드 표준화 | Oracle(POS) + MySQL(온라인몰) + PostgreSQL(분석) | DEVELOPER가 상품 코드 변경 요청 |
+
+금융 분야에서 특히 주목할 점은 **규제 보고 데이터의 리니지(Lineage) 추적**이다. Basel III나 IFRS 17 규제 보고에서 "이 숫자가 어디에서 왔는가"를 소급 증명해야 할 때, 메타데이터가 단일 저장소에 통합되어 있지 않으면 리니지 추적 자체가 불가능하다. 각 도구가 별도 저장소를 사용하면 도구 간 연결 지점에서 리니지가 끊어진다.
+
+제조 분야에서는 **멀티 DBMS 추상화**의 필요성이 가장 크다. ERP(Oracle), MES(Tibero), SCADA(MSSQL), PLM(PostgreSQL)처럼 공장 하나에 4~5종의 DBMS가 공존하는 경우가 드물지 않다. Dialect 패턴 없이 이 환경의 메타데이터를 통합 수집하려면 DBMS 수만큼 별도의 수집 모듈을 개발해야 한다.
+
+---
+
+## 예시: Before/After 비교
+
+### DBMS별 시스템 카탈로그 쿼리 차이
+
+추상화 없이 각 DBMS를 직접 다루는 코드와 Dialect를 통해 추상화한 코드의 차이를 비교한다.
+
+**Before (추상화 없음):** DBMS별 분기가 비즈니스 로직 곳곳에 산재한다.
+
+```python
+# 추상화 없는 코드 - DBMS별 분기가 곳곳에 있다
+def get_columns(connection, schema, dbms_type):
+    if dbms_type == 'oracle':
+        sql = """SELECT column_name, data_type, data_length
+                 FROM all_tab_cols
+                 WHERE owner = :schema"""
+    elif dbms_type == 'postgresql':
+        sql = """SELECT column_name, data_type,
+                        character_maximum_length
+                 FROM information_schema.columns
+                 WHERE table_schema = :schema"""
+    elif dbms_type == 'mysql':
+        sql = """SELECT column_name, data_type,
+                        character_maximum_length
+                 FROM information_schema.columns
+                 WHERE table_schema = :schema"""
+    # ... DBMS가 추가될 때마다 elif가 늘어난다
+    return connection.execute(sql, {'schema': schema})
+```
+
+**After (Strategy Pattern 적용):** DBMS별 로직이 Dialect에 캡슐화되고, 호출부는 DBMS를 알 필요가 없다.
+
+```python
+# Strategy Pattern 적용 - 호출부는 DBMS를 모른다
+class SchemaCollector:
+    def __init__(self, dialect: IDialect, connection):
+        self.dialect = dialect
+        self.connection = connection
+
+    def get_columns(self, schema):
+        sql = self.dialect.get_columns_query(schema)
+        return self.connection.execute(sql)
+
+# 사용 시: dialect는 DBMS에 따라 자동 선택
+dialect = DialectFactory.create(dbms_type='postgresql')
+collector = SchemaCollector(dialect, connection)
+columns = collector.get_columns('public')
+```
+
+새 DBMS(예: Sybase)를 지원해야 할 때, Before 방식은 `get_columns` 함수뿐 아니라 DDL 생성, 진단 쿼리 등 DBMS 분기가 있는 **모든 함수**를 수정해야 한다. After 방식은 `SybaseDialect` 클래스 하나를 추가하고 팩토리에 등록하면 끝이다. 지원 DBMS가 6종이고 DBMS별 분기가 있는 함수가 20개라면, Before 방식은 최대 120개 지점을 수정해야 하지만 After 방식은 20개 메서드를 가진 클래스 1개만 추가하면 된다.
+
+### 스케줄러 적용 전후 비교
+
+**Before (수동 실행):** 담당자가 매일 아침 출근하여 수집 스크립트를 실행한다. 금요일에 실행을 잊으면 월요일까지 3일치 변경분이 누락된다. 프로파일링은 "시간 날 때" 실행하므로 주기가 일정하지 않다.
+
+**After (스케줄러 적용):** 모든 작업이 정해진 시각에 자동 실행된다. 실행 이력이 기록되고, 실패 시 알림이 발송된다. 담당자는 대시보드에서 실행 현황을 확인하고 예외 상황만 처리한다.
+
+| 시나리오 | 수동 실행 | 스케줄러 적용 |
+|---|---|---|
+| 담당자 부재 시 | 실행 누락, 진단 공백 | 정상 실행, 실패 시 자동 재시도 |
+| 작업 간 의존 관계 | 담당자가 순서를 기억해야 함 | `depends_on_job_id`로 자동 보장 |
+| 실행 이력 추적 | 실행 여부 확인 불가 | `tb_schedule_history`에 전수 기록 |
+| 시간 분산 | 담당자 재량 | 부하 분석 기반 최적 배치 |
+
+### RBAC 적용 전후 비교
+
+**Before (RBAC 없음):** 모든 사용자가 동일한 권한으로 시스템에 접근한다. 신입 개발자가 표준 도메인을 수정하거나, 분석가가 운영 DB 변경 요청을 승인한다.
+
+**After (RBAC 적용):** 역할에 따라 접근 가능한 기능이 분리된다.
+
+| 시나리오 | RBAC 없음 | RBAC 적용 |
+|---|---|---|
+| 개발자가 표준 용어 수정 시도 | 바로 수정됨 | 변경 요청만 생성 가능, DA 승인 필요 |
+| 분석가가 품질 규칙 조회 | 가능 | 가능 (읽기 권한 보유) |
+| 분석가가 품질 규칙 수정 시도 | 바로 수정됨 | 권한 없음 오류 |
+| DBA가 DDL 실행 | 제한 없이 실행 | DA 승인 완료된 변경 요청만 실행 가능 |
+
+---
+
+## 관련 주제
+
+**카테고리 내 연결**
+
+- [데이터 거버넌스란 무엇인가 - DAMA 프레임워크 개론](./11-0.dama_framework_overview.qmd)
+- [데이터 라이프사이클 설계](./11-1.data_lifecycle_design.qmd)
+- [데이터 표준 관리](./11-2.data_standard_design.qmd)
+- [데이터 구조 관리](./11-3.data_structure_mgmt.qmd)
+- [공통코드와 마스터 데이터 관리](./11-4.code_master_data_mgmt.qmd)
+- [중요데이터 관리와 비식별화](./11-5.sensitive_data_mgmt.qmd)
+- [데이터 품질 관리](./11-6.data_quality_lifecycle.qmd)
+- [데이터 활용과 Federation](./11-7.data_utilization_federation.qmd)
+- [ROI 분석과 도입 전략](./11-10.roi_adoption_strategy.qmd)
+
+**다른 카테고리 연결**
+
+- [데이터 파이프라인](../Engineering/Data_Engineering/airflow/)
