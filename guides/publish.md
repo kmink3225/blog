@@ -19,41 +19,74 @@ prerequisite:
 ```
 .qmd 수정/생성
     ↓
-렌더링 (HTML 생성 — .qmd 옆에 생성됨)
+렌더링 (HTML 생성 — _site/ 에 생성됨)
     ↓
-git add (.qmd + .html + _files/)
+git add (.qmd + _site/ + _freeze/)
     ↓
 commit → push → Netlify 반영
 ```
 
-### 변경된 파일만 렌더링 (권장)
+### _freeze 캐시 구조
 
-`scripts/render-changed.ps1`을 실행하면 마지막 커밋 이후 변경된 `.qmd`만 골라서 렌더링한다.
+- `_freeze/`는 코드 실행 결과를 캐시한다 — git에 추적됨 (`.gitignore`에서 제외됨)
+- `_quarto.yml`에 `freeze: auto` 설정 → 소스가 변경되지 않은 파일은 코드 재실행 스킵
+- 따라서 전체 렌더(`quarto render`)도 코드 실행 없이 파싱만 하므로 3~5분 수준으로 빠름
+
+### 렌더링 명령어
+
+#### 변경된 파일만 렌더링 (권장 — 빠름)
+
+`render-changed.ps1`을 실행하면 마지막 커밋 이후 변경된 `.qmd`만 골라서 렌더링 후 자동 push한다.
 
 ```powershell
 # 프로젝트 루트에서 실행
-.\scripts\render-changed.ps1
+cd C:\Users\Administrator\Desktop\projects\blog
+.\render-changed.ps1
 ```
 
-- git diff(수정) + cached(staged) + untracked(신규) 파일을 모두 감지한다
-- `_metadata.yml`, `TBD.qmd` 등 렌더링 불필요한 파일은 자동 제외된다
+- git diff(수정) + staged(staged) + untracked(신규) 파일을 모두 감지한다
+- `conda blog` 환경으로 렌더링한다
+- 렌더 후 `blog/index.qmd`를 재렌더하여 목록을 업데이트한다
+- git add → commit → push 까지 자동 처리한다
 
-### 특정 파일만 렌더링
+#### 전체 렌더링 (뭔가 꼬였을 때)
 
 ```powershell
-quarto render docs/blog/posts/Data_Science/pcr-hierarchical-bayesian.qmd
+cd C:\Users\Administrator\Desktop\projects\blog
+conda run -n blog quarto render
+git add -A
+git commit -m "chore: 전체 렌더링"
+git push origin
 ```
 
-개별 파일 렌더링 시 HTML이 `.qmd` 파일 옆에 생성된다.
+#### 특정 파일만 렌더링
+
+```powershell
+conda run -n blog quarto render docs/blog/posts/Statistics/22-mle.qmd
+```
+
+개별 파일 렌더링 시 HTML이 `_site/` 하위에 생성된다.
+단, `blog/index.qmd`가 업데이트되지 않으므로 새 포스트라면 index도 함께 렌더해야 한다.
+
+```powershell
+conda run -n blog quarto render docs/blog/posts/Statistics/22-mle.qmd
+conda run -n blog quarto render docs/blog/index.qmd
+```
 
 ::: {.callout-warning}
 ## 렌더링 없이 push 금지
 
 `.qmd`만 커밋하고 HTML을 커밋하지 않으면 사이트에서 404가 발생한다.
-커밋 전에 반드시 `render-changed.ps1`을 실행한다.
+커밋 전에 반드시 렌더링을 먼저 실행한다.
 
 `draft: true`인 파일은 렌더링해도 사이트에 표시되지 않으나, HTML 파일은 생성된다.
-draft 파일의 HTML은 커밋하지 않아도 무방하다.
+:::
+
+::: {.callout-important}
+## 반드시 conda blog 환경 사용
+
+Python/R 코드가 포함된 파일은 반드시 `conda run -n blog` 로 렌더해야 한다.
+시스템 Python으로 렌더하면 패키지 의존성 오류가 발생한다.
 :::
 
 ## 전환 절차
