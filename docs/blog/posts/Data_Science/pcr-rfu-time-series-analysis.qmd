@@ -38,6 +38,61 @@ RFU
 - **Exponential (cycle 15~35)**: 지수적 증폭. Ct 결정 구간
 - **Plateau (cycle 35~45)**: 반응 포화. 기울기 감소
 
+## RFU 시계열의 정상성: 구간별 특성
+
+시계열 모델(ARIMA, ARIMAX, VAR, BSTS)을 RFU 데이터에 적용하기 전에 이 신호의 **정상성(stationarity)** 구조를 파악해야 한다. 일반 시계열 분석 교재(Hyndman & Athanasopoulos, 2021, Ch.9)에서는 ADF 검정과 1차 차분으로 비정상 시계열을 정상화하도록 권장한다. 그러나 RFU 곡선은 이 접근법이 그대로 통하지 않는다.
+
+RFU 곡선의 세 구간은 각각 다른 통계적 성질을 갖는다.
+
+| 구간 | Cycle 범위 | 트렌드 | 분산 특성 | ADF 결과 | 정상성 |
+|------|-----------|--------|----------|---------|--------|
+| Baseline | 1~10 | 거의 없음 | 일정 (균일 노이즈) | p < 0.05 | 정상 |
+| Exponential | 15~35 | 지수 증가 | 분산 증가 | p > 0.05 | 비정상 |
+| Plateau | 38~45 | 없음 (포화) | 일정 | p < 0.05 | 정상 |
+
+경제 데이터의 "선형 추세 + 확률보행"과 달리, RFU의 Exponential 구간 비정상성은 **비선형 결정론적 성장**이다. 1차 차분으로는 제거할 수 없다. 이 구조가 모델 적용 전 전처리 전략을 결정한다.
+
+### 전처리 전략: 목적별 접근
+
+| 분석 목적 | 권장 전처리 | 근거 |
+|----------|-----------|------|
+| ARIMA 모델 차수 결정 | 기저선 보정 후 잔차에 ACF/PACF 적용 | 비선형 트렌드 제거 후 정상 잔차 분석 (Cryer & Chan, 2008, Ch.4) |
+| 이상 탐지 (BSTS) | 정상 샘플 기준 phase-aligned 잔차 모델링 | 구간 정렬된 기준선 구성 후 이탈 탐지 |
+| Exponential 구간 모델링 | 로그 변환 → 선형 추세 → 1차 차분 | 지수 성장 선형화 후 ARIMA 적용 가능 (Cryer & Chan, 2008, Ch.3) |
+| Baseline 노이즈 모델 | Cycle 1~10만 추출해 AR(1~2) 적합 | 정상 구간 분리 후 잡음 특성 파악 |
+
+```python
+import numpy as np
+from statsmodels.tsa.stattools import adfuller
+
+def phase_stationarity_test(rfu: np.ndarray) -> None:
+    """
+    RFU 시계열의 구간별 ADF 정상성 검정을 수행한다.
+    정상 구간(baseline, plateau)과 비정상 구간(exponential)의 차이를 확인한다.
+    """
+    phases = {
+        "baseline (1~10)":        rfu[0:10],
+        "exponential (15~35)":    rfu[14:35],
+        "log-exponential":        np.log(np.clip(rfu[14:35], 1e-6, None)),
+        "plateau (38~45)":        rfu[37:45],
+    }
+    print(f"{'구간':<25} {'ADF p-value':>12} {'정상성':>8}")
+    print("-" * 48)
+    for name, seg in phases.items():
+        if len(seg) < 4:
+            continue
+        try:
+            _, p, *_ = adfuller(seg, autolag='AIC')
+            label = "정상" if p < 0.05 else "비정상"
+            print(f"{name:<25} {p:>12.4f} {label:>8}")
+        except Exception:
+            print(f"{name:<25} {'계산 불가':>12}")
+```
+
+통상적으로 로그 변환 후 exponential 구간도 ADF 검정에서 p < 0.05에 가까워진다. 이는 **로그 변환 + 1차 차분**이 exponential 구간 정상화에 유효함을 시사한다(Shumway & Stoffer, 2017, Ch.3).
+
+---
+
 ## 중요한 전제: 검사 시간 단축은 불가능하다
 
 시계열 분석 맥락에서 "early cycle 데이터로 Ct를 조기 예측하면 검사 시간을 단축할 수 있다"는 아이디어가 자연스럽게 떠오른다. 그러나 이는 현실적으로 불가능하다.
@@ -71,6 +126,65 @@ zip 데이터 파일 출력
 | 억제제/품질 효과 분석 | O | ARIMAX | 곡선 형태로 품질 판정 |
 | 채널 간 상호작용 | O | VAR + IRF | 타겟 vs 내부 대조군 비교 |
 | **검사 시간 단축** | **X** | — | post-run 분석이므로 불가 |
+
+## 사전 진단: ACF/PACF와 ARIMA 차수 결정
+
+ARIMAX, ADL, VAR를 RFU 잔차에 적용할 때, 차수(p, q)를 잘못 설정하면 잔차에 자기상관이 남아 Ljung-Box 검정에서 기각된다. 차수 선택의 표준 도구는 ACF(자기상관함수)와 PACF(편자기상관함수)이다 (Cryer & Chan, 2008, Ch.4; Hyndman & Athanasopoulos, 2021, Ch.9).
+
+### ACF/PACF 해석 규칙
+
+| 패턴 | 권장 모델 |
+|------|---------|
+| ACF가 q 시차 이후 급감, PACF 서서히 감소 | MA(q) |
+| PACF가 p 시차 이후 급감, ACF 서서히 감소 | AR(p) |
+| ACF, PACF 모두 서서히 감소 | ARMA(p,q) |
+| ACF 모든 시차 유의 → 비정상 신호 | 차분 또는 기저선 재추정 후 재분석 |
+
+### RFU 잔차 진단 코드
+
+기저선 보정 후 잔차를 이 함수로 진단한다. 각 분석(BSTS, ADL, ARIMAX, VAR)의 모델 적합 후 동일하게 적용한다.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.stats.diagnostic import acorr_ljungbox
+
+def diagnose_rfu_residuals(residuals: np.ndarray,
+                            lags: int = 15,
+                            title: str = "RFU 잔차") -> None:
+    """
+    기저선 보정 후 RFU 잔차의 ACF/PACF와 Ljung-Box 검정을 수행한다.
+    ARIMA(p,q) 차수 결정 및 모델 적합도 진단에 사용한다.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    plot_acf(residuals,  lags=lags, ax=axes[0],
+             title=f"{title} — ACF (MA 차수 결정)")
+    plot_pacf(residuals, lags=lags, ax=axes[1],
+             title=f"{title} — PACF (AR 차수 결정)")
+    plt.tight_layout()
+    plt.show()
+
+    # Ljung-Box 검정: 잔차에 자기상관이 남아 있는지 확인
+    lb = acorr_ljungbox(residuals, lags=[5, 10, 15], return_df=True)
+    print(f"\nLjung-Box 검정 — {title}")
+    print(lb.to_string())
+    print("\n해석: p > 0.05 → 잔차 독립성 충족 (모델 적합)")
+    print("      p ≤ 0.05 → 잔차에 자기상관 잔류 → 차수 재검토 필요")
+```
+
+### PCR RFU 잔차에서 흔히 나타나는 패턴
+
+| 잔차 패턴 | 가능한 원인 | 권장 조치 |
+|----------|----------|---------|
+| lag 1~3 ACF 유의, 이후 감소 | 지수 → 고원 전환 구간 미포착 | MA(2) 추가 또는 구간 분리 모델 |
+| lag 1~2 PACF만 유의 | 인접 cycle 간 직접 의존성 | AR(1~2) 추가 |
+| 모든 시차 ACF 유의 | 기저선 보정 불충분 | 기저선 재추정 후 재분석 |
+| 이분산 패턴 (분산 증가) | Exponential 구간 분산 미처리 | 로그 변환 또는 구간 분리 |
+
+이 진단 절차는 이어지는 5가지 분석에서 각 모델의 잔차 검증 단계에 공통으로 적용한다.
+
+---
 
 ## 분석 1: 이상 곡선 탐지 (BSTS)
 
@@ -173,6 +287,140 @@ $$RFU_t = \beta_1 \cdot \text{Temperature} + \beta_2 \cdot \text{ReagentLot} + \
 ```
 
 이 접근법은 단순 내부 대조군 정규화(normalization)보다 더 세밀한 배치 효과 분리가 가능하다.
+
+## 분석 6: 주파수 영역 필터링과 STL 분해
+
+앞서 다룬 BSTS·ARIMAX 등 **시간 영역(time-domain)** 모델과 달리, 주파수 영역 필터링은 RFU 신호를 주파수 성분으로 분해하여 노이즈(고주파)와 증폭 신호(저주파)를 분리한다. Shumway & Stoffer (2017, Ch.4)에서 상세히 다루는 이 접근법은 기저선 보정과 노이즈 제거의 이론적 기반을 제공한다.
+
+### 주파수 성분 분리 원리
+
+RFU 신호를 주파수 성분으로 분해하면 세 영역이 뚜렷이 구분된다:
+
+- **저주파(0~0.05 Hz)**: 기저선 드리프트, 완만한 증폭 트렌드
+- **중간 주파수(0.05~0.3 Hz)**: 실제 증폭 신호 (sigmoid 형태)
+- **고주파(0.3~0.5 Hz)**: 측정 노이즈, 열 변동, 광학 잡음
+
+Low-pass 필터로 노이즈를 제거하고, Band-pass 필터로 증폭 신호 대역만 추출한다.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, filtfilt, periodogram
+
+def spectral_filter_rfu(rfu: np.ndarray,
+                         fs: float = 1.0,
+                         lowpass_cutoff: float = 0.30,
+                         bandpass: tuple = (0.05, 0.35)) -> dict:
+    """
+    RFU 시계열에 Low-pass 및 Band-pass Butterworth 필터를 적용한다.
+
+    Parameters
+    ----------
+    rfu            : RFU 측정값 배열 (길이 45)
+    fs             : 샘플링 주파수 (1 cycle = 1 샘플, fs=1.0)
+    lowpass_cutoff : Low-pass 컷오프 (Nyquist 기준 정규화)
+    bandpass       : Band-pass 통과 주파수 범위 (정규화)
+    """
+    nyquist = fs / 2.0
+
+    # Low-pass: 노이즈 제거, 평활화된 전체 곡선 획득
+    b_lp, a_lp = butter(N=4, Wn=lowpass_cutoff / nyquist, btype='low')
+    rfu_lowpass = filtfilt(b_lp, a_lp, rfu)
+
+    # Band-pass: 증폭 신호 성분만 추출
+    b_bp, a_bp = butter(N=4,
+                         Wn=[bandpass[0] / nyquist, bandpass[1] / nyquist],
+                         btype='band')
+    rfu_bandpass = filtfilt(b_bp, a_bp, rfu)
+
+    return {
+        "lowpass":  rfu_lowpass,          # 평활화 곡선
+        "bandpass": rfu_bandpass,         # 증폭 신호 성분
+        "noise":    rfu - rfu_lowpass,    # 고주파 잔류 노이즈
+    }
+
+def plot_spectral_decomposition(rfu: np.ndarray) -> None:
+    """RFU 주파수 영역 분해 결과를 시각화한다."""
+    comp = spectral_filter_rfu(rfu)
+    cycles = np.arange(1, len(rfu) + 1)
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 8))
+
+    axes[0, 0].plot(cycles, rfu, alpha=0.5, label="원본 RFU")
+    axes[0, 0].plot(cycles, comp["lowpass"], lw=2, label="Low-pass (노이즈 제거)")
+    axes[0, 0].set_title("Low-pass 필터링")
+    axes[0, 0].legend()
+
+    axes[0, 1].plot(cycles, comp["bandpass"])
+    axes[0, 1].set_title("Band-pass — 증폭 신호 성분")
+
+    axes[1, 0].plot(cycles, comp["noise"])
+    axes[1, 0].axhline(0, linestyle='--', color='gray')
+    axes[1, 0].set_title("고주파 노이즈 성분")
+
+    freq, psd = periodogram(rfu, fs=1.0)
+    axes[1, 1].semilogy(freq, psd)
+    axes[1, 1].axvline(0.30, color='red', linestyle='--', label="Low-pass 컷오프")
+    axes[1, 1].set_title("파워 스펙트럼 밀도 (PSD)")
+    axes[1, 1].set_xlabel("주파수 (1/cycle)")
+    axes[1, 1].legend()
+
+    plt.tight_layout()
+    plt.show()
+```
+
+### STL 분해를 이용한 기저선 보정
+
+주파수 영역 필터링의 대안으로 **STL(Seasonal-Trend decomposition using Loess)** 을 적용하면, 기저선 성분과 증폭 신호 성분을 더 유연하게 분리할 수 있다 (Hyndman & Athanasopoulos, 2021, Ch.3).
+
+```python
+from statsmodels.tsa.seasonal import STL
+
+def stl_baseline_correction(rfu: np.ndarray,
+                              period: int = 10) -> dict:
+    """
+    STL 분해로 RFU의 기저선(트렌드 성분)을 추출하고 증폭 잔차를 반환한다.
+
+    robust=True 옵션은 spike나 jump에 강건한 Loess 가중치를 적용한다.
+    period: 잠재적 반복 주기 추정값. PCR baseline ~ 10 cycle을 기본값으로 사용한다.
+    """
+    stl = STL(rfu, period=period, robust=True)
+    result = stl.fit()
+
+    return {
+        "trend":         result.trend,              # 기저선 성분
+        "residual":      result.resid,              # 증폭 잔차 성분
+        "seasonal":      result.seasonal,           # 주기적 변동 (통상 미미)
+        "corrected_rfu": rfu - result.trend,        # 기저선 보정된 RFU
+    }
+```
+
+`robust=True` 옵션이 중요하다. 오염된 샘플이나 초기 spike가 있는 경우, 일반 Loess는 이상치에 영향을 받아 기저선을 과도하게 들어올린다. Robust Loess는 이상치를 자동으로 downweight하여 기저선 추정이 안정된다.
+
+### 주파수 영역 vs 시간 영역 모델 비교
+
+| 방법 | 장점 | 단점 | 적합 용도 |
+|------|------|------|---------|
+| Low-pass 필터 (Butterworth) | 즉각 적용, 컷오프 조절 간단 | 경계 효과, 위상 지연 가능 | 노이즈 제거, 시각화 |
+| Band-pass 필터 | 증폭 신호 대역만 추출 | 컷오프 범위 설정 필요 | 증폭 구간 집중 분석 |
+| STL 분해 | 이상치 강건, 유연한 기저선 | period 파라미터 필요 | 기저선 보정, 트렌드 분리 |
+| BSTS (시간 영역) | 구조적 변화 포착, 불확실성 정량화 | 계산 비용 높음 | 이상 탐지, 확률적 진단 |
+| ARIMAX (시간 영역) | 외부 변수 포함, 계수 해석 용이 | 정상성 가정 필요 | 억제제 효과 정량화 |
+
+실무에서는 두 접근법을 결합하는 2단계 파이프라인이 효과적이다:
+
+```
+① 주파수 필터링 (전처리)
+   Low-pass → 노이즈 제거
+   STL → 기저선 성분 분리
+       ↓
+② 시간 영역 모델 (해석)
+   ARIMAX → 억제제 효과 정량화
+   BSTS   → 구조적 이상 탐지
+   VAR    → 채널 간 상호작용 분석
+```
+
+---
 
 ## 응용 분석 요약
 
