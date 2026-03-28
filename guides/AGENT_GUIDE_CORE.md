@@ -157,6 +157,8 @@ Self-Check 통과
     ↓
 작업 결과 보고
     ↓
+.\scripts\render-changed.ps1  ← 변경된 .qmd HTML 렌더링
+    ↓
 guides/publish.md 로드 → git add → commit → push → 충돌 해결
 ```
 

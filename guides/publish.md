@@ -11,6 +11,51 @@ prerequisite:
 
 # 블로그 배포 (git add → commit → push)
 
+## 렌더링 구조
+
+이 블로그는 Netlify가 build step 없이 커밋된 HTML 파일을 직접 서빙한다.
+따라서 `.qmd` 파일을 수정·생성한 후 **반드시 HTML로 렌더링하고 함께 커밋**해야 사이트에 반영된다.
+
+```
+.qmd 수정/생성
+    ↓
+렌더링 (HTML 생성 — .qmd 옆에 생성됨)
+    ↓
+git add (.qmd + .html + _files/)
+    ↓
+commit → push → Netlify 반영
+```
+
+### 변경된 파일만 렌더링 (권장)
+
+`scripts/render-changed.ps1`을 실행하면 마지막 커밋 이후 변경된 `.qmd`만 골라서 렌더링한다.
+
+```powershell
+# 프로젝트 루트에서 실행
+.\scripts\render-changed.ps1
+```
+
+- git diff(수정) + cached(staged) + untracked(신규) 파일을 모두 감지한다
+- `_metadata.yml`, `TBD.qmd` 등 렌더링 불필요한 파일은 자동 제외된다
+
+### 특정 파일만 렌더링
+
+```powershell
+quarto render docs/blog/posts/Data_Science/pcr-hierarchical-bayesian.qmd
+```
+
+개별 파일 렌더링 시 HTML이 `.qmd` 파일 옆에 생성된다.
+
+::: {.callout-warning}
+## 렌더링 없이 push 금지
+
+`.qmd`만 커밋하고 HTML을 커밋하지 않으면 사이트에서 404가 발생한다.
+커밋 전에 반드시 `render-changed.ps1`을 실행한다.
+
+`draft: true`인 파일은 렌더링해도 사이트에 표시되지 않으나, HTML 파일은 생성된다.
+draft 파일의 HTML은 커밋하지 않아도 무방하다.
+:::
+
 ## 전환 절차
 
 ### Step 1: 변경 파일 확인
