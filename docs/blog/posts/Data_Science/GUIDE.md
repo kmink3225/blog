@@ -2,7 +2,11 @@
 name: Data_Science_GUIDE
 type: category
 version: 1.0
-description: LOAD when writing posts about CRISP-DM workflow, EDA, feature engineering, model deployment, MLOps, or AI engineering. Covers end-to-end data science pipeline with practical methodology.
+description: >
+  LOAD when writing posts about (1) CRISP-DM workflow, EDA, feature engineering, model deployment,
+  MLOps, or AI engineering — end-to-end pipeline methodology; OR (2) domain application projects
+  that integrate Statistics, ML, DL, Engineering tools to solve real business/domain problems
+  (e.g., PCR signal analysis, clinical diagnostics, demand forecasting).
 scope: docs/blog/posts/Data_Science/
 parent: AGENT_GUIDE.md
 index: docs/blog/posts/Data_Science/index.qmd
@@ -15,6 +19,7 @@ cross_references:
   - docs/blog/posts/Engineering/GUIDE.md
   - docs/blog/posts/Experimentation/GUIDE.md
   - docs/blog/posts/Governance/GUIDE.md
+  - docs/blog/posts/Surveilance/GUIDE.md
 ---
 
 # Data Science 카테고리 작성 가이드
@@ -179,6 +184,14 @@ plt.show()
 - 분류/회귀/클러스터링/랭킹별 메트릭을 구분한다
 - 지표 간 trade-off를 설명한다 (예: Precision vs Recall)
 
+### 도메인 응용 프로젝트 포스트
+
+- 특정 도메인 문제를 해결하기 위해 여러 tool(Statistics, ML, Engineering 등)을 통합하여 사용하는 사례를 다룬다
+- **구조**: 도메인 배경 → 문제 정의 → 데이터 탐색 → 방법론 선택 및 적용 → 결과 해석 → 비즈니스 인사이트
+- 기술 선택의 근거(왜 이 방법을 이 도메인에 적용했는가)를 반드시 설명한다
+- 도메인 지식(예: PCR 증폭 원리, 임상 QC 기준)과 데이터 과학 기법을 연결하여 서술한다
+- 크로스 링크: 관련 도메인 카테고리(Surveilance, Governance 등)와 기법 카테고리(Statistics, ML 등)를 모두 참조한다
+
 ---
 
 ## 다른 카테고리와의 관계
@@ -186,13 +199,14 @@ plt.show()
 Data Science는 허브 카테고리로서, 세부 기술은 다른 카테고리에서 깊이 있게 다룬다:
 
 ```
-Data Science (프로세스, 방법론, 통합)
+Data Science (프로세스, 방법론, 통합, 도메인 응용)
   ├── Statistics (이론적 기반, 추론)
   ├── Machine Learning (예측 모델)
   ├── Deep Learning (신경망 모델)
   ├── Engineering (데이터 파이프라인, 배포)
   ├── Experimentation (실험 설계, A/B 테스트)
-  └── Governance (데이터 품질, 표준화)
+  ├── Governance (데이터 품질, 표준화)
+  └── Surveilance (규제/도메인 지식 — PCR, 의료기기 등 응용 시 참조)
 ```
 
 포스트에서 특정 기술을 깊이 다룰 때는 해당 카테고리로의 크로스 링크를 제공하고, Data Science 포스트 자체는 통합적 관점과 프로세스에 집중한다.
@@ -282,6 +296,7 @@ Data Preparation 단계에서 이 변수들의 인코딩 전략을 결정한다.
 - 실무 파이프라인: 데이터 수집 → 전처리 → 모델링 → 배포 → 모니터링 전체 흐름
 - 비즈니스 맥락 연결: 기술적 선택이 비즈니스 가치에 미치는 영향
 - 도구 비교: pandas vs polars, sklearn vs XGBoost, MLflow vs W&B 등 방법론적 관점의 도구 선택 가이드
+- **도메인 응용 프로젝트**: 특정 도메인 문제를 Statistics/ML/DL/Engineering 도구를 통합해 해결하는 실전 분석 사례 (예: RT-PCR 신호 분석, 진단 알고리즘 개발)
 
 ### CANNOT (이 카테고리에서 하지 않는 것)
 
