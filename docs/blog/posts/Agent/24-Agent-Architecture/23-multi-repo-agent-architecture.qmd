@@ -1,0 +1,293 @@
+---
+title: "Multi-Repo 코드베이스 분석 Agent 설계"
+subtitle: "35개 repo를 다루는 계층적 Agent 구조와 정적 온톨로지 전략"
+description: |
+  수십 개의 repo로 구성된 대규모 코드베이스를 분석하는 Agent를 설계할 때,
+  단순 1-repo-1-agent 분할이 실패하는 이유와 계층적 구조·정적 온톨로지로
+  depth 문제를 해결하는 방법을 다룬다.
+categories:
+  - Agent
+  - Engineering
+author: Kwangmin Kim
+date: 03/27/2026
+execute:
+  eval: false
+---
+
+## 문제: 단순 분할이 해결책이 아닌 이유
+
+35개 repo로 구성된 대규모 알고리즘을 분석할 때, "repo당 agent 1개"로 나누면 될 것 같다는 직관이 있다. 그러나 이 접근은 depth 문제를 agent 간 통신 문제로 변환할 뿐이다.
+
+```
+repo-A agent: "함수 X는 인자 3개를 받아서 결과를 리턴한다"
+repo-B agent: "함수 Y에서 repo-A의 X를 호출한다"
+```
+
+여기까지는 문제없다. 그러나:
+
+```
+repo-C agent: "함수 Z에서 repo-B의 Y를 호출하는데,
+               repo-A의 X가 특정 조건에서 예외를 던지면
+               어떻게 되는가?"
+```
+
+agent-C는 repo-A 내부 로직을 모른다. agent-B에게 물어야 하고, agent-B는 다시 agent-A에게 물어야 한다. 결국 depth 문제가 agent 간 통신 지연과 오류 누적 문제로 형태를 바꾼 것뿐이다.
+
+---
+
+## 계층적 Agent 구조
+
+단순 repo별 분할 대신, **의존성 클러스터 기반 계층 구조**가 효과적이다.
+
+```
+[오케스트레이터 Agent]
+  전체 호출 그래프의 depth 1-2만 파악
+       |
+       ├── [클러스터 Agent A] repo 1-5 담당 (밀접 연결 repo끼리 묶음)
+       │     각 repo의 public interface 요약 보유
+       │
+       ├── [클러스터 Agent B] repo 6-12 담당
+       │
+       ├── [클러스터 Agent C] repo 13-20 담당
+       │
+       └── ...
+```
+
+### 왜 repo별이 아니라 클러스터별인가
+
+밀접하게 연결된 repo 5-6개를 한 agent가 담당하면, depth 3-4 수준의 추적은 agent 내부에서 해결된다. 오케스트레이터는 35개 요약만 보고 크로스 repo 경로를 판단한다. 전체 코드를 읽는 것이 아니라 계약서(interface 요약)를 읽는 것이다.
+
+### 3단계 분석 흐름
+
+::: {.callout-note}
+## 실행 흐름
+
+**Step 1**: 각 클러스터 agent가 담당 repo 분석
+→ "이 repo의 진입점, 의존성, 핵심 분기, 예외 조건" 요약 생성
+
+**Step 2**: 오케스트레이터가 요약을 보고
+→ 크로스 repo 호출 그래프 구성
+
+**Step 3**: 특정 경로 심층 분석이 필요하면
+→ 해당 클러스터 agent에게 "이 경로만 depth 끝까지 추적해"
+
+**Step 4**: 결과 통합
+:::
+
+이 구조에서 개별 agent는 depth 3-4만 담당하고, 전체적으로는 depth 6-7을 커버할 수 있다.
+
+### 현실적 제약
+
+| 문제 | 설명 |
+|------|------|
+| 클러스터링 판단 | 35개 repo의 의존성 구조를 모르면 묶는 기준이 없다. 정적 분석이 선행되어야 한다 |
+| 요약 품질 | agent가 만든 인터페이스 요약이 부정확하면 오케스트레이터 판단도 틀려진다 |
+| 비용 | 35개 repo를 각각 읽으면 토큰 사용량이 상당하다. Step 0가 중요한 이유다 |
+
+---
+
+## Step 0: 코드를 읽기 전에 구조부터 뽑기
+
+코드 내용을 한 줄도 읽지 않고도 전체 아키텍처의 80~90%를 파악할 수 있다. agent가 코드 분석에 들어가기 전에 아래 정보를 먼저 수집해야 한다.
+
+::: {.callout-tip}
+## 비용 대비 정보량
+
+| 비용 | 정보원 | 얻을 수 있는 것 |
+|------|--------|----------------|
+| 거의 0 | 파일 트리 + 빌드 파일 | 의존성 방향 |
+| 거의 0 | 진입점 + 설정 파일 | 아키텍처 골격 |
+| 낮음 | 테스트 파일 | 기대 동작 명세 |
+| 낮음 | git log 동시 변경 패턴 | 숨겨진 결합 |
+| 낮음 | 에러 핸들링 위치 | repo 간 경계 |
+:::
+
+### 1. 빌드 파일이 import보다 정확하다
+
+`pyproject.toml`, `setup.py`, `CMakeLists.txt`, `pom.xml` 등 빌드 파일의 `dependencies` 섹션이 repo 간 관계의 정본이다. `import` grep은 동적 import를 놓칠 수 있지만 빌드 파일은 공식 의존성 선언이다.
+
+```bash
+# repo 간 의존성 한 줄 추출
+cat pyproject.toml | grep -A 20 "\[project.dependencies\]"
+```
+
+### 2. 테스트 파일이 최고의 문서다
+
+`test_*`, `*_test.*` 파일은 "이 함수는 이 입력을 넣으면 이 출력이 나와야 한다"는 기대 동작 명세서다. 코드 본문을 읽기 전에 테스트를 먼저 읽으면 함수의 의도를 빠르게 파악할 수 있다.
+
+```bash
+# 테스트 파일 목록만 추출 (코드 읽기 전 스캔)
+find . -name "test_*.py" -o -name "*_test.py" | head -20
+```
+
+### 3. git log로 temporal coupling 발견
+
+같이 변경되는 파일 = 논리적으로 연결된 파일이다. repo-A의 파일과 repo-B의 파일이 항상 같은 커밋에서 변경되면, 코드상 import가 없어도 실질적 의존성이 있다는 뜻이다.
+
+```bash
+# 자주 함께 변경된 파일 쌍 추출
+git log --name-only --pretty=format: | sort | uniq -d | sort -rn | head -20
+```
+
+### 4. 진입점을 먼저 찾는다
+
+`if __name__`, `int main(`, `@app.route`, `@router` 등 진입점 패턴을 grep한다. 35개 repo 중 실제 진입점이 있는 repo는 5개 이하일 가능성이 높고, 나머지는 라이브러리다. 진입점부터 추적하면 호출 그래프의 방향이 잡힌다.
+
+```bash
+# Python 진입점 패턴
+grep -rn "if __name__ == \"__main__\"" --include="*.py" .
+
+# FastAPI/Flask 진입점
+grep -rn "@app.route\|@router\.\|@app.get\|@app.post" --include="*.py" .
+```
+
+### 5. 설정 파일이 아키텍처를 드러낸다
+
+`*.yml`, `*.yaml`, `*.json`, `*.ini` 등 config 파일에 DB 연결, API URL, 큐 이름, 모델 경로 등이 적혀 있다. 코드를 읽지 않고도 어떤 외부 시스템과 연결되는지 파악 가능하다.
+
+### 6. 에러 핸들링이 경계를 보여준다
+
+`try/catch`가 집중된 곳이 repo 간 경계다. 외부 호출이 실패할 수 있는 지점에 에러 핸들링을 넣기 때문이다.
+
+```bash
+# try/except 집중 파일 탐지
+grep -rn "except\|catch" --include="*.py" . | awk -F: '{print $1}' | sort | uniq -c | sort -rn | head -10
+```
+
+---
+
+## 정적 온톨로지 vs 실시간 도구
+
+::: {.callout-note}
+## 핵심 결론
+
+**정적 온톨로지를 먼저 구축하고, 실시간 도구는 보완용으로 사용한다.**
+:::
+
+### 정적 온톨로지가 먼저인 이유
+
+실시간 도구만 사용하면 매 세션마다 같은 구조를 재발견해야 한다. 35개 repo의 의존성 그래프는 코드가 바뀌지 않는 한 동일한데, 매번 glob → grep → 분석을 반복하는 것은 낭비다.
+
+| 기준 | 정적 온톨로지 | 실시간 도구 |
+|------|-------------|------------|
+| 초기 구축 비용 | 1회 | 없음 |
+| 매 세션 비용 | 수초 (로드) | 수분 (스캔) |
+| 크로스 repo 추적 | 그래프로 즉시 | 매번 재발견 |
+| 정확성 | 확정적 | agent 판단 오류 가능 |
+| 최신성 | CI/CD 자동 갱신 필요 | 항상 최신 |
+
+### 온톨로지에 담아야 할 내용
+
+```yaml
+# repo_ontology.yaml 예시 구조
+repos:
+  repo-A:
+    type: library           # library / service / cli
+    language: python
+    entry_points:
+      - src/core/main.py
+    public_interfaces:
+      - name: transform
+        args: [data, config]
+        returns: DataFrame
+        raises: [ValidationError]
+        called_by: [repo-B.pipeline.run]
+    depends_on: [repo-D, repo-E]
+    depended_by: [repo-B, repo-C]
+    config_files: [config/settings.yaml]
+    sensitive_paths: [src/core/processor.py]
+
+clusters:
+  signal-processing: [repo-A, repo-B, repo-D, repo-E]
+  orchestration: [repo-C, repo-F]
+
+call_graph:
+  depth_1: "repo-C.main → repo-C.orchestrator.execute"
+  depth_2: "→ repo-B.pipeline.run"
+  depth_3: "→ repo-A.core.processor.transform"
+```
+
+### 실시간 도구를 쓰는 시점
+
+온톨로지가 "무엇이 어디에 있는가"를 알려주면, 실시간 도구는 "그 안에 구체적으로 뭐가 있는가"를 확인한다.
+
+```
+[시나리오]
+온톨로지: "repo-A.core.processor.transform이 ValidationError를 던진다"
+→ agent: "어떤 조건에서 던지는지 확인해야 해"
+→ 실시간 도구: grep "raise ValidationError" repo-A/src/core/processor.py
+→ 코드 3줄만 읽으면 됨
+
+온톨로지 없이: agent는 "ValidationError가 어디서 발생하는지"부터 35개 repo를 뒤져야 한다
+```
+
+### CI/CD 자동화 구축
+
+온톨로지를 사람이 수동으로 만들면 현행화가 안 된다. CI/CD에서 자동 생성하는 것이 핵심이다.
+
+```bash
+# git push → CI 파이프라인
+#   1. AST 파싱: 함수 시그니처, import, class 계층 추출
+#   2. 빌드 파일 파싱: 의존성 그래프
+#   3. git log 분석: temporal coupling
+#   4. 결과를 repo_ontology.yaml로 저장
+
+# 예시: Python AST 기반 public interface 추출
+python -c "
+import ast, json, sys
+
+def extract_interfaces(filepath):
+    with open(filepath) as f:
+        tree = ast.parse(f.read())
+    interfaces = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            args = [a.arg for a in node.args.args]
+            interfaces.append({'name': node.name, 'args': args})
+    return interfaces
+
+print(json.dumps(extract_interfaces(sys.argv[1]), indent=2))
+" src/core/processor.py
+```
+
+이것은 본질적으로 데이터 거버넌스 시스템에서 DB 스키마를 자동 수집하는 패턴과 동일하다. 대상이 DB에서 코드 repo로 바뀐 것뿐이다.
+
+---
+
+## 전체 설계 요약
+
+```
+Phase 1: 정적 분석 (코드 읽기 전)
+  1. 빌드 파일 → 의존성 방향
+  2. 진입점 → 호출 그래프 시작점
+  3. 설정 파일 → 외부 시스템 연결
+  4. git log → temporal coupling
+  → repo_ontology.yaml 생성
+
+Phase 2: 클러스터링
+  5. 의존성 그래프 기반으로 밀접 repo 묶기
+  → 클러스터 정의
+
+Phase 3: 계층적 Agent 실행
+  6. 클러스터 Agent: 담당 repo 심층 분석 + 인터페이스 요약
+  7. 오케스트레이터: 요약 기반 크로스 repo 경로 추적
+  8. 필요 시 실시간 도구로 특정 지점 확인
+```
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Multi-Agent Design Patterns](./05-multi-agent-design-patterns.qmd)
+- [Context Management](./02-context-management.qmd)
+
+**관련 개념**
+
+- [Codebase Analyzer Agent: Architecture 비교](./08-codebase-analyzer-architecture-comparison.qmd)
+- [code-review-graph: 로컬 지식 그래프 기반 토큰 최적화](./17-code-review-graph-token-optimization.qmd)
+
+**다른 카테고리 연결**
+
+- [데이터 거버넌스 — 메타데이터 관리 시스템](../../Governance/10-0.metadata_mgmt_system_concept.qmd) — 온톨로지 자동 수집의 거버넌스 유사 패턴

@@ -1,0 +1,264 @@
+---
+title: "시스템 프롬프트 동적 주입 아키텍처"
+subtitle: "라우터·RAG·계층 분리 설계 패턴과 크로스 플랫폼 적용"
+description: |
+  LLM Agent의 시스템 프롬프트가 분산될수록 컨텍스트 비용이 커지는 문제를 해결하는
+  세 가지 동적 주입 아키텍처를 정리한다.
+  방법 1(슬래시 커맨드 기반 결정론적 라우터), 방법 2(RAG 기반 규칙 검색),
+  방법 3(CORE + 플랫폼 래퍼 계층 분리)의 구조와 트레이드오프를 비교하고,
+  Claude Code · Copilot CLI · Cursor · Gemini에 범용 적용 가능한
+  Single Source of Truth 아키텍처 설계를 제시한다.
+categories:
+  - Agent
+  - Architecture
+  - Prompt Engineering
+author: Kwangmin Kim
+date: 03/28/2026
+---
+
+## 문제: 가이드 분산과 컨텍스트 비용
+
+스킬 기반 Agent 시스템에서 규칙 파일이 늘어날수록 두 가지 문제가 동시에 발생한다.
+
+**첫째, 에이전트가 관련 없는 규칙까지 읽는다.** 블로그 포스트 작성 요청에 audit 가이드나 changelog 가이드는 필요 없다. 그러나 정적 시스템 프롬프트는 모든 규칙을 항상 포함하거나, 에이전트가 필요한 파일을 스스로 선별해야 한다.
+
+**둘째, 에이전트가 규칙 파일을 스킵한다.** 파일이 여러 개로 분산되면 각 리다이렉트 단계에서 "이미 알고 있다"는 이유로 파일 읽기를 생략한다. 이 현상의 구조적 원인은 [LLM 지시 준수 메커니즘](./24-llm-instruction-compliance-mechanisms.qmd)에서 다룬다.
+
+두 문제의 공통 해결 방향은 **"요청에 필요한 규칙만, 필요한 시점에 주입"**하는 동적 주입(Dynamic Injection) 아키텍처다.
+
+::: {.callout-note}
+## 정적 주입 vs 동적 주입
+
+| | 정적 주입 | 동적 주입 |
+|---|---|---|
+| 방식 | 모든 규칙을 항상 시스템 프롬프트에 포함 | 요청 유형에 따라 필요한 규칙만 주입 |
+| 컨텍스트 | 크고 고정 | 작고 가변 |
+| 에이전트 부담 | 관련 없는 규칙 필터링 필요 | 주어진 규칙만 실행 |
+| 구현 복잡도 | 낮음 | 중간~높음 |
+:::
+
+## 방법 1: 결정론적 라우터 (슬래시 커맨드)
+
+가장 현실적인 방법이다. 에이전트가 태스크 타입을 추론하는 대신, **사용자가 슬래시 커맨드로 직접 선언**하면 라우터가 필요한 가이드만 주입한다.
+
+```
+[현재 방식 — 추론 기반]
+"Statistics 포스트 작성해줘"
+  → 에이전트: "이건 write인가? retrofit인가?" 판단 후 가이드 읽기
+
+[결정론적 라우팅]
+/write Statistics discrete distributions
+  → 즉시: CORE + write-post.md + Statistics/GUIDE.md 로드, 실행 시작
+```
+
+### 구조
+
+```python
+# 라우터 개념 코드 (의사코드)
+def route_task(user_request: str) -> str:
+    task_type = parse_slash_command(user_request)  # "/write", "/fix", "/qa" 등
+
+    guide_map = {
+        "write":   [CORE, INFO_SEARCH, WRITE_POST, get_category_guide(request)],
+        "fix":     [CORE, RETROFIT_POST, get_category_guide(request)],
+        "qa":      [CORE, INFO_SEARCH, ANSWER_QUESTION],
+        "convert": [CORE, INFO_SEARCH, CONVERT_TBD, get_category_guide(request)],
+        "audit":   [CORE, AUDIT, get_category_guide(request)],
+    }
+
+    return inject_guides(guide_map[task_type])
+```
+
+### 장점
+
+| 장점 | 설명 |
+|------|------|
+| 태스크 추론 오류 제거 | "포스트 작성해줘"가 retrofit으로 잘못 분류될 일 없음 |
+| 가이드 로드 순서 보장 | 라우터가 정해진 순서로 주입 |
+| 컨텍스트 오염 방지 | `/qa` 명령이면 audit 가이드를 아예 주입하지 않음 |
+| 토큰 절감 | 관련 없는 가이드 제외로 40~60% 절감 가능 |
+
+### 트레이드오프
+
+사용자가 슬래시 커맨드를 기억하고 입력해야 한다. 혼자 쓰는 도구라면 이 비용은 낮지만, 팀 단위 운영 시 온보딩 비용이 생긴다. 이를 완화하려면 슬래시 커맨드 없이 자연어 입력이 들어올 때도 태스크를 추론하는 **fallback 경로**를 병행한다.
+
+```
+사용자 입력
+  ↓
+슬래시 커맨드 감지?
+  ├── YES → 결정론적 라우팅 (빠르고 정확)
+  └── NO  → 자연어 추론 → 가이드 로드 (느리고 오류 가능성 있음)
+```
+
+## 방법 2: RAG 기반 규칙 검색
+
+가이드 전체를 청크로 분할하여 벡터 DB에 저장하고, 요청과 관련된 규칙 청크만 검색하여 주입한다.
+
+```
+"Statistics 포스트 작성해줘"
+  → 임베딩 → 벡터 검색
+  → 매칭 청크: "수식 공백 규칙", "index.qmd 패턴 B", "YAML date 형식"
+  → 상위 k개 규칙만 컨텍스트에 추가
+```
+
+### 장점
+
+슬래시 커맨드 없이도 동작하므로 UX가 자연스럽다. 수백 개의 규칙을 가진 대형 가이드 시스템에서 효과적이다.
+
+### 단점
+
+| 단점 | 설명 |
+|------|------|
+| 의존성 손실 | 규칙 A를 따르려면 규칙 B도 알아야 하는 경우, 벡터 검색이 의존 규칙을 놓침 |
+| 청크 품질 의존 | 규칙을 어떻게 분할하느냐에 따라 검색 품질이 크게 달라짐 |
+| 인프라 필요 | 벡터 DB 구축 및 임베딩 파이프라인 필요 |
+| 오버헤드 | 매 요청마다 임베딩 + 검색 비용 발생 |
+
+규칙 간 의존성이 강한 시스템(절차적 규칙, 우선순위 규칙)에는 방법 1이, 규칙이 독립적이고 수가 많은 시스템(FAQ형, 정책 문서형)에는 방법 2가 적합하다.
+
+## 방법 3: 계층적 시스템 프롬프트 분리
+
+시스템 프롬프트를 **고정 레이어**와 **동적 레이어**로 분리한다. 항상 필요한 규칙은 고정 레이어에, 태스크별로 달라지는 규칙은 동적 레이어에 배치한다.
+
+```
+[고정 레이어 — System Prompt, 항상 주입]
+  - 절대 규칙 5개
+  - 한다 체, 수식 규칙, 이모지 금지
+  - YAML 형식, index.qmd 패턴
+
+[동적 레이어 — User Turn 앞에 추가]
+  - 태스크별 가이드 (write-post.md, retrofit-post.md 등)
+  - 카테고리 GUIDE.md
+  - 관련 기존 파일 헤더
+```
+
+### 현재 구현 상태
+
+이 블로그 프로젝트는 방법 1 + 방법 3의 하이브리드로 구현되어 있다.
+
+| 방법 3 구성 요소 | 현재 상태 |
+|----------------|---------|
+| 고정 레이어 | `guides/AGENT_GUIDE_CORE.md` (164줄) — 구현 완료 |
+| 동적 레이어 | 에이전트가 슬래시 커맨드 인식 후 파일 직접 읽기 — inference time에 발생 |
+
+진정한 방법 3은 에이전트가 파일을 읽기 전에 **외부 미들웨어가 관련 가이드 텍스트를 시스템 프롬프트에 미리 주입**해야 한다. 현재 Copilot CLI의 `custom_instruction` 구조에서는 이를 지원하지 않으므로, 완전한 방법 3 구현은 플랫폼 제약으로 보류된다.
+
+```
+[진정한 방법 3]
+사용자 입력 → 미들웨어 파싱 → 가이드 텍스트 주입 → LLM 호출
+
+[현재 방식]
+사용자 입력 → LLM이 받음 → LLM이 직접 파일 읽기 → 실행
+```
+
+## 세 가지 방법 비교
+
+| 항목 | 방법 1 (라우터) | 방법 2 (RAG) | 방법 3 (계층 분리) |
+|------|--------------|-------------|-----------------|
+| 구현 복잡도 | 낮음 | 높음 | 중간 |
+| UX | 커맨드 입력 필요 | 자연어 | 자연어 |
+| 규칙 의존성 처리 | 강함 | 약함 | 중간 |
+| 인프라 요구 | 없음 | 벡터 DB 필요 | 없음~중간 |
+| 이 프로젝트 적합도 | 높음 | 낮음 | 높음 (부분 구현) |
+
+혼자 운영하는 블로그 시스템처럼 규모가 작고 사용자가 1명인 경우, **방법 1이 가장 빠르고 신뢰할 수 있는 방법**이다.
+
+## 크로스 플랫폼 범용 아키텍처
+
+같은 블로그 프로젝트를 여러 AI 도구로 관리할 때(Claude Code, Copilot CLI, Cursor, Gemini), 플랫폼마다 진입점 파일명이 다르다.
+
+| 플랫폼 | 진입점 파일 | 로드 방식 |
+|--------|-----------|---------|
+| Claude Code | `CLAUDE.md` | 자동 로드 |
+| Copilot CLI | `AGENT_GUIDE.md` | `custom_instruction` |
+| Cursor | `.cursorrules` | 자동 로드 |
+| Gemini CLI | `GEMINI.md` | 자동 로드 |
+
+각 플랫폼마다 다른 규칙 파일을 유지하면 동기화 문제가 생긴다. 한 곳에서 규칙을 수정했을 때 나머지 파일에도 반영해야 한다.
+
+### Single Source of Truth 패턴
+
+**규칙의 원본을 단 하나의 파일에 두고, 각 플랫폼 파일은 얇은 래퍼(wrapper)로만 사용**한다.
+
+```
+guides/AGENT_GUIDE_CORE.md  ← 단일 진실 소스 (모든 공통 규칙)
+        ↑                               ↑
+AGENT_GUIDE.md              CLAUDE.md
+(Copilot CLI 진입점)         (Claude Code 진입점)
+라우터 + 슬래시 커맨드         슬래시 커맨드 요약 + CC 전용 설정
+```
+
+각 래퍼 파일은 30~50줄로 유지한다. 플랫폼 공통 사항은 CORE에, 플랫폼 고유 사항(Claude Code의 memory 기능, Cursor의 파일 참조 방식 등)만 각 래퍼에 넣는다.
+
+### 래퍼 파일 예시
+
+```markdown
+# CLAUDE.md (Claude Code용 래퍼 — ~45줄)
+
+> 이 프로젝트의 모든 규칙은 guides/AGENT_GUIDE_CORE.md에 있다.
+> 작업 시작 전 반드시 먼저 읽어라.
+
+## 절대 규칙 요약 (인라인 — 리다이렉트 방어)
+1. 한다 체
+2. 수동 번호 금지
+3. Category GUIDE 필수 로드
+4. index.qmd 업데이트
+5. 이모지 금지
+
+## 슬래시 커맨드
+/write [category] [topic]
+/fix [file-path]
+/qa [question]
+/convert [category]
+...
+
+## Claude Code 전용
+- memory: 작업 이력을 MEMORY.md에 기록
+```
+
+### 확장 전략
+
+현재는 Copilot CLI + Claude Code 두 플랫폼만 구현되어 있다. Cursor나 Gemini를 추가할 때는:
+
+1. 해당 플랫폼의 진입점 파일 생성 (`.cursorrules`, `GEMINI.md`)
+2. CORE.md를 참조하는 래퍼 30~50줄 작성
+3. 플랫폼 고유 기능(파일 참조 방식, memory 동작 등)만 추가
+
+CORE.md는 변경하지 않으므로 규칙 동기화 문제가 발생하지 않는다.
+
+## 실전 구현 권고
+
+이 블로그 프로젝트 규모(1인 운영, 12개 카테고리, 20+ 가이드 파일)에서는 다음 조합이 적합하다.
+
+```
+방법 1 (슬래시 커맨드 라우터)
+  + 방법 3의 고정 레이어 (AGENT_GUIDE_CORE.md)
+  + Single Source of Truth 패턴
+  = 현재 구현 상태
+```
+
+토큰 효율과 규칙 준수율 사이의 균형점이다. 규모가 커져서 가이드 파일이 30개 이상이 되면 방법 2(RAG)를 검토할 수 있다.
+
+::: {.callout-tip}
+## 언제 방법을 전환하는가
+
+| 상황 | 권고 전환 방향 |
+|------|-------------|
+| 가이드 파일 30개 이상 | 방법 2 (RAG) 검토 |
+| 다수 사용자, 커맨드 학습 비용 부담 | 방법 2 + fallback |
+| 플랫폼 3개 이상 | Single Source of Truth 필수 |
+| 완전 자동화 파이프라인 필요 | 방법 3 미들웨어 구현 |
+:::
+
+## 관련 주제
+
+**선행 지식**
+
+- [LLM 지시 준수 메커니즘](./24-llm-instruction-compliance-mechanisms.qmd)
+- [시스템 프롬프트 유형 분류와 혼합 설계](./10-system-prompt-types-and-layered-routing.qmd)
+- [스킬 라우팅의 확장성과 한계](./18-skill-routing-scalability-and-limits.qmd)
+
+**후속 주제**
+
+- [스킬 기반 프롬프트 아키텍처 실전 적용](./21-skill-prompt-architecture-practice.qmd)
+- [시스템 프롬프트 평가 — AGENT_GUIDE.md 사례 분석](./22-system-prompt-evaluation.qmd)

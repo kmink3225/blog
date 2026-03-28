@@ -1,0 +1,252 @@
+---
+title: "Fine-tuning 학습 데이터 샘플 수 추정"
+subtitle: "KoBERT 14-class 분류 모델 사례로 보는 필요 샘플 수의 이론과 실무"
+description: |
+  Pretrained 언어 모델(KoBERT)의 fine-tuning에 필요한 클래스당 샘플 수를
+  통계적으로 추정하는 방법과 한계를 다룬다. 14개 도메인 그룹 분류 사례를 통해
+  경험적 기준표의 조건, 합성 데이터의 리스크, Learning Curve 실험의 필요성을 설명한다.
+categories:
+  - Machine Learning
+  - Statistics
+author: Kwangmin Kim
+date: 03/27/2026
+execute:
+  eval: false
+---
+
+## 왜 샘플 수 추정이 어려운가
+
+전통적 power analysis는 가설검정 맥락에서 설계된 것이다. "효과 크기 $\delta$, 유의수준 $\alpha$, 검정력 $1-\beta$이 주어졌을 때 필요한 표본 수 $n$"을 닫힌 해로 구한다.
+
+$$
+n \approx \frac{2\sigma^2 (z_{\alpha/2} + z_\beta)^2}{\delta^2}
+$$
+
+그러나 분류 모델 학습에는 이 공식이 적용되지 않는다. 필요 샘플 수는 다음 요인에 동시에 의존하기 때문이다:
+
+- 모델 아키텍처 (RNN, BERT, MLP)
+- 피처 복잡도 (문장 길이, 클래스 간 분리도)
+- 사전학습 유무 (전이학습은 필요 데이터를 크게 줄임)
+- 클래스 수와 불균형 정도
+
+닫힌 해가 없으며, 실험적 접근이 유일하게 신뢰할 수 있는 방법이다.
+
+---
+
+## 사례: 14개 도메인 그룹 분류
+
+### 문제 설정
+
+14개 도메인 그룹(날짜, 명, 내용, 값, 수, 율, 번호, 식별, 코드, 분류, 보안, 단위, 집합, 일반단어)을 분류하는 KoBERT fine-tuning 모델의 학습 데이터 규모 추정 문제.
+
+### 데이터 현황
+
+| 소스 | 총 건수 | 그룹당 |
+|------|---------|--------|
+| 실제 도메인 사전 (취합) | 738 | 극심한 불균형 |
+| LLM 증강 | 2,868 | ~200 |
+| 규칙 기반 증강 | 2,800 | ~200 |
+| KoBERT 학습용 (병합) | 5,632 | ~400 |
+
+실제 도메인 사전의 그룹별 분포:
+
+```
+코드: 190   값: 132   식별: 117   명: 84    집합: 72
+분류: 45    수: 29    내용: 23    날짜: 22   율: 12
+단위: 7     번호: 2   파일: 2     보안: 1
+```
+
+보안(1개), 번호(2개), 단위(7개)는 실제 데이터가 거의 없다. 합성 데이터 ~200개가 실제 분포를 대표하는지가 샘플 수보다 더 큰 리스크다.
+
+---
+
+## Pretrained Transformer 경험적 기준
+
+KoBERT처럼 사전학습된 모델의 fine-tuning은 전이학습 덕에 적은 데이터로도 동작한다는 것이 NLP 커뮤니티의 경험적 관찰이다.
+
+| 클래스당 샘플 수 | 기대 수준 |
+|-----------------|----------|
+| 50 이하 | 불안정, few-shot 영역 |
+| 100~300 | 합리적 baseline (대부분의 fine-tuning 논문 범위) |
+| 300~500 | 일반적으로 수렴 시작 |
+| 1000+ | 충분, 추가 이득 체감 |
+
+현재 그룹당 ~400개 (KoBERT 학습 데이터)는 fine-tuning 기준으로 합리적인 범위에 있다.
+
+### 이 기준표의 한계
+
+::: {.callout-warning}
+위 기준표는 주로 **영어 텍스트 + 문장 단위 분류 태스크** 기준이다. 현재 태스크는:
+
+- 한국어 도메인명 (평균 6글자 이내 짧은 텍스트)
+- 14개 클래스
+- KoBERT (한국어 사전학습)
+
+이 조합에 대해 "클래스당 400개면 충분하다"는 검증된 근거는 없다. 조건이 다르면 필요량도 달라진다.
+:::
+
+이 기준의 출발점은 BERT 원 논문의 fine-tuning 실험이다. RTE(2,490건), MRPC(3,668건) 같은 소규모 데이터셋에서도 합리적 성능이 나왔고, 이것이 "사전학습 모델은 적은 데이터로도 된다"는 통념의 근거가 됐다. 그러나 이는 영어 텍스트 + 문장 단위 분류 조건이다.
+
+---
+
+## 진짜 문제: 양보다 질
+
+### 합성 데이터의 리스크
+
+현재 데이터의 실제 구성:
+
+| 구분 | 건수 | 비율 |
+|------|------|------|
+| 실제 도메인 사전 | 738 | 13% |
+| 합성 데이터 (LLM + 규칙 기반) | 4,894 | 87% |
+
+합성 데이터(synthetic data)가 87%를 차지한다. 보안(1개), 번호(2개), 단위(7개) 그룹은 실제 데이터가 사실상 없으므로, 해당 그룹의 학습 데이터 ~200개는 전부 인공적으로 만들어진 것이다.
+
+```
+문제: 합성 데이터가 실제 분포를 대표하는가?
+```
+
+양을 400에서 1000으로 늘려도, 합성 데이터가 실제 패턴을 담지 못하면 과적합만 심해진다. **샘플 수보다 합성 데이터 품질 검증이 우선이다.**
+
+### 품질 검증 방법
+
+```python
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+# 실제 데이터만 추출
+real_data = df[df['source'] == 'real_domain_dict']
+
+# 실제 vs 합성 분포 비교
+real_dist = real_data.groupby('domain_group').size()
+synthetic_dist = df[df['source'] != 'real_domain_dict'].groupby('domain_group').size()
+
+# Jensen-Shannon divergence로 분포 차이 측정
+from scipy.spatial.distance import jensenshannon
+import numpy as np
+
+groups = sorted(df['domain_group'].unique())
+p = np.array([real_dist.get(g, 0) for g in groups], dtype=float)
+q = np.array([synthetic_dist.get(g, 0) for g in groups], dtype=float)
+p /= p.sum(); q /= q.sum()
+
+jsd = jensenshannon(p, q)
+print(f"실제 vs 합성 분포 차이 (JSD): {jsd:.3f}")
+# JSD가 0.2 이상이면 합성 데이터가 실제 분포를 잘 대표하지 못한다
+```
+
+---
+
+## 유일하게 신뢰할 수 있는 방법: Learning Curve
+
+이론적 추정보다 실험적 확인이 정확하다. 클래스당 50, 100, 200, 400개로 학습시켜 validation accuracy가 평탄해지는 지점(plateau)을 찾으면 된다.
+
+```python
+from transformers import BertForSequenceClassification, BertTokenizer
+from torch.utils.data import DataLoader, Subset
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
+
+def learning_curve_experiment(
+    dataset,
+    model_name: str = "snunlp/KR-ELECTRA-discriminator",
+    sample_sizes_per_class: list = [50, 100, 200, 400],
+    num_classes: int = 14,
+    n_epochs: int = 5,
+    val_size: int = 200
+):
+    """
+    클래스당 샘플 수를 변화시키면서 validation accuracy 추적
+    """
+    results = {}
+    tokenizer = BertTokenizer.from_pretrained(model_name)
+
+    for n_per_class in sample_sizes_per_class:
+        # 클래스당 n_per_class개 샘플링
+        indices = []
+        for cls_id in range(num_classes):
+            cls_indices = [i for i, (_, label) in enumerate(dataset) if label == cls_id]
+            sampled = np.random.choice(cls_indices, size=min(n_per_class, len(cls_indices)), replace=False)
+            indices.extend(sampled.tolist())
+
+        train_subset = Subset(dataset, indices)
+        train_loader = DataLoader(train_subset, batch_size=16, shuffle=True)
+
+        model = BertForSequenceClassification.from_pretrained(
+            model_name, num_labels=num_classes
+        )
+        optimizer = torch.optim.AdamW(model.parameters(), lr=2e-5)
+
+        # 학습
+        model.train()
+        for epoch in range(n_epochs):
+            for batch in train_loader:
+                outputs = model(**{k: v for k, v in batch.items() if k != 'labels'},
+                               labels=batch['labels'])
+                outputs.loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+
+        # 검증 (고정된 val set으로 비교)
+        model.eval()
+        val_loader = DataLoader(Subset(dataset, list(range(val_size))), batch_size=32)
+        all_preds, all_labels = [], []
+        with torch.no_grad():
+            for batch in val_loader:
+                logits = model(**{k: v for k, v in batch.items() if k != 'labels'}).logits
+                all_preds.extend(logits.argmax(-1).tolist())
+                all_labels.extend(batch['labels'].tolist())
+
+        acc = accuracy_score(all_labels, all_preds)
+        results[n_per_class] = acc
+        print(f"클래스당 {n_per_class}개 → val accuracy: {acc:.3f}")
+
+    # Learning Curve 시각화
+    plt.figure(figsize=(8, 5))
+    plt.plot(list(results.keys()), list(results.values()), marker='o')
+    plt.xlabel("클래스당 샘플 수")
+    plt.ylabel("Validation Accuracy")
+    plt.title("Learning Curve — 클래스당 샘플 수 vs 성능")
+    plt.grid(True)
+    plt.show()
+
+    return results
+```
+
+### 결과 해석 기준
+
+| 패턴 | 해석 | 조치 |
+|------|------|------|
+| 400개에서 이미 plateau | 데이터 추가 불필요 | 합성 데이터 품질 점검 |
+| 400개에서도 상승 중 | 더 많은 데이터가 필요 | 실제 데이터 추가 수집 |
+| 특정 클래스만 낮음 | 클래스별 불균형 문제 | 희소 클래스 데이터 보강 |
+
+---
+
+## 결론
+
+::: {.callout-note}
+## 요약
+
+1. **그룹당 ~400개**는 KoBERT fine-tuning 기준으로 부족하지 않다 — 경험적 기준상 수렴 시작 범위에 있다
+
+2. **양보다 질이 먼저다** — 보안(1개), 번호(2개), 단위(7개) 그룹의 합성 데이터가 실제 패턴을 대표하는지 먼저 검증한다
+
+3. **유일하게 신뢰할 수 있는 방법은 Learning Curve다** — 클래스당 50, 100, 200, 400개로 실험하여 plateau 지점을 찾는다. 이걸 안 하면 400이든 1000이든 전부 감에 의한 숫자다
+:::
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [가설검정과 검정력 분석](../Statistics/25-normality.qmd)
+- [확률과 분포](../Statistics/06-probability.qmd)
+
+**관련 개념**
+
+- [데이터 거버넌스 — 도메인 그룹 표준](../Governance/5-0-0.data_standard.qmd) — 14개 도메인 그룹의 표준 정의 맥락
+- [Lasso / Elastic Net / glmmLasso — 종단 데이터의 변수 선택](./24-mixed-model-ml-regularization.qmd)
