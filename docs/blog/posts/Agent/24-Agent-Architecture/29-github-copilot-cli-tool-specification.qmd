@@ -1,0 +1,414 @@
+---
+title: "GitHub Copilot CLI SW Tool 명세와 Claude Code 대조 분석"
+subtitle: "터미널 AI 에이전트가 실제로 사용하는 도구 전체 정리와 Claude Code 비교"
+description: |
+  GitHub Copilot CLI(터미널)가 제공하는 네이티브 도구, GitHub MCP 서버 내장 도구,
+  슬래시 커맨드의 전체 명세를 정리한다. Claude Code 네이티브 도구와의 1:1 대조 분석을
+  통해 두 CLI의 설계 철학 차이를 명확히 한다.
+categories:
+  - Agent
+  - Architecture
+author: Kwangmin Kim
+date: 03/29/2026
+execute:
+  eval: false
+---
+
+## 왜 두 CLI는 다른 도구 세트를 갖는가
+
+[26번 포스트](./26-sw-tool-sdk-specification.qmd)에서 Claude Code 네이티브 도구와 VS Code 내 GitHub Copilot 도구를 정리했다. 그런데 "GitHub Copilot"에는 두 가지 컨텍스트가 있다.
+
+| 컨텍스트 | 실행 환경 | 핵심 도구 |
+|---------|----------|----------|
+| **GitHub Copilot (VS Code)** | IDE 내 Chat | @workspace, Agent Mode, /explain 등 |
+| **GitHub Copilot CLI** | 터미널(PowerShell/bash) | powershell, task, sql, github-mcp-server-* 등 |
+
+이 포스트는 **터미널에서 실행되는 GitHub Copilot CLI**의 도구 전체 명세를 다룬다. 두 CLI는 같은 Anthropic Claude 모델을 백엔드로 사용하지만, **실행 환경이 다르기 때문에 도구 세트가 크게 다르다**.
+
+- **Claude Code**는 macOS/Linux bash 셸을 전제로, 단일 `Bash` 도구와 파일 조작 도구가 중심이다.
+- **Copilot CLI**는 Windows PowerShell을 기본 환경으로, 세션 기반 인터랙티브 쉘과 GitHub MCP 서버 도구가 내장된다.
+
+---
+
+## GitHub Copilot CLI 네이티브 도구
+
+Copilot CLI가 사용자 요청 처리를 위해 호출하는 도구 전체를 기능 영역별로 분류한다.
+
+### 쉘 실행 도구
+
+터미널 명령 실행의 핵심 도구군이다. Claude Code의 단일 `Bash` 도구와 달리, Copilot CLI는 **세션(shellId) 기반 비동기 모델**을 채택한다.
+
+| 도구 | 역할 | 핵심 파라미터 |
+|------|------|--------------|
+| `powershell` | PowerShell 명령 실행 (sync/async/detach) | `command`, `shellId`, `mode`, `initial_wait`, `detach` |
+| `write_powershell` | 실행 중인 세션에 입력 전송 | `shellId`, `input`, `delay` |
+| `read_powershell` | 세션 출력 읽기 (완료 후 결과 수집) | `shellId`, `delay` |
+| `stop_powershell` | 세션 강제 종료 | `shellId` |
+| `list_powershell` | 활성 세션 목록 조회 | (없음) |
+
+**mode 구분이 핵심이다.** `sync`는 완료를 기다리며, `async`는 백그라운드 실행이고, `async + detach: true`는 세션 종료 후에도 독립 실행된다. 서버·데몬 프로세스는 반드시 `detach: true`를 사용한다.
+
+세션 기반 모델의 실용적 흐름:
+
+```
+# 1단계: 빌드 명령 실행 (오래 걸릴 수 있으므로 sync, initial_wait 30초)
+powershell(command="npm run build", shellId="build-session", mode="sync", initial_wait=30)
+
+# 2단계: 30초 안에 완료되지 않으면 백그라운드로 전환 — 완료 알림을 받음
+#        완료 후 결과 수집
+read_powershell(shellId="build-session", delay=5)
+
+# 3단계: 인터랙티브 도구 실행 — python REPL 활용
+powershell(command="python", shellId="py-session", mode="async")
+write_powershell(shellId="py-session", input="import pandas as pd\nprint(pd.__version__){enter}", delay=3)
+read_powershell(shellId="py-session", delay=2)
+```
+
+이 패턴이 Claude Code의 `Bash` 방식과 근본적으로 다른 점은, **동일 `shellId`에서 상태가 누적된다는 것**이다. `cd` 명령으로 디렉토리를 바꾸면 같은 세션의 다음 명령도 그 디렉토리에서 실행된다.
+
+::: {.callout-note}
+## Claude Code `Bash` vs Copilot CLI `powershell`
+
+Claude Code의 `Bash`는 각 호출마다 독립 프로세스로 실행되어 셸 상태가 초기화된다. Copilot CLI의 `powershell`은 `shellId`로 세션을 유지하므로, 환경 변수 설정·디렉토리 이동·인터랙티브 도구 제어가 가능하다. `write_powershell`로 실행 중인 프로세스에 입력을 보내거나 메뉴를 탐색할 수 있다는 점이 Claude Code `Bash`와 근본적으로 다르다.
+:::
+
+### 파일 조작 도구
+
+| 도구 | 역할 | 핵심 파라미터 |
+|------|------|--------------|
+| `view` | 파일 내용 읽기·디렉토리 목록 조회 | `path`, `view_range` |
+| `create` | 새 파일 생성 (기존 파일에 사용 불가) | `path`, `file_text` |
+| `edit` | 파일 내 정확한 문자열 치환 (단일 편집) | `path`, `old_str`, `new_str` |
+| `grep` | ripgrep 기반 콘텐츠 검색 | `pattern`, `path`, `glob`, `output_mode`, `-n`, `-C` |
+| `glob` | glob 패턴으로 파일 경로 탐색 | `pattern`, `path` |
+
+**`edit`는 동일 응답에서 여러 번 호출 가능하다.** 서로 겹치지 않는 문자열 블록을 한 응답에서 병렬로 수정한다. `old_str`은 파일 내에서 유일해야 하며, 중복이 있으면 더 많은 컨텍스트를 포함해 unique하게 만들어야 한다. Claude Code의 `Edit`와 동일한 diff 방식이다.
+
+**`create`와 `write`의 차이**: Copilot CLI의 `create`는 신규 파일 생성 전용이다. 기존 파일을 덮어쓰는 용도가 없다. 기존 파일 수정에는 `edit`를 사용한다.
+
+### 에이전트 오케스트레이션 도구
+
+| 도구 | 역할 | 지원 에이전트 타입 |
+|------|------|--------------------|
+| `task` | 서브에이전트 실행 (sync/background 모드) | `explore`, `task`, `general-purpose`, `code-review` |
+| `read_agent` | 실행 중·완료된 에이전트 결과 조회 | — |
+| `list_agents` | 활성·완료 에이전트 목록 조회 | — |
+
+`task` 도구의 에이전트 타입:
+
+| 타입 | 역할 | 모델 |
+|------|------|------|
+| `explore` | 코드베이스 탐색·질문 답변 (빠른 파일/키워드 검색) | Haiku (저비용) |
+| `task` | 빌드·테스트·린트 실행, 성공/실패만 보고 | Haiku |
+| `general-purpose` | 복잡한 멀티스텝 태스크, 전체 도구 세트 | Sonnet |
+| `code-review` | 스테이징/브랜치 변경 코드 리뷰 (버그·보안 집중) | Sonnet |
+
+**`background` 모드**로 실행하면 에이전트가 완료될 때 알림을 받고, `read_agent`로 결과를 수집한다. `explore`·`code-review`는 병렬 호출이 안전하다.
+
+병렬 에이전트 호출 패턴:
+
+```
+# 3개 파일을 동시에 탐색 — 각각 독립 컨텍스트 창에서 실행
+task(name="auth-explore",  prompt="src/auth/ 디렉토리의 인증 흐름 설명",  agent_type="explore", mode="background")
+task(name="db-explore",    prompt="src/db/ 디렉토리의 쿼리 패턴 분석",    agent_type="explore", mode="background")
+task(name="api-explore",   prompt="src/api/routes/ 엔드포인트 전체 목록", agent_type="explore", mode="background")
+
+# 완료 알림 수신 후 결과 수집
+read_agent(agent_id="auth-explore-xxx", wait=true)
+read_agent(agent_id="db-explore-xxx",   wait=true)
+read_agent(agent_id="api-explore-xxx",  wait=true)
+```
+
+`explore`와 `code-review` 에이전트는 파일을 수정하지 않으므로 병렬 실행이 항상 안전하다. `general-purpose`와 `task` 에이전트는 파일 수정·명령 실행 등 사이드 이펙트가 있어 병렬 실행 시 충돌에 주의해야 한다.
+
+### 사용자 인터페이스·세션 관리 도구
+
+| 도구 | 역할 | 주요 파라미터 |
+|------|------|--------------|
+| `ask_user` | 사용자에게 질문 (선택지 또는 자유형) | `question`, `choices`, `allow_freeform` |
+| `report_intent` | 현재 작업 의도 UI 표시 | `intent` |
+| `sql` | 세션 SQLite DB 쿼리 실행 | `query`, `description` |
+
+**`sql` 도구는 Claude Code에 없는 Copilot CLI 고유 도구이다.** 세션 내에 SQLite DB가 내장되어 있어, 태스크 추적(`todos`·`todo_deps` 테이블), 배치 작업 상태 관리, 중간 결과 저장 등에 활용한다. Claude Code가 `TaskCreate/TaskUpdate` 전용 도구로 해결하는 문제를 Copilot CLI는 범용 SQL로 해결한다.
+
+```sql
+-- 사전 정의된 todos 테이블 사용
+INSERT INTO todos (id, title, description, status) VALUES
+  ('refactor-auth', '인증 모듈 리팩토링',
+   'src/auth/에서 JWT 로직 분리, bcrypt 해싱 추가', 'pending'),
+  ('add-tests', '단위 테스트 작성',
+   '리팩토링 후 auth 모듈 테스트 커버리지 80% 달성', 'pending');
+
+-- 의존성 등록: 테스트는 리팩토링 완료 후
+INSERT INTO todo_deps (todo_id, depends_on) VALUES ('add-tests', 'refactor-auth');
+
+-- 준비된 태스크 조회 (의존성이 모두 완료된 것만)
+SELECT t.* FROM todos t
+WHERE t.status = 'pending'
+AND NOT EXISTS (
+    SELECT 1 FROM todo_deps td
+    JOIN todos dep ON td.depends_on = dep.id
+    WHERE td.todo_id = t.id AND dep.status != 'done'
+);
+```
+
+범용 SQL 방식의 장점은 **커스텀 테이블을 자유롭게 만들 수 있다는 것**이다. 배치 PR 리뷰 결과를 테이블에 저장하거나, 파일 분석 진행률을 중간 저장하거나, 다단계 파이프라인의 상태를 추적하는 데 모두 같은 도구를 재활용한다.
+
+### 웹·문서 조회 도구
+
+| 도구 | 역할 | 주요 파라미터 |
+|------|------|--------------|
+| `web_fetch` | URL 콘텐츠 조회 (markdown 또는 raw HTML) | `url`, `raw`, `start_index`, `max_length` |
+| `fetch_copilot_cli_documentation` | Copilot CLI 자체 README·도움말 조회 | (없음) |
+
+**`fetch_copilot_cli_documentation`는 자체 문서화 도구이다.** 사용자가 기능이나 커맨드를 물을 때, 메모리에서 답하지 않고 이 도구로 공식 문서를 먼저 조회한 후 답변한다. Claude Code의 `ToolSearch`와 목적이 유사하나, Copilot CLI 전용 문서에 특화된다.
+
+### IDE 연동 도구
+
+| 도구 | 역할 | 반환 정보 |
+|------|------|----------|
+| `ide-get_selection` | 현재 에디터에서 선택된 코드 조회 | 선택 텍스트, 파일 URI, 현재 선택 여부 |
+| `ide-get_diagnostics` | VS Code 언어 진단 정보 조회 | 오류·경고·힌트 목록 (파일별 또는 전체) |
+
+IDE 연동 도구는 **Claude Code에 없는 Copilot CLI 고유 기능이다.** VS Code가 활성 상태일 때 실시간으로 선택 코드나 컴파일 에러를 받아 에이전트 컨텍스트에 포함시킨다. 코드 수정 전 `ide-get_diagnostics`로 현재 오류를 먼저 파악하는 패턴이 일반적이다.
+
+---
+
+## GitHub MCP 서버 내장 도구 (17개)
+
+Copilot CLI는 GitHub MCP 서버를 내장으로 포함한다. Claude Code에서 동일한 기능을 쓰려면 외부 MCP 서버를 별도로 구성해야 한다.
+
+### GitHub Actions 도구 (5개)
+
+| 도구 | 역할 |
+|------|------|
+| `github-mcp-server-actions_get` | 워크플로우·런·잡·아티팩트 상세 조회 |
+| `github-mcp-server-actions_list` | 워크플로우·런·잡·아티팩트 목록 조회 |
+| `github-mcp-server-get_job_logs` | 특정 잡 로그 또는 실패 잡 전체 로그 조회 |
+| `github-mcp-server-get_commit` | 커밋 상세 정보 및 diff 조회 |
+| `github-mcp-server-get_file_contents` | 원격 레포 파일·디렉토리 내용 조회 |
+
+### 이슈·PR 관리 도구 (7개)
+
+| 도구 | 역할 |
+|------|------|
+| `github-mcp-server-issue_read` | 이슈 상세·댓글·서브이슈·레이블 조회 |
+| `github-mcp-server-list_issues` | 이슈 목록 조회 (라벨·날짜·상태 필터) |
+| `github-mcp-server-search_issues` | 이슈 전체 검색 (GitHub search syntax) |
+| `github-mcp-server-list_pull_requests` | PR 목록 조회 |
+| `github-mcp-server-pull_request_read` | PR 상세·diff·파일·리뷰 댓글·체크런 조회 |
+| `github-mcp-server-search_pull_requests` | PR 검색 |
+| `github-mcp-server-list_branches` | 브랜치 목록 조회 |
+
+### 코드·저장소·사용자 탐색 도구 (5개)
+
+| 도구 | 역할 |
+|------|------|
+| `github-mcp-server-search_code` | GitHub 전체 코드 검색 (ripgrep 수준) |
+| `github-mcp-server-search_repositories` | 저장소 탐색 (스타·언어·토픽 필터) |
+| `github-mcp-server-search_users` | 사용자 탐색 |
+| `github-mcp-server-list_commits` | 브랜치·태그별 커밋 목록 조회 |
+| `github-mcp-server-get_copilot_space` | Copilot Space 문서 조회 |
+
+::: {.callout-note}
+## 내장 MCP vs 외부 MCP 구성
+
+Claude Code에서 GitHub MCP 서버를 사용하려면 `claude mcp add` 명령으로 별도 서버를 등록해야 한다. Copilot CLI는 이 17개 도구가 에이전트에 기본 탑재되어 있으므로, 코드 리뷰·CI 분석·이슈 추적을 추가 설정 없이 즉시 수행할 수 있다.
+:::
+
+MCP 서버 도구의 실용적 사용 예는 CI 파이프라인 디버깅에서 잘 드러난다. 배포가 실패했을 때 다음 순서로 도구를 조합한다:
+
+```
+# 1. 최근 실패한 워크플로우 런 조회
+github-mcp-server-actions_list(method="list_workflow_runs",
+  owner="myorg", repo="myrepo",
+  workflow_runs_filter={status: "completed"})
+
+# 2. 실패 잡 로그 수집
+github-mcp-server-get_job_logs(owner="myorg", repo="myrepo",
+  run_id=12345678, failed_only=true, return_content=true)
+
+# 3. 관련 커밋 변경 사항 확인
+github-mcp-server-get_commit(owner="myorg", repo="myrepo",
+  sha="abc1234", include_diff=true)
+
+# 4. 로컬 소스 파일과 비교하여 원인 분석
+view(path="C:\\myrepo\\src\\deploy.py")
+```
+
+이 워크플로우를 Claude Code에서 수행하려면 GitHub CLI(`gh`)를 Bash로 호출하거나 MCP 서버를 별도 등록해야 한다. Copilot CLI에서는 도구 이름만으로 직접 호출한다.
+
+---
+
+## GitHub Copilot CLI 슬래시 커맨드
+
+슬래시 커맨드는 에이전트 설정·세션 관리·모드 전환에 사용된다. VS Code Copilot의 `/explain`, `/fix`와는 완전히 다른 CLI 전용 커맨드이다.
+
+::: {.callout-warning}
+## VS Code Copilot 슬래시 커맨드와의 혼동 주의
+
+VS Code Copilot Chat의 슬래시 커맨드(`/explain`, `/fix`, `/tests`, `/doc`, `/new`)는 **코드 생성 액션**이다.
+GitHub Copilot CLI 슬래시 커맨드(`/model`, `/mcp`, `/session` 등)는 **에이전트 상태 제어**이다. 이름이 같은 `/clear`만 두 환경 모두에서 "대화 초기화" 역할을 한다.
+:::
+
+### 에이전트·모델 설정
+
+| 커맨드 | 동작 |
+|--------|------|
+| `/model` | 사용 모델 변경 (Sonnet·Haiku·Opus·GPT 등) |
+| `/agent` | 에이전트 타입 설정 |
+| `/skills` | 사용 가능한 스킬 목록 조회 |
+| `/mcp` | MCP 서버 목록·연결 상태 확인 |
+| `/plugin` | 플러그인 관리 |
+| `/delegate` | 다른 에이전트에 위임 |
+| `/fleet` | 멀티 에이전트 플릿 관리 |
+| `/tasks` | 백그라운드 태스크 목록 조회 |
+
+### 컨텍스트·파일 관리
+
+| 커맨드 | 동작 |
+|--------|------|
+| `/add-dir` | 에이전트 접근 허용 디렉토리 추가 |
+| `/list-dirs` | 허용된 디렉토리 목록 조회 |
+| `/cwd` | 현재 작업 디렉토리 표시 |
+| `/allow-all` | 모든 도구 호출 자동 승인 |
+| `/reset-allowed-tools` | 도구 허용 목록 초기화 |
+| `/context` | 현재 컨텍스트 정보 조회 |
+| `/compact` | 컨텍스트 압축 (긴 대화 정리) |
+| `/instructions` | 시스템 지시 내용 조회 |
+
+### 세션 관리
+
+| 커맨드 | 동작 |
+|--------|------|
+| `/session` | 세션 정보 조회 |
+| `/resume` | 이전 세션 재개 |
+| `/rename` | 세션 이름 변경 |
+| `/rewind` | 이전 상태로 되돌리기 |
+| `/share` | 세션 공유 |
+| `/copy` | 현재 출력 클립보드 복사 |
+
+### IDE·개발 도구
+
+| 커맨드 | 동작 |
+|--------|------|
+| `/ide` | IDE 연동 도구 호출 |
+| `/diff` | 현재 변경 사항 diff 보기 |
+| `/pr` | PR 관련 작업 |
+| `/review` | 코드 리뷰 실행 |
+| `/lsp` | LSP(언어 서버 프로토콜) 도구 |
+| `/terminal-setup` | 터미널 환경 설정 |
+
+### 유틸리티
+
+| 커맨드 | 동작 |
+|--------|------|
+| `/usage` | 토큰·API 사용량 조회 |
+| `/clear` | 대화 내용 초기화 |
+| `/help` | 도움말 |
+| `/changelog` | 버전별 변경 이력 |
+| `/feedback` | 피드백 제출 |
+| `/theme` | 터미널 테마 변경 |
+| `/update` | CLI 업데이트 |
+| `/version` | 현재 버전 확인 |
+| `/experimental` | 실험적 기능 토글 |
+| `/streamer-mode` | 스트리머 모드 (민감 정보 숨김) |
+
+---
+
+## Claude Code vs GitHub Copilot CLI 대조 분석
+
+두 CLI의 도구를 기능 영역별로 직접 비교한다.
+
+::: {.callout-note}
+## 비교 기준
+
+두 CLI가 **동일한 Anthropic Claude 모델**을 백엔드로 사용함에도 도구 세트가 다른 이유는 세 가지이다.  
+첫째, 실행 OS가 다르다(macOS/Linux bash vs Windows PowerShell).  
+둘째, 통합 대상이 다르다(독립 CLI vs GitHub 생태계 + VS Code IDE).  
+셋째, 태스크 추적 철학이 다르다(도메인 특화 API vs 범용 SQL).
+:::
+
+### 핵심 도구 대응표
+
+| 기능 영역 | Claude Code | GitHub Copilot CLI | 대응 상태 |
+|---------|------------|-------------------|----------|
+| 파일 읽기 | `Read` | `view` | 유사 |
+| 파일 생성 | `Write` | `create` | 유사 |
+| 파일 수정 | `Edit` | `edit` | 동일 |
+| 파일 탐색 | `Glob` | `glob` | 동일 |
+| 콘텐츠 검색 | `Grep` | `grep` | 동일 |
+| 셸 실행 | `Bash` | `powershell` + read/write/stop/list | 구조 다름 |
+| URL 조회 | `WebFetch` | `web_fetch` | 유사 |
+| 웹 검색 | `WebSearch` | 없음 | Claude Code만 |
+| 서브에이전트 실행 | `Agent` | `task` | 유사 |
+| 에이전트 결과 조회 | `TaskGet/TaskOutput` | `read_agent` | 유사 |
+| 태스크 추적 | `TaskCreate/Update/Stop` | `sql` (todos 테이블) | 방식 다름 |
+| 사용자 질문 | `AskUserQuestion` | `ask_user` | 유사 |
+| 스케줄링 | `CronCreate/List/Delete` | 없음 | Claude Code만 |
+| 원격 트리거 | `RemoteTrigger` | GitHub Actions MCP | 방식 다름 |
+| 계획 모드 | `EnterPlanMode/ExitPlanMode` | Shift+Tab (UI 전환) | Claude Code만 |
+| Worktree 격리 | `EnterWorktree/ExitWorktree` | 없음 | Claude Code만 |
+| 노트북 편집 | `NotebookEdit` | 없음 | Claude Code만 |
+| 도구 스키마 조회 | `ToolSearch` | `fetch_copilot_cli_documentation` | 유사 |
+| IDE 연동 | 없음 | `ide-get_selection/ide-get_diagnostics` | Copilot CLI만 |
+| DB 쿼리 | 없음 | `sql` | Copilot CLI만 |
+| 의도 보고 | 없음 | `report_intent` | Copilot CLI만 |
+| GitHub 연동 | 외부 MCP 서버 별도 구성 | `github-mcp-server-*` 17개 내장 | Copilot CLI 유리 |
+
+### 설계 철학 비교
+
+| 관점 | Claude Code | GitHub Copilot CLI | 유사점 | 차이점 |
+|------|------------|-------------------|--------|--------|
+| **셸 모델** | 단일 Bash (호출마다 초기화) | 세션 기반 PowerShell (shellId 유지) | 터미널 명령 실행 | Copilot은 상태 유지 가능, 인터랙티브 도구 제어 가능 |
+| **파일 처리** | Read(PDF·이미지·노트북 지원), Write, Edit | view(텍스트·디렉토리), create, edit | diff 기반 수정 공통 | Claude Code는 바이너리·멀티모달 지원; Copilot CLI는 신규/수정 도구 분리 |
+| **에이전트 타입** | explore, general-purpose, plan, claude-code-guide 등 | explore, task, general-purpose, code-review | 병렬 실행, 별도 컨텍스트 창 | Copilot은 code-review, task(빌드/테스트) 특화 타입 보유 |
+| **태스크 추적** | TaskCreate/TaskUpdate/TaskStop/TaskList 전용 도구 | sql (todos, todo_deps 테이블) | 작업 진행 추적 | Claude Code는 도메인 특화 API; Copilot CLI는 범용 SQL로 유연하게 확장 |
+| **GitHub 연동** | MCP 서버 별도 구성 필요 | 17개 도구 기본 내장 | GitHub 리소스 접근 | Copilot CLI는 추가 설정 없이 PR·이슈·Actions 조회 가능 |
+| **자동화 스케줄링** | CronCreate/Delete (에이전트 내 스케줄) | 없음 (GitHub Actions 활용 권장) | 반복 작업 자동화 | Claude Code는 에이전트 레벨 크론; Copilot CLI는 외부 CI/CD 의존 |
+| **IDE 통합** | 없음 | ide-get_selection/ide-get_diagnostics | — | Copilot CLI는 VS Code 실시간 연동; Claude Code는 독립 CLI |
+| **운영 체제 기본** | macOS/Linux bash | Windows PowerShell | 크로스플랫폼 동작 가능 | 경로 구분자, 셸 문법, 명령어 생태계 상이 |
+| **컨텍스트 압축** | /compact 커맨드 | /compact 커맨드 | 긴 대화 정리 | 동일 |
+
+---
+
+## 어떤 경우에 무엇을 선택하는가
+
+```
+코드베이스 탐색·수정 자동화 (macOS/Linux 환경)
+    → Claude Code (네이티브 Bash, Worktree 격리, CronCreate로 반복 작업)
+
+Windows 환경에서 PowerShell 기반 자동화
+    → Copilot CLI (세션 기반 powershell, Windows 경로 지원)
+
+GitHub PR 리뷰·CI 분석 자동화
+    → Copilot CLI (github-mcp-server-* 17개 내장, /review 커맨드)
+
+VS Code와 실시간 연동이 필요한 코딩 보조
+    → Copilot CLI (ide-get_selection, ide-get_diagnostics)
+
+장기 배치 작업의 진행 상황 추적
+    → Copilot CLI의 sql 도구 (커스텀 테이블로 유연한 상태 관리)
+    → 또는 Claude Code의 TaskCreate/TaskUpdate (도메인 특화 API)
+
+PDF·이미지·Jupyter 노트북이 포함된 분석 워크플로
+    → Claude Code (Read 도구의 멀티모달·노트북 지원)
+```
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [AI Coding Assistant의 SW Tool SDK 명세](./26-sw-tool-sdk-specification.qmd) — Claude Code 도구 + VS Code Copilot 도구 전체 정리
+- [MCP 기반 도구 통합](./15-mcp-tool-integration.qmd) — MCP 아키텍처와 서버 등록 방식
+
+**후속 주제**
+
+- [자체 개발 Agent에 Claude·Copilot 도구 연결하기](./27-connect-claude-copilot-tools-to-custom-agent.qmd) — 두 CLI 도구를 커스텀 에이전트에 통합하는 방법
+- [Claude·Copilot 도구 생태계에 커스텀 도구 추가하기](./28-custom-tool-development-and-registration.qmd) — MCP 서버 개발로 도구 직접 등록
+
+**다른 카테고리 연결**
+
+- [Agent Tech Stack Evolution](./06-agent-tech-stack-evolution.qmd) — 도구 생태계 변화 맥락
