@@ -1,15 +1,14 @@
 ---
 name: "Probabilistic Machine Learning: Advanced Topics"
 type: book-summary
-source_file: "Murphy-PMLAdvanced_azure_full.md"
 authors: "Kevin P. Murphy"
 year: 2023
 total_pages: 1211
 language: en
 keywords: [probabilistic ML, Bayesian inference, variational inference, MCMC, generative models, VAE, normalizing flows, diffusion models, GAN, Gaussian processes, reinforcement learning, causality, graphical models, state-space models, representation learning]
 sources:
-  - file: "Murphy-PMLAdvanced_azure_full.md"
-    tool: Document Intelligence
+  - file: "Murphy-PMLAdvanced_marker_full.md"
+    tool: Marker
 ---
 
 # Probabilistic Machine Learning: Advanced Topics — Summary

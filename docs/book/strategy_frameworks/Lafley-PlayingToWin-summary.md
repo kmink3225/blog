@@ -1,7 +1,9 @@
 ---
 name: "Playing to Win: How Strategy Really Works"
 type: book-summary
-source_file: "Lafley-PlayingToWin_azure_full.md"
+sources:
+  - file: "Lafley-PlayingToWin_marker_full.md"
+    tool: Marker
 authors: "A.G. Lafley, Roger L. Martin"
 year: 2013
 total_pages: 272

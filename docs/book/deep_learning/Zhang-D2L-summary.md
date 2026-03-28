@@ -1,7 +1,6 @@
 ---
 name: "Dive into Deep Learning"
 type: book-summary
-source_file: "Zhang-D2L_azure_full.md"
 authors: "Aston Zhang, Zachary C. Lipton, Mu Li, Alexander J. Smola"
 year: 2023
 total_pages: 1089

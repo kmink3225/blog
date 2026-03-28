@@ -1,7 +1,9 @@
 ---
 name: "Generalized Linear Models (2nd Edition)"
 type: book-summary
-source_file: "McCullagh-GLM_azure_full.md"
+sources:
+  - file: "McCullagh-GLM_azure_full.md"
+    tool: Document Intelligence
 authors: "P. McCullagh, J.A. Nelder"
 year: 1989
 total_pages: 511

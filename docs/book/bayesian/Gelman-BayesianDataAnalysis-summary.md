@@ -1,7 +1,9 @@
 ---
 name: "Bayesian Data Analysis (3rd Edition)"
 type: book-summary
-source_file: "Gelman-BayesianDataAnalysis_azure_full.md"
+sources:
+  - file: "Gelman-BayesianDataAnalysis_azure_full.md"
+    tool: Document Intelligence
 authors: "Andrew Gelman, John B. Carlin, Hal S. Stern, David B. Dunson, Aki Vehtari, Donald B. Rubin"
 year: 2013
 total_pages: 661

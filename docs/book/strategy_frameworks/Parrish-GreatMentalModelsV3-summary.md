@@ -1,7 +1,9 @@
 ---
 name: "The Great Mental Models Volume 3: Systems and Mathematics"
 type: book-summary
-source_file: "Parrish-GreatMentalModelsV3_azure_full.md"
+sources:
+  - file: "Parrish-GreatMentalModelsV3_marker_full.md"
+    tool: Marker
 authors: "Rhiannon Beaubien, Shane Parrish"
 year: 2021
 total_pages: 320

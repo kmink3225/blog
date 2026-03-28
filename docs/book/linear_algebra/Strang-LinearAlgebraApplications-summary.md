@@ -1,7 +1,9 @@
 ---
 name: "Linear Algebra and Its Applications, Fourth Edition"
 type: book-summary
-source_file: "Strang-LinearAlgebraApplications_azure_full.md"
+sources:
+  - file: "Strang-LinearAlgebraApplications_azure_full.md"
+    tool: Document Intelligence
 authors: "Gilbert Strang"
 year: 2006
 total_pages: 486

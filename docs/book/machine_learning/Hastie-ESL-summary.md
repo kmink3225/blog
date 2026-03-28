@@ -6,6 +6,9 @@ year: 2009
 total_pages: 745
 language: en
 keywords: [statistical learning, supervised learning, unsupervised learning, regression, classification, boosting, random forests, SVM, neural networks, ensemble methods, high-dimensional data, splines, kernel methods, graphical models]
+sources:
+  - file: "Hastie-ESL_marker_full.md"
+    tool: Marker
 ---
 
 # The Elements of Statistical Learning — Summary

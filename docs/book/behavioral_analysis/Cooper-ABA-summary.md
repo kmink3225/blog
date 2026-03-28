@@ -1,15 +1,14 @@
 ---
 name: "Applied Behavior Analysis"
 type: book-summary
-source_file: "Cooper-ABA_azure_full.md"
 authors: "John O. Cooper, Timothy E. Heron, William L. Heward"
 year: 2020
 total_pages: 800
 language: en
 keywords: [ABA, behavior-analysis, reinforcement, punishment, stimulus-control, functional-assessment, shaping, chaining, generalization, ethics, BCBA]
 sources:
-  - file: "Cooper-ABA_azure_full.md"
-    tool: Document Intelligence
+  - file: "Cooper-ABA_marker_full.md"
+    tool: Marker
 ---
 
 # Applied Behavior Analysis — Summary

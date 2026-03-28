@@ -1,15 +1,14 @@
 ---
 name: "Probabilistic Machine Learning: An Introduction"
 type: book-summary
-source_file: "Murphy-PMLIntro_azure_full.md"
 authors: "Kevin P. Murphy"
 year: 2022
 total_pages: 826
 language: en
 keywords: [probabilistic ML, Bayesian inference, statistics, decision theory, information theory, linear models, neural networks, CNN, RNN, kernel methods, trees, boosting, clustering, dimensionality reduction, recommender systems]
 sources:
-  - file: "Murphy-PMLIntro_azure_full.md"
-    tool: Document Intelligence
+  - file: "Murphy-PMLIntro_marker_full.md"
+    tool: Marker
 ---
 
 # Probabilistic Machine Learning: An Introduction — Summary

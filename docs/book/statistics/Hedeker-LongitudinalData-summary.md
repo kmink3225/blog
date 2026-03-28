@@ -1,7 +1,9 @@
 ---
 name: "Longitudinal Data Analysis"
 type: book-summary
-source_file: "Hedeker-LongitudinalData_azure_full.md"
+sources:
+  - file: "Hedeker-LongitudinalData_azure_full.md"
+    tool: Document Intelligence
 authors: "Donald Hedeker, Robert D. Gibbons"
 year: 2006
 total_pages: 360

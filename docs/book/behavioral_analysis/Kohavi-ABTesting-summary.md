@@ -1,15 +1,14 @@
 ---
 name: "Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing"
 type: book-summary
-source_file: "Kohavi-ABTesting_azure_full.md"
 authors: "Ron Kohavi, Diane Tang, Ya Xu"
 year: 2020
 total_pages: 250
 language: en
 keywords: [AB-testing, online-experiments, OEC, metrics, statistical-significance, SRM, triggering, experimentation-platform, causal-inference]
 sources:
-  - file: "Kohavi-ABTesting_azure_full.md"
-    tool: Document Intelligence
+  - file: "Kohavi-ABTesting_marker_full.md"
+    tool: Marker
 ---
 
 # Trustworthy Online Controlled Experiments — Summary

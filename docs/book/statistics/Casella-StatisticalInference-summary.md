@@ -1,7 +1,9 @@
 ---
 name: "Statistical Inference, 2nd Edition"
 type: book-summary
-source_file: "Casella-StatisticalInference_azure_full.md"
+sources:
+  - file: "Casella-StatisticalInference_azure_full.md"
+    tool: Document Intelligence
 authors: "George Casella, Roger L. Berger"
 year: 2002
 total_pages: 660

@@ -1,15 +1,14 @@
 ---
 name: "Pattern Recognition and Machine Learning"
 type: book-summary
-source_file: "Bishop-PRML_azure_full.md"
 authors: "Christopher M. Bishop"
 year: 2006
 total_pages: 738
 language: en
 keywords: [pattern recognition, machine learning, Bayesian methods, graphical models, neural networks, kernel methods, SVM, EM algorithm, variational inference, MCMC, sequential data, PCA]
 sources:
-  - file: "Bishop-PRML_azure_full.md"
-    tool: Document Intelligence
+  - file: "Bishop-PRML_marker_full.md"
+    tool: Marker
 ---
 
 # Pattern Recognition and Machine Learning — Summary

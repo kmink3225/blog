@@ -1,7 +1,9 @@
 ---
 name: "Good Strategy Bad Strategy"
 type: book-summary
-source_file: "Rumelt-GoodStrategy_azure_full.md"
+sources:
+  - file: "Rumelt-GoodStrategy_marker_full.md"
+    tool: Marker
 authors: "Richard P. Rumelt"
 year: 2011
 total_pages: 336

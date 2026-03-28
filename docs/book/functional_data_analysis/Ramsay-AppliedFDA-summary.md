@@ -1,7 +1,9 @@
 ---
 name: "Applied Functional Data Analysis: Methods and Case Studies"
 type: book-summary
-source_file: "Ramsay-AppliedFDA_azure_full.md"
+sources:
+  - file: "Ramsay-AppliedFDA_azure_full.md"
+    tool: Document Intelligence
 authors: "J. O. Ramsay, B. W. Silverman"
 year: 2002
 total_pages: 190

@@ -1,7 +1,9 @@
 ---
 name: "Competitive Strategy: Techniques for Analyzing Industries and Competitors"
 type: book-summary
-source_file: "Porter-CompetitiveStrategy_azure_full.md"
+sources:
+  - file: "Porter-CompetitiveStrategy_marker_full.md"
+    tool: Marker
 authors: "Michael E. Porter"
 year: 1980
 total_pages: 396

@@ -1,7 +1,9 @@
 ---
 name: "Modelling Survival Data in Medical Research (4th Ed.)"
 type: book-summary
-source_file: "Collett-ModellingSurvivalData_azure_full.md"
+sources:
+  - file: "Collett-ModellingSurvivalData_azure_full.md"
+    tool: Document Intelligence
 authors: "David Collett"
 year: 2023
 total_pages: 480

@@ -1,7 +1,9 @@
 ---
 name: "A Concise Introduction to Logic"
 type: book-summary
-source_file: "Hurley-Logic_azure_full.md"
+sources:
+  - file: "Hurley-Logic_marker_full.md"
+    tool: Marker
 authors: "Patrick J. Hurley"
 year: 2012
 total_pages: 700

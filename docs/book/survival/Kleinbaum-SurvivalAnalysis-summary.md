@@ -1,7 +1,9 @@
 ---
 name: "Survival Analysis: A Self-Learning Text (3rd Ed.)"
 type: book-summary
-source_file: "Kleinbaum-SurvivalAnalysis_azure_full.md"
+sources:
+  - file: "Kleinbaum-SurvivalAnalysis_azure_full.md"
+    tool: Document Intelligence
 authors: "David G. Kleinbaum, Mitchel Klein"
 year: 2012
 total_pages: 700

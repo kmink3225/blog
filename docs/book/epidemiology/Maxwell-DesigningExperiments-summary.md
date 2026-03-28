@@ -1,7 +1,9 @@
 ---
 name: "Designing Experiments and Analyzing Data: A Model Comparison Perspective"
 type: book-summary
-source_file: "Maxwell-DesigningExperiments_azure_full.md"
+sources:
+  - file: "Maxwell-DesigningExperiments_azure_full.md"
+    tool: Document Intelligence
 authors: "Scott E. Maxwell, Harold D. Delaney"
 year: 2004
 total_pages: 868

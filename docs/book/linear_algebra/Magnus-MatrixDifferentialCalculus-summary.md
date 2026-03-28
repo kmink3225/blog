@@ -1,7 +1,9 @@
 ---
 name: "Matrix Differential Calculus with Applications in Statistics and Econometrics, Third Edition"
 type: book-summary
-source_file: "Magnus-MatrixDifferentialCalculus_azure_full.md"
+sources:
+  - file: "Magnus-MatrixDifferentialCalculus_azure_full.md"
+    tool: Document Intelligence
 authors: "Jan R. Magnus, Heinz Neudecker"
 year: 2007
 total_pages: 470

@@ -1,7 +1,9 @@
 ---
 name: "The Great Mental Models Volume 1: General Thinking Concepts"
 type: book-summary
-source_file: "Parrish-GreatMentalModelsV1_azure_full.md"
+sources:
+  - file: "Parrish-GreatMentalModelsV1_marker_full.md"
+    tool: Marker
 authors: "Shane Parrish"
 year: 2019
 total_pages: 272

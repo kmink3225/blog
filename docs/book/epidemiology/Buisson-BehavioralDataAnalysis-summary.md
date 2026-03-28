@@ -1,7 +1,9 @@
 ---
 name: "Behavioral Data Analysis with R and Python"
 type: book-summary
-source_file: "Buisson-BehavioralDataAnalysis_azure_full.md"
+sources:
+  - file: "Buisson-BehavioralDataAnalysis_azure_full.md"
+    tool: Document Intelligence
 authors: "Florent Buisson"
 year: 2021
 total_pages: 321

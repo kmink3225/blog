@@ -1,7 +1,9 @@
 ---
 name: "Functional Data Analysis"
 type: book-summary
-source_file: "Ramsay-FunctionalDataAnalysis_azure_full.md"
+sources:
+  - file: "Ramsay-FunctionalDataAnalysis_azure_full.md"
+    tool: Document Intelligence
 authors: "J. O. Ramsay, B. W. Silverman"
 year: 1997
 total_pages: 310

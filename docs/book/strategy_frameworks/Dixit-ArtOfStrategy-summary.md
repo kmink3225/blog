@@ -1,7 +1,9 @@
 ---
 name: "The Art of Strategy: A Game Theorist's Guide to Success in Business & Life"
 type: book-summary
-source_file: "Dixit-ArtOfStrategy_azure_full.md"
+sources:
+  - file: "Dixit-ArtOfStrategy_marker_full.md"
+    tool: Marker
 authors: "Avinash K. Dixit, Barry J. Nalebuff"
 year: 2008
 total_pages: 512

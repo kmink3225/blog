@@ -1,7 +1,9 @@
 ---
 name: "Essential Concepts in Clinical Research: Randomised Controlled Trials and Observational Epidemiology"
 type: book-summary
-source_file: "Schulz-ClinicalResearch_azure_full.md"
+sources:
+  - file: "Schulz-ClinicalResearch_azure_full.md"
+    tool: Document Intelligence
 authors: "Kenneth F. Schulz, David A. Grimes"
 year: 2019
 total_pages: 256

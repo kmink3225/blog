@@ -1,7 +1,6 @@
 ---
 name: "Deep Learning"
 type: book-summary
-source_file: "Goodfellow-DeepLearning_azure_full.md"
 authors: "Ian Goodfellow, Yoshua Bengio, Aaron Courville"
 year: 2016
 total_pages: 777

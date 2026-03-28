@@ -1,7 +1,9 @@
 ---
 name: "Thinking, Fast and Slow"
 type: book-summary
-source_file: "Kahneman-ThinkingFastSlow_azure_full.md"
+sources:
+  - file: "Kahneman-ThinkingFastSlow_marker_full.md"
+    tool: Marker
 authors: "Daniel Kahneman"
 year: 2011
 total_pages: 499

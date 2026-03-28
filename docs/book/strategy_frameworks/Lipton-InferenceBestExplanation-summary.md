@@ -1,7 +1,9 @@
 ---
 name: "The Inference to the Best Explanation"
 type: book-summary
-source_file: "Lipton-InferenceBestExplanation_azure_full.md"
+sources:
+  - file: "Lipton-InferenceBestExplanation_marker_full.md"
+    tool: Marker
 authors: "Gilbert H. Harman"
 year: 1965
 total_pages: 8
