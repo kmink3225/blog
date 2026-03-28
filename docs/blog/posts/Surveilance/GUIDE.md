@@ -14,6 +14,7 @@ cross_references:
   - docs/blog/posts/Experimentation/GUIDE.md
   - docs/blog/posts/Data_Science/GUIDE.md
   - docs/blog/posts/Governance/GUIDE.md
+  - docs/blog/posts/Agent/GUIDE.md
 ---
 
 # Surveilance 카테고리 작성 가이드
