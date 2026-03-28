@@ -572,6 +572,82 @@ Bootstrap CI 폭이 1 cycle 이상인 샘플은 Ct 추정이 불안정한 것이
 
 ---
 
+## 자주 묻는 질문
+
+### Q1. Bayesian 추정에서도 "95% 신뢰수준"처럼 숫자로 표현할 수 있나?
+
+오히려 Bayesian이 더 직접적이다.
+
+Frequentist 95% CI는 엄밀히 말해 "이 방법으로 반복 계산하면 95%는 참값을 포함한다"는 의미다. 파라미터가 이 구간 안에 있을 확률을 직접 말할 수 없다.
+
+Bayesian **신용구간(Credible Interval)**은 posterior에서 바로 계산하므로 "Ct가 이 구간에 있을 확률이 95%"라고 직접 해석된다.
+
+```python
+samples = trace.posterior["C"].values.flatten()  # posterior 샘플
+
+ci_80 = np.percentile(samples, [10,  90])   # 80% 신용구간
+ci_95 = np.percentile(samples, [2.5, 97.5]) # 95% 신용구간
+ci_99 = np.percentile(samples, [0.5, 99.5]) # 99% 신용구간
+
+# 단일 확률 질문도 직접 계산 가능
+p_positive = (samples < 35).mean()          # P(Ct < 35 | 데이터)
+p_efficient = (trace.posterior["B"].values.flatten() > 0.279).mean()  # P(효율 > 90%)
+```
+
+어떤 신뢰 수준이든 percentile 한 줄로 계산된다. Joint model에서는 파라미터 간 결합 확률도 계산할 수 있다.
+
+```python
+# Ct < 35이면서 효율 > 90%일 확률 — Frequentist로는 매우 어려움
+B_samples = trace.posterior["B"].values.flatten()
+C_samples = trace.posterior["C"].values.flatten()
+p_joint = ((C_samples < 35) & (B_samples > 0.279)).mean()
+```
+
+Bayesian이 어려운 부분은 신뢰 수준 계산이 아니라 **MCMC 계산 비용(속도)**과 **prior 설정**이다.
+
+---
+
+### Q2. 시나리오 2 해석은 이미 L1 penalty로 파라미터 선택이 된 상태를 전제로 한 것인가?
+
+맞다. 시나리오 2 해석 전체는 Laplace prior(Bayesian L1)가 적용된 이후의 결과를 읽은 것이다.
+
+**원래 추정 대상 파라미터: ~57개**
+
+```
+4PL:       A, D, C, B              (4개)
+Jump 성분: γ_1, γ_2, ..., γ_45    (45개)  ← Laplace prior 적용 대상
+기타:      k, baseline 2개, σ      (4개)
+```
+
+Laplace prior는 γ_c 각각에 0 근방으로 강하게 수축하는 압력을 가한다. Posterior를 계산하면 대부분의 γ_c는 0에 매우 가까워지고, 실제 이상 신호가 있는 cycle만 0에서 멀리 떨어진다.
+
+```python
+γ_samples = trace.posterior["gamma"].values  # shape: (draws, 45)
+
+for c in range(45):
+    mean = γ_samples[:, c].mean()
+    # cycle 1~27, 29~45: mean ≈ 0~5 RFU  → 사실상 탈락
+    # cycle 28:          mean ≈ 140 RFU  → 의미있는 jump로 "선택됨"
+```
+
+이 과정을 거친 후 해석 시점의 유효 파라미터는 다음과 같다.
+
+```
+A, D, C, B (4PL 4개) + γ_28 (1개) + σ = 6~7개
+```
+
+::: {.callout-note}
+## Frequentist Lasso와의 차이
+
+Frequentist Lasso는 γ_c를 **정확히 0**으로 만드는 hard selection이다. Bayesian Laplace prior는 **0 근방으로 강하게 수축**시키는 soft selection이다. 해석 방식은 같지만, Bayesian은 각 γ_c에 대한 posterior 불확실성도 함께 제공한다.
+
+cycle 28에서 $\gamma_{28} = 140 \pm 22$ RFU(95% CI)라면, jump 크기 자체에도 불확실성이 있다는 것을 알 수 있다.
+:::
+
+따라서 시나리오 2의 "γ_28 = 140 RFU만 살아남은 결과"는 Laplace prior가 45개 jump 후보 중 1개만 선택한 이후의 상태를 읽은 것이다.
+
+---
+
 ## 관련 주제
 
 **이 포스트의 전제**
