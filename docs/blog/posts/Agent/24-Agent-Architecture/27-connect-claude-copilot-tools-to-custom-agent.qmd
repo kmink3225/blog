@@ -1,0 +1,611 @@
+---
+title: "자체 개발 Agent에 Claude·Copilot 도구 연결하기"
+subtitle: "MCP·API·Extensions — 세 가지 연결 경로의 실전 구현"
+description: |
+  자체 개발한 Agent에 Claude 도구와 GitHub Copilot 도구를 연결하는 세 가지 경로를 다룬다.
+  Anthropic API Tool Use로 Claude 도구를 직접 호출하고, MCP 서버로 도구를 양방향 노출하며,
+  GitHub Models API와 Copilot Extensions로 Copilot 생태계에 연결하는 구현 패턴을 정리한다.
+categories:
+  - Agent
+  - Architecture
+  - MCP
+  - Claude Code
+  - GitHub Copilot
+author: Kwangmin Kim
+date: 03/29/2026
+execute:
+  eval: false
+---
+
+## 연결 시나리오 정의
+
+"자체 개발 Agent에 도구를 연결한다"는 말은 방향에 따라 두 가지 의미를 갖는다.
+
+```
+[방향 A] 내 Agent → Claude/Copilot 도구 호출
+  예: 내가 만든 Python Agent가 Claude의 추론 능력과
+      파일 읽기 도구를 호출한다
+
+[방향 B] Claude/Copilot → 내 Agent(도구)로 라우팅
+  예: 사용자가 Copilot Chat에서 질문하면
+      Copilot이 내가 만든 커스텀 Agent를 도구로 호출한다
+```
+
+두 방향 모두 다룬다. 연결 경로는 크게 세 가지이다.
+
+| 경로 | 방향 | 핵심 기술 |
+|------|------|---------|
+| **Anthropic API Tool Use** | A: 내 Agent → Claude 추론 + 도구 | Claude API, JSON Schema |
+| **MCP** | 양방향 | MCP 서버, JSON-RPC |
+| **GitHub Models / Copilot Extensions** | A + B: Copilot 생태계 연동 | GitHub Models API, Copilot Extensions |
+
+---
+
+## 경로 1: Anthropic API Tool Use
+
+자체 Agent가 Claude의 추론 능력과 도구 실행 능력을 직접 호출하는 방법이다. "내 Agent의 두뇌로 Claude를 사용하되, 실제 행동(파일 읽기, API 호출 등)은 내가 정의한 함수로 수행한다"는 패턴이다.
+
+### 기본 Tool Use 구현
+
+```python
+import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+# 도구 정의: Agent가 사용할 수 있는 함수들을 JSON Schema로 선언
+TOOLS = [
+    {
+        "name": "read_file",
+        "description": "파일 내용을 읽는다. 텍스트 파일에 적합하다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "읽을 파일의 절대 경로"},
+                "lines": {"type": "integer", "description": "읽을 줄 수 (선택, 기본 전체)"}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "search_web",
+        "description": "웹에서 최신 정보를 검색한다. 실시간 데이터가 필요할 때 사용한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "검색어"},
+                "num_results": {"type": "integer", "description": "결과 수 (기본 5)"}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "write_file",
+        "description": "파일에 내용을 쓴다. 기존 파일은 덮어쓴다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "쓸 파일의 절대 경로"},
+                "content": {"type": "string", "description": "파일에 쓸 내용"}
+            },
+            "required": ["path", "content"]
+        }
+    }
+]
+
+# 실제 도구 구현 (Agent 개발자가 정의)
+def execute_tool(tool_name: str, tool_input: dict) -> str:
+    if tool_name == "read_file":
+        with open(tool_input["path"], "r", encoding="utf-8") as f:
+            return f.read()
+    elif tool_name == "search_web":
+        return f"검색 결과: '{tool_input['query']}'에 대한 상위 결과..."  # tavily 등 사용
+    elif tool_name == "write_file":
+        with open(tool_input["path"], "w", encoding="utf-8") as f:
+            f.write(tool_input["content"])
+        return f"파일 저장 완료: {tool_input['path']}"
+    return f"알 수 없는 도구: {tool_name}"
+```
+
+### Agent 실행 루프
+
+Tool Use의 핵심은 **루프 구조**다. Claude가 도구 호출을 요청하면 실행하고, 결과를 다시 전달하는 과정을 최종 텍스트 응답까지 반복한다.
+
+```python
+def run_agent(user_message: str, system_prompt: str = "") -> str:
+    messages = [{"role": "user", "content": user_message}]
+
+    while True:
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=4096,
+            system=system_prompt,
+            tools=TOOLS,
+            messages=messages
+        )
+
+        # 텍스트만 반환 → 작업 완료
+        if response.stop_reason == "end_turn":
+            text_blocks = [b.text for b in response.content if hasattr(b, "text")]
+            return "\n".join(text_blocks)
+
+        # 도구 호출 요청
+        if response.stop_reason == "tool_use":
+            # 어시스턴트 응답을 히스토리에 추가
+            messages.append({"role": "assistant", "content": response.content})
+
+            # 모든 tool_use 블록 처리 (한 응답에 여러 도구 동시 호출 가능)
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result
+                    })
+
+            # 도구 결과를 히스토리에 추가
+            messages.append({"role": "user", "content": tool_results})
+
+        else:
+            # 예상치 못한 stop_reason
+            break
+
+    return "Agent 오류: 응답 없음"
+
+# 사용 예시
+result = run_agent(
+    "docs/blog/posts/ 폴더에서 최근에 만든 Agent 포스트 목록을 찾아서 요약해줘",
+    system_prompt="당신은 파일 시스템을 탐색하고 문서를 분석하는 전문 Agent이다."
+)
+print(result)
+```
+
+### LangChain ChatAnthropic 연동
+
+LangChain 기반 Agent라면 `ChatAnthropic`으로 Claude를 도구와 함께 바인딩한다.
+
+```python
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.prompts import ChatPromptTemplate
+
+llm = ChatAnthropic(model="claude-opus-4-6", temperature=0)
+
+# LangChain 도구 정의 (@tool 데코레이터)
+@tool
+def read_file(path: str) -> str:
+    """지정한 경로의 파일 내용을 반환한다."""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+@tool
+def search_web(query: str) -> str:
+    """웹에서 정보를 검색하고 상위 결과를 반환한다."""
+    # tavily, serpapi 등 검색 API 호출
+    return f"검색 결과: {query}"
+
+tools = [read_file, search_web]
+
+# 프롬프트 + 에이전트 구성
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "당신은 유능한 코딩 어시스턴트이다."),
+    ("human",  "{input}"),
+    ("placeholder", "{agent_scratchpad}")
+])
+
+agent = create_tool_calling_agent(llm, tools, prompt)
+executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+result = executor.invoke({"input": "현재 디렉토리의 README.md 내용을 요약해줘"})
+```
+
+### LangGraph Tool Node 연동
+
+LangGraph를 사용하는 경우 `ToolNode`로 도구를 그래프에 연결한다.
+
+```python
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+from typing import TypedDict, Annotated
+import operator
+
+tools = [read_file, search_web]  # 위에서 정의한 @tool 함수 재사용
+llm_with_tools = ChatAnthropic(model="claude-opus-4-6").bind_tools(tools)
+
+class AgentState(TypedDict):
+    messages: Annotated[list, operator.add]
+
+graph = StateGraph(AgentState)
+graph.add_node("agent", lambda s: {"messages": [llm_with_tools.invoke(s["messages"])]})
+graph.add_node("tools", ToolNode(tools))
+graph.set_entry_point("agent")
+graph.add_conditional_edges(
+    "agent",
+    lambda s: "tools" if s["messages"][-1].tool_calls else END
+)
+graph.add_edge("tools", "agent")
+app = graph.compile()
+```
+
+---
+
+## 경로 2: MCP 서버로 양방향 연결
+
+MCP(Model Context Protocol)는 **표준 프로토콜**이다. 자체 Agent를 MCP 서버로 구현하면 Claude Code·GitHub Copilot 모두에서 도구로 호출할 수 있다. 반대로 내 Agent가 MCP 클라이언트로 동작하여 외부 MCP 서버의 도구를 호출할 수도 있다.
+
+### MCP 서버 구축 (FastMCP)
+
+```python
+# server.py
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP(
+    name="my-agent-tools",
+    instructions="""
+    코드베이스 분석과 문서 생성 도구를 제공한다.
+    파일 분석, 의존성 맵, 함수 목록 조회가 가능하다.
+    """
+)
+
+@mcp.tool()
+def analyze_file(path: str) -> str:
+    """Python 파일을 분석하여 함수·클래스 목록과 의존성을 반환한다."""
+    import ast
+    with open(path) as f:
+        tree = ast.parse(f.read())
+    functions = [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    classes   = [n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+    return f"함수: {functions}\n클래스: {classes}"
+
+@mcp.tool()
+def generate_docstring(function_code: str, style: str = "google") -> str:
+    """함수 코드를 받아 docstring을 자동 생성한다.
+
+    Args:
+        function_code: docstring을 생성할 함수 코드 전체
+        style: docstring 스타일 (google, numpy, sphinx). 기본값은 google
+    """
+    # 실제 구현에서는 Claude API 재호출 또는 템플릿 사용
+    return f'"""\n{style} 스타일 docstring 자동 생성 결과\n"""'
+
+@mcp.resource("codebase://stats")
+def codebase_stats() -> str:
+    """코드베이스 전체 통계를 반환한다."""
+    import subprocess
+    result = subprocess.run(["find", ".", "-name", "*.py"], capture_output=True, text=True)
+    files = result.stdout.strip().split("\n")
+    return f"Python 파일 수: {len(files)}"
+
+if __name__ == "__main__":
+    mcp.run()  # 기본: stdio 모드
+```
+
+### Claude Code에 MCP 서버 연결
+
+로컬 서버(stdio)를 Claude Code에 등록한다.
+
+```json
+// ~/.claude.json 또는 프로젝트 루트 .claude.json
+{
+  "mcpServers": {
+    "my-agent-tools": {
+      "command": "python",
+      "args": ["server.py"],
+      "cwd": "/path/to/my/agent"
+    }
+  }
+}
+```
+
+HTTP(SSE) 모드로 실행하면 원격 서버로도 연결 가능하다.
+
+```python
+# HTTP 모드로 서버 실행
+if __name__ == "__main__":
+    mcp.run(transport="sse", host="0.0.0.0", port=8000)
+```
+
+```json
+// 원격 서버 연결
+{
+  "mcpServers": {
+    "my-agent-tools": {
+      "url": "http://my-server.example.com:8000/sse"
+    }
+  }
+}
+```
+
+Claude Code에 서버가 등록되면 Claude가 자동으로 도구 목록을 탐색하고, 사용자 요청에 따라 `analyze_file`, `generate_docstring` 등을 호출한다.
+
+### GitHub Copilot에 MCP 서버 연결
+
+VS Code settings.json에 동일한 서버를 등록한다.
+
+```jsonc
+// .vscode/settings.json
+{
+  "github.copilot.chat.mcp.enabled": true,
+  "mcp": {
+    "servers": {
+      "my-agent-tools": {
+        "command": "python",
+        "args": ["server.py"],
+        "cwd": "${workspaceFolder}/agent"
+      }
+    }
+  }
+}
+```
+
+등록 후 Copilot Chat에서 `@my-agent-tools`로 도구에 직접 접근하거나, Agent Mode에서 자동 탐색된 도구로 호출한다.
+
+### MCP 클라이언트로 외부 도구 호출
+
+내 Agent가 MCP 클라이언트로서 외부 MCP 서버의 도구를 호출하는 패턴이다.
+
+```python
+# MCP 클라이언트 구현
+import asyncio
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def call_mcp_tool(server_command: list, tool_name: str, tool_args: dict):
+    """외부 MCP 서버의 도구를 호출한다."""
+    server_params = StdioServerParameters(
+        command=server_command[0],
+        args=server_command[1:]
+    )
+
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # 서버 초기화 및 도구 목록 탐색
+            await session.initialize()
+            tools = await session.list_tools()
+            print(f"사용 가능한 도구: {[t.name for t in tools.tools]}")
+
+            # 도구 호출
+            result = await session.call_tool(tool_name, tool_args)
+            return result.content[0].text
+
+# 사용 예시: filesystem MCP 서버의 read_file 호출
+result = asyncio.run(
+    call_mcp_tool(
+        server_command=["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+        tool_name="read_file",
+        tool_args={"path": "/workspace/README.md"}
+    )
+)
+```
+
+---
+
+## 경로 3: GitHub Copilot 생태계 연결
+
+### GitHub Models API로 Copilot 모델 호출
+
+GitHub Models는 Claude, GPT-4o, Llama 등 다양한 모델을 **OpenAI-compatible API**로 제공한다. 자체 Agent에서 GitHub Personal Access Token만으로 Copilot이 사용하는 모델과 동일한 모델을 tool calling과 함께 호출할 수 있다.
+
+```python
+from openai import OpenAI
+
+# GitHub Models는 OpenAI SDK와 호환
+client = OpenAI(
+    base_url="https://models.inference.ai.azure.com",
+    api_key="<GITHUB_TOKEN>"  # GitHub Personal Access Token
+)
+
+# 도구 정의 (OpenAI 형식)
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_pr_info",
+            "description": "GitHub PR의 변경 내용과 메타데이터를 조회한다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo":   {"type": "string", "description": "owner/repo 형식"},
+                    "pr_num": {"type": "integer", "description": "PR 번호"}
+                },
+                "required": ["repo", "pr_num"]
+            }
+        }
+    }
+]
+
+response = client.chat.completions.create(
+    model="gpt-4o",          # 또는 "claude-3-5-sonnet", "Llama-3.3-70B-Instruct" 등
+    messages=[{"role": "user", "content": "langchain-ai/langchain PR #1234 요약해줘"}],
+    tools=tools,
+    tool_choice="auto"
+)
+```
+
+공식 문서: [docs.github.com/en/github-models](https://docs.github.com/en/github-models)
+
+### Copilot Extensions로 자체 Agent 연결 (방향 B)
+
+Copilot Extensions는 사용자가 Copilot Chat에서 `@my-agent`로 자체 Agent를 호출하게 해주는 메커니즘이다. GitHub App으로 등록하면 Copilot이 대화를 Agent에 라우팅한다.
+
+```
+사용자: @my-agent 오늘 배포한 서비스의 에러 로그 분석해줘
+           ↓
+Copilot → GitHub App Webhook 호출 (내 서버로 요청 전달)
+           ↓
+내 Agent 서버: 로그 조회 → 분석 → 스트리밍 응답
+           ↓
+Copilot Chat에 결과 표시
+```
+
+```python
+# Copilot Extension 서버 구현 (Flask 기반)
+from flask import Flask, request, Response, stream_with_context
+import json
+
+app = Flask(__name__)
+
+@app.route("/", methods=["POST"])
+def copilot_agent():
+    """Copilot이 요청을 전달하는 엔드포인트"""
+    # 요청 검증 (GitHub App 서명 확인)
+    verify_github_signature(request)
+
+    payload = request.json
+    user_message = payload["messages"][-1]["content"]
+    agent_token = request.headers.get("X-GitHub-Token")
+
+    def generate():
+        # Server-Sent Events 형식으로 스트리밍 응답
+        for chunk in process_with_my_agent(user_message, agent_token):
+            data = {
+                "choices": [{
+                    "delta": {"content": chunk},
+                    "finish_reason": None
+                }]
+            }
+            yield f"data: {json.dumps(data)}\n\n"
+
+        # 종료 신호
+        yield "data: [DONE]\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream"
+    )
+
+def process_with_my_agent(message: str, token: str) -> list[str]:
+    """자체 Agent 로직으로 메시지 처리"""
+    # GitHub API 호출, 로그 분석, Claude API 재호출 등 자유롭게 구현
+    result = my_custom_agent.run(message, github_token=token)
+    return [result[i:i+50] for i in range(0, len(result), 50)]  # 청크 분할
+```
+
+```yaml
+# Copilot Extension 설정 (GitHub App 등록 시)
+# GitHub App > Copilot > Agent URL
+agent_url: https://my-agent.example.com/
+pre_authorization: true
+```
+
+공식 문서: [docs.github.com/en/copilot/building-copilot-extensions](https://docs.github.com/en/copilot/building-copilot-extensions)
+
+---
+
+## 통합 아키텍처 패턴
+
+세 가지 경로를 결합하면 Claude와 Copilot의 도구를 동시에 활용하는 Agent를 구축할 수 있다.
+
+```
+┌──────────────────────────────────────────────────────┐
+│  자체 개발 Agent (오케스트레이터)                        │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  태스크 라우터                                   │  │
+│  │  - 추론/분석 → Claude API Tool Use              │  │
+│  │  - 파일시스템·Git → MCP (로컬 서버)             │  │
+│  │  - 코드 리뷰·PR → GitHub Models API             │  │
+│  │  - 외부 서비스 → MCP (리모트/커스텀 서버)        │  │
+│  └────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
+         │              │                │
+         ▼              ▼                ▼
+  Claude API       MCP 서버 군        GitHub Models
+  (Tool Use)    (파일·DB·Slack 등)      API
+```
+
+### 실전 구현 예시: 코드 리뷰 Agent
+
+```python
+import anthropic, asyncio
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+class CodeReviewAgent:
+    def __init__(self):
+        self.claude = anthropic.Anthropic()
+
+    async def review_pr(self, path: str) -> str:
+        # Step 1: MCP로 파일 읽기
+        server_params = StdioServerParameters(
+            command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "."]
+        )
+        async with stdio_client(server_params) as (r, w):
+            async with ClientSession(r, w) as session:
+                await session.initialize()
+                result = await session.call_tool("read_file", {"path": path})
+                code = result.content[0].text
+
+        # Step 2: Claude API Tool Use로 라인별 리뷰
+        tools = [{
+            "name": "add_comment",
+            "description": "코드 리뷰 코멘트를 특정 라인에 추가한다.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "line":     {"type": "integer"},
+                    "comment":  {"type": "string"},
+                    "severity": {"type": "string", "enum": ["info", "warning", "error"]}
+                },
+                "required": ["line", "comment", "severity"]
+            }
+        }]
+
+        comments, messages = [], [{"role": "user", "content": f"코드를 리뷰해줘:\n\n{code}"}]
+        while True:
+            resp = self.claude.messages.create(
+                model="claude-opus-4-6", max_tokens=2048,
+                tools=tools, messages=messages
+            )
+            if resp.stop_reason == "end_turn":
+                break
+            messages.append({"role": "assistant", "content": resp.content})
+            results = []
+            for b in resp.content:
+                if b.type == "tool_use" and b.name == "add_comment":
+                    comments.append(b.input)
+                    results.append({"type": "tool_result", "tool_use_id": b.id, "content": "ok"})
+            messages.append({"role": "user", "content": results})
+
+        return "\n".join(f"L{c['line']} [{c['severity']}]: {c['comment']}" for c in comments)
+```
+
+---
+
+## 연결 경로 선택 기준
+
+| 요구사항 | 권장 경로 |
+|---------|---------|
+| 자체 Agent에서 Claude 추론 + 도구 실행 | Anthropic API Tool Use |
+| LangChain/LangGraph 기반 기존 코드에 Claude 추가 | `ChatAnthropic` + `bind_tools` |
+| 여러 외부 서비스(DB, Slack, Git)를 표준화 | MCP 서버 (커스텀) |
+| Claude Code·Copilot 모두에서 내 도구 호출 허용 | MCP 서버 (양측 등록) |
+| 민감 데이터, 오프라인 환경 | MCP 로컬 서버 (stdio) |
+| Copilot Chat에서 `@my-agent`로 호출 허용 | Copilot Extensions |
+| GitHub 인프라 내에서 다양한 모델 테스트 | GitHub Models API |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [MCP 기반 도구 통합](./15-mcp-tool-integration.qmd) — MCP 아키텍처와 연결 방식 분류
+- [AI Coding Assistant의 SW Tool SDK 명세](./26-sw-tool-sdk-specification.qmd) — 연결 대상 도구 전체 목록
+
+**후속 주제**
+
+- [LangGraph Agent](../18-LangGraph/01-Core-Features/03-LangGraph-Agent.qmd) — LangGraph에서 도구 노드 구현
+- [Multi-Agent Design Patterns](./05-multi-agent-design-patterns.qmd) — 여러 Agent가 도구를 공유하는 설계
+
+**공식 문서**
+
+- [Anthropic Tool Use](https://docs.anthropic.com/en/docs/build-with-claude/tool-use)
+- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+- [GitHub Models API](https://docs.github.com/en/github-models)
+- [Copilot Extensions](https://docs.github.com/en/copilot/building-copilot-extensions)
