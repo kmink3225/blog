@@ -21,12 +21,15 @@ scope: global
 
 ## 로드 원칙
 
-모든 태스크에서 **반드시 `guides/AGENT_GUIDE_CORE.md` 를 가장 먼저 로드**한다.  
+
+모든 태스크에서 **반드시 `conda activate blog` & `guides/AGENT_GUIDE_CORE.md` 를 가장 먼저 로드**한다.  
 그 후 아래 슬래시 커맨드에 매핑된 가이드만 추가로 로드한다.
 
 ```
 사용자 입력
     ↓
+conda activate blog
+    ↓    
 guides/AGENT_GUIDE_CORE.md 로드 (항상)
     ↓
 슬래시 커맨드 파싱 → 매핑 테이블 조회
