@@ -1,0 +1,198 @@
+---
+title: "RT-PCR RFU 시계열 분석 — 품질관리, 정량 정확도, 배치 보정"
+subtitle: "외부 변수 포함 시계열 모델의 의료기기 진단 응용"
+description: |
+  RT-PCR에서 출력되는 cycle별 RFU(형광값) 데이터를 외부 변수 포함 시계열 모델로 분석하는 방법을 정리한다.
+  ARIMAX, ADL, VAR, BSTS를 활용한 이상 곡선 탐지, 농도 정량화 정확도 향상,
+  억제제 효과 분석, 배치 간 보정의 구체적 수행 절차와 해석 방법을 다룬다.
+  검사 시간 단축이 불가능한 이유(post-run 분석 구조)도 명확히 정리한다.
+categories:
+  - Surveilance
+  - Statistics
+author: Kwangmin Kim
+date: 03/28/2026
+---
+
+## RT-PCR 데이터 구조
+
+RT-PCR 장비는 cycle 1~45 동안 형광값을 측정한다. 각 cycle이 하나의 시점 $t$이고, RFU(Relative Fluorescence Unit)가 관측값이다.
+
+$$\text{데이터 구조}: \{RFU_1, RFU_2, \ldots, RFU_{45}\}$$
+
+전형적인 RFU 곡선 형태는 세 구간으로 나뉜다.
+
+```
+RFU
+ │                              ·····
+ │                         ····
+ │                    ·····
+ │             ·······
+ │·············
+ └─────────────────────────────── Cycle
+  1     10     20     30     40   45
+  노이즈구간   지수증폭   포화구간
+```
+
+- **Baseline (cycle 1~15)**: 노이즈 수준. 증폭 미발생
+- **Exponential (cycle 15~35)**: 지수적 증폭. Ct 결정 구간
+- **Plateau (cycle 35~45)**: 반응 포화. 기울기 감소
+
+## 중요한 전제: 검사 시간 단축은 불가능하다
+
+시계열 분석 맥락에서 "early cycle 데이터로 Ct를 조기 예측하면 검사 시간을 단축할 수 있다"는 아이디어가 자연스럽게 떠오른다. 그러나 이는 현실적으로 불가능하다.
+
+RT-PCR 분석 파이프라인의 실제 순서는 다음과 같다.
+
+```
+기계가 cycle 1~45 전부 실행
+    ↓
+zip 데이터 파일 출력
+    ↓
+전처리 (기저선 보정, 노이즈 제거)
+    ↓
+분석 (Ct 판정, 통계 모델 적용)
+```
+
+분석이 **post-run**으로만 가능하므로, 조기 예측이 검사 시간을 줄여주지 않는다. cycle 20 데이터로 Ct를 추정하더라도 기계는 이미 cycle 45까지 돌린 상태다.
+
+::: {.callout-important}
+## post-run 제약이 의미하는 것
+
+시계열 모델을 RT-PCR에 적용할 때는 **예측(prediction) 관점이 아니라 해석(inference) 관점**으로 접근해야 한다. "몇 cycle에서 결과가 나오나"가 아니라 "곡선 전체 형태에서 무엇을 더 정확히 읽어낼 수 있나"가 핵심 질문이다.
+:::
+
+## 현실적으로 가능한 분석
+
+| 분석 목적 | 실현 가능 | 모델 | 비고 |
+|----------|----------|------|------|
+| 이상 곡선 탐지 | O | BSTS / ARIMA | 비정상 증폭 자동 식별 |
+| 농도 정량화 정확도 향상 | O | ADL | 표준곡선 + 시차 보정 |
+| 억제제/품질 효과 분석 | O | ARIMAX | 곡선 형태로 품질 판정 |
+| 채널 간 상호작용 | O | VAR + IRF | 타겟 vs 내부 대조군 비교 |
+| **검사 시간 단축** | **X** | — | post-run 분석이므로 불가 |
+
+## 분석 1: 이상 곡선 탐지 (BSTS)
+
+### 목적
+
+정상 증폭 패턴에서 벗어난 곡선을 자동으로 식별한다. 오염, 억제, 증폭 실패를 탐지한다.
+
+### 수행 절차
+
+```
+① 검증된 정상 샘플 N개의 RFU 곡선으로 BSTS 모델 학습
+② 새 샘플의 RFU를 학습된 모델에 입력
+③ 각 cycle에서 예측값 vs 실제값의 잔차 계산
+④ 잔차가 사후 신뢰구간(95% posterior interval)을 벗어나면 이상 플래그
+```
+
+### 해석
+
+- 잔차가 **초기 cycle에서 이탈**: 노이즈 비정상 → 시약 오염 의심
+- 잔차가 **지수 증폭 구간에서 이탈**: 증폭 효율 저하 → 억제제 존재 의심
+- 잔차가 **포화 구간에서 이탈**: plateau 도달 패턴 비정상 → 비특이 증폭 의심
+
+BSTS는 트렌드 성분, 계절성 성분, 회귀 성분을 분리할 수 있어 RFU 곡선의 구조적 변화를 포착하는 데 유리하다.
+
+## 분석 2: 농도 정량화 정확도 향상 (ADL)
+
+### 목적
+
+단순 Ct 컷오프 대신 RFU 곡선 전체 형태를 활용하여 초기 template 농도 추정의 정확도를 높인다.
+
+### Distributed Lag 구조
+
+$$RFU_t = \beta_0 C_0 + \beta_1 C_0^{(t-1)} + \beta_2 C_0^{(t-2)} + \cdots + \alpha \cdot RFU_{t-1} + \epsilon_t$$
+
+여기서 $C_0$는 초기 template 농도(표준곡선에서 유도)이다.
+
+### 해석 포인트
+
+- $\beta_k$: cycle $k$에서 농도 1단위 증가 시 RFU 증가량
+- **Long-run effect** $\sum_k \beta_k$: 전체 실험에서 농도가 RFU에 미치는 누적 효과
+- 어느 cycle부터 $\beta_k$가 유의해지는지 파악 → **최적 Ct 판정 구간 결정**에 활용
+
+::: {.callout-tip}
+## 경계값 샘플 판정 개선
+
+Ct 컷오프 근처의 경계값 샘플(예: Ct = 34~36)은 단순 임계값 판정에서 오류가 잦다.
+ADL로 추정한 long-run effect와 곡선 기울기를 함께 사용하면 경계값 샘플의 판정 신뢰도가 높아진다.
+:::
+
+## 분석 3: 억제제/품질 효과 분석 (ARIMAX)
+
+### 목적
+
+억제제 존재 여부, 샘플 품질 지표가 RFU 증폭률에 미치는 효과를 정량화한다.
+
+### 모델 구조
+
+$$RFU_t = \beta_1 \cdot \text{Inhibitor}_t + \beta_2 \cdot \text{QualityScore} + \underbrace{\text{ARIMA 구조}}_{\text{시간 의존성}}$$
+
+### 해석 포인트
+
+- $\beta_1$: 억제제 존재 시 RFU 즉각 감소량
+- ARIMA 잔차를 통해 억제 효과가 어느 cycle부터 누적되는지 추적 가능
+- 실무 활용: **억제 시작 cycle 자동 탐지** → 품질 불합격 기준 정량화
+
+## 분석 4: 채널 간 상호작용 분석 (VAR + IRF)
+
+### 목적
+
+타겟 유전자 채널과 내부 대조군(housekeeping gene) 채널 간의 상호 의존성을 분석한다.
+
+### 모델 구조
+
+$$\begin{pmatrix} RFU_t^{\text{target}} \\ RFU_t^{\text{control}} \end{pmatrix} = A_1 \begin{pmatrix} RFU_{t-1}^{\text{target}} \\ RFU_{t-1}^{\text{control}} \end{pmatrix} + \epsilon_t$$
+
+### 해석 포인트
+
+- **Impulse Response Function (IRF)**: 타겟 채널에 충격이 가해졌을 때 대조군 채널이 몇 cycle에 걸쳐 어떻게 반응하는지 시각화
+- 두 채널이 강하게 동조(co-movement)하면 → 반응 조건 변화의 공통 원인 의심
+- 두 채널이 분리(divergence)되면 → 타겟 특이적 문제 의심
+
+## 분석 5: 배치 간 보정 (ARIMAX)
+
+### 목적
+
+런(run)마다 달라지는 외부 조건(온도, 시약 lot, 장비 상태)이 RFU에 미치는 효과를 제거하여 배치 간 비교 가능성을 확보한다.
+
+### 모델 구조
+
+$$RFU_t = \beta_1 \cdot \text{Temperature} + \beta_2 \cdot \text{ReagentLot} + \beta_3 \cdot \text{RunID} + \text{ARIMA 잔차}$$
+
+### 보정 절차
+
+```
+① 복수 런의 RFU 데이터를 수집
+② 각 런의 외부 변수(온도, 시약 lot 등)를 함께 기록
+③ ARIMAX 적합 → 외부 변수 계수 추정
+④ 예측값 = ARIMAX 예측에서 외부 변수 효과를 제거한 값
+⑤ 보정된 RFU를 기준으로 런 간 Ct 비교
+```
+
+이 접근법은 단순 내부 대조군 정규화(normalization)보다 더 세밀한 배치 효과 분리가 가능하다.
+
+## 응용 분석 요약
+
+| 분석 목적 | 모델 | 핵심 출력 | 실무 가치 |
+|----------|------|----------|---------|
+| 이상 곡선 탐지 | BSTS | 신뢰구간 이탈 cycle | 재검 여부 자동 판정 |
+| 농도 정량화 | ADL | cycle별 $\beta_k$, long-run effect | 경계값 샘플 판정 개선 |
+| 억제제 효과 | ARIMAX | 억제 시작 cycle, 억제 강도 | 품질 불합격 기준 정량화 |
+| 채널 상호작용 | VAR + IRF | 충격 반응 함수 | 비특이 증폭 vs 타겟 증폭 구분 |
+| 배치 간 보정 | ARIMAX | 외부 변수 보정 RFU | 런 간 비교 가능성 확보 |
+
+단순 Ct 컷오프 판정에 비해, RFU 곡선 전체 형태를 활용하는 시계열 분석은 더 풍부한 품질 정보를 추출할 수 있다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [시계열 회귀 vs 일반 회귀 — 오차항 독립성과 외부 변수 포함 모델](../../Statistics/65-time-series-regression-vs-ols.qmd)
+- [PCR 신호 처리 파이프라인 리팩토링](./7-pcr-signal-pipeline-refactoring.qmd)
+- [Regulation - PCR Sigmoid](./6-regulation-pcr-sigmoid.qmd)
+
+**후속 주제**
+
+- [RT-PCR 신호의 함수 자료 분석(FDA) 응용](../../Statistics/FDA/topics.qmd)
