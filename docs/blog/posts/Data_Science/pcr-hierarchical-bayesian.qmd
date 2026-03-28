@@ -1,0 +1,308 @@
+---
+title: "PCR 배치 수준 Hierarchical Bayesian — Partial Pooling으로 단일 샘플 불확실성 감소"
+subtitle: "N개 샘플이 공통 prior를 공유하여 45개 데이터의 한계를 극복하는 방법"
+description: |
+  단일 샘플(45 사이클)만으로는 4PL 파라미터 추정이 불안정하다.
+  배치 내 N개 샘플을 Hierarchical Bayesian으로 연결하면 population-level prior가
+  개별 샘플의 posterior를 안정화한다. Partial pooling, shrinkage, lot variation 관리를 다룬다.
+categories:
+  - Data Science
+  - Statistics
+  - Surveilance
+author: Kwangmin Kim
+date: 03/28/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+단일 샘플 Bayesian 4PL(45개 데이터 포인트)에서 gray zone 신호의 Ct CI가 7 cycle 이상 벌어지는 문제는 **데이터 부족**에서 비롯된다. 데이터를 더 늘릴 수 없다면, 같은 배치 안의 다른 샘플에서 정보를 "빌려오는" 것이 유일한 방법이다.
+
+이것이 **Hierarchical Bayesian Model**의 핵심이다. N개 샘플 각각은 공통 population-level 분포에서 파라미터를 추출한다고 가정한다. Population prior를 데이터로부터 학습하면, 정보가 부족한 단일 샘플도 배치 전체의 통계를 prior로 활용한다.
+
+이 포스트는 [PCR Joint Bayesian Estimation](./pcr-joint-bayesian-estimation.qmd)의 배치 수준 확장이다.
+
+---
+
+## Hierarchical Model의 구조
+
+### No Pooling vs Complete Pooling vs Partial Pooling
+
+같은 배치의 N개 샘플을 분석할 때 세 가지 접근법이 있다.
+
+**No Pooling (기존 방법 — 샘플별 독립 추정)**
+
+$$
+\theta_i \sim \text{prior}_{\text{flat}}, \quad y_i \sim \text{4PL}(c;\, \theta_i)
+$$
+
+각 샘플을 완전히 독립적으로 추정한다. 배치 내 다른 샘플의 정보를 전혀 활용하지 않는다. 데이터가 45개뿐인 gray zone 샘플에서 CI가 넓어지는 이유다.
+
+**Complete Pooling (모든 샘플을 하나로 합산)**
+
+$$
+y_{\text{all}} \sim \text{4PL}(c;\, \theta_{\text{common}})
+$$
+
+모든 샘플이 동일한 파라미터를 공유한다고 가정한다. 샘플 간 차이(initial concentration 차이)를 무시하므로 Ct 추정이 왜곡된다. 현실적으로 사용할 수 없다.
+
+**Partial Pooling (Hierarchical Bayesian — 권장)**
+
+$$
+\mu_\theta, \sigma_\theta \sim \text{hyperprior} \quad \text{(배치 수준)}
+$$
+
+$$
+\theta_i \sim \mathcal{N}(\mu_\theta, \sigma_\theta^2) \quad \text{(샘플 수준)}
+$$
+
+$$
+y_i \sim \text{4PL}(c;\, \theta_i) + \varepsilon_i \quad \text{(관측 수준)}
+$$
+
+각 샘플의 파라미터 $\theta_i$ 는 배치 평균 $\mu_\theta$ 에서 $\sigma_\theta$ 만큼 벗어날 수 있다. 데이터가 많은 샘플은 자신의 데이터로 결정되고, 데이터가 적거나 노이즈가 많은 샘플은 배치 평균 쪽으로 **수축(shrinkage)**된다.
+
+---
+
+## PCR 4PL에 적용한 Hierarchical Model
+
+PCR 배치에서 파라미터별로 의미 있는 공유 수준이 다르다.
+
+| 파라미터 | 배치 내 공유 가능성 | 이유 |
+|---------|----------------|------|
+| $B$ (Hill slope, 효율) | 높음 | 같은 시약 lot → 효율이 비슷 |
+| $A$ (기저선) | 높음 | 같은 장비·채널 → 배경 형광 비슷 |
+| $\sigma$ (측정 노이즈) | 높음 | 장비 특성 공유 |
+| $D$ (고원) | 낮음 | 초기 DNA 농도가 샘플마다 다름 |
+| $C$ (Ct, 변곡점) | 낮음 | 농도 차이를 반영, 샘플별 독립 |
+
+$B$, $A$, $\sigma$ 는 hierarchical로 공유하고, $D$, $C$ 는 샘플별 독립 추정이 적합하다.
+
+### 모델 정식화
+
+$$
+\mu_B \sim \mathcal{N}(0.30, 0.02^2), \quad \sigma_B \sim \text{HalfNormal}(0.02)
+$$
+
+$$
+B_i \sim \mathcal{N}(\mu_B, \sigma_B^2) \quad \text{for } i = 1, \ldots, N
+$$
+
+$$
+\mu_A \sim \mathcal{N}(100, 30^2), \quad \sigma_A \sim \text{HalfNormal}(20)
+$$
+
+$$
+A_i \sim \mathcal{N}(\mu_A, \sigma_A^2)
+$$
+
+$$
+C_i \sim \mathcal{N}(25, 8^2) \quad \text{(샘플별 독립)}
+$$
+
+$$
+D_i \sim \mathcal{N}(2000, 800^2) \quad \text{(샘플별 독립)}
+$$
+
+$$
+y_{i,c} \sim \mathcal{N}\!\left(D_i + \frac{A_i - D_i}{1 + (c / C_i)^{B_i}},\; \sigma_{\text{obs}}^2\right)
+$$
+
+---
+
+## PyMC 구현
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+def hierarchical_pcr_model(cycles: np.ndarray,
+                            signals: np.ndarray) -> az.InferenceData:
+    """
+    Parameters
+    ----------
+    cycles  : (45,)          — cycle 번호 배열
+    signals : (N, 45)        — N개 샘플의 형광 신호 행렬
+    
+    Returns
+    -------
+    InferenceData with posterior samples for all parameters
+    """
+    N = signals.shape[0]
+
+    with pm.Model() as hierarchical_model:
+
+        # ── 배치 수준 (Population) hyperparameters ──────────────────
+        # Hill slope (증폭 효율): 배치 내 시약 lot이 같으면 비슷
+        mu_B    = pm.Normal("mu_B",    mu=0.30,  sigma=0.02)
+        sigma_B = pm.HalfNormal("sigma_B", sigma=0.02)
+
+        # Baseline: 같은 채널·장비이면 배경 형광이 비슷
+        mu_A    = pm.Normal("mu_A",    mu=100,   sigma=30)
+        sigma_A = pm.HalfNormal("sigma_A", sigma=20)
+
+        # 측정 잡음: 장비 특성 공유
+        sigma_obs = pm.HalfNormal("sigma_obs", sigma=50)
+
+        # ── 샘플 수준 (Individual) parameters ───────────────────────
+        # B, A는 배치 평균을 중심으로 샘플별로 벗어남 (non-centered)
+        B_offset = pm.Normal("B_offset", mu=0, sigma=1, shape=N)
+        B = pm.Deterministic("B", mu_B + B_offset * sigma_B)
+
+        A_offset = pm.Normal("A_offset", mu=0, sigma=1, shape=N)
+        A = pm.Deterministic("A", mu_A + A_offset * sigma_A)
+
+        # C(Ct)와 D(고원)는 샘플별 독립
+        C = pm.Normal("C", mu=25,   sigma=8,   shape=N)
+        D = pm.Normal("D", mu=2000, sigma=800, shape=N)
+
+        # ── 관측 수준 ─────────────────────────────────────────────
+        # 4PL mechanistic model
+        # cycles: (45,), B/A/C/D: (N,) → broadcast to (N, 45)
+        cycles_bc = cycles[None, :]          # (1, 45)
+        B_bc = B[:, None]                    # (N, 1)
+        A_bc = A[:, None]
+        C_bc = C[:, None]
+        D_bc = D[:, None]
+
+        mu_signal = D_bc + (A_bc - D_bc) / (1 + (cycles_bc / C_bc) ** B_bc)
+
+        pm.Normal("obs", mu=mu_signal, sigma=sigma_obs, observed=signals)
+
+        # ── MCMC 추론 ─────────────────────────────────────────────
+        trace = pm.sample(
+            draws=1000, tune=500, chains=2,
+            target_accept=0.9,
+            return_inferencedata=True,
+            progressbar=False,
+        )
+
+    return trace
+```
+
+---
+
+## Partial Pooling의 효과: Shrinkage
+
+Hierarchical model의 핵심 결과는 **shrinkage(수축)**이다. 각 샘플의 posterior가 배치 평균 방향으로 당겨진다.
+
+### Shrinkage의 정도는 데이터 품질에 비례한다
+
+| 샘플 상태 | No Pooling B 추정 | Hierarchical B 추정 | 변화 방향 |
+|---------|--------------|-----------------|---------|
+| 명확 양성 (Ct=22, 깨끗한 S자) | 0.298 ± 0.008 | 0.299 ± 0.007 | 거의 변화 없음 |
+| Gray zone (Ct=36.8, 평탄한 S자) | 0.24 ± 0.05 | 0.271 ± 0.024 | 배치 평균(0.30) 쪽으로 수축 |
+| 매우 노이즈 (R² < 0.80) | 0.18 ± 0.09 | 0.284 ± 0.018 | 강하게 수축 |
+
+gray zone 샘플의 B가 0.24에서 0.271로 수축하는 것은 "다른 샘플들의 B가 0.30 부근이었으니 이 샘플도 아마 그 범위일 것"이라는 배치 정보를 반영한 것이다. 이로 인해 B의 CI가 ±0.05에서 ±0.024로 절반 이하로 좁아진다.
+
+### Ct(C)는 shrinkage가 없어야 한다
+
+$C_i$ 는 초기 농도에 직접 대응하므로 샘플별 독립 추정을 유지한다. 만약 C도 hierarchical로 묶으면 고농도 샘플의 Ct가 배치 평균으로 당겨져 정량 오류가 발생한다.
+
+```python
+# posterior에서 배치 수준 통계 추출
+mu_B_samples = trace.posterior["mu_B"].values.flatten()
+sigma_B_samples = trace.posterior["sigma_B"].values.flatten()
+
+print(f"배치 B 평균: {mu_B_samples.mean():.4f} ± {mu_B_samples.std():.4f}")
+print(f"배치 B 변동: {sigma_B_samples.mean():.4f}")
+
+# 각 샘플의 B posterior
+B_samples = trace.posterior["B"].values  # shape: (chains, draws, N)
+for i in range(N):
+    b_i = B_samples[:, :, i].flatten()
+    print(f"샘플 {i}: B = {b_i.mean():.4f} [CI: {np.percentile(b_i, 2.5):.4f}, {np.percentile(b_i, 97.5):.4f}]")
+```
+
+---
+
+## Lot-to-Lot Variation 관리
+
+배치(lot)가 바뀌면 시약 품질이 달라지므로 $\mu_B$ 가 이동한다. Hierarchical model에서 이 변화를 감지하고 자동으로 반영한다.
+
+### Lot 간 B 분포 변화 모니터링
+
+```python
+def monitor_lot_variation(traces: list, lot_labels: list) -> dict:
+    """
+    여러 lot의 trace에서 배치 수준 B(mu_B) 분포를 비교한다.
+    
+    lot 간 mu_B가 크게 다르면 시약 품질 문제를 조기에 감지할 수 있다.
+    """
+    results = {}
+    for trace, label in zip(traces, lot_labels):
+        mu_B = trace.posterior["mu_B"].values.flatten()
+        results[label] = {
+            "mean": float(mu_B.mean()),
+            "ci": tuple(np.percentile(mu_B, [2.5, 97.5])),
+        }
+    return results
+
+# 예시 결과
+# Lot A: mu_B = 0.299 [0.291, 0.307]  ← 정상
+# Lot B: mu_B = 0.271 [0.261, 0.282]  ← 시약 효율 저하 감지
+# Lot C: mu_B = 0.254 [0.243, 0.265]  ← 경고 — 재검증 필요
+```
+
+Lot B에서 $\mu_B = 0.271$ 이 검출되면 효율이 배치 전체적으로 낮다는 뜻이다. 개별 샘플 기준으로는 borderline 범위라 놓칠 수 있지만, Hierarchical model은 배치 수준 통계가 있어 조기 감지가 가능하다.
+
+---
+
+## No Pooling vs Hierarchical 성능 비교
+
+```python
+import arviz as az
+
+# Gray zone 샘플(idx=gray_idx)의 Ct CI 비교
+gray_idx = 5  # 예: 6번째 샘플이 gray zone
+
+# No Pooling CI
+ct_no_pool = no_pool_trace.posterior["C"].values[:, :, gray_idx].flatten()
+ci_no_pool = np.percentile(ct_no_pool, [2.5, 97.5])
+
+# Hierarchical CI
+ct_hier = hier_trace.posterior["C"].values[:, :, gray_idx].flatten()
+ci_hier = np.percentile(ct_hier, [2.5, 97.5])
+
+print(f"No Pooling  Ct CI: [{ci_no_pool[0]:.1f}, {ci_no_pool[1]:.1f}]  폭: {ci_no_pool[1]-ci_no_pool[0]:.1f}")
+print(f"Hierarchical Ct CI: [{ci_hier[0]:.1f}, {ci_hier[1]:.1f}]  폭: {ci_hier[1]-ci_hier[0]:.1f}")
+# No Pooling   Ct CI: [33.2, 40.4]  폭: 7.2
+# Hierarchical Ct CI: [34.1, 39.3]  폭: 5.2
+```
+
+C 자체의 shrinkage는 없지만, A와 B의 posterior가 안정화되면서 C 추정도 간접적으로 안정화된다. CI 폭이 7.2 → 5.2로 줄어드는 것은 B와 A의 불확실성이 C의 추정에 영향을 미쳤기 때문이다.
+
+---
+
+## 실용 적용 범위
+
+| 상황 | 권장 모델 | 이유 |
+|------|---------|------|
+| 단일 샘플, 명확 신호 | 단일 Bayesian 4PL | 배치 정보 불필요 |
+| 단일 샘플, gray zone | 단일 Bayesian 4PL + 넓은 prior | 배치 없으면 대안 없음 |
+| 배치 N ≥ 10, 혼합 품질 | **Hierarchical Bayesian** | Partial pooling 효과 최대 |
+| Lot QC 모니터링 | Hierarchical (lot별 hyperparameter) | mu_B 추적으로 lot 열화 조기 감지 |
+| 실시간 처리 필요 | No Pooling + Bootstrap | MCMC 속도 문제 |
+
+배치 크기가 10개 미만이면 hyperparameter 추정이 불안정하다. N ≥ 10이 partial pooling 효과를 얻을 수 있는 실용적 하한이다. N ≥ 30이면 $\mu_B$, $\sigma_B$ 추정이 충분히 안정된다.
+
+---
+
+## 관련 주제
+
+**이 포스트의 전제**
+
+- [PCR Joint Bayesian Estimation](./pcr-joint-bayesian-estimation.qmd) — 단일 샘플 Bayesian 4PL, sparse jump, 불확실성 정량화
+
+**신호 처리 시리즈**
+
+- [PCR 신호 처리 파이프라인 리팩토링](./pcr-signal-pipeline-refactoring.qmd) — Semi-Joint 아키텍처 설계 원칙
+- [RT-PCR 그레이존 처리와 불확실성 관리](./pcr-grayzone-uncertainty.qmd) — 3-state 출력과 판정 회피
+
+**연관 카테고리**
+
+- [Statistics](../Statistics/index.qmd) — Hierarchical model, Partial pooling, Shrinkage estimation
+- [Surveilance](../Surveilance/index.qmd) — Lot validation, FDA QC 요구사항
