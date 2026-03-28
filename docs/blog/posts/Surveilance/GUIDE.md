@@ -10,6 +10,8 @@ book_sources: []
 cross_references:
   - docs/blog/posts/Statistics/GUIDE.md
   - docs/blog/posts/Deep_Learning/GUIDE.md
+  - docs/blog/posts/Machine_Learning/GUIDE.md
+  - docs/blog/posts/Experimentation/GUIDE.md
   - docs/blog/posts/Data_Science/GUIDE.md
   - docs/blog/posts/Governance/GUIDE.md
 ---
@@ -59,6 +61,7 @@ cross_references:
 - 위험 분류 체계, 심사 경로, 필수 요건을 정리한다
 - 규제 기관별 차이점을 비교한다
 - 추상적이거나 이해하기 어려운 개념에는 비유, 규제 부재 시 위험 예시 등 직관적 설명을 적재적소에 포함한다 (필요시 별도 섹션으로 분리 가능)
+- 각 개념 또는 원리에 데이터 사이언스 실무에 어떻게 적용될 수 있는지 설명한다
 
 ### 3. 왜 필요한가 (Why It Matters)
 
