@@ -2,7 +2,7 @@
 title: "PCR 신호 처리 파이프라인 리팩토링"
 subtitle: "Rule Explosion에서 Feature 기반 Semi-Joint 아키텍처로"
 description: |
-  PCR 진단 알고리즘에서 Sequential 추정 구조가 위양성/위음성을 유발하는 메커니즘을 분석하고,
+  PCR 진단 알고리즘에서 Sequential Estimation 구조가 위양성/위음성을 유발하는 메커니즘을 분석하고,
   전처리에 누적된 분기(rule explosion)가 pseudo black box를 형성하는 문제를 진단한다.
   전처리(f) → Feature 추출(φ) → 판정(g)의 3계층 Semi-Joint 아키텍처로 리팩토링하는 전략을 제시하고,
   Feature contribution 기반 해석 프레임으로 규제(FDA) 요건의 traceability를 확보하는 방법을 설명한다.
@@ -22,7 +22,7 @@ execute:
 이것은 단순한 신호 처리 문제가 아니라, **의료기기 소프트웨어의 판정 정확도** 문제이며, FDA/MFDS 규제 하에서의 알고리즘 변경은 validation 전략과 직결된다.
 리팩토링 설계 자체도 **해석 가능성(explainability)**과 **추적 가능성(traceability)**을 확보해야 규제 대응이 가능하므로, 순수 엔지니어링이 아닌 규제 맥락에서 다뤄야 한다.
 
-수학적 배경 — 함수의 합 vs 합성함수, Sequential vs Joint 추정의 차이 — 은 [함수의 합과 합성함수](../Math/function/function_addition_vs_composition.qmd)에서 다룬다.
+수학적 배경 — 함수의 합 vs 합성함수, Sequential vs Joint Estimation의 차이 — 은 [함수의 합과 합성함수](../Math/function/function_addition_vs_composition.qmd)에서 다룬다.
 
 ## 일상 비유: 왜 전처리가 판정을 망치는가
 
@@ -39,7 +39,7 @@ PCR 신호 처리에서 벌어지는 일이 정확히 이것이다.
 
 ---
 
-## 현재 구조: Sequential 추정의 한계
+## 현재 구조: Sequential Estimation의 한계
 
 ### 파이프라인 수식
 
@@ -48,7 +48,7 @@ PCR 진단 파이프라인을 단순화하면 다음과 같다:
 $$x \xrightarrow{f} z \xrightarrow{g} y$$
 
 - $f$: baseline correction, smoothing, normalization 등 전처리
-- $g$: thresholding / curve fitting / Ct 추정 / classification
+- $g$: thresholding / curve fitting / Ct Estimation / classification
 
 현재는 **완전한 Sequential 구조**이다:
 
@@ -60,6 +60,10 @@ $$x \xrightarrow{f} z \xrightarrow{g} y$$
 핵심은 하나다:
 
 > $f$ 가 신호를 왜곡할 수 있는데, 그 왜곡이 $g$ 에서 복구 불가능하다
+
+**왜 복구 불가능한가**: $f$ 는 **다대일(many-to-one) 매핑**이다. 서로 다른 원본 신호 $x_1 \neq x_2$ 가 전처리 후 동일한 $z = f(x_1) = f(x_2)$ 를 만들어낼 수 있다. 이 경우 $g$ 가 $z$ 를 받을 때 원본 $x_1$ 인지 $x_2$ 인지 구분할 수 없다. 정보가 $f$ 에서 소실되었기 때문이다.
+
+구체적인 예: 과도한 smoothing은 "low viral load의 약한 증폭 신호"와 "노이즈만 있는 음성 신호"를 모두 flat 곡선으로 변환한다. $g$ 에 도달하는 입력은 구분 불가능하다 → 위음성 발생.
 
 **위양성(False Positive) 발생 메커니즘**:
 
@@ -155,6 +159,31 @@ $$x \rightarrow f(x) \rightarrow \phi(x) \rightarrow g(\phi(x))$$
 | $\phi$ (Feature 추출) | Ct, slope, curvature, jump score, noise metric 등 | 판단에 필요한 정보를 **수치로 표현**한다 |
 | $g$ (판정) | Logistic Regression / Tree / Rule-light hybrid | feature를 종합하여 **모델이 판단**한다 |
 
+::: {.callout-note}
+## "Semi-Joint"가 sequential과 다른 점
+
+x→f→φ→g 구조는 순서상으로는 여전히 sequential처럼 보인다. **"Joint"의 의미는 φ와 g가 함께 최적화된다**는 것이다.
+
+- **완전 Sequential**: f, φ, g 각각 독립적으로 설계·고정. f의 출력을 변경하면 g 재훈련 필요.
+- **Semi-Joint (제안)**: f는 label-independent로 고정, **φ와 g는 동일한 손실함수로 동시에 훈련**. 새로운 케이스가 나오면 feature를 추가하고 φ+g를 재훈련한다. f는 건드리지 않는다.
+- **완전 Joint (end-to-end)**: f의 파라미터(smoothing 강도, baseline 구간 등)까지 g의 손실함수로 업데이트. 해석 가능성 낮아져 규제 대응에 불리하다.
+
+"Semi"인 이유: f를 joint loop 바깥에 두어 **해석 가능성과 성능 사이의 균형**을 잡는다.
+:::
+
+### label-independent 전처리의 기준
+
+"label-independent"는 **f의 파라미터가 positive/negative 레이블을 보지 않고 추정된다**는 뜻이다.
+
+| 전처리 방법 | Label 참조 여부 | 판정 |
+|------------|----------------|------|
+| Baseline 구간(cycle 1~10)의 평균 차감 | 레이블 불필요 | label-independent ✓ |
+| STL 분해로 트렌드 제거 | 레이블 불필요 | label-independent ✓ |
+| "positive 샘플의 평균 기울기를 기준으로 정규화" | 레이블 필요 | label-DEPENDENT ✗ |
+| "두 그룹의 Ct 차이를 최대화하는 smoothing 파라미터 선택" | 레이블 필요 | label-DEPENDENT ✗ |
+
+label-dependent 전처리는 학습 데이터의 레이블 분포를 과적합하고, 새로운 분포의 샘플에서 예상치 못한 실패를 낳는다. FDA 제출 시 validation set에서 성능이 급락하는 원인이 되기도 한다.
+
 ### 역할 분리 복구
 
 **BEFORE (현재)**:
@@ -202,6 +231,93 @@ $$x \rightarrow f(x) \rightarrow \phi(x) \rightarrow g(\phi(x))$$
 | 중첩신호 분리 | 분리 실패 시 분기 추가 | `multi_peak_flag`, `dominant_peak_ratio` |
 | Jumping 신호 탐지 | "jump면 제외" rule | `jump_magnitude`, `jump_frequency`, `derivative_spike` |
 | 선형적 증폭 탐지 | "선형이면 노이즈" rule | `r_squared` (선형 적합도), `exponential_fit_residual` |
+
+### Feature 추출 구현 ($\phi$ 계층 코드)
+
+Feature를 나열하는 것과 실제로 계산하는 것은 다르다. 아래는 각 feature의 수식 정의와 구현이다.
+
+**Noise metric**: baseline 안정성 지표
+
+$$noise\_metric = \frac{\sigma_{baseline}}{RFU_{max} - RFU_{min}}$$
+
+**Slope**: exponential 구간 선형 근사 기울기 (증폭 속도)
+
+$$slope = \frac{\sum_{t \in [15,35]} (t - \bar{t})(y_t - \bar{y})}{\sum_{t \in [15,35]} (t - \bar{t})^2}$$
+
+**Curvature**: 2차 유한 차분 최댓값 (S자 곡선의 굴곡 정도)
+
+$$curvature = \max_t |y_{t+1} - 2y_t + y_{t-1}|$$
+
+**Jump score**: baseline 표준편차 단위로 정규화된 최대 급변량
+
+$$jump\_score = \frac{\max_t |y_t - y_{t-1}|}{\sigma_{baseline}}$$
+
+```python
+import numpy as np
+from scipy.stats import linregress
+from scipy.signal import find_peaks
+
+def extract_pcr_features(rfu: np.ndarray,
+                          baseline_end: int = 10,
+                          exp_start: int = 14,
+                          exp_end: int = 35) -> dict:
+    """
+    RFU 시계열에서 판정용 feature 벡터를 추출한다.
+    $phi$ 계층: 전처리 후 신호 → 해석 가능한 수치 변환.
+    각 feature는 domain 의미를 가지므로 규제 보고서에 직접 인용 가능하다.
+    """
+    cycles = np.arange(1, len(rfu) + 1)
+
+    # 1. Baseline 통계 (cycle 1~baseline_end)
+    baseline     = rfu[:baseline_end]
+    baseline_std = np.std(baseline) + 1e-6   # 0 나눔 방지
+
+    # 2. Ct 추정: baseline + 3σ 를 처음 초과하는 cycle
+    ct_threshold = np.mean(baseline) + 3 * baseline_std
+    ct_crossings = np.where(rfu > ct_threshold)[0]
+    ct = float(ct_crossings[0] + 1) if len(ct_crossings) > 0 else float(len(rfu))
+
+    # 3. Noise metric: baseline 변동 / 전체 신호 범위
+    signal_range = np.max(rfu) - np.min(rfu) + 1e-6
+    noise_metric = np.std(baseline) / signal_range
+
+    # 3. Slope + R²: exponential 구간 선형 기울기
+    exp_cycles = cycles[exp_start:exp_end]
+    exp_rfu    = rfu[exp_start:exp_end]
+    slope, _, r_value, _, _ = linregress(exp_cycles, exp_rfu)
+    r_squared = r_value ** 2
+
+    # 4. Curvature: 2차 유한 차분 최댓값
+    second_diff = np.diff(rfu, n=2)
+    curvature   = float(np.max(np.abs(second_diff)))
+
+    # 5. Jump score: baseline std 단위 최대 급변량
+    delta         = np.abs(np.diff(rfu))
+    jump_score    = float(np.max(delta) / baseline_std)
+
+    # 6. Jump frequency: baseline std 2배 초과 급변 횟수
+    jump_frequency = int(np.sum(delta > 2 * baseline_std))
+
+    # 7. Dominant peak ratio: 다중 피크 존재 여부
+    peaks, _ = find_peaks(rfu, height=np.mean(baseline) + 2 * baseline_std)
+    if len(peaks) > 1:
+        dominant_peak_ratio = float(np.max(rfu[peaks]) / np.mean(rfu[peaks]))
+    else:
+        dominant_peak_ratio = 1.0   # 단일 피크: 정상
+
+    return {
+        "ct":                  round(ct, 1),
+        "noise_metric":        round(noise_metric, 4),
+        "slope":               round(float(slope), 4),
+        "r_squared":           round(float(r_squared), 4),
+        "curvature":           round(curvature, 4),
+        "jump_score":          round(jump_score, 4),
+        "jump_frequency":      jump_frequency,
+        "dominant_peak_ratio": round(dominant_peak_ratio, 4),
+    }
+```
+
+Feature 설계의 핵심은 **domain 의미와 수치가 1:1로 대응**되어야 한다는 점이다. `jump_score = 4.5`는 "baseline 표준편차의 4.5배 급변이 있었다"고 바로 해석된다. rule의 "jump가 있으면 제외"와 달리, 모델이 이 수치를 다른 feature와 종합하여 판단한다.
 
 ::: {.callout-warning}
 ## Rule을 완전히 없애면 안 된다
@@ -255,21 +371,94 @@ Logistic Regression 예시:
 
 $$\text{logit}(p) = w_1 \cdot Ct + w_2 \cdot slope + w_3 \cdot noise$$
 
-각 feature의 계수($w$)가 곧 기여도이므로, "Ct가 낮아서 positive 기여, noise가 높아서 negative 기여"라는 설명이 가능하다.
+각 feature의 계수( $w$ )가 곧 기여도이므로, "Ct가 낮아서 positive 기여, noise가 높아서 negative 기여"라는 설명이 가능하다.
+
+```python
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+
+def train_pcr_classifier(feature_df: pd.DataFrame,
+                          labels: np.ndarray) -> tuple:
+    """
+    PCR feature 벡터로 로지스틱 회귀 분류기를 훈련한다.
+    $g$ 계층: feature → positive/negative 확률.
+
+    StandardScaler로 표준화하면 계수(coef_) 크기로 feature 중요도를 직접 비교할 수 있다.
+    """
+    scaler   = StandardScaler()
+    X_scaled = scaler.fit_transform(feature_df)
+
+    lr = LogisticRegression(C=1.0, max_iter=1000)
+    lr.fit(X_scaled, labels)
+
+    # feature 중요도: 표준화 계수 절댓값
+    importance = pd.Series(
+        np.abs(lr.coef_[0]),
+        index=feature_df.columns
+    ).sort_values(ascending=False)
+
+    print("Feature 중요도 (표준화 계수 절댓값):")
+    print(importance.to_string())
+
+    return lr, scaler
+```
 
 **장치 3: Feature contribution으로 샘플별 설명을 제공한다**
 
-각 샘플에 대해 "이 결과가 나온 이유"를 분해한다:
+각 샘플에 대해 "이 결과가 나온 이유"를 feature별로 분해한다. 이 출력이 규제 제출용 traceability 보고서의 핵심이다.
+
+```python
+def explain_prediction(lr: LogisticRegression,
+                        scaler: StandardScaler,
+                        features: dict) -> dict:
+    """
+    단일 샘플의 판정 근거를 feature별 기여도로 분해한다.
+    contribution = 표준화 계수 × 표준화 feature값.
+    양수: positive 방향 기여 / 음수: negative 방향 기여
+    """
+    X        = np.array(list(features.values())).reshape(1, -1)
+    X_scaled = scaler.transform(X)
+
+    contributions = {
+        name: round(float(lr.coef_[0][i] * X_scaled[0, i]), 3)
+        for i, name in enumerate(features.keys())
+    }
+    prob_pos = lr.predict_proba(X_scaled)[0, 1]
+    label    = "positive" if prob_pos > 0.5 else "negative"
+
+    # 기여도 절댓값 내림차순 정렬
+    sorted_contrib = dict(
+        sorted(contributions.items(), key=lambda x: abs(x[1]), reverse=True)
+    )
+
+    print(f"\n판정: {label}  (확률: {prob_pos:.1%})")
+    print("\nFeature 기여도 (+ = positive 기여, - = negative 기여):")
+    for name, contrib in sorted_contrib.items():
+        bar = "▶" * max(1, int(abs(contrib) * 5))
+        print(f"  {name:<22}: {contrib:+.3f}  {bar}")
+
+    return {"label": label, "probability": prob_pos,
+            "contributions": sorted_contrib}
+```
+
+실제 출력 예시:
 
 ```
-Ct:     +0.8  (positive 기여)
-slope:  +0.5  (positive 기여)
-noise:  -1.2  (negative 기여, 가장 큰 영향)
-────────────
-최종:   negative (확률 87%)
+판정: negative  (확률: 87.3%)
+
+Feature 기여도 (+ = positive 기여, - = negative 기여):
+  noise_metric         : -1.243  ▶▶▶▶▶▶
+  jump_score           : -0.821  ▶▶▶▶
+  slope                : +0.512  ▶▶▶
+  curvature            : +0.310  ▶▶
+  r_squared            : -0.180  ▶
+  jump_frequency       : -0.071  ▶
+  dominant_peak_ratio  : +0.022  ▶
 ```
 
-rule 기반보다 훨씬 정교한 설명이다.
+rule 기반 "jump 있어서 제외"와 달리, **noise와 jump가 negative 방향으로 크게 기여하지만 slope와 curvature는 positive 방향**이라는 다차원 근거를 보여준다. 규제 기관에 이 출력을 직접 제출할 수 있다.
 
 ### 실제 PCR 해석 예시 비교
 
@@ -329,8 +518,47 @@ rule 기반보다 훨씬 정교한 설명이다.
 
 ### Step 4: $f$ 파라미터 sensitivity 분석
 
-- smoothing 강도 vs classification 결과 변화 분석
-- task-aware preprocessing으로 전환 (Weak Joint Optimization)
+$f$ 의 파라미터(smoothing 강도, baseline 구간 길이 등)가 분류 성능에 얼마나 영향을 미치는지 정량화한다. 이 분석이 **Weak Joint Optimization**의 출발점이다.
+
+```python
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from scipy.ndimage import uniform_filter1d
+
+def sensitivity_analysis(rfu_batch: np.ndarray,
+                          labels: np.ndarray,
+                          smooth_widths: list = [1, 3, 5, 7, 9]) -> dict:
+    """
+    smoothing 강도(window 크기)에 따라 분류 성능이 어떻게 변하는지 분석한다.
+    최적 smoothing 강도를 g의 성능 기준으로 선택한다.
+
+    rfu_batch : (N, 45) — N개 샘플의 RFU 시계열
+    labels    : (N,)   — 0=negative, 1=positive
+    """
+    results = {}
+    for w in smooth_widths:
+        # f 적용: uniform smoothing
+        smoothed = np.array([
+            uniform_filter1d(rfu, size=w) for rfu in rfu_batch
+        ])
+        # φ 적용: feature 추출
+        features = np.array([
+            list(extract_pcr_features(s).values()) for s in smoothed
+        ])
+        # g 성능 평가: 5-fold CV AUC
+        lr  = LogisticRegression(max_iter=1000)
+        auc = cross_val_score(lr, features, labels,
+                              cv=5, scoring='roc_auc').mean()
+        results[f"smooth_w={w}"] = round(auc, 4)
+        print(f"smoothing window={w:2d} → CV AUC: {auc:.4f}")
+
+    best = max(results, key=results.get)
+    print(f"\n최적 smoothing: {best} (AUC={results[best]})")
+    return results
+```
+
+이 분석이 "Weak Joint"인 이유: f의 파라미터를 g의 손실함수로 **직접** 미분하지 않고, 격자 탐색(grid search)으로 간접 최적화한다. 완전 end-to-end 역전파보다 해석이 용이하고 FDA 검증에서 파라미터 선택 근거를 제시할 수 있다.
 
 ### Step 5: 검증 및 비교
 
@@ -349,12 +577,14 @@ rule 기반보다 훨씬 정교한 설명이다.
 
 **선행 지식**
 
-- [함수의 합과 합성함수](../Math/function/function_addition_vs_composition.qmd) — $f(x)+g(x)$ vs $g(f(x))$, Sequential vs Joint 추정의 수학적 차이
+- [함수의 합과 합성함수](../Math/function/function_addition_vs_composition.qmd) — $f(x)+g(x)$ vs $g(f(x))$, Sequential vs Joint Estimation의 수학적 차이
 
 **카테고리 내 연결**
 
-- [RT-PCR 진단 알고리즘과 딥러닝](./5-regulation-pcr-example.qmd) — 제한된 신호 공간에서의 딥러닝 설계 원칙
-- [RT-PCR Sigmoid Fitting](./6-regulation-pcr-sigmoid.qmd) — 4PL 모델 기반 curve fitting
+- [RT-PCR 진단 알고리즘과 딥러닝](./pcr-diagnostic-dl-regulatory.qmd) — 제한된 신호 공간에서의 딥러닝 설계 원칙
+- [RT-PCR Sigmoid Fitting](./pcr-sigmoid-curve-fitting.qmd) — 4PL 모델 기반 curve fitting
+- [RFU 시계열 분석 — ARIMAX·BSTS·VAR](./pcr-rfu-time-series-analysis.qmd) — feature 추출 전 시계열 진단 방법
+- [Joint Bayesian Estimation](./pcr-joint-bayesian-estimation.qmd) — 기저선 보정·jump 탐지의 확률적 재설계
 
 **다른 카테고리 연결**
 
