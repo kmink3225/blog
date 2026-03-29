@@ -75,44 +75,13 @@ Self-Check 통과 후 **별도 지시 없이 `guides/publish.md`를 로드하고
 
 ---
 
-## 슬래시 커맨드 라우팅
+## 슬래시 커맨드 라우팅 / 카테고리 목록 / 규칙 우선순위 / Project Info
 
-| 명령어 | 추가 로드 가이드 |
-|--------|-----------------|
-| `/write [category] [topic]` | `guides/info-search.md` + `guides/write-post.md` + category GUIDE |
-| `/fix [file-path]` | `guides/retrofit-post.md` + category GUIDE |
-| `/qa [question]` | `guides/info-search.md` + `guides/answer-question.md` |
-| `/convert [category]` | `guides/info-search.md` + `guides/convert-tbd.md` + category GUIDE |
-| `/series [category]` | `guides/info-search.md` + `guides/organize-series.md` + category GUIDE |
-| `/audit [file-path]` | `guides/audit.md` + category GUIDE |
-| `/log` | `guides/changelog-summary.md` |
-| `/reindex [category]` | `guides/reorganize-index.md` + category GUIDE |
-| `/publish` | `guides/publish.md` |
+> **이 섹션은 AGENT_GUIDE.md가 canonical 소스다.**
+> 중복 유지를 피하기 위해 아래 항목은 `AGENT_GUIDE.md`에서만 관리한다.
+> 이 파일은 **Claude Code 전용 Phase 프로토콜과 절대 규칙**만 담는다.
 
-슬래시 커맨드가 없으면 자연어로 태스크를 추론하여 위 표에서 가장 적합한 행을 선택한다.
-
----
-
-## 카테고리 목록
-
-`Statistics` / `Math` / `Machine_Learning` / `Deep_Learning` / `Experimentation` /
-`Engineering` / `Agent` / `Data_Science` / `Governance` / `Strategy_Frameworks` /
-`Code_Test` / `Surveilance`
-
----
-
-## 규칙 우선순위
-
-```
-카테고리 GUIDE.md  >  guides/AGENT_GUIDE_CORE.md  >  에이전트 자체 판단
-```
-
----
-
-## Project Info
-
-- **Site**: https://kk3225.netlify.app
-- **Author**: Kwangmin Kim
-- **Stack**: Quarto → Netlify
-- **Commands**: `quarto preview` / `quarto render`
-- **Key Files**: `_quarto.yml`, `docs/blog/posts/_metadata.yml`
+- 슬래시 커맨드 라우팅 → `AGENT_GUIDE.md` §슬래시 커맨드 정의
+- 카테고리 목록 → `AGENT_GUIDE.md` §카테고리 목록
+- 규칙 우선순위 → `AGENT_GUIDE.md` §규칙 우선순위
+- Project Info → `AGENT_GUIDE.md` §Project Info
