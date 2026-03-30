@@ -1,0 +1,356 @@
+---
+title: "PCR 규칙 기반 파이프라인의 파라미터 오염 문제"
+subtitle: "전처리 후 4PL 추정값이 증폭 효율을 대표하지 못하는 이유, 그리고 Bayesian 해석가능성"
+description: |
+  규칙 기반 PCR 파이프라인에서 순차 전처리 후 추정된 4PL 파라미터(B, C, D)는
+  원본 신호의 물리적 특성이 아니라 변형된 잔여 신호의 fitting 결과이다.
+  이 오염 문제가 의사에게 전달되는 해석에 어떤 영향을 미치는지, 그리고
+  Bayesian joint 추정이 해석가능성을 어떻게 회복하는지를 다룬다.
+categories:
+  - Data Science
+  - Statistics
+  - Surveilance
+author: Kwangmin Kim
+date: 03/30/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+PCR 진단 시스템에서 의사가 가장 강하게 complain하는 지점은 판정 결과 자체가 아니다.
+"왜 이 신호가 양성인가?" 또는 "왜 음성인가?"에 대한 **설명의 부재**이다.
+
+규칙 기반 파이프라인은 판정 경로를 기록할 수 있다.
+그러나 그 기록이 의사에게 의미 있는 설명이 되는지는 다른 문제이다.
+더 근본적인 문제는, 규칙 기반 파이프라인이 추정한 파라미터가
+원본 신호의 물리적 특성을 실제로 반영하는지 여부이다.
+
+이 포스트는 두 가지 문제를 다룬다.
+
+1. **파라미터 오염(parameter contamination)**: 순차 전처리 후 추정된 4PL 파라미터는 원본 신호의 물리량이 아니다
+2. **해석가능성 비교**: 규칙 기반 해석은 알고리즘 로그이고, Bayesian 해석은 신호의 물리적 특성이다
+
+## 파라미터 오염 문제
+
+### 규칙 기반 파이프라인의 구조
+
+전형적인 규칙 기반 PCR 파이프라인은 다음과 같은 순차 구조를 갖는다.
+
+```
+원본 신호 (N 사이클 RFU 데이터)
+    ↓ Step 1: 조건 판단 (baseline 평균 임계값 등)
+    ↓ Step 2: baseline fitting 선택 (linear vs quadratic)
+    ↓ Step 3: baseline 차감 → 신호 변형
+    ↓ Step 4: jump 처리, 이상값 처리 → 신호 변형
+    ↓ Step 5: 추가 전처리 → 신호 변형
+    ↓ Step 6: 4PL fitting → B, C, D, Ct 추정
+    ↓ Step 7: 임계값 비교 → 판정
+```
+
+각 단계는 신호를 변형한다.
+Step 6에서 추정된 파라미터 $B$ (Hill 기울기 / 증폭 효율 관련)는
+원본 신호가 아니라 Step 1~5를 거쳐 변형된 **잔여 신호**에 fitting한 결과이다.
+
+::: {.callout-warning}
+## 파라미터 오염의 본질
+
+Step 6에서 추정된 $B = 0.37$은 원본 신호의 증폭 효율이 아니다.
+전처리 오류들이 누적된 잔여 신호에서 추정된 fitting 파라미터이다.
+
+어느 단계의 오류가 얼마나 기여했는지 역추적이 불가능하다.
+:::
+
+### baseline 오차가 B에 미치는 영향
+
+간단한 예로 baseline fitting이 조금 틀렸을 때 어떤 일이 발생하는지 확인한다.
+
+```python
+import numpy as np
+from scipy.optimize import curve_fit
+
+def four_param_logistic(x, A, B, C, D):
+    """4-Parameter Logistic (4PL) 모델"""
+    return D + (A - D) / (1 + (x / C) ** B)
+
+# 가상의 원본 신호 (45사이클)
+np.random.seed(42)
+cycles = np.arange(1, 46)
+true_B, true_C = 1.8, 28.0  # 진짜 증폭 효율 파라미터
+
+signal_true = four_param_logistic(cycles, A=100, B=true_B, C=true_C, D=200)
+noise = np.random.normal(0, 3, len(cycles))
+signal_observed = signal_true + noise
+
+# 정확한 baseline (사이클 3~10 평균)
+baseline_correct = np.mean(signal_observed[2:10])
+
+# 오염된 baseline (조건 분기로 잘못 선택된 경우)
+baseline_wrong = np.mean(signal_observed[2:15])  # 5사이클 더 포함
+
+signal_corrected = signal_observed - baseline_correct
+signal_contaminated = signal_observed - baseline_wrong
+
+# 4PL fitting 비교
+try:
+    popt_correct, _ = curve_fit(
+        four_param_logistic, cycles, signal_corrected,
+        p0=[max(signal_corrected), 1.5, 28, 0], maxfev=5000
+    )
+    popt_contaminated, _ = curve_fit(
+        four_param_logistic, cycles, signal_contaminated,
+        p0=[max(signal_contaminated), 1.5, 28, 0], maxfev=5000
+    )
+    print(f"정확한 baseline → B = {popt_correct[1]:.3f}, Ct = {popt_correct[2]:.2f}")
+    print(f"오염된 baseline → B = {popt_contaminated[1]:.3f}, Ct = {popt_contaminated[2]:.2f}")
+    print(f"True B = {true_B}, True Ct = {true_C}")
+except:
+    print("fitting 수렴 실패 — 오염 정도가 클 때 발생하는 전형적 문제")
+```
+
+baseline 선택 오류 하나만으로 $B$ 추정값이 크게 달라진다.
+이것이 파이프라인 끝에서 "증폭 효율 $B = 0.37$"이라고 의사에게 보고할 때의 문제다.
+그 값은 원본 신호의 증폭 특성을 반영하는 것이 아니라,
+파이프라인이 적용한 전처리들의 누적 결과이다.
+
+### Bayesian joint 추정의 차이
+
+Bayesian joint 추정은 전처리 없이 원본 신호에 직접 접근한다.
+
+```python
+import pymc as pm
+import numpy as np
+
+def four_pl_model(cycles, A, B, C, D):
+    return D + (A - D) / (1 + (cycles / C) ** B)
+
+with pm.Model() as joint_model:
+    # 파라미터의 prior (물리적 의미 반영)
+    A = pm.HalfNormal("A", sigma=200)    # 최대 RFU
+    B = pm.HalfNormal("B", sigma=3)      # Hill 기울기 (증폭 효율)
+    C = pm.Normal("C", mu=25, sigma=10)  # Ct (변곡점)
+    D = pm.HalfNormal("D", sigma=50)     # 베이스라인 RFU
+    sigma = pm.HalfNormal("sigma", sigma=10)
+
+    # 원본 신호에 직접 모델 적용 — 전처리 없음
+    mu = four_pl_model(cycles, A, B, C, D)
+    obs = pm.Normal("obs", mu=mu, sigma=sigma, observed=signal_observed)
+
+    # posterior 추정
+    trace = pm.sample(1000, tune=500, progressbar=False)
+
+# 결과 해석
+import arviz as az
+posterior = az.summary(trace, var_names=["B", "C"])
+print(posterior[["mean", "sd", "hdi_3%", "hdi_97%"]])
+```
+
+Bayesian joint는 $B$의 posterior 분포를 직접 추정한다.
+$B$의 HDI(Highest Density Interval)가 넓으면 증폭 효율의 불확실성이 크다는 뜻이고,
+이 불확실성이 Ct 추정의 신뢰도에 직접 연결된다.
+이것이 물리적 근거가 있는 해석이다.
+
+## 의사가 원하는 설명 vs. 알고리즘 로그
+
+의사가 받는 두 종류의 설명을 비교한다.
+
+### 규칙 기반 해석 (알고리즘 로그)
+
+```
+"baseline 평균이 37.2로 임계값(37) 이하이므로 linear fitting을 적용했습니다.
+ fitting 기울기가 0.73으로 기준값(0.8) 이하이므로 음성 처리하였습니다."
+```
+
+이것은 알고리즘이 어떤 분기 경로를 탔는지를 설명한다.
+의사 입장에서 이 설명은 "왜 양성/음성인가?"에 답하지 않는다.
+
+- **기울기 0.8 기준이 왜 음성 임계값인가?** — 경험적으로 정해진 숫자이다
+- **이 환자 샘플에 그 기준이 적합한가?** — 판단 불가능하다
+- **linear fitting이 왜 이 신호에 더 적합한가?** — 생물학적 근거가 없다
+
+이 설명이 의미없는 근본 이유는, 규칙이 신호의 생물학을 모델링한 것이 아니라
+**경험적으로 튜닝된 분기 조건**이기 때문이다.
+설명하면 할수록 "그래서 왜?"가 남는다.
+
+### Bayesian 해석 (신호의 물리적 특성)
+
+```
+"증폭 효율이 74%로 정상 범위(90~110%)를 크게 벗어납니다.
+ S자 곡선의 변곡점(Ct)을 cycle 33~40 사이로 특정할 수 없습니다.
+ 이 신호가 양성일 확률은 64%입니다. 재검을 권장합니다."
+```
+
+이것은 신호의 물리적 특성으로 설명한다.
+의사는 이 설명에서 "증폭이 잘 안 됐구나, 바이러스 농도가 극히 낮거나
+시약 문제가 있겠구나"로 이해할 수 있다.
+
+::: {.callout-note}
+## 핵심 구분
+
+규칙 기반 해석: "우리 알고리즘의 분기 조건을 이 신호가 어떻게 통과했는가"
+
+Bayesian 해석: "이 신호의 물리적 특성이 무엇인가, 그리고 얼마나 불확실한가"
+
+의사는 후자를 원한다.
+:::
+
+## 결과 불일치 처리 전략
+
+Bayesian을 병렬로 운용하면 규칙 기반(C++)의 결과와 Bayesian의 결과가 다를 수 있다.
+이 불일치를 어떻게 처리하는지가 실용적 설계의 핵심이다.
+
+| C++ 결과 | Bayesian 결과 | 처리 방법 | 근거 |
+|----------|---------------|-----------|------|
+| 양성 | 양성 | 일치 — 그대로 출력 | 두 방법 모두 동의 |
+| 음성 | 음성 | 일치 — 그대로 출력 | 두 방법 모두 동의 |
+| 양성 | Uncertain | C++ 결과 유지 + 경고 플래그 | Bayesian이 신뢰도 낮음을 표시 |
+| 음성 | Uncertain | C++ 결과 유지 + 경고 플래그 | Bayesian이 신뢰도 낮음을 표시 |
+| 양성 | 음성 | 가장 위험 — 재검 강제 | 두 방법이 반대 결론 |
+| 음성 | 양성 | 가장 위험 — 재검 강제 | 두 방법이 반대 결론 |
+
+실제로 두 방법이 반대 결론을 내는 경우는 거의 항상 gray zone 신호이다.
+C++이 임계값을 아슬아슬하게 넘거나 못 넘은 케이스다.
+
+```
+C++ Ct = 34.9  →  양성 (threshold = 35)
+Bayesian Ct CI = [33.1, 40.2]  →  Uncertain
+```
+
+이 경우 "결과가 달라진 게 문제"가 아니라
+"원래부터 판정이 어려운 신호였다"는 정보를 Bayesian이 드러낸 것이다.
+
+::: {.callout-important}
+## 설계 원칙
+
+Bayesian을 **결과를 바꾸는** 알고리즘으로 쓰면 안 된다.
+Bayesian을 **C++ 결과의 신뢰도를 점수화하는** 알고리즘으로 써야 한다.
+
+최종 출력 예시:
+- 판정: 양성 (C++ 기준)
+- 신뢰도: LOW — Ct CI 폭 7.2 cycle, 증폭 효율 74%
+- 권고: Retest Recommended
+:::
+
+## MCMC 속도와 Hybrid 아키텍처
+
+### 속도 비교
+
+MCMC는 posterior 분포를 수렴시키기 위해 샘플을 수천 개 뽑는다.
+각 샘플에서 likelihood를 계산하므로 신호 1개당 수백 ms가 소요된다.
+
+| 방법 | 신호 1개 처리 시간 | 768개 총 시간 |
+|------|-------------------|---------------|
+| C++ 규칙 기반 | ~수 $\mu$s | < 10 ms |
+| Python MCMC (PyMC) | 200~500 ms | 3~6분 |
+| Python VI (Variational Inference) | 10~50 ms | 10~40초 |
+| Laplace Approximation | 수 ms | < 1초 |
+
+실시간 장비(수초 내 결과 요구)에서 전체를 MCMC로 처리하는 것은 현실적이지 않다.
+
+### 구조가 다르다
+
+C++은 신호 1개씩 순차 처리한다.
+Hierarchical Bayesian은 384개 신호를 행렬 연산으로 한 번에 처리할 수 있다.
+
+```python
+# C++ 방식: 768개를 순차 루프
+for signal in signals:
+    result = cpp_algorithm(signal)
+
+# Hierarchical Bayesian: (768, 45) 행렬을 한 번에 처리
+signals_matrix = np.array(signals)  # shape: (768, 45)
+# PyMC 내부에서 벡터화 연산으로 동시 추정
+```
+
+JAX 백엔드 + GPU를 쓰면 768개 동시 처리가 가능하여
+총 시간이 10~30초 수준으로 줄어든다.
+
+### Hybrid 아키텍처
+
+```
+C++ 규칙 기반 (실시간, < 10 ms)
+        ↓ 전체 신호 처리
+gray zone 판정된 신호만 추출 (전체의 10~20%)
+        ↓ ~77개 신호
+Python Bayesian (비동기, 수초 허용)
+        ↓ 불확실성 정량화
+의사에게 리포트:
+  "불확실 — Ct CI 폭 7.2 cycle, 증폭 효율 74%, 재검 권장"
+```
+
+384웰 중 gray zone이 20%면 약 77개 신호만 MCMC로 처리한다.
+플레이트 전체를 MCMC로 돌리는 것이 아니다.
+이 구조는 실시간 요구사항을 유지하면서 gray zone 신호에 대한 해석가능한 불확실성을 제공한다.
+
+## 전처리 문서화와 불확실성 추적의 차이
+
+규제 문서(FDA 510(k), 로슈 등)에 전처리 절차가 명시되어 있다는 반론이 있다.
+예를 들면:
+
+```
+공식 문서: "baseline은 linear/quadratic 회귀로 fitting하여 차감한다" ← 명시됨
+```
+
+그러나 이것은 **절차의 투명성**이다.
+**결과의 신뢰성**(baseline fitting 오차가 B 추정값에 얼마나 기여하는가)과는 다른 차원이다.
+
+| 구분 | 내용 |
+|------|------|
+| 문서화된 것 | 전처리 절차 — "이 파이프라인은 이렇게 동작한다" |
+| 추적되지 않는 것 | 전처리 오차의 파라미터 추정 기여 — "전처리 오류가 B 추정에 얼마나 영향을 주는가" |
+
+로슈나 FDA 승인 문서도 마찬가지다.
+전처리 절차는 기술되어 있지만, 그 전처리가 최종 파라미터 추정의 불확실성에
+얼마나 기여하는지는 대부분 정량화되어 있지 않다.
+
+::: {.callout-note}
+## 정당한 전처리와 문제가 되는 전처리의 구분
+
+| 구분 | 설명 |
+|------|------|
+| 정당한 전처리 | 노이즈 제거, 단위 변환 — 모델에 명시, 불확실성 추적 |
+| 문제가 되는 전처리 | 신호를 변형한 후 그 결과물을 원본 신호의 물리적 특성으로 해석 |
+
+NASA도 전처리를 한다.
+그러나 NASA는 전처리된 데이터로 추정한 값을 "원본 물리량"이라고 부르지 않는다.
+전처리 과정을 모델에 명시하고, 그 불확실성을 함께 보고한다.
+:::
+
+## 결론
+
+규칙 기반 PCR 파이프라인의 핵심 한계는 두 가지이다.
+
+**첫 번째, 파라미터 오염**: 순차 전처리 후 추정된 $B$는 원본 신호의 증폭 효율이 아니다.
+각 단계의 오류가 누적된 잔여 신호의 fitting 결과이다.
+이것을 의사에게 "증폭 효율"이라고 설명하는 것은 용어 자체가 틀렸다.
+
+**두 번째, 해석의 부재**: 판정 경로(알고리즘 로그)를 전달해도
+의사에게 생물학적 근거를 제공하지 못한다.
+
+Bayesian joint 추정은 두 문제를 동시에 해결한다.
+원본 신호에서 직접 파라미터를 추정하므로 파라미터 오염이 없고,
+posterior 분포를 통해 불확실성을 정량화하므로 의사에게
+"왜 불확실한가"를 신호의 물리적 특성으로 설명할 수 있다.
+
+현실적인 전환 경로는 규칙 기반을 버리는 것이 아니다.
+**C++로 전체 처리 → gray zone만 추출 → Bayesian으로 신뢰도 점수화**하는
+Hybrid 아키텍처가 실용적이다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [PCR Joint Bayesian Estimation — 순차 규칙에서 확률적 추정으로](./pcr-joint-bayesian-estimation.qmd)
+- [RT-PCR 4PL 모델 — 증폭 효율과 의료 규제 설계 원칙](./pcr-4pl-amplification-efficiency.qmd)
+- [RT-PCR 그레이존 처리와 불확실성 관리](./pcr-grayzone-uncertainty.qmd)
+
+**같은 주제 시리즈**
+
+- [규칙 기반 알고리즘과 데이터 기반 알고리즘 — 진단 시스템 설계 관점의 비교](./pcr-rule-based-vs-bayesian-critique.qmd)
+- [PCR 배치 수준 Hierarchical Bayesian](./pcr-hierarchical-bayesian.qmd)
+- [RT-PCR 진단 알고리즘과 딥러닝 — FDA 규제 관점의 설계 원칙](./pcr-diagnostic-dl-regulatory.qmd)
+
+**다른 카테고리 연결**
+
+- [베이지안 계층 모형](../Statistics/83-hierarchical-models-mixtures.qmd) — Bayesian 추론의 이론적 기반
+- [FDA SaMD 규제](../Surveilance/0-regulation-basic.qmd) — IVD 소프트웨어 규제 맥락

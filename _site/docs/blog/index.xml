@@ -3182,6 +3182,1582 @@ font-style: inherit;">}</span></span></code></pre></div>
   <pubDate>Thu, 24 Dec 2026 15:00:00 GMT</pubDate>
 </item>
 <item>
+  <title>SW Tool을 SDK로 배포하기</title>
+  <dc:creator>Kwangmin Kim</dc:creator>
+  <link>kk3225.netlify.app/docs/blog/posts/Agent/24-Agent-Architecture/30-sw-tool-sdk-distribution-architecture.html</link>
+  <description><![CDATA[ 
+
+
+
+
+
+<section id="개요" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="개요"><span class="header-section-number">1</span> 개요</h2>
+<p>“SDK를 설치하면 Agent가 바로 Tool을 쓸 수 있는가?”</p>
+<p>이 질문에 답하려면 먼저 Agent가 Tool을 호출하는 구조를 이해해야 한다. LLM이 Tool을 선택하고 실행하는 흐름은 다음과 같다.</p>
+<pre><code>사용자 요청
+    ↓
+LLM: 요청 분석 → 필요한 Tool 식별 → Tool 호출 결정
+    ↓
+Tool 실행 레이어: Tool 선택 → 파라미터 파싱 → 실행
+    ↓
+실행 결과 → LLM에 반환
+    ↓
+최종 응답 생성</code></pre>
+<p>“SDK를 설치하면 바로 동작”하려면 이 흐름의 세 가지 조건이 모두 충족되어야 한다.</p>
+<ol type="1">
+<li><strong>Tool이 자기 자신을 설명하는 Schema를 내장</strong>할 것</li>
+<li><strong>자동 발견(auto-discovery)과 등록 메커니즘</strong>이 있을 것</li>
+<li><strong>LLM이 function calling을 지원</strong>할 것</li>
+</ol>
+</section>
+<section id="tool-schema-tool의-자기-기술" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="tool-schema-tool의-자기-기술"><span class="header-section-number">2</span> Tool Schema — Tool의 자기 기술</h2>
+<p>LLM이 Tool을 선택하려면 “이 Tool이 무엇을 하는가, 어떤 입력을 받는가”를 알아야 한다. 이 메타데이터를 <strong>Tool Schema</strong>라고 한다.</p>
+<div class="sourceCode" id="cb2" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb2-1"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">class</span> SearchTool:</span>
+<span id="cb2-2">    name <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"search_documents"</span></span>
+<span id="cb2-3">    description <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"사내 문서를 키워드로 검색합니다"</span></span>
+<span id="cb2-4">    parameters <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> {</span>
+<span id="cb2-5">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"query"</span>: {</span>
+<span id="cb2-6">            <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"type"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"string"</span>,</span>
+<span id="cb2-7">            <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"description"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"검색할 키워드"</span></span>
+<span id="cb2-8">        },</span>
+<span id="cb2-9">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"top_k"</span>: {</span>
+<span id="cb2-10">            <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"type"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"integer"</span>,</span>
+<span id="cb2-11">            <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"description"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"반환할 결과 수"</span>,</span>
+<span id="cb2-12">            <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"default"</span>: <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5</span></span>
+<span id="cb2-13">        }</span>
+<span id="cb2-14">    }</span>
+<span id="cb2-15"></span>
+<span id="cb2-16">    <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> run(<span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">self</span>, query: <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">str</span>, top_k: <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">int</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5</span>) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-&gt;</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">str</span>:</span>
+<span id="cb2-17">        <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 실제 검색 로직</span></span>
+<span id="cb2-18">        results <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> internal_search(query, top_k)</span>
+<span id="cb2-19">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> format_results(results)</span></code></pre></div>
+<p>LLM의 function calling은 이 Schema를 보고 Tool을 선택하고 파라미터를 채운다. Schema가 명확할수록 LLM이 Tool을 정확하게 호출한다.</p>
+<section id="schema-설계-원칙" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="schema-설계-원칙"><span class="header-section-number">2.1</span> Schema 설계 원칙</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th>항목</th>
+<th>좋은 예</th>
+<th>나쁜 예</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>name</code></td>
+<td><code>search_documents</code> (동작+대상 명시)</td>
+<td><code>search</code>, <code>tool1</code></td>
+</tr>
+<tr class="even">
+<td><code>description</code></td>
+<td>“사내 문서를 키워드로 검색합니다”</td>
+<td>“검색 도구”</td>
+</tr>
+<tr class="odd">
+<td>parameter 설명</td>
+<td>“검색할 키워드 (한국어/영어 모두 가능)”</td>
+<td>“키워드”</td>
+</tr>
+<tr class="even">
+<td>반환값 설명</td>
+<td>함수 docstring에 반환 포맷 명시</td>
+<td>없음</td>
+</tr>
+</tbody>
+</table>
+<p>description이 구체적일수록 LLM이 적절한 상황에서 Tool을 선택한다. LLM은 description의 문장을 의미론적으로 해석하여 호출 여부를 결정하기 때문이다.</p>
+</section>
+</section>
+<section id="tool-registry-자동-발견과-등록" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="tool-registry-자동-발견과-등록"><span class="header-section-number">3</span> Tool Registry — 자동 발견과 등록</h2>
+<p>여러 Tool을 관리하고 LLM에게 일괄 제공하는 구조가 <strong>Tool Registry</strong>이다.</p>
+<div class="sourceCode" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb3-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">from</span> minerva_tools <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> ToolRegistry</span>
+<span id="cb3-2"></span>
+<span id="cb3-3"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># SDK 설치 후 Tool 자동 발견</span></span>
+<span id="cb3-4">registry <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> ToolRegistry.discover()  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 설치된 모든 Tool 자동 수집</span></span>
+<span id="cb3-5"></span>
+<span id="cb3-6"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># LLM에 넘길 Schema 자동 생성 (OpenAI / Anthropic 포맷)</span></span>
+<span id="cb3-7">tools_for_llm <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> registry.get_openai_format()</span>
+<span id="cb3-8"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 또는</span></span>
+<span id="cb3-9">tools_for_claude <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> registry.get_anthropic_format()</span>
+<span id="cb3-10"></span>
+<span id="cb3-11"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Tool 실행</span></span>
+<span id="cb3-12">result <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> registry.execute(</span>
+<span id="cb3-13">    <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"search_documents"</span>,</span>
+<span id="cb3-14">    {<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"query"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"안전기준"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"top_k"</span>: <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3</span>}</span>
+<span id="cb3-15">)</span></code></pre></div>
+<p>Registry 패턴의 장점은 Tool을 추가할 때 Agent 코드를 수정할 필요가 없다는 점이다. SDK에 새 Tool 클래스를 추가하면 <code>discover()</code>가 자동으로 인식한다.</p>
+</section>
+<section id="주요-프레임워크별-tool-등록-방식" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="주요-프레임워크별-tool-등록-방식"><span class="header-section-number">4</span> 주요 프레임워크별 Tool 등록 방식</h2>
+<table class="table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>프레임워크</th>
+<th>방식</th>
+<th>특징</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>LangChain</td>
+<td><code>@tool</code> 데코레이터</td>
+<td>자동 Schema 생성 → Agent에 바인딩</td>
+</tr>
+<tr class="even">
+<td>OpenAI</td>
+<td>JSON Schema 직접 정의</td>
+<td>LLM이 선택/호출, 실행은 직접 구현</td>
+</tr>
+<tr class="odd">
+<td>MCP</td>
+<td>Tool을 서버로 노출</td>
+<td>어떤 LLM/Agent든 연결 가능</td>
+</tr>
+<tr class="even">
+<td>Anthropic SDK</td>
+<td><code>tools</code> 파라미터로 전달</td>
+<td>Claude가 <code>tool_use</code> 블록으로 호출</td>
+</tr>
+</tbody>
+</table>
+<section id="langchain-tool-데코레이터" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="langchain-tool-데코레이터"><span class="header-section-number">4.1</span> LangChain — <span class="citation" data-cites="tool">@tool</span> 데코레이터</h3>
+<div class="sourceCode" id="cb4" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb4-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">from</span> langchain_core.tools <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> tool</span>
+<span id="cb4-2"></span>
+<span id="cb4-3"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">@tool</span></span>
+<span id="cb4-4"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> search_documents(query: <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">str</span>, top_k: <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">int</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5</span>) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-&gt;</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">str</span>:</span>
+<span id="cb4-5">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">"""사내 문서를 키워드로 검색합니다.</span></span>
+<span id="cb4-6"></span>
+<span id="cb4-7"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">    Args:</span></span>
+<span id="cb4-8"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">        query: 검색할 키워드</span></span>
+<span id="cb4-9"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">        top_k: 반환할 결과 수</span></span>
+<span id="cb4-10"></span>
+<span id="cb4-11"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">    Returns:</span></span>
+<span id="cb4-12"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">        검색 결과 목록</span></span>
+<span id="cb4-13"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">    """</span></span>
+<span id="cb4-14">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> internal_search(query, top_k)</span>
+<span id="cb4-15"></span>
+<span id="cb4-16"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Agent에 바인딩</span></span>
+<span id="cb4-17"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">from</span> langchain_openai <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> ChatOpenAI</span>
+<span id="cb4-18">llm <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> ChatOpenAI(model<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"gpt-4o"</span>)</span>
+<span id="cb4-19">llm_with_tools <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> llm.bind_tools([search_documents])</span></code></pre></div>
+<p>docstring이 곧 description이다. <code>@tool</code> 데코레이터가 함수 시그니처와 docstring을 파싱하여 Schema를 자동 생성한다.</p>
+</section>
+</section>
+<section id="mcp-model-context-protocol-표준-서버-방식" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="mcp-model-context-protocol-표준-서버-방식"><span class="header-section-number">5</span> MCP (Model Context Protocol) — 표준 서버 방식</h2>
+<p>Anthropic이 제안한 오픈 표준 프로토콜이다. Tool을 MCP 서버로 만들면 Claude뿐 아니라 어떤 LLM/Agent든 연결할 수 있다.</p>
+<section id="mcp-서버-구현" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="mcp-서버-구현"><span class="header-section-number">5.1</span> MCP 서버 구현</h3>
+<div class="sourceCode" id="cb5" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb5-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">from</span> mcp.server.fastmcp <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> FastMCP</span>
+<span id="cb5-2"></span>
+<span id="cb5-3">mcp <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> FastMCP(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"my-tools"</span>)</span>
+<span id="cb5-4"></span>
+<span id="cb5-5"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">@mcp.tool</span>()</span>
+<span id="cb5-6"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> search_documents(query: <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">str</span>, top_k: <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">int</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5</span>) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-&gt;</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">str</span>:</span>
+<span id="cb5-7">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">"""사내 문서를 키워드로 검색합니다"""</span></span>
+<span id="cb5-8">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> internal_search(query, top_k)</span>
+<span id="cb5-9"></span>
+<span id="cb5-10"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">@mcp.tool</span>()</span>
+<span id="cb5-11"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> get_regulation_info(topic: <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">str</span>) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-&gt;</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">str</span>:</span>
+<span id="cb5-12">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">"""규제 기준 정보를 조회합니다"""</span></span>
+<span id="cb5-13">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> regulation_db.query(topic)</span>
+<span id="cb5-14"></span>
+<span id="cb5-15"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">if</span> <span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">__name__</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"__main__"</span>:</span>
+<span id="cb5-16">    mcp.run()  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># MCP 서버 시작</span></span></code></pre></div>
+</section>
+<section id="claude-code에서-연결" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="claude-code에서-연결"><span class="header-section-number">5.2</span> Claude Code에서 연결</h3>
+<div class="sourceCode" id="cb6" style="background: #f1f3f5;"><pre class="sourceCode numberSource json number-lines code-with-copy"><code class="sourceCode json"><span id="cb6-1"><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">{</span></span>
+<span id="cb6-2">  <span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">"mcpServers"</span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">:</span> <span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">{</span></span>
+<span id="cb6-3">    <span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">"my-tools"</span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">:</span> <span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">{</span></span>
+<span id="cb6-4">      <span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">"command"</span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">:</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"python"</span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">,</span></span>
+<span id="cb6-5">      <span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">"args"</span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">:</span> <span class="ot" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">[</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"my_mcp_server.py"</span><span class="ot" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">]</span></span>
+<span id="cb6-6">    <span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">}</span></span>
+<span id="cb6-7">  <span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">}</span></span>
+<span id="cb6-8"><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">}</span></span></code></pre></div>
+<p>설정 파일 한 줄만 추가하면 Claude가 해당 Tool을 자동 인식하고 호출한다. Tool 제공자와 소비자가 완전히 분리되는 구조이다.</p>
+</section>
+</section>
+<section id="anthropic-sdk-function-calling-방식" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="anthropic-sdk-function-calling-방식"><span class="header-section-number">6</span> Anthropic SDK — Function Calling 방식</h2>
+<p>API 레벨에서 직접 Tool을 정의하여 Claude에 전달하는 방식이다.</p>
+<div class="sourceCode" id="cb7" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb7-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> anthropic</span>
+<span id="cb7-2"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> json</span>
+<span id="cb7-3"></span>
+<span id="cb7-4">client <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> anthropic.Anthropic()</span>
+<span id="cb7-5"></span>
+<span id="cb7-6">tools <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [</span>
+<span id="cb7-7">    {</span>
+<span id="cb7-8">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"name"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"search_documents"</span>,</span>
+<span id="cb7-9">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"description"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"사내 문서를 키워드로 검색합니다"</span>,</span>
+<span id="cb7-10">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"input_schema"</span>: {</span>
+<span id="cb7-11">            <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"type"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"object"</span>,</span>
+<span id="cb7-12">            <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"properties"</span>: {</span>
+<span id="cb7-13">                <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"query"</span>: {</span>
+<span id="cb7-14">                    <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"type"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"string"</span>,</span>
+<span id="cb7-15">                    <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"description"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"검색할 키워드"</span></span>
+<span id="cb7-16">                },</span>
+<span id="cb7-17">                <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"top_k"</span>: {</span>
+<span id="cb7-18">                    <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"type"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"integer"</span>,</span>
+<span id="cb7-19">                    <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"description"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"반환할 결과 수"</span>,</span>
+<span id="cb7-20">                    <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"default"</span>: <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5</span></span>
+<span id="cb7-21">                }</span>
+<span id="cb7-22">            },</span>
+<span id="cb7-23">            <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"required"</span>: [<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"query"</span>]</span>
+<span id="cb7-24">        }</span>
+<span id="cb7-25">    }</span>
+<span id="cb7-26">]</span>
+<span id="cb7-27"></span>
+<span id="cb7-28"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Claude에게 Tool과 함께 메시지 전송</span></span>
+<span id="cb7-29">response <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> client.messages.create(</span>
+<span id="cb7-30">    model<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"claude-opus-4-5-20251101"</span>,</span>
+<span id="cb7-31">    max_tokens<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1024</span>,</span>
+<span id="cb7-32">    tools<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>tools,</span>
+<span id="cb7-33">    messages<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>[</span>
+<span id="cb7-34">        {<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"role"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"user"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"content"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"안전기준 관련 문서 찾아줘"</span>}</span>
+<span id="cb7-35">    ]</span>
+<span id="cb7-36">)</span>
+<span id="cb7-37"></span>
+<span id="cb7-38"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Claude가 Tool을 호출하면 tool_use 블록이 반환됨</span></span>
+<span id="cb7-39"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">for</span> block <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">in</span> response.content:</span>
+<span id="cb7-40">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">if</span> block.<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">type</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"tool_use"</span>:</span>
+<span id="cb7-41">        tool_name <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> block.name</span>
+<span id="cb7-42">        tool_input <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> block.<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">input</span></span>
+<span id="cb7-43">        <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"Tool 호출: </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>tool_name<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">(</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>tool_input<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">)"</span>)</span>
+<span id="cb7-44"></span>
+<span id="cb7-45">        <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Tool 실행</span></span>
+<span id="cb7-46">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">if</span> tool_name <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"search_documents"</span>:</span>
+<span id="cb7-47">            result <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> search_documents(<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">**</span>tool_input)</span>
+<span id="cb7-48"></span>
+<span id="cb7-49">        <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 결과를 Claude에 반환하여 최종 응답 생성</span></span>
+<span id="cb7-50">        follow_up <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> client.messages.create(</span>
+<span id="cb7-51">            model<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"claude-opus-4-5-20251101"</span>,</span>
+<span id="cb7-52">            max_tokens<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1024</span>,</span>
+<span id="cb7-53">            tools<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>tools,</span>
+<span id="cb7-54">            messages<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>[</span>
+<span id="cb7-55">                {<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"role"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"user"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"content"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"안전기준 관련 문서 찾아줘"</span>},</span>
+<span id="cb7-56">                {<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"role"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"assistant"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"content"</span>: response.content},</span>
+<span id="cb7-57">                {</span>
+<span id="cb7-58">                    <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"role"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"user"</span>,</span>
+<span id="cb7-59">                    <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"content"</span>: [{</span>
+<span id="cb7-60">                        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"type"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"tool_result"</span>,</span>
+<span id="cb7-61">                        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"tool_use_id"</span>: block.<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">id</span>,</span>
+<span id="cb7-62">                        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"content"</span>: result</span>
+<span id="cb7-63">                    }]</span>
+<span id="cb7-64">                }</span>
+<span id="cb7-65">            ]</span>
+<span id="cb7-66">        )</span>
+<span id="cb7-67">        <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(follow_up.content[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>].text)</span></code></pre></div>
+</section>
+<section id="mcp-vs-anthropic-sdk-비교" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="mcp-vs-anthropic-sdk-비교"><span class="header-section-number">7</span> MCP vs Anthropic SDK 비교</h2>
+<table class="table">
+<colgroup>
+<col style="width: 23%">
+<col style="width: 19%">
+<col style="width: 57%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>항목</th>
+<th>MCP</th>
+<th>Anthropic SDK</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>방식</td>
+<td>Tool을 서버로 노출</td>
+<td>API 호출 시 Schema 직접 전달</td>
+</tr>
+<tr class="even">
+<td>Tool 재사용</td>
+<td>어떤 LLM/Agent든 연결 가능</td>
+<td>Claude 전용</td>
+</tr>
+<tr class="odd">
+<td>연결 방식</td>
+<td>설정 파일 한 줄</td>
+<td>코드에서 직접 구현</td>
+</tr>
+<tr class="even">
+<td>제어 수준</td>
+<td>표준화된 인터페이스</td>
+<td>세밀한 직접 제어</td>
+</tr>
+<tr class="odd">
+<td>적합한 경우</td>
+<td>Tool을 여러 Agent/앱에서 재사용</td>
+<td>특정 앱에 Claude 깊이 통합</td>
+</tr>
+<tr class="even">
+<td>생태계</td>
+<td>오픈 표준 (Claude, Cursor, Windsurf 등)</td>
+<td>Anthropic 생태계</td>
+</tr>
+</tbody>
+</table>
+<p>Tool을 여러 곳에서 재사용할 계획이라면 MCP가 적합하다. 특정 앱에 Claude를 직접 통합하고 응답 흐름을 세밀하게 제어해야 한다면 Anthropic SDK가 유리하다.</p>
+</section>
+<section id="sdk-배포의-세-가지-복잡도-레벨" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="sdk-배포의-세-가지-복잡도-레벨"><span class="header-section-number">8</span> SDK 배포의 세 가지 복잡도 레벨</h2>
+<p>Tool을 SDK로 배포할 때 실제로 “바로 동작”하는 수준은 Tool의 성격에 따라 다르다.</p>
+<table class="table">
+<colgroup>
+<col style="width: 16%">
+<col style="width: 27%">
+<col style="width: 38%">
+<col style="width: 16%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>레벨</th>
+<th>Tool 유형</th>
+<th>추가 필요 사항</th>
+<th>예시</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>쉬움</td>
+<td>순수 연산</td>
+<td>SDK 설치만으로 동작</td>
+<td>텍스트 변환, 계산, 포맷팅</td>
+</tr>
+<tr class="even">
+<td>중간</td>
+<td>외부 시스템 연결</td>
+<td>인증, 엔드포인트 config 필요</td>
+<td>DB 검색, API 호출, 파일 읽기</td>
+</tr>
+<tr class="odd">
+<td>어려움</td>
+<td>자체 LLM 통합</td>
+<td>Function calling 미지원 시 파서 구현 필요</td>
+<td>function calling 없는 오픈소스 LLM</td>
+</tr>
+</tbody>
+</table>
+<p>외부 시스템에 연결하는 Tool은 <code>.env</code> 파일이나 설정 파일로 인증 정보를 주입해야 한다. 자체 LLM이 function calling을 지원하지 않는 경우에는 프롬프트 기반으로 Tool 호출을 파싱하는 별도 레이어가 필요하다.</p>
+</section>
+<section id="실전-구현-경로" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="실전-구현-경로"><span class="header-section-number">9</span> 실전 구현 경로</h2>
+<p>자체 개발 Agent에 Tool SDK를 붙이는 가장 빠른 경로는 다음과 같다.</p>
+<pre><code>Step 1: Tool Schema 정의
+  - Tool 이름, description, 파라미터를 명확히 기술
+  - LangChain @tool 또는 Anthropic SDK input_schema 포맷 선택
+
+Step 2: 배포 방식 결정
+  - Tool을 여러 Agent에서 재사용 → MCP 서버 구현
+  - Claude에만 통합 → Anthropic SDK 직접 사용
+
+Step 3: Registry 구성
+  - Tool 목록을 LLM에 일괄 전달하는 구조 구현
+  - MCP의 경우 mcp.run()으로 서버 시작 후 설정 파일 연결
+
+Step 4: 실행 루프 구현 (Anthropic SDK 직접 사용 시)
+  - LLM 응답에서 tool_use 블록 파싱
+  - Tool 실행 후 결과를 tool_result로 반환
+  - 최종 응답 생성까지 루프
+
+Step 5: 에러 처리
+  - Tool 실행 실패 시 error 메시지를 tool_result로 반환
+  - LLM이 실패를 인식하고 대안을 시도하도록 유도</code></pre>
+</section>
+<section id="관련-주제" class="level2" data-number="10">
+<h2 data-number="10" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">10</span> 관련 주제</h2>
+<p><strong>선행 지식</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/15-mcp-tool-integration.html">MCP 기반 도구 통합</a> — MCP 프로토콜 아키텍처 상세</li>
+<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/26-sw-tool-sdk-specification.html">AI Coding Assistant의 SW Tool SDK 명세</a> — Claude Code/Copilot의 기본 Tool 목록</li>
+</ul>
+<p><strong>후속 주제</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/27-connect-claude-copilot-tools-to-custom-agent.html">자체 개발 Agent에 Claude·Copilot 도구 연결하기</a> — 양방향 연결 패턴</li>
+<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/28-custom-tool-development-and-registration.html">Claude·Copilot 도구 생태계에 커스텀 도구 추가하기</a> — MCP 서버 구현 실전</li>
+</ul>
+<p><strong>다른 카테고리 연결</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Agent/16-Agent/02-Bind-Tools.html">LangChain Agent와 Tools</a> — LangChain <span class="citation" data-cites="tool">@tool</span> 바인딩 실전</li>
+<li><a href="../../../../../docs/blog/posts/Engineering/Python/pathlib.html">Python SDK 환경 설정</a> — 패키지 관리와 환경 분리</li>
+</ul>
+
+
+</section>
+
+ ]]></description>
+  <category>Agent</category>
+  <category>Architecture</category>
+  <category>MCP</category>
+  <guid>kk3225.netlify.app/docs/blog/posts/Agent/24-Agent-Architecture/30-sw-tool-sdk-distribution-architecture.html</guid>
+  <pubDate>Sun, 29 Mar 2026 15:00:00 GMT</pubDate>
+</item>
+<item>
+  <title>PCR 규칙 기반 파이프라인의 파라미터 오염 문제</title>
+  <dc:creator>Kwangmin Kim</dc:creator>
+  <link>kk3225.netlify.app/docs/blog/posts/Data_Science/pcr-parameter-contamination-interpretability.html</link>
+  <description><![CDATA[ 
+
+
+
+
+
+<section id="개요" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="개요"><span class="header-section-number">1</span> 개요</h2>
+<p>PCR 진단 시스템에서 의사가 가장 강하게 complain하는 지점은 판정 결과 자체가 아니다. “왜 이 신호가 양성인가?” 또는 “왜 음성인가?”에 대한 <strong>설명의 부재</strong>이다.</p>
+<p>규칙 기반 파이프라인은 판정 경로를 기록할 수 있다. 그러나 그 기록이 의사에게 의미 있는 설명이 되는지는 다른 문제이다. 더 근본적인 문제는, 규칙 기반 파이프라인이 추정한 파라미터가 원본 신호의 물리적 특성을 실제로 반영하는지 여부이다.</p>
+<p>이 포스트는 두 가지 문제를 다룬다.</p>
+<ol type="1">
+<li><strong>파라미터 오염(parameter contamination)</strong>: 순차 전처리 후 추정된 4PL 파라미터는 원본 신호의 물리량이 아니다</li>
+<li><strong>해석가능성 비교</strong>: 규칙 기반 해석은 알고리즘 로그이고, Bayesian 해석은 신호의 물리적 특성이다</li>
+</ol>
+</section>
+<section id="파라미터-오염-문제" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="파라미터-오염-문제"><span class="header-section-number">2</span> 파라미터 오염 문제</h2>
+<section id="규칙-기반-파이프라인의-구조" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="규칙-기반-파이프라인의-구조"><span class="header-section-number">2.1</span> 규칙 기반 파이프라인의 구조</h3>
+<p>전형적인 규칙 기반 PCR 파이프라인은 다음과 같은 순차 구조를 갖는다.</p>
+<pre><code>원본 신호 (N 사이클 RFU 데이터)
+    ↓ Step 1: 조건 판단 (baseline 평균 임계값 등)
+    ↓ Step 2: baseline fitting 선택 (linear vs quadratic)
+    ↓ Step 3: baseline 차감 → 신호 변형
+    ↓ Step 4: jump 처리, 이상값 처리 → 신호 변형
+    ↓ Step 5: 추가 전처리 → 신호 변형
+    ↓ Step 6: 4PL fitting → B, C, D, Ct 추정
+    ↓ Step 7: 임계값 비교 → 판정</code></pre>
+<p>각 단계는 신호를 변형한다. Step 6에서 추정된 파라미터 <img src="https://latex.codecogs.com/png.latex?B"> (Hill 기울기 / 증폭 효율 관련)는 원본 신호가 아니라 Step 1~5를 거쳐 변형된 <strong>잔여 신호</strong>에 fitting한 결과이다.</p>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+파라미터 오염의 본질
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Step 6에서 추정된 <img src="https://latex.codecogs.com/png.latex?B%20=%200.37">은 원본 신호의 증폭 효율이 아니다. 전처리 오류들이 누적된 잔여 신호에서 추정된 fitting 파라미터이다.</p>
+<p>어느 단계의 오류가 얼마나 기여했는지 역추적이 불가능하다.</p>
+</div>
+</div>
+</section>
+<section id="baseline-오차가-b에-미치는-영향" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="baseline-오차가-b에-미치는-영향"><span class="header-section-number">2.2</span> baseline 오차가 B에 미치는 영향</h3>
+<p>간단한 예로 baseline fitting이 조금 틀렸을 때 어떤 일이 발생하는지 확인한다.</p>
+<div class="sourceCode" id="cb2" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb2-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> np</span>
+<span id="cb2-2"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">from</span> scipy.optimize <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> curve_fit</span>
+<span id="cb2-3"></span>
+<span id="cb2-4"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> four_param_logistic(x, A, B, C, D):</span>
+<span id="cb2-5">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">"""4-Parameter Logistic (4PL) 모델"""</span></span>
+<span id="cb2-6">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> D <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> (A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> D) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> (<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> (x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> C) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">**</span> B)</span>
+<span id="cb2-7"></span>
+<span id="cb2-8"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 가상의 원본 신호 (45사이클)</span></span>
+<span id="cb2-9">np.random.seed(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">42</span>)</span>
+<span id="cb2-10">cycles <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.arange(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">46</span>)</span>
+<span id="cb2-11">true_B, true_C <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1.8</span>, <span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">28.0</span>  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 진짜 증폭 효율 파라미터</span></span>
+<span id="cb2-12"></span>
+<span id="cb2-13">signal_true <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> four_param_logistic(cycles, A<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">100</span>, B<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>true_B, C<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>true_C, D<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">200</span>)</span>
+<span id="cb2-14">noise <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.random.normal(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3</span>, <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(cycles))</span>
+<span id="cb2-15">signal_observed <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> signal_true <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> noise</span>
+<span id="cb2-16"></span>
+<span id="cb2-17"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 정확한 baseline (사이클 3~10 평균)</span></span>
+<span id="cb2-18">baseline_correct <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.mean(signal_observed[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">2</span>:<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">10</span>])</span>
+<span id="cb2-19"></span>
+<span id="cb2-20"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 오염된 baseline (조건 분기로 잘못 선택된 경우)</span></span>
+<span id="cb2-21">baseline_wrong <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.mean(signal_observed[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">2</span>:<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">15</span>])  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 5사이클 더 포함</span></span>
+<span id="cb2-22"></span>
+<span id="cb2-23">signal_corrected <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> signal_observed <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> baseline_correct</span>
+<span id="cb2-24">signal_contaminated <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> signal_observed <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> baseline_wrong</span>
+<span id="cb2-25"></span>
+<span id="cb2-26"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 4PL fitting 비교</span></span>
+<span id="cb2-27"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">try</span>:</span>
+<span id="cb2-28">    popt_correct, _ <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> curve_fit(</span>
+<span id="cb2-29">        four_param_logistic, cycles, signal_corrected,</span>
+<span id="cb2-30">        p0<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>[<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">max</span>(signal_corrected), <span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1.5</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">28</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>], maxfev<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5000</span></span>
+<span id="cb2-31">    )</span>
+<span id="cb2-32">    popt_contaminated, _ <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> curve_fit(</span>
+<span id="cb2-33">        four_param_logistic, cycles, signal_contaminated,</span>
+<span id="cb2-34">        p0<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>[<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">max</span>(signal_contaminated), <span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1.5</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">28</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>], maxfev<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5000</span></span>
+<span id="cb2-35">    )</span>
+<span id="cb2-36">    <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"정확한 baseline → B = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>popt_correct[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">, Ct = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>popt_correct[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">2</span>]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>)</span>
+<span id="cb2-37">    <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"오염된 baseline → B = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>popt_contaminated[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">, Ct = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>popt_contaminated[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">2</span>]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>)</span>
+<span id="cb2-38">    <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"True B = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>true_B<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">, True Ct = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>true_C<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>)</span>
+<span id="cb2-39"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">except</span>:</span>
+<span id="cb2-40">    <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"fitting 수렴 실패 — 오염 정도가 클 때 발생하는 전형적 문제"</span>)</span></code></pre></div>
+<p>baseline 선택 오류 하나만으로 <img src="https://latex.codecogs.com/png.latex?B"> 추정값이 크게 달라진다. 이것이 파이프라인 끝에서 “증폭 효율 <img src="https://latex.codecogs.com/png.latex?B%20=%200.37">”이라고 의사에게 보고할 때의 문제다. 그 값은 원본 신호의 증폭 특성을 반영하는 것이 아니라, 파이프라인이 적용한 전처리들의 누적 결과이다.</p>
+</section>
+<section id="bayesian-joint-추정의-차이" class="level3" data-number="2.3">
+<h3 data-number="2.3" class="anchored" data-anchor-id="bayesian-joint-추정의-차이"><span class="header-section-number">2.3</span> Bayesian joint 추정의 차이</h3>
+<p>Bayesian joint 추정은 전처리 없이 원본 신호에 직접 접근한다.</p>
+<div class="sourceCode" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb3-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> pymc <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> pm</span>
+<span id="cb3-2"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> np</span>
+<span id="cb3-3"></span>
+<span id="cb3-4"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> four_pl_model(cycles, A, B, C, D):</span>
+<span id="cb3-5">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> D <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> (A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> D) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> (<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> (cycles <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> C) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">**</span> B)</span>
+<span id="cb3-6"></span>
+<span id="cb3-7"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">with</span> pm.Model() <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> joint_model:</span>
+<span id="cb3-8">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 파라미터의 prior (물리적 의미 반영)</span></span>
+<span id="cb3-9">    A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pm.HalfNormal(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"A"</span>, sigma<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">200</span>)    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 최대 RFU</span></span>
+<span id="cb3-10">    B <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pm.HalfNormal(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"B"</span>, sigma<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3</span>)      <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Hill 기울기 (증폭 효율)</span></span>
+<span id="cb3-11">    C <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pm.Normal(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"C"</span>, mu<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">25</span>, sigma<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">10</span>)  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Ct (변곡점)</span></span>
+<span id="cb3-12">    D <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pm.HalfNormal(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"D"</span>, sigma<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">50</span>)     <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 베이스라인 RFU</span></span>
+<span id="cb3-13">    sigma <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pm.HalfNormal(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"sigma"</span>, sigma<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">10</span>)</span>
+<span id="cb3-14"></span>
+<span id="cb3-15">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 원본 신호에 직접 모델 적용 — 전처리 없음</span></span>
+<span id="cb3-16">    mu <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> four_pl_model(cycles, A, B, C, D)</span>
+<span id="cb3-17">    obs <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pm.Normal(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"obs"</span>, mu<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>mu, sigma<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>sigma, observed<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>signal_observed)</span>
+<span id="cb3-18"></span>
+<span id="cb3-19">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># posterior 추정</span></span>
+<span id="cb3-20">    trace <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pm.sample(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1000</span>, tune<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">500</span>, progressbar<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">False</span>)</span>
+<span id="cb3-21"></span>
+<span id="cb3-22"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 결과 해석</span></span>
+<span id="cb3-23"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> arviz <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> az</span>
+<span id="cb3-24">posterior <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> az.summary(trace, var_names<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"B"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"C"</span>])</span>
+<span id="cb3-25"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(posterior[[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"mean"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"sd"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"hdi_3%"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"hdi_97%"</span>]])</span></code></pre></div>
+<p>Bayesian joint는 <img src="https://latex.codecogs.com/png.latex?B">의 posterior 분포를 직접 추정한다. <img src="https://latex.codecogs.com/png.latex?B">의 HDI(Highest Density Interval)가 넓으면 증폭 효율의 불확실성이 크다는 뜻이고, 이 불확실성이 Ct 추정의 신뢰도에 직접 연결된다. 이것이 물리적 근거가 있는 해석이다.</p>
+</section>
+</section>
+<section id="의사가-원하는-설명-vs.-알고리즘-로그" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="의사가-원하는-설명-vs.-알고리즘-로그"><span class="header-section-number">3</span> 의사가 원하는 설명 vs.&nbsp;알고리즘 로그</h2>
+<p>의사가 받는 두 종류의 설명을 비교한다.</p>
+<section id="규칙-기반-해석-알고리즘-로그" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="규칙-기반-해석-알고리즘-로그"><span class="header-section-number">3.1</span> 규칙 기반 해석 (알고리즘 로그)</h3>
+<pre><code>"baseline 평균이 37.2로 임계값(37) 이하이므로 linear fitting을 적용했습니다.
+ fitting 기울기가 0.73으로 기준값(0.8) 이하이므로 음성 처리하였습니다."</code></pre>
+<p>이것은 알고리즘이 어떤 분기 경로를 탔는지를 설명한다. 의사 입장에서 이 설명은 “왜 양성/음성인가?”에 답하지 않는다.</p>
+<ul>
+<li><strong>기울기 0.8 기준이 왜 음성 임계값인가?</strong> — 경험적으로 정해진 숫자이다</li>
+<li><strong>이 환자 샘플에 그 기준이 적합한가?</strong> — 판단 불가능하다</li>
+<li><strong>linear fitting이 왜 이 신호에 더 적합한가?</strong> — 생물학적 근거가 없다</li>
+</ul>
+<p>이 설명이 의미없는 근본 이유는, 규칙이 신호의 생물학을 모델링한 것이 아니라 <strong>경험적으로 튜닝된 분기 조건</strong>이기 때문이다. 설명하면 할수록 “그래서 왜?”가 남는다.</p>
+</section>
+<section id="bayesian-해석-신호의-물리적-특성" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="bayesian-해석-신호의-물리적-특성"><span class="header-section-number">3.2</span> Bayesian 해석 (신호의 물리적 특성)</h3>
+<pre><code>"증폭 효율이 74%로 정상 범위(90~110%)를 크게 벗어납니다.
+ S자 곡선의 변곡점(Ct)을 cycle 33~40 사이로 특정할 수 없습니다.
+ 이 신호가 양성일 확률은 64%입니다. 재검을 권장합니다."</code></pre>
+<p>이것은 신호의 물리적 특성으로 설명한다. 의사는 이 설명에서 “증폭이 잘 안 됐구나, 바이러스 농도가 극히 낮거나 시약 문제가 있겠구나”로 이해할 수 있다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+핵심 구분
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>규칙 기반 해석: “우리 알고리즘의 분기 조건을 이 신호가 어떻게 통과했는가”</p>
+<p>Bayesian 해석: “이 신호의 물리적 특성이 무엇인가, 그리고 얼마나 불확실한가”</p>
+<p>의사는 후자를 원한다.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="결과-불일치-처리-전략" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="결과-불일치-처리-전략"><span class="header-section-number">4</span> 결과 불일치 처리 전략</h2>
+<p>Bayesian을 병렬로 운용하면 규칙 기반(C++)의 결과와 Bayesian의 결과가 다를 수 있다. 이 불일치를 어떻게 처리하는지가 실용적 설계의 핵심이다.</p>
+<table class="table">
+<colgroup>
+<col style="width: 23%">
+<col style="width: 35%">
+<col style="width: 26%">
+<col style="width: 14%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>C++ 결과</th>
+<th>Bayesian 결과</th>
+<th>처리 방법</th>
+<th>근거</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>양성</td>
+<td>양성</td>
+<td>일치 — 그대로 출력</td>
+<td>두 방법 모두 동의</td>
+</tr>
+<tr class="even">
+<td>음성</td>
+<td>음성</td>
+<td>일치 — 그대로 출력</td>
+<td>두 방법 모두 동의</td>
+</tr>
+<tr class="odd">
+<td>양성</td>
+<td>Uncertain</td>
+<td>C++ 결과 유지 + 경고 플래그</td>
+<td>Bayesian이 신뢰도 낮음을 표시</td>
+</tr>
+<tr class="even">
+<td>음성</td>
+<td>Uncertain</td>
+<td>C++ 결과 유지 + 경고 플래그</td>
+<td>Bayesian이 신뢰도 낮음을 표시</td>
+</tr>
+<tr class="odd">
+<td>양성</td>
+<td>음성</td>
+<td>가장 위험 — 재검 강제</td>
+<td>두 방법이 반대 결론</td>
+</tr>
+<tr class="even">
+<td>음성</td>
+<td>양성</td>
+<td>가장 위험 — 재검 강제</td>
+<td>두 방법이 반대 결론</td>
+</tr>
+</tbody>
+</table>
+<p>실제로 두 방법이 반대 결론을 내는 경우는 거의 항상 gray zone 신호이다. C++이 임계값을 아슬아슬하게 넘거나 못 넘은 케이스다.</p>
+<pre><code>C++ Ct = 34.9  →  양성 (threshold = 35)
+Bayesian Ct CI = [33.1, 40.2]  →  Uncertain</code></pre>
+<p>이 경우 “결과가 달라진 게 문제”가 아니라 “원래부터 판정이 어려운 신호였다”는 정보를 Bayesian이 드러낸 것이다.</p>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+설계 원칙
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Bayesian을 <strong>결과를 바꾸는</strong> 알고리즘으로 쓰면 안 된다. Bayesian을 <strong>C++ 결과의 신뢰도를 점수화하는</strong> 알고리즘으로 써야 한다.</p>
+<p>최종 출력 예시: - 판정: 양성 (C++ 기준) - 신뢰도: LOW — Ct CI 폭 7.2 cycle, 증폭 효율 74% - 권고: Retest Recommended</p>
+</div>
+</div>
+</section>
+<section id="mcmc-속도와-hybrid-아키텍처" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="mcmc-속도와-hybrid-아키텍처"><span class="header-section-number">5</span> MCMC 속도와 Hybrid 아키텍처</h2>
+<section id="속도-비교" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="속도-비교"><span class="header-section-number">5.1</span> 속도 비교</h3>
+<p>MCMC는 posterior 분포를 수렴시키기 위해 샘플을 수천 개 뽑는다. 각 샘플에서 likelihood를 계산하므로 신호 1개당 수백 ms가 소요된다.</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>방법</th>
+<th>신호 1개 처리 시간</th>
+<th>768개 총 시간</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>C++ 규칙 기반</td>
+<td>~수 <img src="https://latex.codecogs.com/png.latex?%5Cmu">s</td>
+<td>&lt; 10 ms</td>
+</tr>
+<tr class="even">
+<td>Python MCMC (PyMC)</td>
+<td>200~500 ms</td>
+<td>3~6분</td>
+</tr>
+<tr class="odd">
+<td>Python VI (Variational Inference)</td>
+<td>10~50 ms</td>
+<td>10~40초</td>
+</tr>
+<tr class="even">
+<td>Laplace Approximation</td>
+<td>수 ms</td>
+<td>&lt; 1초</td>
+</tr>
+</tbody>
+</table>
+<p>실시간 장비(수초 내 결과 요구)에서 전체를 MCMC로 처리하는 것은 현실적이지 않다.</p>
+</section>
+<section id="구조가-다르다" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="구조가-다르다"><span class="header-section-number">5.2</span> 구조가 다르다</h3>
+<p>C++은 신호 1개씩 순차 처리한다. Hierarchical Bayesian은 384개 신호를 행렬 연산으로 한 번에 처리할 수 있다.</p>
+<div class="sourceCode" id="cb7" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb7-1"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># C++ 방식: 768개를 순차 루프</span></span>
+<span id="cb7-2"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">for</span> signal <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">in</span> signals:</span>
+<span id="cb7-3">    result <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> cpp_algorithm(signal)</span>
+<span id="cb7-4"></span>
+<span id="cb7-5"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Hierarchical Bayesian: (768, 45) 행렬을 한 번에 처리</span></span>
+<span id="cb7-6">signals_matrix <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.array(signals)  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># shape: (768, 45)</span></span>
+<span id="cb7-7"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># PyMC 내부에서 벡터화 연산으로 동시 추정</span></span></code></pre></div>
+<p>JAX 백엔드 + GPU를 쓰면 768개 동시 처리가 가능하여 총 시간이 10~30초 수준으로 줄어든다.</p>
+</section>
+<section id="hybrid-아키텍처" class="level3" data-number="5.3">
+<h3 data-number="5.3" class="anchored" data-anchor-id="hybrid-아키텍처"><span class="header-section-number">5.3</span> Hybrid 아키텍처</h3>
+<pre><code>C++ 규칙 기반 (실시간, &lt; 10 ms)
+        ↓ 전체 신호 처리
+gray zone 판정된 신호만 추출 (전체의 10~20%)
+        ↓ ~77개 신호
+Python Bayesian (비동기, 수초 허용)
+        ↓ 불확실성 정량화
+의사에게 리포트:
+  "불확실 — Ct CI 폭 7.2 cycle, 증폭 효율 74%, 재검 권장"</code></pre>
+<p>384웰 중 gray zone이 20%면 약 77개 신호만 MCMC로 처리한다. 플레이트 전체를 MCMC로 돌리는 것이 아니다. 이 구조는 실시간 요구사항을 유지하면서 gray zone 신호에 대한 해석가능한 불확실성을 제공한다.</p>
+</section>
+</section>
+<section id="전처리-문서화와-불확실성-추적의-차이" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="전처리-문서화와-불확실성-추적의-차이"><span class="header-section-number">6</span> 전처리 문서화와 불확실성 추적의 차이</h2>
+<p>규제 문서(FDA 510(k), 로슈 등)에 전처리 절차가 명시되어 있다는 반론이 있다. 예를 들면:</p>
+<pre><code>공식 문서: "baseline은 linear/quadratic 회귀로 fitting하여 차감한다" ← 명시됨</code></pre>
+<p>그러나 이것은 <strong>절차의 투명성</strong>이다. <strong>결과의 신뢰성</strong>(baseline fitting 오차가 B 추정값에 얼마나 기여하는가)과는 다른 차원이다.</p>
+<table class="table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>구분</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>문서화된 것</td>
+<td>전처리 절차 — “이 파이프라인은 이렇게 동작한다”</td>
+</tr>
+<tr class="even">
+<td>추적되지 않는 것</td>
+<td>전처리 오차의 파라미터 추정 기여 — “전처리 오류가 B 추정에 얼마나 영향을 주는가”</td>
+</tr>
+</tbody>
+</table>
+<p>로슈나 FDA 승인 문서도 마찬가지다. 전처리 절차는 기술되어 있지만, 그 전처리가 최종 파라미터 추정의 불확실성에 얼마나 기여하는지는 대부분 정량화되어 있지 않다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+정당한 전처리와 문제가 되는 전처리의 구분
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<table class="table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>구분</th>
+<th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>정당한 전처리</td>
+<td>노이즈 제거, 단위 변환 — 모델에 명시, 불확실성 추적</td>
+</tr>
+<tr class="even">
+<td>문제가 되는 전처리</td>
+<td>신호를 변형한 후 그 결과물을 원본 신호의 물리적 특성으로 해석</td>
+</tr>
+</tbody>
+</table>
+<p>NASA도 전처리를 한다. 그러나 NASA는 전처리된 데이터로 추정한 값을 “원본 물리량”이라고 부르지 않는다. 전처리 과정을 모델에 명시하고, 그 불확실성을 함께 보고한다.</p>
+</div>
+</div>
+</section>
+<section id="결론" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="결론"><span class="header-section-number">7</span> 결론</h2>
+<p>규칙 기반 PCR 파이프라인의 핵심 한계는 두 가지이다.</p>
+<p><strong>첫 번째, 파라미터 오염</strong>: 순차 전처리 후 추정된 <img src="https://latex.codecogs.com/png.latex?B">는 원본 신호의 증폭 효율이 아니다. 각 단계의 오류가 누적된 잔여 신호의 fitting 결과이다. 이것을 의사에게 “증폭 효율”이라고 설명하는 것은 용어 자체가 틀렸다.</p>
+<p><strong>두 번째, 해석의 부재</strong>: 판정 경로(알고리즘 로그)를 전달해도 의사에게 생물학적 근거를 제공하지 못한다.</p>
+<p>Bayesian joint 추정은 두 문제를 동시에 해결한다. 원본 신호에서 직접 파라미터를 추정하므로 파라미터 오염이 없고, posterior 분포를 통해 불확실성을 정량화하므로 의사에게 “왜 불확실한가”를 신호의 물리적 특성으로 설명할 수 있다.</p>
+<p>현실적인 전환 경로는 규칙 기반을 버리는 것이 아니다. <strong>C++로 전체 처리 → gray zone만 추출 → Bayesian으로 신뢰도 점수화</strong>하는 Hybrid 아키텍처가 실용적이다.</p>
+</section>
+<section id="관련-주제" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">8</span> 관련 주제</h2>
+<p><strong>선행 지식</strong></p>
+<ul>
+<li><a href="../../../../docs/blog/posts/Data_Science/pcr-joint-bayesian-estimation.html">PCR Joint Bayesian Estimation — 순차 규칙에서 확률적 추정으로</a></li>
+<li><a href="../../../../docs/blog/posts/Data_Science/pcr-4pl-amplification-efficiency.html">RT-PCR 4PL 모델 — 증폭 효율과 의료 규제 설계 원칙</a></li>
+<li><a href="../../../../docs/blog/posts/Data_Science/pcr-grayzone-uncertainty.html">RT-PCR 그레이존 처리와 불확실성 관리</a></li>
+</ul>
+<p><strong>같은 주제 시리즈</strong></p>
+<ul>
+<li><a href="../../../../docs/blog/posts/Data_Science/pcr-rule-based-vs-bayesian-critique.html">규칙 기반 알고리즘과 데이터 기반 알고리즘 — 진단 시스템 설계 관점의 비교</a></li>
+<li><a href="../../../../docs/blog/posts/Data_Science/pcr-hierarchical-bayesian.html">PCR 배치 수준 Hierarchical Bayesian</a></li>
+<li><a href="../../../../docs/blog/posts/Data_Science/pcr-diagnostic-dl-regulatory.html">RT-PCR 진단 알고리즘과 딥러닝 — FDA 규제 관점의 설계 원칙</a></li>
+</ul>
+<p><strong>다른 카테고리 연결</strong></p>
+<ul>
+<li><a href="../../../../docs/blog/posts/Statistics/83-hierarchical-models-mixtures.html">베이지안 계층 모형</a> — Bayesian 추론의 이론적 기반</li>
+<li><a href="../../../../docs/blog/posts/Surveilance/0-regulation-basic.html">FDA SaMD 규제</a> — IVD 소프트웨어 규제 맥락</li>
+</ul>
+
+
+</section>
+
+ ]]></description>
+  <category>Data Science</category>
+  <category>Statistics</category>
+  <category>Surveilance</category>
+  <guid>kk3225.netlify.app/docs/blog/posts/Data_Science/pcr-parameter-contamination-interpretability.html</guid>
+  <pubDate>Sun, 29 Mar 2026 15:00:00 GMT</pubDate>
+</item>
+<item>
   <title>지수족 (Exponential Family)</title>
   <dc:creator>Kwangmin Kim</dc:creator>
   <link>kk3225.netlify.app/docs/blog/posts/Statistics/76-exponential-family.html</link>
@@ -20349,2196 +21925,6 @@ Claude:
   <category>MCP</category>
   <category>Tool</category>
   <guid>kk3225.netlify.app/docs/blog/posts/Agent/24-Agent-Architecture/28-custom-tool-development-and-registration.html</guid>
-  <pubDate>Sat, 28 Mar 2026 15:00:00 GMT</pubDate>
-</item>
-<item>
-  <title>GitHub Copilot CLI SW Tool 명세와 Claude Code 대조 분석</title>
-  <dc:creator>Kwangmin Kim</dc:creator>
-  <link>kk3225.netlify.app/docs/blog/posts/Agent/24-Agent-Architecture/29-github-copilot-cli-tool-specification.html</link>
-  <description><![CDATA[ 
-
-
-
-
-
-<section id="왜-두-cli는-다른-도구-세트를-갖는가" class="level2" data-number="1">
-<h2 data-number="1" class="anchored" data-anchor-id="왜-두-cli는-다른-도구-세트를-갖는가"><span class="header-section-number">1</span> 왜 두 CLI는 다른 도구 세트를 갖는가</h2>
-<p><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/26-sw-tool-sdk-specification.html">26번 포스트</a>에서 Claude Code 네이티브 도구와 VS Code 내 GitHub Copilot 도구를 정리했다. 그런데 “GitHub Copilot”에는 두 가지 컨텍스트가 있다.</p>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 31%">
-<col style="width: 34%">
-<col style="width: 34%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>컨텍스트</th>
-<th>실행 환경</th>
-<th>핵심 도구</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><strong>GitHub Copilot (VS Code)</strong></td>
-<td>IDE 내 Chat</td>
-<td><span class="citation" data-cites="workspace">@workspace</span>, Agent Mode, /explain 등</td>
-</tr>
-<tr class="even">
-<td><strong>GitHub Copilot CLI</strong></td>
-<td>터미널(PowerShell/bash)</td>
-<td>powershell, task, sql, github-mcp-server-* 등</td>
-</tr>
-</tbody>
-</table>
-<p>이 포스트는 <strong>터미널에서 실행되는 GitHub Copilot CLI</strong>의 도구 전체 명세를 다룬다. 두 CLI는 같은 Anthropic Claude 모델을 백엔드로 사용하지만, <strong>실행 환경이 다르기 때문에 도구 세트가 크게 다르다</strong>.</p>
-<ul>
-<li><strong>Claude Code</strong>는 macOS/Linux bash 셸을 전제로, 단일 <code>Bash</code> 도구와 파일 조작 도구가 중심이다.</li>
-<li><strong>Copilot CLI</strong>는 Windows PowerShell을 기본 환경으로, 세션 기반 인터랙티브 쉘과 GitHub MCP 서버 도구가 내장된다.</li>
-</ul>
-<hr>
-</section>
-<section id="github-copilot-cli-네이티브-도구" class="level2" data-number="2">
-<h2 data-number="2" class="anchored" data-anchor-id="github-copilot-cli-네이티브-도구"><span class="header-section-number">2</span> GitHub Copilot CLI 네이티브 도구</h2>
-<p>Copilot CLI가 사용자 요청 처리를 위해 호출하는 도구 전체를 기능 영역별로 분류한다.</p>
-<section id="쉘-실행-도구" class="level3" data-number="2.1">
-<h3 data-number="2.1" class="anchored" data-anchor-id="쉘-실행-도구"><span class="header-section-number">2.1</span> 쉘 실행 도구</h3>
-<p>터미널 명령 실행의 핵심 도구군이다. Claude Code의 단일 <code>Bash</code> 도구와 달리, Copilot CLI는 <strong>세션(shellId) 기반 비동기 모델</strong>을 채택한다.</p>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 23%">
-<col style="width: 23%">
-<col style="width: 53%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-<th>핵심 파라미터</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>powershell</code></td>
-<td>PowerShell 명령 실행 (sync/async/detach)</td>
-<td><code>command</code>, <code>shellId</code>, <code>mode</code>, <code>initial_wait</code>, <code>detach</code></td>
-</tr>
-<tr class="even">
-<td><code>write_powershell</code></td>
-<td>실행 중인 세션에 입력 전송</td>
-<td><code>shellId</code>, <code>input</code>, <code>delay</code></td>
-</tr>
-<tr class="odd">
-<td><code>read_powershell</code></td>
-<td>세션 출력 읽기 (완료 후 결과 수집)</td>
-<td><code>shellId</code>, <code>delay</code></td>
-</tr>
-<tr class="even">
-<td><code>stop_powershell</code></td>
-<td>세션 강제 종료</td>
-<td><code>shellId</code></td>
-</tr>
-<tr class="odd">
-<td><code>list_powershell</code></td>
-<td>활성 세션 목록 조회</td>
-<td>(없음)</td>
-</tr>
-</tbody>
-</table>
-<p><strong>mode 구분이 핵심이다.</strong> <code>sync</code>는 완료를 기다리며, <code>async</code>는 백그라운드 실행이고, <code>async + detach: true</code>는 세션 종료 후에도 독립 실행된다. 서버·데몬 프로세스는 반드시 <code>detach: true</code>를 사용한다.</p>
-<p>세션 기반 모델의 실용적 흐름:</p>
-<pre><code># 1단계: 빌드 명령 실행 (오래 걸릴 수 있으므로 sync, initial_wait 30초)
-powershell(command="npm run build", shellId="build-session", mode="sync", initial_wait=30)
-
-# 2단계: 30초 안에 완료되지 않으면 백그라운드로 전환 — 완료 알림을 받음
-#        완료 후 결과 수집
-read_powershell(shellId="build-session", delay=5)
-
-# 3단계: 인터랙티브 도구 실행 — python REPL 활용
-powershell(command="python", shellId="py-session", mode="async")
-write_powershell(shellId="py-session", input="import pandas as pd\nprint(pd.__version__){enter}", delay=3)
-read_powershell(shellId="py-session", delay=2)</code></pre>
-<p>이 패턴이 Claude Code의 <code>Bash</code> 방식과 근본적으로 다른 점은, <strong>동일 <code>shellId</code>에서 상태가 누적된다는 것</strong>이다. <code>cd</code> 명령으로 디렉토리를 바꾸면 같은 세션의 다음 명령도 그 디렉토리에서 실행된다.</p>
-<div class="callout callout-style-default callout-note callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-Claude Code <code>Bash</code> vs Copilot CLI <code>powershell</code>
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>Claude Code의 <code>Bash</code>는 각 호출마다 독립 프로세스로 실행되어 셸 상태가 초기화된다. Copilot CLI의 <code>powershell</code>은 <code>shellId</code>로 세션을 유지하므로, 환경 변수 설정·디렉토리 이동·인터랙티브 도구 제어가 가능하다. <code>write_powershell</code>로 실행 중인 프로세스에 입력을 보내거나 메뉴를 탐색할 수 있다는 점이 Claude Code <code>Bash</code>와 근본적으로 다르다.</p>
-</div>
-</div>
-</section>
-<section id="파일-조작-도구" class="level3" data-number="2.2">
-<h3 data-number="2.2" class="anchored" data-anchor-id="파일-조작-도구"><span class="header-section-number">2.2</span> 파일 조작 도구</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 23%">
-<col style="width: 23%">
-<col style="width: 53%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-<th>핵심 파라미터</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>view</code></td>
-<td>파일 내용 읽기·디렉토리 목록 조회</td>
-<td><code>path</code>, <code>view_range</code></td>
-</tr>
-<tr class="even">
-<td><code>create</code></td>
-<td>새 파일 생성 (기존 파일에 사용 불가)</td>
-<td><code>path</code>, <code>file_text</code></td>
-</tr>
-<tr class="odd">
-<td><code>edit</code></td>
-<td>파일 내 정확한 문자열 치환 (단일 편집)</td>
-<td><code>path</code>, <code>old_str</code>, <code>new_str</code></td>
-</tr>
-<tr class="even">
-<td><code>grep</code></td>
-<td>ripgrep 기반 콘텐츠 검색</td>
-<td><code>pattern</code>, <code>path</code>, <code>glob</code>, <code>output_mode</code>, <code>-n</code>, <code>-C</code></td>
-</tr>
-<tr class="odd">
-<td><code>glob</code></td>
-<td>glob 패턴으로 파일 경로 탐색</td>
-<td><code>pattern</code>, <code>path</code></td>
-</tr>
-</tbody>
-</table>
-<p><strong><code>edit</code>는 동일 응답에서 여러 번 호출 가능하다.</strong> 서로 겹치지 않는 문자열 블록을 한 응답에서 병렬로 수정한다. <code>old_str</code>은 파일 내에서 유일해야 하며, 중복이 있으면 더 많은 컨텍스트를 포함해 unique하게 만들어야 한다. Claude Code의 <code>Edit</code>와 동일한 diff 방식이다.</p>
-<p><strong><code>create</code>와 <code>write</code>의 차이</strong>: Copilot CLI의 <code>create</code>는 신규 파일 생성 전용이다. 기존 파일을 덮어쓰는 용도가 없다. 기존 파일 수정에는 <code>edit</code>를 사용한다.</p>
-</section>
-<section id="에이전트-오케스트레이션-도구" class="level3" data-number="2.3">
-<h3 data-number="2.3" class="anchored" data-anchor-id="에이전트-오케스트레이션-도구"><span class="header-section-number">2.3</span> 에이전트 오케스트레이션 도구</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 18%">
-<col style="width: 18%">
-<col style="width: 62%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-<th>지원 에이전트 타입</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>task</code></td>
-<td>서브에이전트 실행 (sync/background 모드)</td>
-<td><code>explore</code>, <code>task</code>, <code>general-purpose</code>, <code>code-review</code></td>
-</tr>
-<tr class="even">
-<td><code>read_agent</code></td>
-<td>실행 중·완료된 에이전트 결과 조회</td>
-<td>—</td>
-</tr>
-<tr class="odd">
-<td><code>list_agents</code></td>
-<td>활성·완료 에이전트 목록 조회</td>
-<td>—</td>
-</tr>
-</tbody>
-</table>
-<p><code>task</code> 도구의 에이전트 타입:</p>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 33%">
-<col style="width: 33%">
-<col style="width: 33%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>타입</th>
-<th>역할</th>
-<th>모델</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>explore</code></td>
-<td>코드베이스 탐색·질문 답변 (빠른 파일/키워드 검색)</td>
-<td>Haiku (저비용)</td>
-</tr>
-<tr class="even">
-<td><code>task</code></td>
-<td>빌드·테스트·린트 실행, 성공/실패만 보고</td>
-<td>Haiku</td>
-</tr>
-<tr class="odd">
-<td><code>general-purpose</code></td>
-<td>복잡한 멀티스텝 태스크, 전체 도구 세트</td>
-<td>Sonnet</td>
-</tr>
-<tr class="even">
-<td><code>code-review</code></td>
-<td>스테이징/브랜치 변경 코드 리뷰 (버그·보안 집중)</td>
-<td>Sonnet</td>
-</tr>
-</tbody>
-</table>
-<p><strong><code>background</code> 모드</strong>로 실행하면 에이전트가 완료될 때 알림을 받고, <code>read_agent</code>로 결과를 수집한다. <code>explore</code>·<code>code-review</code>는 병렬 호출이 안전하다.</p>
-<p>병렬 에이전트 호출 패턴:</p>
-<pre><code># 3개 파일을 동시에 탐색 — 각각 독립 컨텍스트 창에서 실행
-task(name="auth-explore",  prompt="src/auth/ 디렉토리의 인증 흐름 설명",  agent_type="explore", mode="background")
-task(name="db-explore",    prompt="src/db/ 디렉토리의 쿼리 패턴 분석",    agent_type="explore", mode="background")
-task(name="api-explore",   prompt="src/api/routes/ 엔드포인트 전체 목록", agent_type="explore", mode="background")
-
-# 완료 알림 수신 후 결과 수집
-read_agent(agent_id="auth-explore-xxx", wait=true)
-read_agent(agent_id="db-explore-xxx",   wait=true)
-read_agent(agent_id="api-explore-xxx",  wait=true)</code></pre>
-<p><code>explore</code>와 <code>code-review</code> 에이전트는 파일을 수정하지 않으므로 병렬 실행이 항상 안전하다. <code>general-purpose</code>와 <code>task</code> 에이전트는 파일 수정·명령 실행 등 사이드 이펙트가 있어 병렬 실행 시 충돌에 주의해야 한다.</p>
-</section>
-<section id="사용자-인터페이스세션-관리-도구" class="level3" data-number="2.4">
-<h3 data-number="2.4" class="anchored" data-anchor-id="사용자-인터페이스세션-관리-도구"><span class="header-section-number">2.4</span> 사용자 인터페이스·세션 관리 도구</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 23%">
-<col style="width: 23%">
-<col style="width: 53%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-<th>주요 파라미터</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>ask_user</code></td>
-<td>사용자에게 질문 (선택지 또는 자유형)</td>
-<td><code>question</code>, <code>choices</code>, <code>allow_freeform</code></td>
-</tr>
-<tr class="even">
-<td><code>report_intent</code></td>
-<td>현재 작업 의도 UI 표시</td>
-<td><code>intent</code></td>
-</tr>
-<tr class="odd">
-<td><code>sql</code></td>
-<td>세션 SQLite DB 쿼리 실행</td>
-<td><code>query</code>, <code>description</code></td>
-</tr>
-</tbody>
-</table>
-<p><strong><code>sql</code> 도구는 Claude Code에 없는 Copilot CLI 고유 도구이다.</strong> 세션 내에 SQLite DB가 내장되어 있어, 태스크 추적(<code>todos</code>·<code>todo_deps</code> 테이블), 배치 작업 상태 관리, 중간 결과 저장 등에 활용한다. Claude Code가 <code>TaskCreate/TaskUpdate</code> 전용 도구로 해결하는 문제를 Copilot CLI는 범용 SQL로 해결한다.</p>
-<div class="sourceCode" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode numberSource sql number-lines code-with-copy"><code class="sourceCode sql"><span id="cb3-1"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-- 사전 정의된 todos 테이블 사용</span></span>
-<span id="cb3-2"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">INSERT</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">INTO</span> todos (<span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">id</span>, title, description, status) <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">VALUES</span></span>
-<span id="cb3-3">  (<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'refactor-auth'</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'인증 모듈 리팩토링'</span>,</span>
-<span id="cb3-4">   <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'src/auth/에서 JWT 로직 분리, bcrypt 해싱 추가'</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'pending'</span>),</span>
-<span id="cb3-5">  (<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'add-tests'</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'단위 테스트 작성'</span>,</span>
-<span id="cb3-6">   <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'리팩토링 후 auth 모듈 테스트 커버리지 80% 달성'</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'pending'</span>);</span>
-<span id="cb3-7"></span>
-<span id="cb3-8"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-- 의존성 등록: 테스트는 리팩토링 완료 후</span></span>
-<span id="cb3-9"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">INSERT</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">INTO</span> todo_deps (todo_id, depends_on) <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">VALUES</span> (<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'add-tests'</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'refactor-auth'</span>);</span>
-<span id="cb3-10"></span>
-<span id="cb3-11"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-- 준비된 태스크 조회 (의존성이 모두 완료된 것만)</span></span>
-<span id="cb3-12"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">SELECT</span> t.<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">FROM</span> todos t</span>
-<span id="cb3-13"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">WHERE</span> t.status <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'pending'</span></span>
-<span id="cb3-14"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">AND</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">NOT</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">EXISTS</span> (</span>
-<span id="cb3-15">    <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">SELECT</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">FROM</span> todo_deps td</span>
-<span id="cb3-16">    <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">JOIN</span> todos dep <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">ON</span> td.depends_on <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> dep.<span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">id</span></span>
-<span id="cb3-17">    <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">WHERE</span> td.todo_id <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> t.<span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">id</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">AND</span> dep.status <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">!=</span> <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'done'</span></span>
-<span id="cb3-18">);</span></code></pre></div>
-<p>범용 SQL 방식의 장점은 <strong>커스텀 테이블을 자유롭게 만들 수 있다는 것</strong>이다. 배치 PR 리뷰 결과를 테이블에 저장하거나, 파일 분석 진행률을 중간 저장하거나, 다단계 파이프라인의 상태를 추적하는 데 모두 같은 도구를 재활용한다.</p>
-</section>
-<section id="웹문서-조회-도구" class="level3" data-number="2.5">
-<h3 data-number="2.5" class="anchored" data-anchor-id="웹문서-조회-도구"><span class="header-section-number">2.5</span> 웹·문서 조회 도구</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 23%">
-<col style="width: 23%">
-<col style="width: 53%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-<th>주요 파라미터</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>web_fetch</code></td>
-<td>URL 콘텐츠 조회 (markdown 또는 raw HTML)</td>
-<td><code>url</code>, <code>raw</code>, <code>start_index</code>, <code>max_length</code></td>
-</tr>
-<tr class="even">
-<td><code>fetch_copilot_cli_documentation</code></td>
-<td>Copilot CLI 자체 README·도움말 조회</td>
-<td>(없음)</td>
-</tr>
-</tbody>
-</table>
-<p><strong><code>fetch_copilot_cli_documentation</code>는 자체 문서화 도구이다.</strong> 사용자가 기능이나 커맨드를 물을 때, 메모리에서 답하지 않고 이 도구로 공식 문서를 먼저 조회한 후 답변한다. Claude Code의 <code>ToolSearch</code>와 목적이 유사하나, Copilot CLI 전용 문서에 특화된다.</p>
-</section>
-<section id="ide-연동-도구" class="level3" data-number="2.6">
-<h3 data-number="2.6" class="anchored" data-anchor-id="ide-연동-도구"><span class="header-section-number">2.6</span> IDE 연동 도구</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 27%">
-<col style="width: 27%">
-<col style="width: 45%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-<th>반환 정보</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>ide-get_selection</code></td>
-<td>현재 에디터에서 선택된 코드 조회</td>
-<td>선택 텍스트, 파일 URI, 현재 선택 여부</td>
-</tr>
-<tr class="even">
-<td><code>ide-get_diagnostics</code></td>
-<td>VS Code 언어 진단 정보 조회</td>
-<td>오류·경고·힌트 목록 (파일별 또는 전체)</td>
-</tr>
-</tbody>
-</table>
-<p>IDE 연동 도구는 <strong>Claude Code에 없는 Copilot CLI 고유 기능이다.</strong> VS Code가 활성 상태일 때 실시간으로 선택 코드나 컴파일 에러를 받아 에이전트 컨텍스트에 포함시킨다. 코드 수정 전 <code>ide-get_diagnostics</code>로 현재 오류를 먼저 파악하는 패턴이 일반적이다.</p>
-<hr>
-</section>
-</section>
-<section id="github-mcp-서버-내장-도구-17개" class="level2" data-number="3">
-<h2 data-number="3" class="anchored" data-anchor-id="github-mcp-서버-내장-도구-17개"><span class="header-section-number">3</span> GitHub MCP 서버 내장 도구 (17개)</h2>
-<p>Copilot CLI는 GitHub MCP 서버를 내장으로 포함한다. Claude Code에서 동일한 기능을 쓰려면 외부 MCP 서버를 별도로 구성해야 한다.</p>
-<section id="github-actions-도구-5개" class="level3" data-number="3.1">
-<h3 data-number="3.1" class="anchored" data-anchor-id="github-actions-도구-5개"><span class="header-section-number">3.1</span> GitHub Actions 도구 (5개)</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 50%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>github-mcp-server-actions_get</code></td>
-<td>워크플로우·런·잡·아티팩트 상세 조회</td>
-</tr>
-<tr class="even">
-<td><code>github-mcp-server-actions_list</code></td>
-<td>워크플로우·런·잡·아티팩트 목록 조회</td>
-</tr>
-<tr class="odd">
-<td><code>github-mcp-server-get_job_logs</code></td>
-<td>특정 잡 로그 또는 실패 잡 전체 로그 조회</td>
-</tr>
-<tr class="even">
-<td><code>github-mcp-server-get_commit</code></td>
-<td>커밋 상세 정보 및 diff 조회</td>
-</tr>
-<tr class="odd">
-<td><code>github-mcp-server-get_file_contents</code></td>
-<td>원격 레포 파일·디렉토리 내용 조회</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="이슈pr-관리-도구-7개" class="level3" data-number="3.2">
-<h3 data-number="3.2" class="anchored" data-anchor-id="이슈pr-관리-도구-7개"><span class="header-section-number">3.2</span> 이슈·PR 관리 도구 (7개)</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 50%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>github-mcp-server-issue_read</code></td>
-<td>이슈 상세·댓글·서브이슈·레이블 조회</td>
-</tr>
-<tr class="even">
-<td><code>github-mcp-server-list_issues</code></td>
-<td>이슈 목록 조회 (라벨·날짜·상태 필터)</td>
-</tr>
-<tr class="odd">
-<td><code>github-mcp-server-search_issues</code></td>
-<td>이슈 전체 검색 (GitHub search syntax)</td>
-</tr>
-<tr class="even">
-<td><code>github-mcp-server-list_pull_requests</code></td>
-<td>PR 목록 조회</td>
-</tr>
-<tr class="odd">
-<td><code>github-mcp-server-pull_request_read</code></td>
-<td>PR 상세·diff·파일·리뷰 댓글·체크런 조회</td>
-</tr>
-<tr class="even">
-<td><code>github-mcp-server-search_pull_requests</code></td>
-<td>PR 검색</td>
-</tr>
-<tr class="odd">
-<td><code>github-mcp-server-list_branches</code></td>
-<td>브랜치 목록 조회</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="코드저장소사용자-탐색-도구-5개" class="level3" data-number="3.3">
-<h3 data-number="3.3" class="anchored" data-anchor-id="코드저장소사용자-탐색-도구-5개"><span class="header-section-number">3.3</span> 코드·저장소·사용자 탐색 도구 (5개)</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 50%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>도구</th>
-<th>역할</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>github-mcp-server-search_code</code></td>
-<td>GitHub 전체 코드 검색 (ripgrep 수준)</td>
-</tr>
-<tr class="even">
-<td><code>github-mcp-server-search_repositories</code></td>
-<td>저장소 탐색 (스타·언어·토픽 필터)</td>
-</tr>
-<tr class="odd">
-<td><code>github-mcp-server-search_users</code></td>
-<td>사용자 탐색</td>
-</tr>
-<tr class="even">
-<td><code>github-mcp-server-list_commits</code></td>
-<td>브랜치·태그별 커밋 목록 조회</td>
-</tr>
-<tr class="odd">
-<td><code>github-mcp-server-get_copilot_space</code></td>
-<td>Copilot Space 문서 조회</td>
-</tr>
-</tbody>
-</table>
-<div class="callout callout-style-default callout-note callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-내장 MCP vs 외부 MCP 구성
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>Claude Code에서 GitHub MCP 서버를 사용하려면 <code>claude mcp add</code> 명령으로 별도 서버를 등록해야 한다. Copilot CLI는 이 17개 도구가 에이전트에 기본 탑재되어 있으므로, 코드 리뷰·CI 분석·이슈 추적을 추가 설정 없이 즉시 수행할 수 있다.</p>
-</div>
-</div>
-<p>MCP 서버 도구의 실용적 사용 예는 CI 파이프라인 디버깅에서 잘 드러난다. 배포가 실패했을 때 다음 순서로 도구를 조합한다:</p>
-<pre><code># 1. 최근 실패한 워크플로우 런 조회
-github-mcp-server-actions_list(method="list_workflow_runs",
-  owner="myorg", repo="myrepo",
-  workflow_runs_filter={status: "completed"})
-
-# 2. 실패 잡 로그 수집
-github-mcp-server-get_job_logs(owner="myorg", repo="myrepo",
-  run_id=12345678, failed_only=true, return_content=true)
-
-# 3. 관련 커밋 변경 사항 확인
-github-mcp-server-get_commit(owner="myorg", repo="myrepo",
-  sha="abc1234", include_diff=true)
-
-# 4. 로컬 소스 파일과 비교하여 원인 분석
-view(path="C:\\myrepo\\src\\deploy.py")</code></pre>
-<p>이 워크플로우를 Claude Code에서 수행하려면 GitHub CLI(<code>gh</code>)를 Bash로 호출하거나 MCP 서버를 별도 등록해야 한다. Copilot CLI에서는 도구 이름만으로 직접 호출한다.</p>
-<hr>
-</section>
-</section>
-<section id="github-copilot-cli-슬래시-커맨드" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="github-copilot-cli-슬래시-커맨드"><span class="header-section-number">4</span> GitHub Copilot CLI 슬래시 커맨드</h2>
-<p>슬래시 커맨드는 에이전트 설정·세션 관리·모드 전환에 사용된다. VS Code Copilot의 <code>/explain</code>, <code>/fix</code>와는 완전히 다른 CLI 전용 커맨드이다.</p>
-<div class="callout callout-style-default callout-warning callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-VS Code Copilot 슬래시 커맨드와의 혼동 주의
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>VS Code Copilot Chat의 슬래시 커맨드(<code>/explain</code>, <code>/fix</code>, <code>/tests</code>, <code>/doc</code>, <code>/new</code>)는 <strong>코드 생성 액션</strong>이다. GitHub Copilot CLI 슬래시 커맨드(<code>/model</code>, <code>/mcp</code>, <code>/session</code> 등)는 <strong>에이전트 상태 제어</strong>이다. 이름이 같은 <code>/clear</code>만 두 환경 모두에서 “대화 초기화” 역할을 한다.</p>
-</div>
-</div>
-<section id="에이전트모델-설정" class="level3" data-number="4.1">
-<h3 data-number="4.1" class="anchored" data-anchor-id="에이전트모델-설정"><span class="header-section-number">4.1</span> 에이전트·모델 설정</h3>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>커맨드</th>
-<th>동작</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>/model</code></td>
-<td>사용 모델 변경 (Sonnet·Haiku·Opus·GPT 등)</td>
-</tr>
-<tr class="even">
-<td><code>/agent</code></td>
-<td>에이전트 타입 설정</td>
-</tr>
-<tr class="odd">
-<td><code>/skills</code></td>
-<td>사용 가능한 스킬 목록 조회</td>
-</tr>
-<tr class="even">
-<td><code>/mcp</code></td>
-<td>MCP 서버 목록·연결 상태 확인</td>
-</tr>
-<tr class="odd">
-<td><code>/plugin</code></td>
-<td>플러그인 관리</td>
-</tr>
-<tr class="even">
-<td><code>/delegate</code></td>
-<td>다른 에이전트에 위임</td>
-</tr>
-<tr class="odd">
-<td><code>/fleet</code></td>
-<td>멀티 에이전트 플릿 관리</td>
-</tr>
-<tr class="even">
-<td><code>/tasks</code></td>
-<td>백그라운드 태스크 목록 조회</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="컨텍스트파일-관리" class="level3" data-number="4.2">
-<h3 data-number="4.2" class="anchored" data-anchor-id="컨텍스트파일-관리"><span class="header-section-number">4.2</span> 컨텍스트·파일 관리</h3>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>커맨드</th>
-<th>동작</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>/add-dir</code></td>
-<td>에이전트 접근 허용 디렉토리 추가</td>
-</tr>
-<tr class="even">
-<td><code>/list-dirs</code></td>
-<td>허용된 디렉토리 목록 조회</td>
-</tr>
-<tr class="odd">
-<td><code>/cwd</code></td>
-<td>현재 작업 디렉토리 표시</td>
-</tr>
-<tr class="even">
-<td><code>/allow-all</code></td>
-<td>모든 도구 호출 자동 승인</td>
-</tr>
-<tr class="odd">
-<td><code>/reset-allowed-tools</code></td>
-<td>도구 허용 목록 초기화</td>
-</tr>
-<tr class="even">
-<td><code>/context</code></td>
-<td>현재 컨텍스트 정보 조회</td>
-</tr>
-<tr class="odd">
-<td><code>/compact</code></td>
-<td>컨텍스트 압축 (긴 대화 정리)</td>
-</tr>
-<tr class="even">
-<td><code>/instructions</code></td>
-<td>시스템 지시 내용 조회</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="세션-관리" class="level3" data-number="4.3">
-<h3 data-number="4.3" class="anchored" data-anchor-id="세션-관리"><span class="header-section-number">4.3</span> 세션 관리</h3>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>커맨드</th>
-<th>동작</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>/session</code></td>
-<td>세션 정보 조회</td>
-</tr>
-<tr class="even">
-<td><code>/resume</code></td>
-<td>이전 세션 재개</td>
-</tr>
-<tr class="odd">
-<td><code>/rename</code></td>
-<td>세션 이름 변경</td>
-</tr>
-<tr class="even">
-<td><code>/rewind</code></td>
-<td>이전 상태로 되돌리기</td>
-</tr>
-<tr class="odd">
-<td><code>/share</code></td>
-<td>세션 공유</td>
-</tr>
-<tr class="even">
-<td><code>/copy</code></td>
-<td>현재 출력 클립보드 복사</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="ide개발-도구" class="level3" data-number="4.4">
-<h3 data-number="4.4" class="anchored" data-anchor-id="ide개발-도구"><span class="header-section-number">4.4</span> IDE·개발 도구</h3>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>커맨드</th>
-<th>동작</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>/ide</code></td>
-<td>IDE 연동 도구 호출</td>
-</tr>
-<tr class="even">
-<td><code>/diff</code></td>
-<td>현재 변경 사항 diff 보기</td>
-</tr>
-<tr class="odd">
-<td><code>/pr</code></td>
-<td>PR 관련 작업</td>
-</tr>
-<tr class="even">
-<td><code>/review</code></td>
-<td>코드 리뷰 실행</td>
-</tr>
-<tr class="odd">
-<td><code>/lsp</code></td>
-<td>LSP(언어 서버 프로토콜) 도구</td>
-</tr>
-<tr class="even">
-<td><code>/terminal-setup</code></td>
-<td>터미널 환경 설정</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="유틸리티" class="level3" data-number="4.5">
-<h3 data-number="4.5" class="anchored" data-anchor-id="유틸리티"><span class="header-section-number">4.5</span> 유틸리티</h3>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>커맨드</th>
-<th>동작</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>/usage</code></td>
-<td>토큰·API 사용량 조회</td>
-</tr>
-<tr class="even">
-<td><code>/clear</code></td>
-<td>대화 내용 초기화</td>
-</tr>
-<tr class="odd">
-<td><code>/help</code></td>
-<td>도움말</td>
-</tr>
-<tr class="even">
-<td><code>/changelog</code></td>
-<td>버전별 변경 이력</td>
-</tr>
-<tr class="odd">
-<td><code>/feedback</code></td>
-<td>피드백 제출</td>
-</tr>
-<tr class="even">
-<td><code>/theme</code></td>
-<td>터미널 테마 변경</td>
-</tr>
-<tr class="odd">
-<td><code>/update</code></td>
-<td>CLI 업데이트</td>
-</tr>
-<tr class="even">
-<td><code>/version</code></td>
-<td>현재 버전 확인</td>
-</tr>
-<tr class="odd">
-<td><code>/experimental</code></td>
-<td>실험적 기능 토글</td>
-</tr>
-<tr class="even">
-<td><code>/streamer-mode</code></td>
-<td>스트리머 모드 (민감 정보 숨김)</td>
-</tr>
-</tbody>
-</table>
-<hr>
-</section>
-</section>
-<section id="claude-code-vs-github-copilot-cli-대조-분석" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="claude-code-vs-github-copilot-cli-대조-분석"><span class="header-section-number">5</span> Claude Code vs GitHub Copilot CLI 대조 분석</h2>
-<p>두 CLI의 도구를 기능 영역별로 직접 비교한다.</p>
-<div class="callout callout-style-default callout-note callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-비교 기준
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>두 CLI가 <strong>동일한 Anthropic Claude 모델</strong>을 백엔드로 사용함에도 도구 세트가 다른 이유는 세 가지이다.<br>
-첫째, 실행 OS가 다르다(macOS/Linux bash vs Windows PowerShell).<br>
-둘째, 통합 대상이 다르다(독립 CLI vs GitHub 생태계 + VS Code IDE).<br>
-셋째, 태스크 추적 철학이 다르다(도메인 특화 API vs 범용 SQL).</p>
-</div>
-</div>
-<section id="핵심-도구-대응표" class="level3" data-number="5.1">
-<h3 data-number="5.1" class="anchored" data-anchor-id="핵심-도구-대응표"><span class="header-section-number">5.1</span> 핵심 도구 대응표</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 18%">
-<col style="width: 24%">
-<col style="width: 38%">
-<col style="width: 20%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>기능 영역</th>
-<th>Claude Code</th>
-<th>GitHub Copilot CLI</th>
-<th>대응 상태</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>파일 읽기</td>
-<td><code>Read</code></td>
-<td><code>view</code></td>
-<td>유사</td>
-</tr>
-<tr class="even">
-<td>파일 생성</td>
-<td><code>Write</code></td>
-<td><code>create</code></td>
-<td>유사</td>
-</tr>
-<tr class="odd">
-<td>파일 수정</td>
-<td><code>Edit</code></td>
-<td><code>edit</code></td>
-<td>동일</td>
-</tr>
-<tr class="even">
-<td>파일 탐색</td>
-<td><code>Glob</code></td>
-<td><code>glob</code></td>
-<td>동일</td>
-</tr>
-<tr class="odd">
-<td>콘텐츠 검색</td>
-<td><code>Grep</code></td>
-<td><code>grep</code></td>
-<td>동일</td>
-</tr>
-<tr class="even">
-<td>셸 실행</td>
-<td><code>Bash</code></td>
-<td><code>powershell</code> + read/write/stop/list</td>
-<td>구조 다름</td>
-</tr>
-<tr class="odd">
-<td>URL 조회</td>
-<td><code>WebFetch</code></td>
-<td><code>web_fetch</code></td>
-<td>유사</td>
-</tr>
-<tr class="even">
-<td>웹 검색</td>
-<td><code>WebSearch</code></td>
-<td>없음</td>
-<td>Claude Code만</td>
-</tr>
-<tr class="odd">
-<td>서브에이전트 실행</td>
-<td><code>Agent</code></td>
-<td><code>task</code></td>
-<td>유사</td>
-</tr>
-<tr class="even">
-<td>에이전트 결과 조회</td>
-<td><code>TaskGet/TaskOutput</code></td>
-<td><code>read_agent</code></td>
-<td>유사</td>
-</tr>
-<tr class="odd">
-<td>태스크 추적</td>
-<td><code>TaskCreate/Update/Stop</code></td>
-<td><code>sql</code> (todos 테이블)</td>
-<td>방식 다름</td>
-</tr>
-<tr class="even">
-<td>사용자 질문</td>
-<td><code>AskUserQuestion</code></td>
-<td><code>ask_user</code></td>
-<td>유사</td>
-</tr>
-<tr class="odd">
-<td>스케줄링</td>
-<td><code>CronCreate/List/Delete</code></td>
-<td>없음</td>
-<td>Claude Code만</td>
-</tr>
-<tr class="even">
-<td>원격 트리거</td>
-<td><code>RemoteTrigger</code></td>
-<td>GitHub Actions MCP</td>
-<td>방식 다름</td>
-</tr>
-<tr class="odd">
-<td>계획 모드</td>
-<td><code>EnterPlanMode/ExitPlanMode</code></td>
-<td>Shift+Tab (UI 전환)</td>
-<td>Claude Code만</td>
-</tr>
-<tr class="even">
-<td>Worktree 격리</td>
-<td><code>EnterWorktree/ExitWorktree</code></td>
-<td>없음</td>
-<td>Claude Code만</td>
-</tr>
-<tr class="odd">
-<td>노트북 편집</td>
-<td><code>NotebookEdit</code></td>
-<td>없음</td>
-<td>Claude Code만</td>
-</tr>
-<tr class="even">
-<td>도구 스키마 조회</td>
-<td><code>ToolSearch</code></td>
-<td><code>fetch_copilot_cli_documentation</code></td>
-<td>유사</td>
-</tr>
-<tr class="odd">
-<td>IDE 연동</td>
-<td>없음</td>
-<td><code>ide-get_selection/ide-get_diagnostics</code></td>
-<td>Copilot CLI만</td>
-</tr>
-<tr class="even">
-<td>DB 쿼리</td>
-<td>없음</td>
-<td><code>sql</code></td>
-<td>Copilot CLI만</td>
-</tr>
-<tr class="odd">
-<td>의도 보고</td>
-<td>없음</td>
-<td><code>report_intent</code></td>
-<td>Copilot CLI만</td>
-</tr>
-<tr class="even">
-<td>GitHub 연동</td>
-<td>외부 MCP 서버 별도 구성</td>
-<td><code>github-mcp-server-*</code> 17개 내장</td>
-<td>Copilot CLI 유리</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="설계-철학-비교" class="level3" data-number="5.2">
-<h3 data-number="5.2" class="anchored" data-anchor-id="설계-철학-비교"><span class="header-section-number">5.2</span> 설계 철학 비교</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 11%">
-<col style="width: 22%">
-<col style="width: 35%">
-<col style="width: 15%">
-<col style="width: 15%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>관점</th>
-<th>Claude Code</th>
-<th>GitHub Copilot CLI</th>
-<th>유사점</th>
-<th>차이점</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><strong>셸 모델</strong></td>
-<td>단일 Bash (호출마다 초기화)</td>
-<td>세션 기반 PowerShell (shellId 유지)</td>
-<td>터미널 명령 실행</td>
-<td>Copilot은 상태 유지 가능, 인터랙티브 도구 제어 가능</td>
-</tr>
-<tr class="even">
-<td><strong>파일 처리</strong></td>
-<td>Read(PDF·이미지·노트북 지원), Write, Edit</td>
-<td>view(텍스트·디렉토리), create, edit</td>
-<td>diff 기반 수정 공통</td>
-<td>Claude Code는 바이너리·멀티모달 지원; Copilot CLI는 신규/수정 도구 분리</td>
-</tr>
-<tr class="odd">
-<td><strong>에이전트 타입</strong></td>
-<td>explore, general-purpose, plan, claude-code-guide 등</td>
-<td>explore, task, general-purpose, code-review</td>
-<td>병렬 실행, 별도 컨텍스트 창</td>
-<td>Copilot은 code-review, task(빌드/테스트) 특화 타입 보유</td>
-</tr>
-<tr class="even">
-<td><strong>태스크 추적</strong></td>
-<td>TaskCreate/TaskUpdate/TaskStop/TaskList 전용 도구</td>
-<td>sql (todos, todo_deps 테이블)</td>
-<td>작업 진행 추적</td>
-<td>Claude Code는 도메인 특화 API; Copilot CLI는 범용 SQL로 유연하게 확장</td>
-</tr>
-<tr class="odd">
-<td><strong>GitHub 연동</strong></td>
-<td>MCP 서버 별도 구성 필요</td>
-<td>17개 도구 기본 내장</td>
-<td>GitHub 리소스 접근</td>
-<td>Copilot CLI는 추가 설정 없이 PR·이슈·Actions 조회 가능</td>
-</tr>
-<tr class="even">
-<td><strong>자동화 스케줄링</strong></td>
-<td>CronCreate/Delete (에이전트 내 스케줄)</td>
-<td>없음 (GitHub Actions 활용 권장)</td>
-<td>반복 작업 자동화</td>
-<td>Claude Code는 에이전트 레벨 크론; Copilot CLI는 외부 CI/CD 의존</td>
-</tr>
-<tr class="odd">
-<td><strong>IDE 통합</strong></td>
-<td>없음</td>
-<td>ide-get_selection/ide-get_diagnostics</td>
-<td>—</td>
-<td>Copilot CLI는 VS Code 실시간 연동; Claude Code는 독립 CLI</td>
-</tr>
-<tr class="even">
-<td><strong>운영 체제 기본</strong></td>
-<td>macOS/Linux bash</td>
-<td>Windows PowerShell</td>
-<td>크로스플랫폼 동작 가능</td>
-<td>경로 구분자, 셸 문법, 명령어 생태계 상이</td>
-</tr>
-<tr class="odd">
-<td><strong>컨텍스트 압축</strong></td>
-<td>/compact 커맨드</td>
-<td>/compact 커맨드</td>
-<td>긴 대화 정리</td>
-<td>동일</td>
-</tr>
-</tbody>
-</table>
-<hr>
-</section>
-</section>
-<section id="어떤-경우에-무엇을-선택하는가" class="level2" data-number="6">
-<h2 data-number="6" class="anchored" data-anchor-id="어떤-경우에-무엇을-선택하는가"><span class="header-section-number">6</span> 어떤 경우에 무엇을 선택하는가</h2>
-<pre><code>코드베이스 탐색·수정 자동화 (macOS/Linux 환경)
-    → Claude Code (네이티브 Bash, Worktree 격리, CronCreate로 반복 작업)
-
-Windows 환경에서 PowerShell 기반 자동화
-    → Copilot CLI (세션 기반 powershell, Windows 경로 지원)
-
-GitHub PR 리뷰·CI 분석 자동화
-    → Copilot CLI (github-mcp-server-* 17개 내장, /review 커맨드)
-
-VS Code와 실시간 연동이 필요한 코딩 보조
-    → Copilot CLI (ide-get_selection, ide-get_diagnostics)
-
-장기 배치 작업의 진행 상황 추적
-    → Copilot CLI의 sql 도구 (커스텀 테이블로 유연한 상태 관리)
-    → 또는 Claude Code의 TaskCreate/TaskUpdate (도메인 특화 API)
-
-PDF·이미지·Jupyter 노트북이 포함된 분석 워크플로
-    → Claude Code (Read 도구의 멀티모달·노트북 지원)</code></pre>
-<hr>
-</section>
-<section id="관련-주제" class="level2" data-number="7">
-<h2 data-number="7" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">7</span> 관련 주제</h2>
-<p><strong>선행 지식</strong></p>
-<ul>
-<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/26-sw-tool-sdk-specification.html">AI Coding Assistant의 SW Tool SDK 명세</a> — Claude Code 도구 + VS Code Copilot 도구 전체 정리</li>
-<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/15-mcp-tool-integration.html">MCP 기반 도구 통합</a> — MCP 아키텍처와 서버 등록 방식</li>
-</ul>
-<p><strong>후속 주제</strong></p>
-<ul>
-<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/27-connect-claude-copilot-tools-to-custom-agent.html">자체 개발 Agent에 Claude·Copilot 도구 연결하기</a> — 두 CLI 도구를 커스텀 에이전트에 통합하는 방법</li>
-<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/28-custom-tool-development-and-registration.html">Claude·Copilot 도구 생태계에 커스텀 도구 추가하기</a> — MCP 서버 개발로 도구 직접 등록</li>
-</ul>
-<p><strong>다른 카테고리 연결</strong></p>
-<ul>
-<li><a href="../../../../../docs/blog/posts/Agent/24-Agent-Architecture/06-agent-tech-stack-evolution.html">Agent Tech Stack Evolution</a> — 도구 생태계 변화 맥락</li>
-</ul>
-
-
-</section>
-
- ]]></description>
-  <category>Agent</category>
-  <category>Architecture</category>
-  <guid>kk3225.netlify.app/docs/blog/posts/Agent/24-Agent-Architecture/29-github-copilot-cli-tool-specification.html</guid>
-  <pubDate>Sat, 28 Mar 2026 15:00:00 GMT</pubDate>
-</item>
-<item>
-  <title>기대값 vs 실현값 (Expected Value vs Realized Value)</title>
-  <dc:creator>Kwangmin Kim</dc:creator>
-  <link>kk3225.netlify.app/docs/blog/posts/Statistics/66-expected-value-vs-realized-value.html</link>
-  <description><![CDATA[ 
-
-
-
-
-
-<section id="왜-구분이-중요한가" class="level2" data-number="1">
-<h2 data-number="1" class="anchored" data-anchor-id="왜-구분이-중요한가"><span class="header-section-number">1</span> 왜 구분이 중요한가</h2>
-<p>통계학을 처음 공부할 때 가장 자주 혼동하는 개념 쌍이 있다: <strong>기대값 <img src="https://latex.codecogs.com/png.latex?E%5BX%5D"></strong> 와 <strong>실현값 <img src="https://latex.codecogs.com/png.latex?X(%5Comega)"></strong>. 이 둘은 다른 종류의 수학적 객체이다.</p>
-<div class="callout callout-style-default callout-tip callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-핵심 구분 — 한 줄로
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<ul>
-<li><img src="https://latex.codecogs.com/png.latex?E%5BX%5D">: 분포 전체에 대한 가중 평균 — <strong>고정된 상수</strong>, 실험 전에도 계산 가능</li>
-<li><img src="https://latex.codecogs.com/png.latex?X(%5Comega)">: 특정 결과 <img src="https://latex.codecogs.com/png.latex?%5Comega">에서의 값 — <strong>확률변수의 실현</strong>, 실험 후에만 결정됨</li>
-</ul>
-</div>
-</div>
-<p>이 구분이 없으면 다음 질문에 답할 수 없다:</p>
-<ul>
-<li>“비편향 추정량이란 무엇인가?” → <img src="https://latex.codecogs.com/png.latex?E%5B%5Chat%7B%5Ctheta%7D%5D%20=%20%5Ctheta"> 에서 <img src="https://latex.codecogs.com/png.latex?%5Chat%7B%5Ctheta%7D">는 확률변수, <img src="https://latex.codecogs.com/png.latex?E%5B%5Chat%7B%5Ctheta%7D%5D">는 상수</li>
-<li>“표본 평균 <img src="https://latex.codecogs.com/png.latex?%5Cbar%7BX%7D">와 모평균 <img src="https://latex.codecogs.com/png.latex?%5Cmu">의 차이는?” → <img src="https://latex.codecogs.com/png.latex?%5Cmu%20=%20E%5BX%5D">는 상수, <img src="https://latex.codecogs.com/png.latex?%5Cbar%7BX%7D">는 확률변수, <img src="https://latex.codecogs.com/png.latex?%5Cbar%7Bx%7D">는 실현값</li>
-<li>“모델의 기대 손실과 훈련 손실의 차이는?” → 기대 손실은 <img src="https://latex.codecogs.com/png.latex?E%5BL%5D">, 훈련 손실은 <img src="https://latex.codecogs.com/png.latex?%5Cfrac%7B1%7D%7Bn%7D%5Csum_i%20L(x_i)"></li>
-</ul>
-<hr>
-</section>
-<section id="확률변수와-실현값" class="level2" data-number="2">
-<h2 data-number="2" class="anchored" data-anchor-id="확률변수와-실현값"><span class="header-section-number">2</span> 확률변수와 실현값</h2>
-<section id="확률변수는-함수이다" class="level3" data-number="2.1">
-<h3 data-number="2.1" class="anchored" data-anchor-id="확률변수는-함수이다"><span class="header-section-number">2.1</span> 확률변수는 함수이다</h3>
-<p>Casella &amp; Berger(Ch.1)에 따르면, 확률변수 <img src="https://latex.codecogs.com/png.latex?X">는 표본공간 <img src="https://latex.codecogs.com/png.latex?%5COmega"> 에서 실수로의 <strong>가측 함수</strong>이다:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AX%20:%20%5COmega%20%5Cto%20%5Cmathbb%7BR%7D,%20%5Cquad%20%5Comega%20%5Cmapsto%20X(%5Comega)%0A"></p>
-<ul>
-<li><img src="https://latex.codecogs.com/png.latex?%5COmega">: 실험의 모든 가능한 결과의 집합</li>
-<li><img src="https://latex.codecogs.com/png.latex?%5Comega%20%5Cin%20%5COmega">: 실험의 특정 결과 (하나의 시나리오)</li>
-<li><img src="https://latex.codecogs.com/png.latex?X(%5Comega)">: 그 결과에 대응하는 숫자 — <strong>실현값(realized value)</strong></li>
-</ul>
-</section>
-<section id="예시-주사위" class="level3" data-number="2.2">
-<h3 data-number="2.2" class="anchored" data-anchor-id="예시-주사위"><span class="header-section-number">2.2</span> 예시: 주사위</h3>
-<p>주사위를 던지는 실험에서 <img src="https://latex.codecogs.com/png.latex?%5COmega%20=%20%5C%7B1,%202,%203,%204,%205,%206%5C%7D">.</p>
-<p>확률변수 <img src="https://latex.codecogs.com/png.latex?X(%5Comega)%20=%20%5Comega"> 로 정의하면:</p>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>결과 <img src="https://latex.codecogs.com/png.latex?%5Comega"></th>
-<th>실현값 <img src="https://latex.codecogs.com/png.latex?X(%5Comega)"></th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>1</td>
-<td>1</td>
-</tr>
-<tr class="even">
-<td>2</td>
-<td>2</td>
-</tr>
-<tr class="odd">
-<td><img src="https://latex.codecogs.com/png.latex?%5Cvdots"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Cvdots"></td>
-</tr>
-<tr class="even">
-<td>6</td>
-<td>6</td>
-</tr>
-</tbody>
-</table>
-<p>던지기 전에는 “다음 주사위 값”이 불확실하다 — 이것이 확률변수 <img src="https://latex.codecogs.com/png.latex?X">. 던진 후에 3이 나왔다면, <img src="https://latex.codecogs.com/png.latex?X(%5Comega)%20=%203"> — 이것이 실현값 <img src="https://latex.codecogs.com/png.latex?x%20=%203">.</p>
-<p>확률변수 <img src="https://latex.codecogs.com/png.latex?X"> 는 함수이다. 실현값 <img src="https://latex.codecogs.com/png.latex?x"> 는 숫자이다.</p>
-<hr>
-</section>
-</section>
-<section id="기대값-분포의-무게중심" class="level2" data-number="3">
-<h2 data-number="3" class="anchored" data-anchor-id="기대값-분포의-무게중심"><span class="header-section-number">3</span> 기대값: 분포의 무게중심</h2>
-<section id="정의" class="level3" data-number="3.1">
-<h3 data-number="3.1" class="anchored" data-anchor-id="정의"><span class="header-section-number">3.1</span> 정의</h3>
-<p>확률변수 <img src="https://latex.codecogs.com/png.latex?X">의 기대값은 분포 전체에 대한 가중 평균이다:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AE%5BX%5D%20=%20%5Cbegin%7Bcases%7D%0A%5Cdisplaystyle%5Csum_%7Bx%20%5Cin%20%5Cmathcal%7BX%7D%7D%20x%20%5C,%20p_X(x)%20&amp;%20%5Ctext%7B%EC%9D%B4%EC%82%B0%ED%98%95%7D%20%5C%5C%5B6pt%5D%0A%5Cdisplaystyle%5Cint_%7B-%5Cinfty%7D%5E%7B%5Cinfty%7D%20x%20%5C,%20f_X(x)%20%5C,%20dx%20&amp;%20%5Ctext%7B%EC%97%B0%EC%86%8D%ED%98%95%7D%0A%5Cend%7Bcases%7D%0A"></p>
-<p><img src="https://latex.codecogs.com/png.latex?E%5BX%5D">는: - 실험 전에도 계산할 수 있다 (분포만 알면 됨) - 특정 결과 <img src="https://latex.codecogs.com/png.latex?%5Comega">에 의존하지 않는다 - <strong>상수</strong>이다 — 무작위성이 없다</p>
-<p>주사위 예시에서 <img src="https://latex.codecogs.com/png.latex?E%5BX%5D%20=%20%5Cfrac%7B1+2+3+4+5+6%7D%7B6%7D%20=%203.5">. 주사위를 아직 던지지 않았어도 이 값은 정해져 있다.</p>
-</section>
-<section id="ex는-실현되지-않을-수-있다" class="level3" data-number="3.2">
-<h3 data-number="3.2" class="anchored" data-anchor-id="ex는-실현되지-않을-수-있다"><span class="header-section-number">3.2</span> E[X]는 실현되지 않을 수 있다</h3>
-<p><img src="https://latex.codecogs.com/png.latex?E%5BX%5D%20=%203.5"> 이지만, 실제 주사위를 던지면 3.5는 절대 나오지 않는다. 기대값은 반복 시행의 <strong>장기 평균</strong>을 의미하지, “이번 실험에서 나올 값”을 의미하지 않는다.</p>
-<div class="callout callout-style-default callout-note callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-기대값의 확률론적 의미
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>강수의 법칙(Law of Large Numbers)에 따르면, iid 확률변수 <img src="https://latex.codecogs.com/png.latex?X_1,%20X_2,%20%5Cldots">에 대해:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbar%7BX%7D_n%20=%20%5Cfrac%7B1%7D%7Bn%7D%20%5Csum_%7Bi=1%7D%5En%20X_i%20%5Cxrightarrow%7BP%7D%20E%5BX%5D%20%5Cquad%20(n%20%5Cto%20%5Cinfty)%0A"></p>
-<p>개별 실현값은 <img src="https://latex.codecogs.com/png.latex?E%5BX%5D">와 다를 수 있지만, 반복 시행의 평균은 <img src="https://latex.codecogs.com/png.latex?E%5BX%5D">에 수렴한다.</p>
-</div>
-</div>
-<hr>
-</section>
-</section>
-<section id="ex-vs.-xω-차원이-다르다" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="ex-vs.-xω-차원이-다르다"><span class="header-section-number">4</span> E[X] vs.&nbsp;X(ω): 차원이 다르다</h2>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>개념</th>
-<th>기호</th>
-<th>종류</th>
-<th>무작위성</th>
-<th>언제 결정되나</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>기대값</td>
-<td><img src="https://latex.codecogs.com/png.latex?E%5BX%5D">, <img src="https://latex.codecogs.com/png.latex?%5Cmu"></td>
-<td>상수</td>
-<td>없음</td>
-<td>분포가 정해지면</td>
-</tr>
-<tr class="even">
-<td>확률변수</td>
-<td><img src="https://latex.codecogs.com/png.latex?X"></td>
-<td>함수 <img src="https://latex.codecogs.com/png.latex?%5COmega%20%5Cto%20%5Cmathbb%7BR%7D"></td>
-<td>있음</td>
-<td>—</td>
-</tr>
-<tr class="odd">
-<td>실현값</td>
-<td><img src="https://latex.codecogs.com/png.latex?X(%5Comega)%20=%20x"></td>
-<td>숫자</td>
-<td>없음 (이미 고정)</td>
-<td>실험 후</td>
-</tr>
-</tbody>
-</table>
-<p><img src="https://latex.codecogs.com/png.latex?E%5BX%5D">와 <img src="https://latex.codecogs.com/png.latex?X(%5Comega)">의 차이는 <strong>오차(error)</strong> 또는 <strong>잡음(noise)</strong>이다:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AX(%5Comega)%20=%20E%5BX%5D%20+%20%5Cunderbrace%7B(X(%5Comega)%20-%20E%5BX%5D)%7D_%7B%5Ctext%7Bzero-mean%20noise%7D%7D%0A"></p>
-<p><img src="https://latex.codecogs.com/png.latex?E%5BX(%5Comega)%20-%20E%5BX%5D%5D%20=%20E%5BX%5D%20-%20E%5BX%5D%20=%200"> 이므로, 실현값과 기대값의 차이는 평균이 0인 변동이다.</p>
-<hr>
-</section>
-<section id="추정량-vs.-추정값" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="추정량-vs.-추정값"><span class="header-section-number">5</span> 추정량 vs.&nbsp;추정값</h2>
-<p>통계적 추론에서 이 구분이 가장 명확하게 드러난다.</p>
-<section id="추정량-estimator-확률변수" class="level3" data-number="5.1">
-<h3 data-number="5.1" class="anchored" data-anchor-id="추정량-estimator-확률변수"><span class="header-section-number">5.1</span> 추정량 (Estimator) = 확률변수</h3>
-<p>모수 <img src="https://latex.codecogs.com/png.latex?%5Ctheta"> 를 추정하기 위해 표본 <img src="https://latex.codecogs.com/png.latex?X_1,%20%5Cldots,%20X_n"> 의 함수를 정의한다:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Chat%7B%5Ctheta%7D%20=%20T(X_1,%20X_2,%20%5Cldots,%20X_n)%0A"></p>
-<p><img src="https://latex.codecogs.com/png.latex?X_i">들이 확률변수이므로, <img src="https://latex.codecogs.com/png.latex?%5Chat%7B%5Ctheta%7D"> 도 <strong>확률변수</strong>이다. 표본을 뽑기 전에는 <img src="https://latex.codecogs.com/png.latex?%5Chat%7B%5Ctheta%7D">의 값이 결정되지 않는다.</p>
-</section>
-<section id="추정값-estimate-실현값" class="level3" data-number="5.2">
-<h3 data-number="5.2" class="anchored" data-anchor-id="추정값-estimate-실현값"><span class="header-section-number">5.2</span> 추정값 (Estimate) = 실현값</h3>
-<p>실제 데이터 <img src="https://latex.codecogs.com/png.latex?x_1,%20%5Cldots,%20x_n"> 이 관측되면:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Chat%7B%5Ctheta%7D(%5Cmathbf%7Bx%7D)%20=%20T(x_1,%20x_2,%20%5Cldots,%20x_n)%20=%20%5Ctext%7B%EC%88%AB%EC%9E%90%7D%0A"></p>
-<p>이것이 <strong>실현된 추정값</strong> — 하나의 고정된 숫자이다.</p>
-</section>
-<section id="비편향성-unbiasedness" class="level3" data-number="5.3">
-<h3 data-number="5.3" class="anchored" data-anchor-id="비편향성-unbiasedness"><span class="header-section-number">5.3</span> 비편향성 (Unbiasedness)</h3>
-<p>비편향 추정량의 정의:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AE%5B%5Chat%7B%5Ctheta%7D%5D%20=%20%5Ctheta%0A"></p>
-<p>여기서 <img src="https://latex.codecogs.com/png.latex?E%5B%5Chat%7B%5Ctheta%7D%5D">는 <strong>상수</strong> <img src="https://latex.codecogs.com/png.latex?%5Ctheta">와 같아야 한다는 조건이다. <img src="https://latex.codecogs.com/png.latex?%5Chat%7B%5Ctheta%7D">가 확률변수이므로, 그것의 기대값(분포의 무게중심)이 참값 <img src="https://latex.codecogs.com/png.latex?%5Ctheta">와 일치해야 한다는 의미이다.</p>
-<p>개별 추정값 <img src="https://latex.codecogs.com/png.latex?%5Chat%7B%5Ctheta%7D(%5Cmathbf%7Bx%7D)">는 <img src="https://latex.codecogs.com/png.latex?%5Ctheta">와 다를 수 있다 — 비편향성은 <strong>평균적으로</strong> 맞힌다는 뜻이지, <strong>매번</strong> 맞힌다는 뜻이 아니다.</p>
-<div class="callout callout-style-default callout-warning callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-흔한 오해
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>비편향 추정량이라도, 특정 표본에서의 추정값은 <img src="https://latex.codecogs.com/png.latex?%5Ctheta">와 다를 수 있다. 비편향성은 <img src="https://latex.codecogs.com/png.latex?E%5B%5Chat%7B%5Ctheta%7D%5D%20=%20%5Ctheta"> — “반복 실험의 평균이 <img src="https://latex.codecogs.com/png.latex?%5Ctheta">”라는 장기적 성질이다.</p>
-</div>
-</div>
-<hr>
-</section>
-</section>
-<section id="표본-평균-ex의-추정" class="level2" data-number="6">
-<h2 data-number="6" class="anchored" data-anchor-id="표본-평균-ex의-추정"><span class="header-section-number">6</span> 표본 평균: E[X]의 추정</h2>
-<section id="모평균-mu-ex-상수" class="level3" data-number="6.1">
-<h3 data-number="6.1" class="anchored" data-anchor-id="모평균-mu-ex-상수"><span class="header-section-number">6.1</span> 모평균 <img src="https://latex.codecogs.com/png.latex?%5Cmu%20=%20E%5BX%5D">: 상수</h3>
-<p>모집단 분포가 정해지면 <img src="https://latex.codecogs.com/png.latex?%5Cmu%20=%20E%5BX%5D">는 고정된 상수이다. 관측하기 전에도 원리상 계산 가능하지만, 현실에서는 모집단 전체를 알 수 없으므로 추정이 필요하다.</p>
-</section>
-<section id="표본-평균-barx_n-확률변수" class="level3" data-number="6.2">
-<h3 data-number="6.2" class="anchored" data-anchor-id="표본-평균-barx_n-확률변수"><span class="header-section-number">6.2</span> 표본 평균 <img src="https://latex.codecogs.com/png.latex?%5Cbar%7BX%7D_n">: 확률변수</h3>
-<p>크기 <img src="https://latex.codecogs.com/png.latex?n">의 iid 표본 <img src="https://latex.codecogs.com/png.latex?X_1,%20%5Cldots,%20X_n">에서:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbar%7BX%7D_n%20=%20%5Cfrac%7B1%7D%7Bn%7D%20%5Csum_%7Bi=1%7D%5En%20X_i%0A"></p>
-<p><img src="https://latex.codecogs.com/png.latex?%5Cbar%7BX%7D_n">은 <strong>확률변수</strong>이다 — 어떤 표본이 추출되느냐에 따라 값이 달라진다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AE%5B%5Cbar%7BX%7D_n%5D%20=%20%5Cmu,%20%5Cquad%20%5Ctext%7BVar%7D(%5Cbar%7BX%7D_n)%20=%20%5Cfrac%7B%5Csigma%5E2%7D%7Bn%7D%0A"></p>
-</section>
-<section id="실현된-표본-평균-barx-숫자" class="level3" data-number="6.3">
-<h3 data-number="6.3" class="anchored" data-anchor-id="실현된-표본-평균-barx-숫자"><span class="header-section-number">6.3</span> 실현된 표본 평균 <img src="https://latex.codecogs.com/png.latex?%5Cbar%7Bx%7D">: 숫자</h3>
-<p>실제 데이터 <img src="https://latex.codecogs.com/png.latex?x_1,%20%5Cldots,%20x_n">을 얻으면:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbar%7Bx%7D%20=%20%5Cfrac%7B1%7D%7Bn%7D%20%5Csum_%7Bi=1%7D%5En%20x_i%20=%20%5Ctext%7B%EC%88%AB%EC%9E%90%7D%0A"></p>
-<p>이것이 <strong>실현값</strong> — 우리가 실제로 계산하는 숫자이다.</p>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>기호</th>
-<th>의미</th>
-<th>종류</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><img src="https://latex.codecogs.com/png.latex?%5Cmu%20=%20E%5BX%5D"></td>
-<td>모평균</td>
-<td>상수 (unknown)</td>
-</tr>
-<tr class="even">
-<td><img src="https://latex.codecogs.com/png.latex?%5Cbar%7BX%7D_n"></td>
-<td>표본 평균 추정량</td>
-<td>확률변수</td>
-</tr>
-<tr class="odd">
-<td><img src="https://latex.codecogs.com/png.latex?%5Cbar%7Bx%7D"></td>
-<td>실현된 표본 평균</td>
-<td>숫자</td>
-</tr>
-</tbody>
-</table>
-<hr>
-</section>
-</section>
-<section id="기대-손실-vs.-경험-손실" class="level2" data-number="7">
-<h2 data-number="7" class="anchored" data-anchor-id="기대-손실-vs.-경험-손실"><span class="header-section-number">7</span> 기대 손실 vs.&nbsp;경험 손실</h2>
-<p>머신러닝에서 이 구분은 일반화(generalization) 문제의 핵심이다.</p>
-<section id="기대-손실-population-risk" class="level3" data-number="7.1">
-<h3 data-number="7.1" class="anchored" data-anchor-id="기대-손실-population-risk"><span class="header-section-number">7.1</span> 기대 손실 (Population Risk)</h3>
-<p>데이터 생성 분포 <img src="https://latex.codecogs.com/png.latex?P(X,%20Y)">에 대한 기대값:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AR(f)%20=%20E_%7B(X,Y)%20%5Csim%20P%7D%5BL(f(X),%20Y)%5D%20=%20%5Cint%20L(f(x),%20y)%20%5C,%20dP(x,%20y)%0A"></p>
-<p>이것이 우리가 최소화하고 싶은 진정한 목표이다. 하지만 <img src="https://latex.codecogs.com/png.latex?P">를 모르므로 직접 계산할 수 없다.</p>
-</section>
-<section id="경험-손실-empirical-risk" class="level3" data-number="7.2">
-<h3 data-number="7.2" class="anchored" data-anchor-id="경험-손실-empirical-risk"><span class="header-section-number">7.2</span> 경험 손실 (Empirical Risk)</h3>
-<p>관측된 훈련 데이터 <img src="https://latex.codecogs.com/png.latex?(x_1,%20y_1),%20%5Cldots,%20(x_n,%20y_n)">에서의 평균 손실:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Chat%7BR%7D(f)%20=%20%5Cfrac%7B1%7D%7Bn%7D%20%5Csum_%7Bi=1%7D%5En%20L(f(x_i),%20y_i)%20=%20%5Ctext%7B%EC%88%AB%EC%9E%90%7D%0A"></p>
-<p><img src="https://latex.codecogs.com/png.latex?%5Chat%7BR%7D(f)">는 <img src="https://latex.codecogs.com/png.latex?R(f)">의 <strong>실현된 추정값</strong>이다.</p>
-</section>
-<section id="일반화-오차-generalization-gap" class="level3" data-number="7.3">
-<h3 data-number="7.3" class="anchored" data-anchor-id="일반화-오차-generalization-gap"><span class="header-section-number">7.3</span> 일반화 오차 (Generalization Gap)</h3>
-<p><img src="https://latex.codecogs.com/png.latex?%0AR(f)%20-%20%5Chat%7BR%7D(f)%20=%20%5Cunderbrace%7BE%5BL%5D%7D_%7B%5Ctext%7B%EA%B8%B0%EB%8C%80%20%EC%86%90%EC%8B%A4%7D%7D%20-%20%5Cunderbrace%7B%5Cfrac%7B1%7D%7Bn%7D%5Csum_i%20L(x_i,%20y_i)%7D_%7B%5Ctext%7B%EA%B2%BD%ED%97%98%20%EC%86%90%EC%8B%A4%7D%7D%0A"></p>
-<p>이 갭이 크면 과적합(overfitting) — 훈련 데이터의 실현값에만 맞추고, 기대값(새 데이터)에는 못 맞추는 상태이다.</p>
-<hr>
-</section>
-</section>
-<section id="실무-응용-분야" class="level2" data-number="8">
-<h2 data-number="8" class="anchored" data-anchor-id="실무-응용-분야"><span class="header-section-number">8</span> 실무 응용 분야</h2>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>분야</th>
-<th>기대값 <img src="https://latex.codecogs.com/png.latex?E%5BX%5D"></th>
-<th>실현값 <img src="https://latex.codecogs.com/png.latex?x"></th>
-<th>핵심 질문</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>A/B 테스트</td>
-<td>모집단 전환율 <img src="https://latex.codecogs.com/png.latex?p%5E*"></td>
-<td>관측된 전환율 <img src="https://latex.codecogs.com/png.latex?%5Chat%7Bp%7D"></td>
-<td>실현 차이가 기대 차이와 다른가?</td>
-</tr>
-<tr class="even">
-<td>금융</td>
-<td>기대 수익률 <img src="https://latex.codecogs.com/png.latex?E%5BR%5D"></td>
-<td>실현 수익률 <img src="https://latex.codecogs.com/png.latex?r"></td>
-<td>예상치 못한 손실이 발생했는가?</td>
-</tr>
-<tr class="odd">
-<td>품질관리</td>
-<td>공정 평균 <img src="https://latex.codecogs.com/png.latex?%5Cmu"></td>
-<td>측정값 <img src="https://latex.codecogs.com/png.latex?x_i"></td>
-<td>실현값이 관리 한계를 벗어나는가?</td>
-</tr>
-<tr class="even">
-<td>보험수리</td>
-<td>기대 손해 <img src="https://latex.codecogs.com/png.latex?E%5B%5Ctext%7Bloss%7D%5D"></td>
-<td>실제 청구액</td>
-<td>준비금이 충분한가?</td>
-</tr>
-<tr class="odd">
-<td>ML 모델</td>
-<td>기대 손실 <img src="https://latex.codecogs.com/png.latex?R(f)"></td>
-<td>훈련 손실 <img src="https://latex.codecogs.com/png.latex?%5Chat%7BR%7D(f)"></td>
-<td>일반화가 되는가?</td>
-</tr>
-</tbody>
-</table>
-<hr>
-</section>
-<section id="코드-예시" class="level2" data-number="9">
-<h2 data-number="9" class="anchored" data-anchor-id="코드-예시"><span class="header-section-number">9</span> 코드 예시</h2>
-<section id="step-1-순수-python-기대값-vs.-실현값-직접-계산" class="level3" data-number="9.1">
-<h3 data-number="9.1" class="anchored" data-anchor-id="step-1-순수-python-기대값-vs.-실현값-직접-계산"><span class="header-section-number">9.1</span> Step 1: 순수 Python — 기대값 vs.&nbsp;실현값 직접 계산</h3>
-<div class="sourceCode" id="cb1" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb1-1"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> random</span>
-<span id="cb1-2"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> math</span>
-<span id="cb1-3"></span>
-<span id="cb1-4"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 이산균등 분포: 주사위 (1~6)</span></span>
-<span id="cb1-5"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 기대값: E[X] = (1+2+3+4+5+6)/6 = 3.5</span></span>
-<span id="cb1-6">pmf <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> {<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>: <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span><span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>: <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span><span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>: <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span><span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">4</span>: <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span><span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>: <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span><span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>: <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span><span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>}</span>
-<span id="cb1-7"></span>
-<span id="cb1-8"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 기대값 계산 (이론적 상수 — 실험 전에 결정됨)</span></span>
-<span id="cb1-9">expected_value <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>(x <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> p <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">for</span> x, p <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">in</span> pmf.items())</span>
-<span id="cb1-10"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"E[X] = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>expected_value<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)  <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 3.5000</span></span>
-<span id="cb1-11"></span>
-<span id="cb1-12"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 실현값: 실험 1회</span></span>
-<span id="cb1-13">random.seed(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">42</span>)</span>
-<span id="cb1-14">realized_once <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> random.choices(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">list</span>(pmf.keys()), weights<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">list</span>(pmf.values()))[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>]</span>
-<span id="cb1-15"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"실현값 (1회): X(ω) = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>realized_once<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)  <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 3.5와 다를 수 있음</span></span>
-<span id="cb1-16"></span>
-<span id="cb1-17"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 실현값: 표본 평균 — n이 커질수록 E[X]에 수렴</span></span>
-<span id="cb1-18"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">for</span> n <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">in</span> [<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">10</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">100</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1000</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">10000</span>]:</span>
-<span id="cb1-19">    sample <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> random.choices(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">list</span>(pmf.keys()), weights<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">list</span>(pmf.values()), k<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>n)</span>
-<span id="cb1-20">    sample_mean <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>(sample) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> n</span>
-<span id="cb1-21">    <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"n=</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>n<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:&gt;6}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">: x̄ = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>sample_mean<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">  (E[X]와의 차이: </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">abs</span>(sample_mean <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> expected_value)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)"</span>)</span></code></pre></div>
-<pre><code>E[X] = 3.5000
-실현값 (1회): X(ω) = 4
-n=    10: x̄ = 3.3000  (E[X]와의 차이: 0.2000)
-n=   100: x̄ = 3.5600  (E[X]와의 차이: 0.0600)
-n=  1000: x̄ = 3.5020  (E[X]와의 차이: 0.0020)
-n= 10000: x̄ = 3.4981  (E[X]와의 차이: 0.0019)</code></pre>
-<p>큰 수의 법칙(LLN): 표본 평균(실현값의 평균)은 <img src="https://latex.codecogs.com/png.latex?n"> 이 커질수록 <img src="https://latex.codecogs.com/png.latex?E%5BX%5D%20=%203.5">에 수렴한다.</p>
-</section>
-<section id="step-2-numpyscipy-추정량-vs.-추정값의-표집-분포" class="level3" data-number="9.2">
-<h3 data-number="9.2" class="anchored" data-anchor-id="step-2-numpyscipy-추정량-vs.-추정값의-표집-분포"><span class="header-section-number">9.2</span> Step 2: numpy/scipy — 추정량 vs.&nbsp;추정값의 표집 분포</h3>
-<div class="sourceCode" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb3-1"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">as</span> np</span>
-<span id="cb3-2"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">from</span> scipy <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> stats</span>
-<span id="cb3-3"></span>
-<span id="cb3-4"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 모집단: 정규분포 N(mu=5, sigma=2)</span></span>
-<span id="cb3-5">mu_true <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5.0</span></span>
-<span id="cb3-6">sigma_true <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2.0</span></span>
-<span id="cb3-7"></span>
-<span id="cb3-8">np.random.seed(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)</span>
-<span id="cb3-9"></span>
-<span id="cb3-10"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 추정량 X̄는 확률변수 — 표본마다 다른 실현값을 가짐</span></span>
-<span id="cb3-11">n <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">30</span></span>
-<span id="cb3-12">n_simulations <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">10000</span></span>
-<span id="cb3-13"></span>
-<span id="cb3-14">sample_means <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> []  <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 추정량 X̄의 실현값들</span></span>
-<span id="cb3-15"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">for</span> _ <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(n_simulations):</span>
-<span id="cb3-16">    sample <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.random.normal(mu_true, sigma_true, n)</span>
-<span id="cb3-17">    x_bar <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> sample.mean()  <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 실현된 표본 평균 (숫자)</span></span>
-<span id="cb3-18">    sample_means.append(x_bar)</span>
-<span id="cb3-19"></span>
-<span id="cb3-20">sample_means <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array(sample_means)</span>
-<span id="cb3-21"></span>
-<span id="cb3-22"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"=== 추정량 X̄의 표집 분포 ==="</span>)</span>
-<span id="cb3-23"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"E[X̄] = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>sample_means<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>mean()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">  (참값 μ = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>mu_true<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)  ← 비편향성 확인"</span>)</span>
-<span id="cb3-24"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"Var(X̄) = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>sample_means<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>var()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">  (이론값 σ²/n = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>sigma_true<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">**</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span><span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span>n<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)"</span>)</span>
-<span id="cb3-25"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>()</span>
-<span id="cb3-26"></span>
-<span id="cb3-27"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 단 하나의 표본에서의 실현값</span></span>
-<span id="cb3-28">single_sample <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.random.normal(mu_true, sigma_true, n)</span>
-<span id="cb3-29">x_bar_realized <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> single_sample.mean()</span>
-<span id="cb3-30"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"=== 특정 표본의 실현값 ==="</span>)</span>
-<span id="cb3-31"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"x̄ = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>x_bar_realized<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">  (μ와의 차이: </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">abs</span>(x_bar_realized <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> mu_true)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)"</span>)</span>
-<span id="cb3-32"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"이 값이 CI [mu-1.96*se, mu+1.96*se] 안에 있는가: "</span></span>
-<span id="cb3-33">      <span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'Yes'</span> <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">if</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">abs</span>(x_bar_realized <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> mu_true) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&lt;</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.96</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> sigma_true <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> np<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>sqrt(n) <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">else</span> <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'No'</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span></code></pre></div>
-<pre><code>=== 추정량 X̄의 표집 분포 ===
-E[X̄] = 5.0012  (참값 μ = 5.0)  ← 비편향성 확인
-Var(X̄) = 0.1327  (이론값 σ²/n = 0.1333)
-
-=== 특정 표본의 실현값 ===
-x̄ = 4.8231  (μ와의 차이: 0.1769)
-이 값이 CI 안에 있는가: Yes</code></pre>
-</section>
-<section id="step-3-ml-맥락-기대-손실-vs.-경험-손실" class="level3" data-number="9.3">
-<h3 data-number="9.3" class="anchored" data-anchor-id="step-3-ml-맥락-기대-손실-vs.-경험-손실"><span class="header-section-number">9.3</span> Step 3: ML 맥락 — 기대 손실 vs.&nbsp;경험 손실</h3>
-<div class="sourceCode" id="cb5" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb5-1"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">as</span> np</span>
-<span id="cb5-2"></span>
-<span id="cb5-3"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 데이터 생성 분포: Y = 2X + 1 + ε, ε ~ N(0, 1)</span></span>
-<span id="cb5-4">np.random.seed(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>)</span>
-<span id="cb5-5">n_population <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">100000</span>  <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 모집단 (매우 크게)</span></span>
-<span id="cb5-6">n_train <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">50</span>           <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 훈련 표본</span></span>
-<span id="cb5-7"></span>
-<span id="cb5-8">X_pop <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.random.uniform(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">10</span>, n_population)</span>
-<span id="cb5-9">eps_pop <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.random.normal(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, n_population)</span>
-<span id="cb5-10">Y_pop <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> X_pop <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> eps_pop</span>
-<span id="cb5-11"></span>
-<span id="cb5-12"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 모델: f(x) = 2x + 1 (참 모형을 안다고 가정)</span></span>
-<span id="cb5-13"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">def</span> model(x):</span>
-<span id="cb5-14">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">return</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> x <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span></span>
-<span id="cb5-15"></span>
-<span id="cb5-16"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">def</span> mse(y_pred, y_true):</span>
-<span id="cb5-17">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">return</span> np.mean((y_pred <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> y_true) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">**</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>)</span>
-<span id="cb5-18"></span>
-<span id="cb5-19"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 기대 손실 (population risk) — 모집단 전체에서 계산</span></span>
-<span id="cb5-20">expected_loss <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> mse(model(X_pop), Y_pop)</span>
-<span id="cb5-21"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"기대 손실 E[L] (population risk) = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>expected_loss<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb5-22"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 이론값: E[(Y - f(X))²] = E[ε²] = Var(ε) = 1.0</span></span>
-<span id="cb5-23"></span>
-<span id="cb5-24"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 경험 손실 (empirical risk) — 훈련 표본에서만 계산 (실현값)</span></span>
-<span id="cb5-25">X_train <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.random.uniform(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">10</span>, n_train)</span>
-<span id="cb5-26">Y_train <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> X_train <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> np.random.normal(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, n_train)</span>
-<span id="cb5-27">empirical_loss <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> mse(model(X_train), Y_train)</span>
-<span id="cb5-28"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"경험 손실 R̂(f) (훈련 데이터) = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>empirical_loss<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb5-29"></span>
-<span id="cb5-30"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 일반화 갭</span></span>
-<span id="cb5-31"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"일반화 갭 = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">abs</span>(expected_loss <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> empirical_loss)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb5-32"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>()</span>
-<span id="cb5-33"></span>
-<span id="cb5-34"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 표본마다 경험 손실이 달라짐 (경험 손실도 확률변수의 실현값)</span></span>
-<span id="cb5-35">empirical_losses <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> []</span>
-<span id="cb5-36"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">for</span> _ <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1000</span>):</span>
-<span id="cb5-37">    X_s <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.random.uniform(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">10</span>, n_train)</span>
-<span id="cb5-38">    Y_s <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> X_s <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> np.random.normal(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, n_train)</span>
-<span id="cb5-39">    empirical_losses.append(mse(model(X_s), Y_s))</span>
-<span id="cb5-40"></span>
-<span id="cb5-41"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"경험 손실의 평균 E[R̂] = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>np<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>mean(empirical_losses)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">  (기대 손실과 비교: </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>expected_loss<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)"</span>)</span>
-<span id="cb5-42"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"경험 손실의 표준편차 = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>np<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>std(empirical_losses)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.4f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span></code></pre></div>
-<pre><code>기대 손실 E[L] (population risk) = 0.9981
-경험 손실 R̂(f) (훈련 데이터) = 1.0431
-일반화 갭 = 0.0450
-
-경험 손실의 평균 E[R̂] = 0.9984  (기대 손실과 비교: 0.9981)
-경험 손실의 표준편차 = 0.2002</code></pre>
-<p>경험 손실은 기대 손실의 비편향 추정값이다 — 단 개별 실현값은 기대 손실과 다를 수 있다.</p>
-<hr>
-</section>
-</section>
-<section id="개념-정리" class="level2" data-number="10">
-<h2 data-number="10" class="anchored" data-anchor-id="개념-정리"><span class="header-section-number">10</span> 개념 정리</h2>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 25%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>맥락</th>
-<th>기대값 (상수)</th>
-<th>추정량 (확률변수)</th>
-<th>실현값 (숫자)</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>기본</td>
-<td><img src="https://latex.codecogs.com/png.latex?E%5BX%5D%20=%20%5Cmu"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Cbar%7BX%7D_n"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Cbar%7Bx%7D"></td>
-</tr>
-<tr class="even">
-<td>추정</td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Ctheta"> (모수)</td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Chat%7B%5Ctheta%7D%20=%20T(%5Cmathbf%7BX%7D)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Chat%7B%5Ctheta%7D(%5Cmathbf%7Bx%7D)"></td>
-</tr>
-<tr class="odd">
-<td>ML</td>
-<td><img src="https://latex.codecogs.com/png.latex?R(f)"> (기대 손실)</td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Chat%7BR%7D(f)"> (경험 손실 변수)</td>
-<td>특정 훈련셋의 손실값</td>
-</tr>
-<tr class="even">
-<td>금융</td>
-<td><img src="https://latex.codecogs.com/png.latex?E%5BR%5D"> (기대 수익)</td>
-<td><img src="https://latex.codecogs.com/png.latex?R"> (수익률 변수)</td>
-<td><img src="https://latex.codecogs.com/png.latex?r"> (실현 수익)</td>
-</tr>
-</tbody>
-</table>
-<p>핵심 메시지: - <strong>기대값</strong> <img src="https://latex.codecogs.com/png.latex?E%5BX%5D">: 분포에 내재된 상수, 실험과 무관하게 고정 - <strong>확률변수</strong> <img src="https://latex.codecogs.com/png.latex?X">: 실험 결과를 숫자로 매핑하는 함수, 아직 불확실 - <strong>실현값</strong> <img src="https://latex.codecogs.com/png.latex?x%20=%20X(%5Comega)">: 특정 실험 후 확정된 숫자, 더 이상 불확실하지 않음</p>
-<p>이 세 개념의 구분은 비편향성, 일치성, 신뢰구간의 빈도론적 해석, 머신러닝의 일반화 이론 전반에 걸쳐 반복적으로 등장한다.</p>
-<hr>
-</section>
-<section id="관련-주제" class="level2" data-number="11">
-<h2 data-number="11" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">11</span> 관련 주제</h2>
-<p><strong>선행 지식</strong></p>
-<ul>
-<li><a href="../../../../docs/blog/posts/Statistics/43-random-variables.html">확률변수 — 가측함수, PMF·PDF·CDF, 이산·연속·혼합형, 변수변환</a></li>
-<li><a href="../../../../docs/blog/posts/Statistics/52-expected-values.html">기대값 — 정의, LOTUS, 선형성, 분산, 공분산, 적률, MGF, 부등식</a></li>
-</ul>
-<p><strong>후속 주제</strong></p>
-<ul>
-<li><a href="../../../../docs/blog/posts/Statistics/53-moments-mgf.html">적률과 적률생성함수 — 적률 체계, MGF 존재·유일성</a></li>
-<li>수렴과 점근이론</li>
-</ul>
-<p><strong>관련 개념</strong></p>
-<ul>
-<li><a href="../../../../docs/blog/posts/Statistics/22-mle.html">MLE — 최대우도추정</a> — 추정량의 성질에서 이 구분이 핵심</li>
-<li><a href="../../../../docs/blog/posts/Statistics/24-blue.html">BLUE — 최량선형불편추정량</a> — 비편향성의 응용</li>
-</ul>
-
-
-</section>
-
- ]]></description>
-  <category>Statistics</category>
-  <guid>kk3225.netlify.app/docs/blog/posts/Statistics/66-expected-value-vs-realized-value.html</guid>
   <pubDate>Sat, 28 Mar 2026 15:00:00 GMT</pubDate>
 </item>
 </channel>
