@@ -23,7 +23,8 @@ cross_references:
 - **문제-풀이 쌍(Problem-Solution Pair)**: 코딩 테스트 문제 풀이가 핵심이다
 - **알고리즘 유형별 분류**: Hash, Stack/Queue, Sorting, Graph 등 유형별로 구성한다
 - **실행 가능한 코드**: 코드가 즉시 실행 가능해야 한다
-- **하위 폴더**: `algorithm/` (알고리즘 문제), `sql/` (SQL 문제, 계획 중)
+- **하위 폴더**: `algorithm/` (알고리즘 문제), `sql/` (SQL 문제)
+- **트랙 구분**: 알고리즘은 AIE(AI Engineer) / DS(Data Scientist) 트랙으로 구분한다
 - **파일명 패턴**: `유형_난이도_문제명.qmd` (예: `hash_level1_pocketmon.qmd`)
 
 ---
@@ -147,14 +148,13 @@ def solution(nums):
 
 ### 유형 분류
 
-| 유형 | 핵심 개념 | 대표 패턴 |
-|------|-----------|-----------|
-| SELECT/WHERE | 필터링, 조건 검색 | 조건 조합, LIKE, IN, BETWEEN |
-| JOIN | 테이블 결합 | INNER/LEFT/RIGHT/CROSS JOIN, 자기 결합 |
-| GROUP BY / HAVING | 집계, 그룹 필터 | COUNT, SUM, AVG + HAVING 조건 |
-| Window Function | 윈도우 함수 | ROW_NUMBER, RANK, LAG/LEAD, 누적합 |
-| Subquery / CTE | 서브쿼리, 공통 테이블 표현식 | 상관 서브쿼리, WITH 절, 재귀 CTE |
-| String / Date | 문자열·날짜 처리 | CONCAT, SUBSTRING, DATE_DIFF, FORMAT |
+| 유형 | 난이도 | 핵심 개념 | 대표 패턴 |
+|------|--------|-----------|-----------|
+| SELECT/WHERE | Lv.1 | 필터링, 조건 검색, 정렬 | 조건 조합, LIKE, IN, BETWEEN, ORDER BY |
+| JOIN + GROUP BY | Lv.2 | 테이블 결합, 그룹 집계, CASE WHEN | INNER/LEFT JOIN, HAVING, 기본 서브쿼리 |
+| 복합 쿼리 | Lv.3 | 다중 JOIN, 상관 서브쿼리, 날짜 함수 | EXISTS, UNION, COALESCE, 조건부 집계 |
+| Window Function | Lv.4 | 윈도우 함수, CTE | ROW_NUMBER, RANK, LAG/LEAD, PARTITION BY |
+| 고급 패턴 | Lv.5 | 재귀 CTE, 연속 구간, 누적 집계 | Island & Gaps, 이동 평균, PIVOT |
 
 ### SQL 포스트 구조
 

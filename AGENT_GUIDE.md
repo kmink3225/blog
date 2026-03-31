@@ -55,6 +55,8 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `/audit [file-path]` | 품질 감사 | `guides/audit.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/log` | 변경 이력 요약 | `guides/changelog-summary.md` |
 | `/reindex [category]` | index.qmd 재구성 | `guides/reorganize-index.md` + `docs/blog/posts/{category}/GUIDE.md` |
+| `/algo [track] [problem]` | Python 알고리즘 튜터 (AIE/DS) | `guides/algo-tutor.md` + `docs/blog/posts/Code_Test/GUIDE.md` |
+| `/sql [problem]` | SQL 코딩 테스트 튜터 | `guides/sql-tutor.md` + `docs/blog/posts/Code_Test/GUIDE.md` |
 | `/publish` | git add·commit·push·충돌해결 | `guides/publish.md` |
 
 ### 커맨드별 사용 예시
@@ -69,6 +71,9 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `/audit` | `/audit Statistics/56-common-families-discrete.qmd` |
 | `/log` | `/log` |
 | `/reindex` | `/reindex Statistics` |
+| `/algo` | `/algo AIE Level 3 DFS 문제 풀자` |
+| `/algo` | `/algo DS Level 2 정렬 연습` |
+| `/sql` | `/sql Programmers SELECT Level 1 문제 풀자` |
 | `/publish` | `/publish` |
 
 ### `/fix` vs `/audit` 차이
@@ -97,6 +102,14 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 /log
   → CORE + changelog-summary
   → 로드 안 함: 모든 skill/category 가이드
+
+/algo AIE Level 3 DFS
+  → CORE + algo-tutor + Code_Test/GUIDE.md
+  → 로드 안 함: write-post, info-search, sql-tutor, ...
+
+/sql Programmers JOIN Level 2
+  → CORE + sql-tutor + Code_Test/GUIDE.md
+  → 로드 안 함: write-post, info-search, algo-tutor, ...
 
 /publish
   → CORE + publish.md
