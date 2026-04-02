@@ -1,0 +1,473 @@
+---
+title: "Git 머지 충돌 해결: 실전 케이스"
+subtitle: "PR 충돌부터 재충돌까지 — 실제 프로젝트에서 겪은 4가지 상황"
+description: |
+  실제 프로젝트에서 발생한 Git 머지 충돌 4가지 케이스를 상세히 기록한다.
+  -X ours 일괄 해결, 날짜 기반 파일별 선택, PR 머지 후 재충돌, stash 활용까지
+  실제 명령어와 출력을 그대로 보존하여 재현 가능한 가이드로 정리한다.
+categories:
+  - Engineering
+  - Git
+  - DevOps
+author: Kwangmin Kim
+date: 04/03/2026
+---
+
+이 포스트는 실제 프로젝트에서 발생한 머지 충돌 4가지 케이스를 기록한 것이다. 각 케이스에서 실행한 명령어와 실제 출력을 그대로 보존했으므로, 비슷한 상황을 만났을 때 참고할 수 있다. 머지 충돌의 개념(Merge Base, 3-way Merge, 전략 옵션)은 [Git 머지 충돌 해결: 개념과 전략](./17.git_merge_conflict_concepts.qmd)에서 다룬다.
+
+## Case 1: `-X ours` 로 한 번에 해결 (feat/chatbot → main)
+
+### 상황 배경
+
+- GitHub에서 `feat/chatbot` → `main` PR을 열었는데 충돌 표시가 뜸
+- 원인: `main` 에는 `feat/code-analyzer` 브랜치가 별도로 머지되어 있었고, 같은 파일들을 두 브랜치가 각자 수정한 상태
+
+### 브랜치 상태 파악
+
+**실행한 명령:**
+
+```bash
+git fetch origin
+git log --oneline origin/feat/chatbot...origin/main --left-right
+```
+
+**실제 출력 (일부):**
+
+```
+< e504cfd citation improved           <- feat/chatbot에만 있는 커밋
+< ce54111 cosine similarity scoring...
+< 7540f67 data uplodad:
+...
+> c968455 Merge branch 'feat/code-analyzer'   <- main에만 있는 커밋
+> 989d972 docs: 메타데이터 작업 관리 문서 추가
+> f789dc7 feat: 1차 메타데이터 추출 프롬프트 파일
+...
+```
+
+**이게 의미하는 것:**
+
+- `<` = feat/chatbot이 앞서 나간 커밋 (chatbot 기능 개발분)
+- `>` = main이 앞서 나간 커밋 14개 (code-analyzer, metadata 작업)
+- 즉, 두 브랜치가 **같은 출발점에서 각자 다른 방향으로 뻗어나간 상태**
+
+### 머지 시뮬레이션으로 충돌 파일 확인
+
+**실행한 명령:**
+
+```bash
+git checkout feat/chatbot
+git merge origin/main --no-commit --no-ff
+```
+
+**실제 에러 출력:**
+
+```
+Auto-merging .gitignore
+CONFLICT (content): Merge conflict in .gitignore
+Auto-merging data/messages.json
+CONFLICT (content): Merge conflict in data/messages.json
+Auto-merging data/metrics.json
+CONFLICT (content): Merge conflict in data/metrics.json
+Auto-merging data/visitors.json
+CONFLICT (content): Merge conflict in data/visitors.json
+Auto-merging poetry.lock
+CONFLICT (content): Merge conflict in poetry.lock
+Auto-merging pyproject.toml
+CONFLICT (content): Merge conflict in pyproject.toml
+Auto-merging src/agent/shared/llm/provider.py
+CONFLICT (content): Merge conflict in src/agent/shared/llm/provider.py
+Auto-merging src/data/experiments/experiments.json
+CONFLICT (content): Merge conflict in src/data/experiments/experiments.json
+Automatic merge failed; fix conflicts and then commit the result.
+```
+
+**`CONFLICT (content)` 가 의미하는 것:**
+
+- `Auto-merging` 성공 = 같은 파일이지만 Git이 자동으로 합칠 수 있었음 (수정 위치가 겹치지 않음)
+- `CONFLICT (content)` = **같은 파일의 같은 부분**을 두 브랜치가 각자 다르게 수정 → Git이 어느 쪽을 선택할지 모르는 상태
+
+충돌난 파일을 열어보면 이런 형태가 된다:
+
+```
+<<<<<<< HEAD (feat/chatbot의 내용)
+chatbot 브랜치에서 수정한 내용
+=======
+main 브랜치에서 수정한 내용
+>>>>>>> origin/main
+```
+
+### 머지 취소 후 전략 결정
+
+```bash
+git merge --abort
+```
+
+**왜 취소했나?**
+
+- `--no-commit` 으로 들어간 충돌 상태를 그대로 두면 git이 "머지 진행 중" 상태로 잠김
+- 파일 하나씩 수동으로 편집해서 해결할 수도 있지만, 8개 파일 모두 `feat/chatbot` 기준으로 가져가면 되는 상황
+- **전략: `-X ours` 로 한 번에 해결**
+
+**`--abort` 의 효과:**
+
+- 충돌 파일들의 `<<<<<<<`, `=======`, `>>>>>>>` 마커 제거
+- 브랜치를 머지 시도 이전 상태로 완전 복원
+
+### `-X ours` 전략으로 재머지
+
+```bash
+git merge origin/main -X ours -m "Merge origin/main into feat/chatbot (feat/chatbot takes precedence)"
+```
+
+**실제 출력:**
+
+```
+Auto-merging .gitignore
+Auto-merging data/messages.json
+...
+Merge made by the 'ort' strategy.
+ data/docs/metadata/... | 240 +
+ data/docs/metadata/... | 406 +
+ ...
+ 61 files changed, 16743 insertions(+), 107923 deletions(-)
+```
+
+**이번엔 CONFLICT가 없는 이유:**
+
+- `-X ours` 옵션이 충돌 발생 시 자동으로 현재 브랜치(feat/chatbot) 내용을 선택
+- 충돌 없는 파일들은 정상 3-way merge로 처리 (양쪽 변경 모두 반영)
+- 결과: main에만 있던 metadata 문서들은 추가됨 + 충돌 파일들은 chatbot 버전 유지
+
+### Push
+
+```bash
+git push origin feat/chatbot
+```
+
+**출력:**
+
+```
+To https://github.com/kmkim3225/agent.git
+   e504cfd..9c9b5d2  feat/chatbot -> feat/chatbot
+```
+
+GitHub PR에서 충돌 해소됨.
+
+## Case 2: 날짜 기반 파일별 선택 (feat/standardizer → main)
+
+### 상황 배경
+
+- `feat/standardizer` 는 단순히 "최신 브랜치"가 아닌 복잡한 상태
+- 개발 중 실수로 chatbot 관련 파일도 수정 → 파일마다 어느 브랜치가 더 최신인지 다름
+- **파일별로 커밋 날짜를 비교해서 더 최신인 브랜치 버전 선택**
+
+### 머지 시뮬레이션
+
+```bash
+git checkout feat/standardizer
+git merge origin/main --no-commit --no-ff
+```
+
+**실제 에러 출력:**
+
+```
+Auto-merging .gitignore
+CONFLICT (content): Merge conflict in .gitignore
+Auto-merging data/messages.json
+CONFLICT (content): Merge conflict in data/messages.json
+Auto-merging data/metrics.json
+CONFLICT (content): Merge conflict in data/metrics.json
+Auto-merging data/visitors.json
+CONFLICT (content): Merge conflict in data/visitors.json
+Auto-merging poetry.lock
+CONFLICT (content): Merge conflict in poetry.lock
+Auto-merging pyproject.toml
+CONFLICT (content): Merge conflict in pyproject.toml
+Auto-merging src/agent/shared/llm/provider.py
+CONFLICT (content): Merge conflict in src/agent/shared/llm/provider.py
+Auto-merging src/data/experiments/experiments.json
+Automatic merge failed; fix conflicts and then commit the result.
+```
+
+*(이 상태에서 머지를 취소하지 않고 — 충돌 상태 유지한 채로 — 파일별 날짜 비교 진행)*
+
+### 파일별 최신 커밋 날짜 비교
+
+```bash
+MERGE_BASE=9ef1d052e8b4407c417f18e19a18edf78e83705c
+
+for f in .gitignore data/messages.json ...; do
+  std_date=$(git log -1 --format="%ai" "$MERGE_BASE..origin/feat/standardizer" -- "$f")
+  main_date=$(git log -1 --format="%ai" "$MERGE_BASE..origin/main" -- "$f")
+  echo "FILE: $f"
+  echo "  standardizer: $std_date"
+  echo "  main:         $main_date"
+done
+```
+
+**실제 출력:**
+
+```
+FILE: .gitignore
+  standardizer: 2026-03-16 14:18:54 +0900
+  main:         2026-03-30 10:07:46 +0900   <- main이 더 최신
+
+FILE: data/messages.json
+  standardizer: 2026-03-06 05:53:47 +0000   <- standardizer가 더 최신
+  main:         2026-02-23 08:54:39 +0900
+
+FILE: poetry.lock
+  standardizer: 2026-03-17 23:14:14 +0000   <- standardizer가 더 최신
+  main:         2026-02-23 08:54:39 +0900
+...
+```
+
+**왜 merge base 이후로 범위를 제한했나?**
+
+만약 `git log -1 --format="%ai" origin/feat/standardizer -- ".gitignore"` 처럼 전체 이력으로 조회하면:
+
+- merge base 이전 커밋(공통 조상 이전 커밋)까지 포함되어 날짜가 왜곡됨
+- `MERGE_BASE..브랜치` 로 범위를 잘라야 **"이 브랜치에서 독자적으로 수정한 마지막 날짜"** 를 정확히 볼 수 있음
+
+**비교 결과 정리:**
+
+| 파일 | standardizer | main | 선택 |
+|------|-------------|------|------|
+| `.gitignore` | 2026-03-16 | 2026-03-30 | **main** |
+| `data/messages.json` | 2026-03-06 | 2026-02-23 | **standardizer** |
+| `data/metrics.json` | 2026-03-06 | 2026-02-23 | **standardizer** |
+| `data/visitors.json` | 2026-03-16 | 2026-02-23 | **standardizer** |
+| `poetry.lock` | 2026-03-17 | 2026-02-23 | **standardizer** |
+| `pyproject.toml` | 2026-03-18 | 2026-02-23 | **standardizer** |
+| `src/agent/shared/llm/provider.py` | 2026-03-06 | 2026-02-23 | **standardizer** |
+| `src/data/experiments/experiments.json` | 2026-03-23 | 2026-02-23 | **standardizer** |
+
+### 파일별 버전 수동 선택
+
+충돌 상태가 유지된 채로 (머지 진행 중 상태):
+
+```bash
+# main이 더 최신인 파일 -> --theirs (상대 브랜치 = main 선택)
+git checkout --theirs .gitignore
+git add .gitignore
+
+# standardizer가 더 최신인 파일 -> --ours (현재 브랜치 = standardizer 선택)
+git checkout --ours data/messages.json
+git add data/messages.json
+
+git checkout --ours data/metrics.json
+git add data/metrics.json
+
+git checkout --ours data/visitors.json
+git add data/visitors.json
+
+git checkout --ours poetry.lock
+git add poetry.lock
+
+git checkout --ours pyproject.toml
+git add pyproject.toml
+
+git checkout --ours src/agent/shared/llm/provider.py
+git add src/agent/shared/llm/provider.py
+
+git checkout --ours src/data/experiments/experiments.json
+git add src/data/experiments/experiments.json
+```
+
+**`git add` 를 반드시 해야 하는 이유:**
+
+- `git checkout --ours/--theirs` 로 파일 내용을 선택하면, 파일은 수정되지만 git 내부적으로는 아직 "충돌 상태"로 표시됨
+- `git add` 를 해야 "이 파일의 충돌을 해소했다"고 git에게 알리는 것이다
+
+**`git status` 로 확인하면:**
+
+```
+On branch feat/standardizer
+All conflicts fixed but you are still merging.
+  (use "git commit" to conclude merge)
+
+Changes to be committed:
+    modified: .gitignore
+    ...
+```
+
+### 머지 커밋 완료 및 Push
+
+```bash
+git commit -m "Merge origin/main into feat/standardizer (date-based conflict resolution)"
+git push origin feat/standardizer
+```
+
+## Case 3: chatbot PR 머지 후 재충돌 (standardizer)
+
+### 상황 배경
+
+- Case 2 작업 후 GitHub에서 chatbot PR을 먼저 머지함
+- 그러자 `origin/main` 에 chatbot 관련 커밋이 추가됨
+- standardizer에 chatbot 코드가 섞여 있었기 때문에 **또 충돌 발생 가능성**
+
+**왜 다시 해야 했나?**
+
+```
+[merge base] --- feat/chatbot ----> main (chatbot 머지 후)
+                                      |
+                                이 새 커밋들이 또 충돌 가능
+feat/standardizer ----------------------------------------
+```
+
+- chatbot이 main에 머지되면서 main에 새 커밋이 추가된다
+- standardizer에 chatbot 코드가 섞여 있어 또 충돌이 가능하다
+
+### main 최신 상태 확인
+
+```bash
+git fetch origin
+git log --oneline origin/main | head -3
+```
+
+**실제 출력:**
+
+```
+9b81f8e Merge pull request #2 from kmkim3225/feat/chatbot  <- 방금 머지된 chatbot PR
+9c9b5d2 Merge origin/main into feat/chatbot (feat/chatbot takes precedence)
+c968455 Merge branch 'feat/code-analyzer'
+```
+
+main에 chatbot이 들어왔으니 standardizer에서 새로 pull한다.
+
+### 새 충돌 확인
+
+```bash
+git checkout feat/standardizer
+git merge origin/main --no-commit --no-ff
+```
+
+**실제 에러 출력:**
+
+```
+Auto-merging .gitignore
+CONFLICT (content): Merge conflict in .gitignore
+Auto-merging data/debug_retrieved_chunks.json
+CONFLICT (content): Merge conflict in data/debug_retrieved_chunks.json
+Auto-merging data/session_data.json
+CONFLICT (content): Merge conflict in data/session_data.json
+Auto-merging poetry.lock
+CONFLICT (content): Merge conflict in poetry.lock
+Auto-merging pyproject.toml
+CONFLICT (content): Merge conflict in pyproject.toml
+Automatic merge failed; fix conflicts and then commit the result.
+```
+
+**이번엔 다른 파일들이 충돌난 이유:**
+
+- 이전에 없던 `data/debug_retrieved_chunks.json`, `data/session_data.json` 이 새로 충돌
+- chatbot 브랜치가 main에 들어오면서 이 파일들이 main에 추가/수정됨
+- standardizer에도 같은 파일이 수정되어 있었기 때문
+
+### 날짜 비교 후 이번엔 모두 main이 최신
+
+```bash
+MERGE_BASE=$(git merge-base origin/feat/standardizer origin/main)
+# 이번 merge base는 이전과 다름! chatbot 머지가 반영된 새 커밋이 base
+
+for f in .gitignore data/debug_retrieved_chunks.json data/session_data.json poetry.lock pyproject.toml; do
+  std_date=$(git log -1 --format="%ai" "$MERGE_BASE..origin/feat/standardizer" -- "$f")
+  main_date=$(git log -1 --format="%ai" "$MERGE_BASE..origin/main" -- "$f")
+  echo "FILE: $f"
+  echo "  standardizer: $std_date"
+  echo "  main:         $main_date"
+done
+```
+
+**실제 출력:**
+
+```
+FILE: .gitignore
+  standardizer: (not changed)          <- standardizer에서 변경 없음
+  main:         2026-03-30 02:11:31    <- main만 변경됨
+
+FILE: data/debug_retrieved_chunks.json
+  standardizer: 2026-03-23 05:55:23
+  main:         2026-03-24 05:48:14    <- main이 더 최신
+
+FILE: poetry.lock
+  standardizer: 2026-03-17 23:14:14
+  main:         2026-03-30 02:11:31    <- main이 더 최신
+```
+
+이번엔 전부 main이 최신이므로 전부 `--theirs` 를 선택한다.
+
+```bash
+git checkout --theirs .gitignore && git add .gitignore
+git checkout --theirs data/debug_retrieved_chunks.json && git add data/debug_retrieved_chunks.json
+git checkout --theirs data/session_data.json && git add data/session_data.json
+git checkout --theirs poetry.lock && git add poetry.lock
+git checkout --theirs pyproject.toml && git add pyproject.toml
+
+git commit -m "Merge origin/main (post-chatbot) into feat/standardizer"
+git push origin feat/standardizer
+```
+
+## Case 4: 브랜치 전환 시 stash 필요 상황
+
+### 상황 배경
+
+- 모든 로컬 브랜치를 최신화하려고 `git checkout main` 을 시도
+- 그런데 현재 브랜치( `feat/standardizer` )에 **커밋하지 않은 변경 파일**이 있었음
+
+### checkout 시도 → 에러 발생
+
+```bash
+git checkout main
+```
+
+**실제 에러 출력:**
+
+```
+error: Your local changes to the following files would be overwritten by checkout:
+    data/debug_retrieved_chunks.json
+    data/session_data.json
+    src/data/experiments/experiments.json
+Please commit your changes or stash them before you switch branches.
+Aborting
+```
+
+**이 에러가 발생하는 이유:**
+
+- 브랜치를 전환하면 해당 파일들이 main 버전으로 교체됨
+- 현재 수정 중인 내용이 사라질 수 있어 **git이 안전장치로 차단**
+
+### stash로 임시 저장 후 작업
+
+```bash
+git stash   # 변경사항을 임시 스택에 저장
+```
+
+**출력:**
+
+```
+Saved working directory and index state WIP on feat/standardizer: 773a5af Merge origin/main...
+```
+
+이후 브랜치 전환이 가능해진다:
+
+```bash
+git checkout main && git pull origin main
+git checkout feat/chatbot && git pull origin feat/chatbot
+git checkout feat/standardizer && git pull origin feat/standardizer
+
+git stash pop   # 임시 저장했던 변경사항 복원
+```
+
+**출력:**
+
+```
+Dropped refs/stash@{0} (936752d35d3db7ec2c8f1d17f122ae531a24fdf7)
+```
+
+## 관련 주제
+
+- [Git 머지 충돌 해결: 개념과 전략](./17.git_merge_conflict_concepts.qmd) — Merge Base, 3-way Merge, 전략 옵션 상세 설명
+- [Git 브랜치 동기화](./16.git_sync.qmd) — reset --hard로 로컬-원격 강제 동기화
+- [Git Merge vs Rebase](./8.git_merge_rebase.qmd) — merge와 rebase의 차이
+- [Git Stash](./10.git_stash.qmd) — stash 상세 사용법

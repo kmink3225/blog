@@ -1,0 +1,179 @@
+---
+title: "Git 브랜치 동기화"
+subtitle: "로컬 브랜치를 원격(origin) 기준으로 강제 동기화하기"
+description: |
+  로컬과 원격(origin) 브랜치가 어긋났을 때 git reset --hard, git stash, git clean으로
+  강제 동기화하는 방법을 상황별로 정리한다. git branch -vv로 상태를 파악하고,
+  안전하게 동기화하는 실전 워크플로를 다룬다.
+categories:
+  - Engineering
+  - Git
+  - DevOps
+author: Kwangmin Kim
+date: 04/03/2026
+---
+
+여러 브랜치를 운영하다 보면 로컬과 원격(origin)이 어긋나는 경우가 자주 생긴다.
+
+```bash
+git pull
+```
+
+을 실행했더니 아래와 같은 에러가 발생했다.
+
+```
+error: Your local changes to the following files would be overwritten by merge:
+    data/code/multiom/insilico-core-multiom/...
+Please commit your changes or stash them before you merge.
+Aborting
+```
+
+**원인:** 로컬에서 수정된 파일이 있는데, origin에서도 같은 파일이 변경되어 merge 시 충돌이 발생한 것이다.
+
+## 현재 상태 파악: `git branch -vv`
+
+먼저 각 브랜치가 origin 대비 얼마나 밀려있는지 확인한다.
+
+```bash
+git branch -vv
+```
+
+```
+* feat/chatbot      9c9b5d2 [origin/feat/chatbot]                          # 최신
+  feat/standardizer a954edd [origin/feat/standardizer: behind 47]          # 47개 뒤처짐
+  main              ce0acf0 [origin/main: ahead 1, behind 163]            # 1개 앞서고 163개 뒤처짐
+```
+
+| 표시 | 의미 |
+|------|------|
+| `behind N` | origin에 N개 커밋이 더 있다 (로컬이 뒤처짐) |
+| `ahead N` | 로컬에만 N개 커밋이 있다 (origin에 안 올라감) |
+| 표시 없음 | origin과 동일 |
+
+## 해결 전략: origin을 기준으로 강제 동기화
+
+로컬 변경사항을 버리고 **origin을 정답으로** 맞추기로 결정했다.
+
+### 핵심 명령어: `git reset --hard`
+
+```bash
+git reset --hard origin/<branch-name>
+```
+
+이 명령어는 로컬 브랜치의 HEAD를 origin의 최신 커밋으로 **강제 이동**시킨다.
+
+- 로컬에만 있던 커밋 -> 사라짐
+- 로컬 파일 수정사항 -> 사라짐
+- origin과 완전히 동일한 상태가 됨
+
+:::{.callout-warning}
+`git reset --hard`는 **되돌릴 수 없다.** 로컬 변경사항이 영구 삭제되므로, 중요한 작업이 있다면 반드시 먼저 백업(stash, 별도 브랜치)해야 한다.
+:::
+
+### 실제 수행 과정
+
+#### 작업 중인 변경사항 임시 저장
+
+현재 `feat/chatbot`에서 작업 중인 파일(`parent_retriever.py`)이 있으므로 stash로 보관한다.
+
+```bash
+git stash
+# Saved working directory and index state WIP on feat/chatbot: 9c9b5d2 ...
+```
+
+#### 각 브랜치를 origin 기준으로 reset
+
+```bash
+# main 브랜치 동기화
+git checkout main
+git reset --hard origin/main
+# HEAD is now at 00b4565 Merge pull request #4
+
+# standardizer 브랜치 동기화
+git checkout feat/standardizer
+git reset --hard origin/feat/standardizer
+# HEAD is now at 60e88d5 docs: update chatbot prompts ...
+```
+
+#### 원래 브랜치로 돌아와서 작업 복원
+
+```bash
+git checkout feat/chatbot
+git stash pop
+# parent_retriever.py 수정사항 복원됨
+```
+
+#### 한 줄로 실행
+
+위 과정을 한 줄로 연결하면:
+
+```bash
+git stash \
+  && git checkout main && git reset --hard origin/main \
+  && git checkout feat/standardizer && git reset --hard origin/feat/standardizer \
+  && git checkout feat/chatbot && git stash pop
+```
+
+### 결과 확인
+
+```bash
+git branch -vv
+```
+
+```
+* feat/chatbot      9c9b5d2 [origin/feat/chatbot]              # 최신
+  feat/standardizer 60e88d5 [origin/feat/standardizer]          # 최신
+  main              00b4565 [origin/main]                       # 최신
+```
+
+모든 브랜치가 origin과 일치한다.
+
+## `git pull`이 안 되는 다른 경우들
+
+### `git stash`로도 해결 안 될 때
+
+`git stash`는 tracked 파일의 변경만 저장한다. 인덱스(staging area)가 꼬인 경우에는 stash 후에도 merge가 실패할 수 있다.
+
+```bash
+# 인덱스 재구성 후 reset
+git read-tree HEAD
+git reset --hard origin/<branch>
+```
+
+### untracked 파일이 충돌할 때
+
+origin에 새로 추가된 파일과 로컬 untracked 파일이 겹치는 경우:
+
+```bash
+# untracked 파일 정리 후 pull
+git clean -fd <충돌-디렉토리>/
+git pull
+```
+
+| 옵션 | 의미 |
+|------|------|
+| `-f` | 강제 삭제 |
+| `-d` | 디렉토리도 삭제 |
+| `-n` | dry-run (삭제 대상만 미리 확인) |
+
+:::{.callout-tip}
+`git clean -nd`로 먼저 삭제 대상을 확인한 후, `-fd`로 실행하는 것이 안전하다.
+:::
+
+## 정리
+
+| 상황 | 해결 명령어 |
+|------|-------------|
+| 로컬 변경 버리고 origin 따라가기 | `git reset --hard origin/<branch>` |
+| 로컬 변경 보관 후 pull | `git stash && git pull && git stash pop` |
+| 인덱스 꼬임 | `git read-tree HEAD && git reset --hard origin/<branch>` |
+| untracked 파일 충돌 | `git clean -fd <dir> && git pull` |
+
+핵심 원칙: **origin이 기준이면 `git reset --hard origin/<branch>`로 맞추고, 보존할 작업이 있으면 먼저 `git stash`로 빼놓는다.**
+
+## 관련 주제
+
+- [Git Stash](./10.git_stash.qmd) -- stash 상세 사용법
+- [Git 되돌리기 완전 가이드](./9.git_undo.qmd) -- reset, revert, restore 비교
+- [Git 머지 충돌 해결: 개념과 전략](./17.git_merge_conflict_concepts.qmd) -- 브랜치 병합 시 충돌 해소
+- [Git 머지 충돌 해결: 실전 케이스](./18.git_merge_conflict_cases.qmd) -- 실제 PR 충돌 해결 사례
