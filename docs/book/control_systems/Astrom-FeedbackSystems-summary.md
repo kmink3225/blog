@@ -16,6 +16,24 @@ sources:
 
 피드백 시스템의 설계와 분석을 위한 입문서다. 물리, 생물, 정보, 사회 시스템 전반에 걸친 피드백 현상을 수학적으로 다루며, 상태공간 방법과 주파수 영역 방법을 균형 있게 제시한다. 전반부(Ch 1–7)는 상태공간 중심의 모델링·안정성·설계를, 후반부(Ch 8–12)는 전달함수와 주파수 영역 설계를 다룬다. Caltech과 Lund University에서 실제 강의에 사용된 교재로, 수학적 엄밀함을 유지하면서도 다양한 전공 배경을 가진 독자를 위해 라플라스 변환에 의존하지 않는 접근법을 채택한다.
 
+## Marker 세부 목차
+
+> `L:숫자`는 `Astrom-FeedbackSystems_marker_full.md`의 라인 번호.
+
+- Preface `L:168`
+- Ch 1 Introduction `L:216`
+- Ch 2 System Modeling `L:586`
+- Ch 3 Examples `L:1456`
+- Ch 4 Dynamic Behavior `L:2073`
+- Ch 5 Linear Systems `L:3046`
+- Ch 6 State Feedback `L:4066`
+- Ch 7 Output Feedback `L:5062`
+- Ch 8 Transfer Functions `L:5821`
+- Ch 9 Frequency Domain Analysis `L:6845`
+- Ch 10 PID Control `L:7430`
+- Ch 11 Frequency Domain Design `L:7927`
+- Ch 12 Robust Performance `L:8599`
+
 ## 챕터별 요약
 
 ### Preface
@@ -135,20 +153,3 @@ PID 제어는 11,000개 이상의 산업 제어기 조사에서 97%가 채택한
 
 ---
 
-## Marker 세부 목차
-
-> `L:숫자`는 `Astrom-FeedbackSystems_marker_full.md`의 라인 번호.
-
-- Preface `L:168`
-- Ch 1 Introduction `L:216`
-- Ch 2 System Modeling `L:586`
-- Ch 3 Examples `L:1456`
-- Ch 4 Dynamic Behavior `L:2073`
-- Ch 5 Linear Systems `L:3046`
-- Ch 6 State Feedback `L:4066`
-- Ch 7 Output Feedback `L:5062`
-- Ch 8 Transfer Functions `L:5821`
-- Ch 9 Frequency Domain Analysis `L:6845`
-- Ch 10 PID Control `L:7430`
-- Ch 11 Frequency Domain Design `L:7927`
-- Ch 12 Robust Performance `L:8599`

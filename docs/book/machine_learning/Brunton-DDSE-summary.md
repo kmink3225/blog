@@ -16,6 +16,25 @@ sources:
 
 데이터 기반 과학과 공학의 핵심 방법론을 체계적으로 다룬 교재다. SVD·Fourier 변환·압축 센싱 등 수학적 기초에서 출발하여, 동역학 시스템 식별(SINDy, DMD), 선형 제어 이론, 강화학습, 축소차수 모델(ROM), 물리 기반 머신러닝까지 광범위한 주제를 포괄한다. 각 방법론은 MATLAB·Python·R 코드 예제와 함께 제시되어 실용성을 강조한다. 이 책 전반에서 반복되는 핵심 원리는 복잡한 고차원 데이터가 실제로는 저차원 구조를 가진다는 관찰이며, 이를 활용해 효율적인 표현·예측·제어를 달성하는 것이 전체 서사를 관통한다.
 
+## Marker 세부 목차
+
+> `L:숫자`는 `Brunton-DDSE_marker_full.md`의 라인 번호.
+
+- Ch 1 Singular Value Decomposition `L:652`
+- Ch 2 Fourier and Wavelet Transforms `L:2147`
+- Ch 3 Sparsity and Compressed Sensing `L:3566`
+- Ch 4 Regression and Model Selection `L:4425`
+- Ch 5 Clustering and Classification `L:5259`
+- Ch 6 Neural Networks and Deep Learning `L:6230`
+- Ch 7 Data-Driven Dynamical Systems `L:7148`
+- Ch 8 Linear Control Theory `L:8627`
+- Ch 9 Balanced Models for Control `L:10030`
+- Ch 10 Data-Driven Control `L:10869`
+- Ch 11 Reinforcement Learning `L:11481`
+- Ch 12 Reduced-Order Models (ROMs) `L:12197`
+- Ch 13 Interpolation for Parametric ROMs `L:13099`
+- Ch 14 Physics-Informed Machine Learning `L:13838`
+
 ## 챕터별 요약
 
 ### Ch 1. Singular Value Decomposition (SVD)
@@ -143,22 +162,3 @@ POD-Galerkin ROM의 근본적 계산 병목은 비선형 항의 내적 계산으
 물리 기반 머신러닝은 이 책 전반의 방법론을 통합하는 최종 장으로, 데이터 기반 모델의 해석 가능성·일반화·외삽 능력을 향상시키기 위해 사전 물리 지식을 모델에 내재화하는 다양한 전략을 제시한다. 간결성(parsimony)은 아리스토텔레스부터 아인슈타인까지 물리 모델링의 지도 원리였으며, 현대 ML에서도 과적합 방지와 일반화를 위해 핵심 원칙으로 작동한다. SINDy 오토인코더는 오토인코더로 발견한 내재 좌표 z에서 SINDy가 간결한 동역학을 식별하도록 동시 최적화하며, 진자 비디오에서 각도·각속도를 자동 발견하는 예제로 시연된다. Koopman 예측 프레임워크는 신경망으로 시계열 데이터를 가능한 한 정현파에 가깝게 변환하는 시간 왜핑(time warping)을 학습하여 FFT의 한계를 극복하는 장기 예측 도구를 제공한다. 물리 정보 신경망(PINN)은 손실 함수에 지배 방정식의 잔차를 포함시켜 PDE 제약을 만족하는 해를 학습한다. 디지털 트윈은 물리 모델과 Kalman 필터링을 결합해 온라인 데이터로 지속 갱신되는 가상 모델을 구현한다. 다중 스케일·부분 관측·잡음이 있는 데이터 환경에서의 모델 식별은 여전히 미해결 수학적 과제로 제시된다.
 
 ---
-
-## Marker 세부 목차
-
-> `L:숫자`는 `Brunton-DDSE_marker_full.md`의 라인 번호.
-
-- Ch 1 Singular Value Decomposition `L:652`
-- Ch 2 Fourier and Wavelet Transforms `L:2147`
-- Ch 3 Sparsity and Compressed Sensing `L:3566`
-- Ch 4 Regression and Model Selection `L:4425`
-- Ch 5 Clustering and Classification `L:5259`
-- Ch 6 Neural Networks and Deep Learning `L:6230`
-- Ch 7 Data-Driven Dynamical Systems `L:7148`
-- Ch 8 Linear Control Theory `L:8627`
-- Ch 9 Balanced Models for Control `L:10030`
-- Ch 10 Data-Driven Control `L:10869`
-- Ch 11 Reinforcement Learning `L:11481`
-- Ch 12 Reduced-Order Models (ROMs) `L:12197`
-- Ch 13 Interpolation for Parametric ROMs `L:13099`
-- Ch 14 Physics-Informed Machine Learning `L:13838`
