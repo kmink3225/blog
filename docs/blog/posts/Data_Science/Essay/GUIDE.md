@@ -216,64 +216,129 @@ Essay를 작성하는 출발점은 두 가지다.
 
 ---
 
+## 증명된 실적 무기고 (면접 필수 카드)
+
+> Essay를 쓸 때 아래 수치를 **구체적 증거**로 활용한다.
+> "나는 비슷한 문제를 이미 이렇게 풀었다"는 증거가 없는 Essay는 제안서가 아니라 희망사항이다.
+
+### 측정 가능한 성과 (숫자로 기억하라)
+
+| 프로젝트 | 핵심 수치 | 연결 가능 JD 키워드 |
+|---|---|---|
+| 엔터프라이즈 AI Agent Platform | 데이터 표준화 검증 시간 99% 단축 (8h → 0.73초) | AI 플랫폼, RAG, Agent 구축 |
+| 엔터프라이즈 AI Agent Platform | 메타데이터 일관성 8.4% → 98.7% (샘플 2,214 컬럼) | 데이터 품질, 거버넌스 |
+| 엔터프라이즈 AI Agent Platform | 부서 간 문의 월 70건 → 4건 (94.3% 감소) | 자동화, 운영 효율화 |
+| PCR QC 자동화 | QC 비용 13배 절감 (연간 약 8억원), 시간 96.5% 단축 | ML 자동화, 이상 탐지 |
+| PCR QC 자동화 | 합격/불합격 분류 94.5%, 등급 분류 82.7% | 분류 모델, LSTM |
+| FDA 통계 검증 | 검증 시간 87.5% 단축 (6개월 → 3주) | 규제 대응, 통계 파이프라인 |
+| FDA 통계 검증 | 통계적 신뢰도 99.2% DSP 알고리즘 안전성 검증 | 안전성 검증, 규제 문서 |
+| PCR baseline 보정 | 위음성률 91.49% 개선 (0.47% → 0.04%) | 신호 처리, 알고리즘 최적화 |
+| NLP 데이터 표준화 | KoBERT 도메인 분류 정확도 96.89%, Macro-F1 0.97 | NLP, 분류 모델 |
+| NLP 데이터 표준화 | KoSRoBERTa+HDBSCAN 실루엣 스코어 58.95% 개선 | 클러스터링, 임베딩 |
+| 알츠하이머 연구 | 3,000개 대사물질 중 13개 핵심 바이오마커 발견 | 고차원 데이터, 바이오마커 |
+| 알츠하이머 연구 | 8개월간 미발견 교란자 EDA로 규명 → 연구 돌파구 | EDA, 인과분석 |
+
+### 팀 리더십 증거
+
+| 규모 | 내용 |
+|---|---|
+| 20명 | NLP 표준화 시스템: DS·엔지니어·도메인 전문가 멘토링 |
+| 15명 | FDA 인허가 통계 분석: DS·DE·생물학자·특허 담당자 다학제 팀 PM |
+| 11명 | PCR QC 자동화: DS·개발자·기계공학자·특허 담당자 팀 PM |
+| 23명 | Columbia CUIMC 알츠하이머 연구: 역학자·신경외과 의사·생화학자 협업 |
+
+### 특허 및 수상 (신뢰성 증거)
+
+- 특허 9건 (제1발명가 5건 포함): QC 자동화, 진단 알고리즘, AI 플랫폼 관련
+- R&D 부문 우수상 (Seegene), 학과장상 (Columbia), 학장상/수석졸업 (강원대)
+- Quarto 오픈소스 기여 (issue #5508)
+
+---
+
 ## 보유 역량 목록 (Essay 연결 고리 작성용)
 
 ### 역량 A: AI Agent Platform
 
-**핵심 경험:** LangChain/LangGraph를 통한 RAG 시스템 구현 및 orchestration layer 설계
+**핵심 경험:** 엔터프라이즈 5-Layer AI Agent Knowledge Base Platform 설계·구축 (2025.11~)
+- 데이터 표준화 검증 시간 **99% 단축** (8시간 → 0.73초)
+- KoBERT(도메인 분류) + KoSRoBERTa+HDBSCAN(유사어) + RAG(규칙 기반 검증) 통합
+- LangGraph 기반 다중 도메인 Agent (QnA Chatbot, Data Standardizer, Code Standardizer, Codebase Analyzer)
+- 5-Layer 아키텍처: Presentation → Orchestration(FastAPI) → Processing(AST/Airflow) → Storage(Azure AI Search/SQL) → AI/Monitoring(Prometheus/Grafana)
 
-| 세부 역량 | 설명 |
+| 세부 역량 | 실제 구현 증거 |
 |---|---|
-| Advanced RAG | Query transformation, hybrid search (dense+sparse), reranking, contextual compression |
-| Modular RAG | Retrieve → Rerank → Generate 각 모듈 독립 교체 가능한 파이프라인 설계 |
-| Agentic RAG | Tool-calling, 자기 수정(self-reflection), multi-step reasoning LangGraph 구현 |
-| Orchestration Layer | 조건부 라우팅, 병렬 실행, state machine 설계 (LangGraph StateGraph) |
-| Memory & State | Short-term (대화 이력) + Long-term (Vector DB 기반) 메모리 아키텍처 |
+| Advanced RAG | 규칙 200+개 PDF 임베딩/검색/생성 파이프라인 (Azure AI Search + Azure OpenAI) |
+| Modular RAG | Rule-Based Engine + Data-Driven Engine + LLM 3개 모듈 독립 교체 구조 |
+| Agentic RAG | 다중 도메인 Agent 조건부 라우팅 + Tool-calling (LangGraph StateGraph) |
+| Orchestration Layer | FastAPI AI Engine 서빙, Java Spring WebFlux BFF, 병렬 실행 |
+| Memory & State | Vector Store(Azure AI Search) Long-term + 대화 이력 Short-term |
+| MLOps | MLflow 모델 레지스트리, GitHub Actions CI/CD, Prometheus/Grafana 모니터링 |
+| NLP 모델 | KoBERT(96.89% 정확도), KoSRoBERTa+HDBSCAN(실루엣 스코어 58.95% 개선) |
 
 **Essay 연결 고리 템플릿:**
 
 | 새 문제 | 연결 고리 한 문장 |
 |---|---|
-| 사내 지식 검색 | "Advanced RAG의 hybrid search + reranking 파이프라인을 사내 문서 검색에 그대로 적용한다" |
-| CS 자동화 | "LangGraph stateful agent로 멀티턴 고객 상담 context를 유지하는 구조를 설계한 경험이 있다" |
-| 규제 문서 Q&A | "Modular RAG의 retrieval grounding으로 hallucination을 억제하는 구조를 구현했다" |
-| 복합 데이터 파이프라인 | "LangGraph orchestration layer로 병렬 도구 호출과 조건부 분기를 설계한 경험이 있다" |
+| 사내 지식 검색 | "53개 DB, 200+개 규칙 문서 기반 RAG 파이프라인을 실제 구축했으며, 검증 시간을 99% 단축한 경험이 있다" |
+| CS/헬프데스크 자동화 | "LangGraph 다중 도메인 Agent로 QnA Chatbot과 Data Standardizer를 동일 플랫폼에서 orchestration한 경험이 있다" |
+| 규제 문서 Q&A | "FDA 규제 문서 RAG 검증 구조를 실제 구현했으며, hallucination 억제를 위한 Rule-Based + LLM 이중 검증 구조를 설계했다" |
+| 레거시 시스템 AI 전환 | "Matlab 레거시 알고리즘을 Python Data-Driven 알고리즘으로 전환하고, NLP 기반 코드 표준화 시스템으로 확장한 경험이 있다" |
 
 ---
 
-### 역량 B: 고급 통계 / Mechanistic 모델링 (PCR 시리즈)
+### 역량 B: 고급 통계 / Mechanistic 모델링
 
-**핵심 경험:** 4PL sigmoid 피팅 + 계층적 Bayesian + 시계열 분석으로 PCR 진단 파이프라인 설계
+**핵심 경험:** RT-PCR 진단 알고리즘 전 주기 — Reverse Engineering → Statistical Modeling → FDA 검증 → Data-Driven 최적화 (2021~2024, 4년)
 
-| 세부 역량 | 설명 |
+| 세부 역량 | 실제 구현 증거 |
 |---|---|
-| 4PL Sigmoid 피팅 | 비선형 회귀, 수렴 안정성 (bounds, Ridge 정규화), AIC/BIC 모델 선택 |
+| 4PL Sigmoid 피팅 | RT-PCR 신호 비선형 회귀, bounds/Ridge 정규화, AIC/BIC 모델 선택 |
 | 계층적 Bayesian | PyMC MCMC, partial pooling, shrinkage, CRB/Fisher 정보 분석 |
-| Bayesian 불확실성 정량화 | Posterior CI, 그레이존 처리, 재검 프로토콜 설계 |
-| 시계열 이상 탐지 | ARIMA, wavelet 변환, Ljung-Box 잔차 검정, 전환점 탐지 |
-| Joint Bayesian Estimation | 다중 파라미터 동시 추정, prior 설계, MCMC 수렴 진단 |
-| FDA 규제 맥락 ML 설계 | Closed system, OOD 탐지, 규제 적합 모델 구조 |
+| Bayesian 불확실성 정량화 | 그레이존(Ct 35~40) Posterior CI 기반 재검 프로토콜 설계 |
+| 시계열 이상 탐지 | ARIMA + wavelet + Ljung-Box 잔차 검정, 전환점 탐지 |
+| Joint Bayesian Estimation | 다중 파라미터 동시 추정, MCMC 수렴 진단 |
+| FDA 규제 통계 | 2-Way Repeated Measures ANOVA, McNemar, Breslow-Day, CMH; 신뢰도 99.2% |
+| 고급 통계 (Columbia) | Cox Hazard Model, GEE, sPLS, Multiple Testing Correction (Permuted p-values) |
+| 알고리즘 최적화 | 혼합 기저 함수(다항·지수·로그) 특성방정식, 모멘텀 경사 하강법; 위음성률 91.49% 개선 |
 
 **Essay 연결 고리 템플릿:**
 
 | 새 문제 | 연결 고리 한 문장 |
 |---|---|
-| 수요 예측 | "PCR 배치 간 Hill slope 공유 구조가 매장 간 계절성 partial pooling과 수학적으로 동일하다" |
-| 재고 회색지대 | "Ct 35~40 그레이존 처리의 Bayesian posterior 구조를 재주문점 불확실성 처리에 그대로 전용한다" |
-| 프로모션 반응 | "PCR 증폭 곡선의 S자(4PL) 구조가 할인율-전환율 반응 모델과 수학적으로 동일하다" |
-| 이상 탐지 | "RFU 시계열의 ARIMA 잔차 + Ljung-Box 파이프라인을 리드타임/거래 시계열에 그대로 적용한다" |
-| A/B 테스트 | "PCR 그레이존의 Bayesian posterior 의사결정 구조가 A/B 테스트의 ROPE 기반 판정과 동일하다" |
+| 수요 예측 | "PCR 배치 간 계층적 Bayesian partial pooling 구조를 매장 간 계절성 공유에 그대로 전용한다" |
+| 재고 회색지대 | "그레이존 Bayesian posterior 기반 재검 프로토콜을 재주문점 불확실성 자동 발주에 적용한다" |
+| 프로모션 반응 모델 | "RT-PCR 4PL sigmoid S자 구조가 할인율-전환율 반응 모델과 수학적으로 동일하며 SKU별 임계 할인율을 자동 추정한다" |
+| 이상 탐지 | "RFU 시계열 ARIMA 잔차 + Ljung-Box 파이프라인을 리드타임/거래 시계열 이상 탐지에 그대로 적용한다" |
+| 규제 대응 통계 | "FDA 검증 파이프라인 설계 경험(검증 시간 87.5% 단축)으로 ISO/규제 요구 통계 문서를 자동화한다" |
 
 ---
 
 ### 역량 C: 딥러닝 / 머신러닝
 
-| 세부 역량 | 설명 |
+**핵심 경험:** PCR QC LSTM (94.5% 정확도, 비용 13배 절감), KoBERT 도메인 분류 (96.89%), 알츠하이머 바이오마커 sPLS (78%)
+
+| 세부 역량 | 실제 구현 증거 |
 |---|---|
-| 분류/회귀 파이프라인 | 피처 엔지니어링, 앙상블, 하이퍼파라미터 최적화 |
-| 시계열 DL | LSTM, Transformer 기반 예측 |
-| 도메인 특화 DL | PCR 신호 처리 딥러닝 (FDA 규제 closed system 내 설계) |
-| 모델 해석 | SHAP, LIME, Bayesian 불확실성 연동 |
+| 시계열 DL | LSTM 2단계 QC 예측 (61,248개 PCR 신호, 96.5% 시간 단축) |
+| NLP 분류 | KoBERT 도메인 분류 (96.89%, Macro-F1 0.97, 14 class) |
+| 클러스터링 | KoSRoBERTa + HDBSCAN (실루엣 58.95% 개선) |
+| 이상 탐지 | PCA + t-SNE + DBSCAN + 3-Sigma Rule 조합 |
+| 고차원 데이터 | 146샘플 × 3,000변수 소표본 문제, sPLS 78% 정확도 + 해석력 |
+| 앙상블 비교 | 10+ 알고리즘 성능 비교 (Lasso, Ridge, RF, SVM, GBM 등) |
+
+---
+
+### 역량 D: 팀 리딩 / 실험 설계 / 문서 자동화
+
+| 세부 역량 | 실제 구현 증거 |
+|---|---|
+| 다학제 팀 리딩 | 최대 20명 (DS·DE·생물학자·기계공학자·특허 담당자·임원) |
+| FDA 실험 프로토콜 설계 | Switch Model 10개 시나리오로 8개 모듈 개별 기여도 정량 분석 |
+| 문서 자동화 | Apache Airflow ETL → R + Quarto → 200페이지 FDA V&V 보고서 반자동화 |
+| 비용 절감 | QC 연간 약 8억원 절감, 데이터 표준화 부서 문의 94.3% 감소 |
+| 종단 연구 설계 | GEE family-based design, 20년 잠복기 알츠하이머 Cox 회귀 |
+
+
 
 ---
 
