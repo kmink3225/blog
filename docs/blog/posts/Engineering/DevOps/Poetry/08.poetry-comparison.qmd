@@ -1,9 +1,9 @@
 ---
-title: "Poetry vs pip vs Conda vs Pipenv vs PDM"
+title: "Poetry vs setuptools vs pip vs Conda vs Pipenv vs PDM"
 subtitle: "Python 패키지 관리 도구 비교와 선택 기준"
 description: |
   Python 생태계의 주요 패키지 관리 도구들을 비교한다.
-  pip, Conda, Pipenv, Poetry, PDM의 특징과 장단점,
+  setuptools, pip, Conda, Pipenv, Poetry, PDM의 특징과 장단점,
   프로젝트 상황별 최적 도구 선택 기준을 정리한다.
 categories:
   - Engineering
@@ -87,6 +87,24 @@ poetry build && poetry publish
 - PEP 표준(`pyproject.toml`) 기반
 - 풍부한 CLI 명령어
 
+## setuptools
+
+Python 전통 빌드/패키징 도구. `setup.py`, `setup.cfg`, `pyproject.toml`을 혼용하여 프로젝트를 구성한다.
+
+```bash
+python setup.py sdist bdist_wheel
+twine upload dist/*
+```
+
+**특징:**
+
+- Python 패키징의 사실상 표준이었던 레거시 도구
+- `setup.py` / `setup.cfg` / `pyproject.toml` 세 파일이 혼재할 수 있음
+- 의존성 관리는 `requirements.txt`로 별도 수행 (pip 의존)
+- Lock 파일 없음 (`pip freeze`로 수동 생성)
+- 가상환경 관리 기능 없음 (`venv`, `conda` 별도 사용)
+- 빌드/배포 시 `twine` 등 별도 도구가 필요
+
 ## PDM
 
 PEP 표준을 가장 충실히 따르는 차세대 도구. PEP 582 (`__pypackages__`) 지원.
@@ -107,18 +125,19 @@ pdm build && pdm publish
 
 # 기능 비교표
 
-| 기능 | pip | Conda | Pipenv | Poetry | PDM |
-|------|-----|-------|--------|--------|-----|
-| 의존성 설치 | O | O | O | O | O |
-| Lock 파일 | X | X | O | O | O |
-| 가상환경 관리 | X (별도) | O | O | O | O |
-| 의존성 해결 | 제한적 | O | O (느림) | O (빠름) | O (빠름) |
-| 빌드/배포 | X | X | X | O | O |
-| pyproject.toml | X | X | X | O | O |
-| 의존성 그룹 | X | X | dev만 | O | O |
-| 비-Python 패키지 | X | O | X | X | X |
-| PEP 621 지원 | - | - | - | 2.x부터 | O |
-| 설치 용이성 | 기본 내장 | 별도 설치 | pip 설치 | 별도 설치 | pip 설치 |
+| 기능 | setuptools | pip | Conda | Pipenv | Poetry | PDM |
+|------|-----------|-----|-------|--------|--------|-----|
+| 설정 파일 | setup.py/cfg 혼재 | requirements.txt | environment.yml | Pipfile | pyproject.toml | pyproject.toml |
+| 의존성 설치 | X (pip 의존) | O | O | O | O | O |
+| Lock 파일 | X | X | X | O | O | O |
+| 가상환경 관리 | X | X (별도) | O | O | O | O |
+| 의존성 해결 | X (pip 의존) | 제한적 | O | O (느림) | O (빠름, SAT solver) | O (빠름) |
+| 빌드/배포 | O (+ twine) | X | X | X | O | O |
+| pyproject.toml | 부분 지원 | X | X | X | O | O |
+| 의존성 그룹 | X | X | X | dev만 | O | O |
+| 비-Python 패키지 | X | X | O | X | X | X |
+| PEP 621 지원 | X | - | - | - | 2.x부터 | O |
+| 설치 용이성 | 기본 내장 | 기본 내장 | 별도 설치 | pip 설치 | 별도 설치 | pip 설치 |
 
 # 의존성 파일 비교
 
@@ -212,6 +231,47 @@ pytest = "^7.4"
 - Poetry의 `[tool.poetry]` 방식 대신 표준 `[project]` 방식 선호
 - 새 프로젝트에서 최신 도구를 사용하고 싶을 때
 
+# setuptools에서 Poetry로 전환
+
+기존 `setup.py` / `setup.cfg` 기반 프로젝트를 Poetry로 전환하는 과정:
+
+```bash
+# 1. 프로젝트 디렉토리에서 Poetry 초기화
+cd my_project
+poetry init
+
+# 2. setup.py/setup.cfg의 install_requires를 확인하여 의존성 추가
+poetry add requests pandas numpy
+
+# 3. 개발 의존성 추가 (setup.py의 extras_require['dev'] 등)
+poetry add --group dev pytest black mypy
+
+# 4. entry_points가 있다면 pyproject.toml의 [tool.poetry.scripts]로 이전
+# setup.py:  entry_points={'console_scripts': ['mycli=mypackage.cli:main']}
+# → pyproject.toml:
+#   [tool.poetry.scripts]
+#   mycli = "mypackage.cli:main"
+
+# 5. 가상환경 생성 및 설치
+poetry install
+
+# 6. 기존 setup.py, setup.cfg, MANIFEST.in 삭제 (선택)
+```
+
+**전환 시 장점:**
+
+- **단일 파일 관리**: `setup.py` + `requirements.txt` + `MANIFEST.in` → `pyproject.toml` 하나로 통합
+- **재현성**: `poetry.lock`이 모든 하위 의존성 버전을 고정하므로 "내 PC에서는 되는데" 문제가 감소한다
+- **의존성 충돌 사전 감지**: SAT solver가 설치 전에 호환성을 검증한다
+- **dev/prod 의존성 분리**: `[tool.poetry.group.dev.dependencies]`로 깔끔하게 구분
+- **버전 관리 통합**: `poetry version patch/minor/major`로 버전 bump
+
+**전환하지 않아도 되는 경우:**
+
+- 이미 conda 환경에서 잘 돌아가고 있고, 패키지 배포(PyPI)할 일이 없는 경우
+- C extension이 많아서 setuptools의 `ext_modules`가 필요한 경우
+- 팀 전체가 conda 기반 워크플로우에 익숙한 경우
+
 # pip에서 Poetry로 마이그레이션
 
 기존 pip 기반 프로젝트를 Poetry로 전환하는 과정:
@@ -262,6 +322,7 @@ poetry install
 
 | 도구 | 핵심 강점 | 핵심 약점 |
 |------|----------|----------|
+| **setuptools** | 레거시 표준, 기본 내장 | 설정 파일 혼재, Lock 없음, 가상환경 없음 |
 | **pip** | 기본 내장, 단순함 | Lock 파일 없음, 의존성 해결 약함 |
 | **Conda** | 비-Python 패키지 관리 | 무거움, PyPI와 별도 생태계 |
 | **Pipenv** | pip + venv 통합 | 느림, 빌드/배포 없음 |
