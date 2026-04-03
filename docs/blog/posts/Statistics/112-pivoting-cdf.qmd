@@ -1,0 +1,570 @@
+---
+title: "CDF 피벗팅 (Pivoting the CDF)"
+subtitle: "피벗이 없을 때도 쓸 수 있는 완전 일반적 구간추정 — PIT, 연속·이산 정리, 포아송·이항·이진 예시"
+description: |
+  CDF 피벗팅은 확률적분변환(PIT)에 기반한 구간추정 방법으로, 위치·척도 구조가 없어
+  피벗을 찾기 어려운 상황에서도 적용 가능한 완전 일반적 방법이다.
+  연속(Theorem 9.2.12)·이산(Theorem 9.2.14) CDF 피벗팅의 이론, 보수성 문제,
+  포아송·이항·위치지수 분포 예시, Python/R 코드를 Casella & Berger Ch.9를 뼈대로 전개한다.
+categories:
+  - Statistics
+author: Kwangmin Kim
+date: 04/04/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+구간추정의 네 가지 방법 중 CDF 피벗팅은 **가장 범용적인 방법**이다.
+
+| 방법 | 적용 가능 범위 |
+|---|---|
+| 검정의 역전 | 항상 가능하지만 구성이 어려울 수 있음 |
+| 피벗 양 | 위치·척도 구조가 있을 때 자연스러움 |
+| **CDF 피벗팅** | **연속/이산 무관, 위치·척도 구조 불필요** |
+| 베이즈 구간 | 사전분포 지정 필요 |
+
+CDF 피벗팅의 핵심 아이디어는 단순하다:
+
+> **확률적분변환(PIT)**: 연속 확률변수 $T$ 에 대해 $F_T(T|\theta) \sim \text{Uniform}(0,1)$ — 이것이 항상 사용할 수 있는 피벗이다.
+
+이 보편 피벗에 $F_T(t|\theta)$ 의 $\theta$ 에 대한 단조성 조건을 결합하면, 수용역을 역전하여 신뢰구간을 얻는다.
+
+이 포스트는 [구간추정량 탐색 방법](./109-methods-finding-intervals.qmd)의 방법 3(CDF 피벗팅)을 심화한다.
+PIT의 원리, 연속·이산 CDF 피벗팅 정리의 전체 증명, 구체적 예시, 이산 분포의 보수성 문제, Python/R 코드를 전개한다.
+
+---
+
+## 동기 — 왜 CDF 피벗팅이 필요한가
+
+### 피벗 방법의 한계
+
+[피벗 양 방법](./111-pivotal-quantities.qmd)은 강력하지만 피벗 자체를 찾아야 한다.
+위치·척도 구조가 없으면 피벗을 찾기 어렵다. 예를 들어:
+
+- **이항 분포** $X \sim \text{Binomial}(n, p)$: $p$ 에 대한 자연스러운 피벗이 없다.
+- **포아송 분포** $X \sim \text{Poisson}(\lambda)$: $\lambda$ 에 대한 해석적 피벗이 없다.
+- **복합 모수 문제**: pdf가 복잡한 형태여서 $t/\theta$ 또는 $t - \theta$ 형태로 분해되지 않는 경우.
+
+### Sterne 방법의 함정 — 비구간 신뢰집합
+
+피벗 없이 단순히 수용역을 역전하면 신뢰집합이 **구간이 아닌** 집합이 될 수 있다.
+
+Sterne(1954)은 이항 분포 $X \sim \text{Binomial}(3, p)$, 신뢰계수 $1-\alpha = 0.442$ 에서
+최단 길이를 목표로 수용역을 역전했다. 그 결과:
+
+| $x$ | 신뢰집합 $C(x)$ |
+|---|---|
+| 0 | $[0, 0.305) \cup (0.362, 0.366)$ |
+| 1 | $(0.238, 0.634]$ |
+| 2 | $[0.366, 0.762)$ |
+| 3 | $(0.634, 0.638) \cup (0.695, 1.00]$ |
+
+$x = 0, 3$ 의 신뢰집합이 **비연결 집합(disconnected set)**이 된다.
+이는 pmf가 $p$ 에 대해 단조적으로 변하지 않아서 수용역이 구간이 아닌 복잡한 형태가 되기 때문이다
+(Casella & Berger, 2002, Ex.9.2.11).
+
+**CDF 피벗팅은 이 문제를 방지한다**: $F_T(t|\theta)$ 의 $\theta$ 에 대한 단조성만 보장되면 신뢰구간을 보장한다.
+
+---
+
+## 핵심 원리: 확률적분변환 (PIT)
+
+::: {.callout-note}
+## 정리 2.1.10: 확률적분변환 (Probability Integral Transformation)
+
+연속 확률변수 $T$ 의 CDF가 $F_T(t|\theta)$ 이면, 확률변수 $U = F_T(T|\theta)$ 는
+
+$$U = F_T(T|\theta) \sim \text{Uniform}(0,1)$$
+
+을 따른다. 특히, 이 분포는 $\theta$ 에 **무관**하다 — 즉 $F_T(T|\theta)$ 는 피벗이다.
+:::
+
+**직관**: CDF $F_T$ 는 $T$ 를 확률 공간 $[0,1]$ 로 변환한다.
+$T$ 가 연속이면 이 변환이 정확히 균등 분포를 만들어낸다.
+
+**피벗으로의 활용**:
+$\alpha_1 + \alpha_2 = \alpha$ 에 대해, $U \sim \text{Uniform}(0,1)$ 이면
+
+$$P(\alpha_1 \leq U \leq 1-\alpha_2) = 1-\alpha$$
+
+따라서 수용역
+
+$$A(\theta_0) = \{t : \alpha_1 \leq F_T(t|\theta_0) \leq 1-\alpha_2\}$$
+
+는 크기(size) $\alpha$ 검정의 수용역이다.
+정리 9.2.2(검정-신뢰구간 대응)를 적용하면 역전된 집합
+
+$$C(t) = \{\theta_0 : \alpha_1 \leq F_T(t|\theta_0) \leq 1-\alpha_2\}$$
+
+는 $1-\alpha$ 신뢰집합이다. 이것이 CDF 피벗팅의 전체 원리다.
+
+---
+
+## 연속 CDF 피벗팅
+
+::: {.callout-important}
+## 정리 9.2.12: 연속 CDF 피벗팅 (Casella & Berger, 2002)
+
+$T$ 가 연속 CDF $F_T(t|\theta)$ 를 갖는 통계량이고, $\alpha_1 + \alpha_2 = \alpha$ ($0 < \alpha < 1$) 로 고정.
+각 $t$ 에서 $\theta_L(t)$, $\theta_U(t)$ 를 다음과 같이 정의할 수 있으면:
+
+**(i) $F_T(t|\theta)$ 가 $\theta$ 의 감소함수인 경우** (확률론적 감소, stochastically decreasing):
+
+$$F_T(t|\theta_U(t)) = \alpha_1, \quad F_T(t|\theta_L(t)) = 1-\alpha_2$$
+
+**(ii) $F_T(t|\theta)$ 가 $\theta$ 의 증가함수인 경우** (확률론적 증가, stochastically increasing):
+
+$$F_T(t|\theta_U(t)) = 1-\alpha_2, \quad F_T(t|\theta_L(t)) = \alpha_1$$
+
+그러면 랜덤 구간 $[\theta_L(T), \theta_U(T)]$ 는 $\theta$ 의 $1-\alpha$ 신뢰구간이다.
+:::
+
+### 증명 (케이스 i: 감소함수 경우)
+
+$F_T(t|\theta)$ 가 $\theta$ 에 대해 감소함수이므로:
+
+$$F_T(t|\theta) < \alpha_1 \Longleftrightarrow \theta > \theta_U(t)$$
+$$F_T(t|\theta) > 1-\alpha_2 \Longleftrightarrow \theta < \theta_L(t)$$
+
+따라서
+
+$$\alpha_1 \leq F_T(t|\theta) \leq 1-\alpha_2 \Longleftrightarrow \theta_L(t) \leq \theta \leq \theta_U(t)$$
+
+수용역 $A(\theta_0) = \{t : \alpha_1 \leq F_T(t|\theta_0) \leq 1-\alpha_2\}$ 의 피복확률:
+
+$$P_{\theta_0}(T \in A(\theta_0)) = P_{\theta_0}(\alpha_1 \leq F_T(T|\theta_0) \leq 1-\alpha_2)$$
+
+PIT에 의해 $F_T(T|\theta_0) \sim \text{Uniform}(0,1)$ 이므로
+
+$$= P(\alpha_1 \leq U \leq 1-\alpha_2) = 1-\alpha$$
+
+정리 9.2.2에 의해 $C(t) = \{\theta : \alpha_1 \leq F_T(t|\theta) \leq 1-\alpha_2\} = [\theta_L(t), \theta_U(t)]$ 는 $1-\alpha$ 신뢰구간이다. $\square$
+
+### 실용 계산 공식
+
+관측값 $T = t_0$ 에서 신뢰구간의 끝점은 다음 두 방정식의 해다:
+
+$$\int_{-\infty}^{t_0} f_T(u|\theta_U(t_0))\,du = \alpha_1$$
+
+$$\int_{t_0}^{\infty} f_T(u|\theta_L(t_0))\,du = \alpha_2$$
+
+이 방정식을 해석적으로 풀 수 없어도, 수치적으로 풀면 되므로 **완전히 일반적인 방법**이다.
+
+::: {.callout-tip}
+## $\alpha_1$, $\alpha_2$ 선택
+
+- **기본값**: $\alpha_1 = \alpha_2 = \alpha/2$ (등분할, 양측 등꼬리)
+- **단측 구간**: $\alpha_1 = 0$ (상한만) 또는 $\alpha_2 = 0$ (하한만)
+- **최단 구간**: 최단 기대 길이를 위한 $(\alpha_1, \alpha_2)$ 는 별도 최적화 필요 (9.3 참조)
+
+등분할 $\alpha/2$ 는 최단 구간을 보장하지 않지만, 특별한 이유가 없으면 표준 선택이다.
+:::
+
+---
+
+## 예시 1: 위치 지수 분포
+
+$X_1, \ldots, X_n \overset{\text{iid}}{\sim} f(x|\mu) = e^{-(x-\mu)} I_{[\mu,\infty)}(x)$.
+충분통계량 $Y = X_{(1)} = \min\{X_1, \ldots, X_n\}$ 의 pdf와 CDF:
+
+$$f_Y(y|\mu) = ne^{-n(y-\mu)} I_{[\mu,\infty)}(y), \quad F_Y(y|\mu) = 1 - e^{-n(y-\mu)}, \quad y \geq \mu$$
+
+**$F_Y$ 의 $\mu$ 에 대한 단조성**: $F_Y(y|\mu)$ 는 $\mu$ 에 대해 단조 **증가**함수 ($e^{-n(y-\mu)}$ 가 $\mu$ 증가 시 감소하므로 $1 - e^{-n(y-\mu)}$ 는 증가).
+
+**케이스 ii (증가함수) 적용**, $\alpha_1 = \alpha_2 = \alpha/2$:
+
+$$F_Y(y|\mu_U(y)) = 1 - \frac{\alpha}{2}, \quad F_Y(y|\mu_L(y)) = \frac{\alpha}{2}$$
+
+첫 번째 방정식:
+
+$$1 - e^{-n(y-\mu_U)} = 1 - \frac{\alpha}{2} \implies e^{-n(y-\mu_U)} = \frac{\alpha}{2} \implies \mu_U(y) = y + \frac{1}{n}\log\!\left(\frac{\alpha}{2}\right)$$
+
+두 번째 방정식:
+
+$$1 - e^{-n(y-\mu_L)} = \frac{\alpha}{2} \implies e^{-n(y-\mu_L)} = 1 - \frac{\alpha}{2} \implies \mu_L(y) = y + \frac{1}{n}\log\!\left(1 - \frac{\alpha}{2}\right)$$
+
+$1-\alpha$ 신뢰구간:
+
+$$C(Y) = \left[Y + \frac{\log(\alpha/2)}{n},\;\; Y + \frac{\log(1-\alpha/2)}{n}\right]$$
+
+**직관 확인**: $\log(\alpha/2) < 0 < \log(1-\alpha/2) < 0$ (since $0 < 1-\alpha/2 < 1$), 따라서 양 끝점 모두 $Y$ 보다 작다.
+$Y = X_{(1)} = \min X_i$ 는 $\mu$ 의 상한이기 때문에 직관과 일치한다.
+
+**수치 예시** ($n=10$, $\alpha=0.05$):
+
+$$C(y) = \left[y + \frac{\log(0.025)}{10},\;\; y + \frac{\log(0.975)}{10}\right] = [y - 0.369,\;\; y - 0.00253]$$
+
+---
+
+## 예시 2: 포아송 신뢰구간 (Garwood, 1936)
+
+$X_1, \ldots, X_n \overset{\text{iid}}{\sim} \text{Poisson}(\lambda)$. 충분통계량 $Y = \sum_{i=1}^n X_i \sim \text{Poisson}(n\lambda)$.
+
+**이산 분포**이므로 정리 9.2.14(아래)를 적용한다.
+
+**$F_Y$ 의 $\lambda$ 에 대한 단조성**:
+$F_Y(y|n\lambda) = P(Y \leq y|n\lambda)$ 는 $\lambda$ 증가 시 감소함수다 (포아송 평균이 커지면 작은 값의 확률이 감소).
+→ 케이스 i (감소함수) 적용.
+
+$Y = y_0$ 관측 시, $\alpha_1 = \alpha_2 = \alpha/2$:
+
+$$P(Y \leq y_0|\lambda_U) = \frac{\alpha}{2}, \quad P(Y \geq y_0|\lambda_L) = \frac{\alpha}{2}$$
+
+### 포아송-감마 항등식으로 해석적 해 유도
+
+(Casella & Berger, 2002, Ex.3.3.1) 포아송-감마 항등식:
+
+$$\sum_{k=0}^{y_0} e^{-m}\frac{m^k}{k!} = P(\chi^2_{2(y_0+1)} > 2m)$$
+
+$m = n\lambda$ 로 놓으면 첫 번째 방정식:
+
+$$\frac{\alpha}{2} = P(Y \leq y_0|\lambda_U) = P\!\left(\chi^2_{2(y_0+1)} > 2n\lambda_U\right) \implies \lambda_U = \frac{\chi^2_{2(y_0+1),\alpha/2}}{2n}$$
+
+두 번째 방정식 ($y_0 > 0$):
+
+$$\frac{\alpha}{2} = P(Y \geq y_0|\lambda_L) = P\!\left(\chi^2_{2y_0} < 2n\lambda_L\right) \implies \lambda_L = \frac{\chi^2_{2y_0,1-\alpha/2}}{2n}$$
+
+($y_0 = 0$ 이면 $\lambda_L = 0$으로 정의.)
+
+**Garwood(1936) 신뢰구간**:
+
+$$\left[\frac{\chi^2_{2y_0,1-\alpha/2}}{2n},\;\; \frac{\chi^2_{2(y_0+1),\alpha/2}}{2n}\right]$$
+
+**수치 예시** ($n=10$, $y_0 = 6$, $\alpha=0.10$):
+
+$$\left[\frac{\chi^2_{12, 0.95}}{20},\;\; \frac{\chi^2_{14, 0.05}}{20}\right] = \left[\frac{5.226}{20},\;\; \frac{23.685}{20}\right] = [0.261,\;\; 1.184]$$
+
+**so what**: $\hat{\lambda} = y_0/n = 0.6$ 이 95% 신뢰구간의 중간 근처에 있으나, 구간은 **비대칭**이다.
+이산 분포의 불연속성으로 피복확률이 $\lambda$ 에 따라 들쑥날쑥하지만 항상 $\geq 1-\alpha$ 를 보장한다.
+
+---
+
+## 이산 CDF 피벗팅
+
+### 이산 분포의 특수성
+
+이산 분포에서 $F_T(T|\theta)$ 는 연속이 아니므로 PIT가 정확히 성립하지 않는다.
+연속 경우와 달리 $F_T(T|\theta) \sim \text{Uniform}(0,1)$ 이 아니라 **확률론적으로 균등 분포보다 크다**:
+
+$$P_\theta(F_T(T|\theta) \leq x) \leq x, \quad \forall x \in [0,1]$$
+
+즉, $F_T(T|\theta)$ 는 $\text{Uniform}(0,1)$ 보다 **확률론적으로 더 크게(stochastically larger)** 분포한다.
+이 때문에 이산 경우에는 **보수적(conservative) 신뢰구간**이 얻어진다 — 실제 피복확률이 목표 $1-\alpha$ 이상이 된다.
+
+::: {.callout-important}
+## 정리 9.2.14: 이산 CDF 피벗팅 (Casella & Berger, 2002)
+
+이산 통계량 $T$ 의 CDF $F_T(t|\theta) = P(T \leq t|\theta)$. $\alpha_1 + \alpha_2 = \alpha$.
+각 $t$ 에서 $\theta_L(t)$, $\theta_U(t)$ 를 다음과 같이 정의할 수 있으면:
+
+**(i) $F_T(t|\theta)$ 가 $\theta$ 의 감소함수인 경우**:
+
+$$P(T \leq t|\theta_U(t)) = \alpha_1, \quad P(T \geq t|\theta_L(t)) = \alpha_2$$
+
+**(ii) $F_T(t|\theta)$ 가 $\theta$ 의 증가함수인 경우**:
+
+$$P(T \geq t|\theta_U(t)) = \alpha_1, \quad P(T \leq t|\theta_L(t)) = \alpha_2$$
+
+그러면 $[\theta_L(T), \theta_U(T)]$ 는 $\theta$ 의 $1-\alpha$ 신뢰구간이다.
+:::
+
+### 이산 경우 증명 스케치 (케이스 i)
+
+이산 분포에서 Exercise 2.10의 결과: $P_\theta(F_T(T|\theta) \leq x) \leq x$.
+마찬가지로 $\bar{F}_T(T|\theta) = P(T \geq t|\theta)$ 도 $P_\theta(\bar{F}_T(T|\theta) \leq x) \leq x$ 를 만족한다.
+
+따라서 집합 $\{\theta : F_T(T|\theta) \leq \alpha_1 \text{ and } \bar{F}_T(T|\theta) \leq \alpha_2\}$ 는 $1-\alpha$ 신뢰집합이다.
+
+$F_T(t|\theta)$ 가 $\theta$ 에 대해 감소, $\bar{F}_T(t|\theta) = P(T \geq t|\theta)$ 는 비감소:
+
+$$\theta > \theta_U(t) \Rightarrow F_T(t|\theta) < \alpha_1$$
+$$\theta < \theta_L(t) \Rightarrow \bar{F}_T(t|\theta) < \alpha_2$$
+
+따라서 신뢰집합 $= \{\theta : \theta_L(T) \leq \theta \leq \theta_U(T)\}$ 는 구간이다. $\square$
+
+### 보수성(Conservatism)의 의미
+
+이산 분포에서 Theorem 9.2.14의 $[\theta_L(T), \theta_U(T)]$ 의 실제 피복확률은 일반적으로 $1-\alpha$ **보다 크다**.
+이는 이산 분포의 CDF가 계단 함수이기 때문에, 방정식 $P(T \leq t|\theta_U) = \alpha/2$ 를 정확히 만족하는 $\theta_U$ 가 존재하지 않을 수 있고, 가장 가까운 값을 사용하면 실제 확률이 $\alpha/2$ 보다 더 작아진다.
+
+**결과**: 보수적 구간은 목표보다 넓고, 신뢰계수는 $1-\alpha$ 이상이다.
+
+::: {.callout-tip}
+## 이산 분포의 대안: 랜덤화 신뢰구간
+
+정확히 $1-\alpha$ 피복확률을 원하면, 경계에서 **랜덤화(randomization)**를 사용할 수 있다.
+실무에서는 보수적 구간이 더 많이 쓰인다.
+:::
+
+---
+
+## 예시 3: 이항 분포 신뢰구간 (Clopper-Pearson)
+
+$X \sim \text{Binomial}(n, p)$, $p$ 의 신뢰구간 구성.
+
+$F_X(x|p) = P(X \leq x|p)$ 는 $p$ 의 감소함수다 (성공확률이 클수록 큰 값의 확률이 높아짐).
+→ 케이스 i (감소함수) 적용.
+
+$X = x_0$ 관측 시, $\alpha_1 = \alpha_2 = \alpha/2$:
+
+$$P(X \leq x_0|p_U) = \frac{\alpha}{2}, \quad P(X \geq x_0|p_L) = \frac{\alpha}{2}$$
+
+**이항-베타 항등식**을 이용하면:
+
+$$P(X \leq x_0|p) = P(W \geq p), \quad W \sim \text{Beta}(x_0+1, n-x_0)$$
+$$P(X \geq x_0|p) = P(V \leq p), \quad V \sim \text{Beta}(x_0, n-x_0+1)$$
+
+따라서
+
+$$p_L = B_{\alpha_2}(x_0, n-x_0+1), \quad p_U = B_{1-\alpha_1}(x_0+1, n-x_0)$$
+
+여기서 $B_q(a,b)$ 는 $\text{Beta}(a,b)$ 분포의 $q$ 분위수.
+
+**Clopper-Pearson 정확 구간** ($x_0 = 0$ 이면 $p_L = 0$, $x_0 = n$ 이면 $p_U = 1$):
+
+$$\left[B_{\alpha/2}(x_0, n-x_0+1),\;\; B_{1-\alpha/2}(x_0+1, n-x_0)\right]$$
+
+**수치 예시** ($n=20$, $x_0=8$, $\alpha=0.05$):
+
+$$p_L = B_{0.025}(8, 13) \approx 0.191, \quad p_U = B_{0.975}(9, 12) \approx 0.598$$
+
+**so what**: 이 구간은 정확하게 $1-\alpha$ 이상의 피복확률을 보장하는 보수적 구간이다.
+Wald 근사구간 $\hat{p} \pm z_{\alpha/2}\sqrt{\hat{p}(1-\hat{p})/n} = 0.4 \pm 0.215$ 과 비교하면 Clopper-Pearson이 더 넓다.
+그러나 $n$ 이 작거나 $p$ 가 0 또는 1 근처에서는 Wald 근사가 심각하게 부정확하므로 Clopper-Pearson이 선호된다.
+
+---
+
+## 예시 4: 균등분포 $\text{Uniform}(0,\theta)$ 의 CDF 피벗팅
+
+$X_1, \ldots, X_n \overset{\text{iid}}{\sim} \text{Uniform}(0, \theta)$, $Y = X_{(n)} = \max\{X_i\}$.
+
+$F_Y(y|\theta) = (y/\theta)^n$, $0 \leq y \leq \theta$.
+
+**$\theta$ 에 대한 단조성**: $\partial F_Y / \partial\theta = -ny^n/\theta^{n+1} < 0$ → 감소함수.
+
+케이스 i, $\alpha_1 = \alpha_2 = \alpha/2$:
+
+$$F_Y(y|\theta_U) = \frac{\alpha}{2} \implies \left(\frac{y}{\theta_U}\right)^n = \frac{\alpha}{2} \implies \theta_U = \frac{y}{(\alpha/2)^{1/n}}$$
+
+$$F_Y(y|\theta_L) = 1-\frac{\alpha}{2} \implies \left(\frac{y}{\theta_L}\right)^n = 1-\frac{\alpha}{2} \implies \theta_L = \frac{y}{(1-\alpha/2)^{1/n}}$$
+
+$1-\alpha$ 신뢰구간:
+
+$$\left[\frac{Y}{(1-\alpha/2)^{1/n}},\;\; \frac{Y}{(\alpha/2)^{1/n}}\right]$$
+
+**피벗 방법과의 일관성 확인**: [피벗 양 포스트](./111-pivotal-quantities.qmd)에서 $Q = Y/\theta \sim \text{Beta}(n,1)$ 을 이용했다.
+두 방법은 동일한 신뢰구간을 준다 — $F_Y(y|\theta) = P(Y \leq y|\theta) = (y/\theta)^n$ 이 CDF 방법의 방정식을 충족하기 때문이다.
+
+---
+
+## CDF 피벗팅 vs. 피벗 방법 비교
+
+| 비교 항목 | CDF 피벗팅 | 피벗 양 방법 |
+|---|---|---|
+| 적용 조건 | $F_T(t|\theta)$ 가 $\theta$ 에 단조 | 피벗 $Q(X,\theta)$ 존재 |
+| 이산 분포 | 적용 가능 (보수적) | 일반적으로 어려움 |
+| 수치적 해 필요 여부 | 일반적으로 필요 | 불필요 (분포표 사용) |
+| 구간 보장 | 단조성 조건 시 항상 구간 | 단조성 조건 시 항상 구간 |
+| 연결 | $Q = F_T(T|\theta)$ 로 피벗 방법의 특수 케이스 | CDF 피벗팅의 해석적 특수 케이스 |
+
+**본질적 관계**: CDF 피벗팅은 피벗 $Q = F_T(T|\theta)$ 를 사용하는 피벗 방법이다.
+위치·척도 피벗(예: $t$-피벗)이 있으면 그것이 더 해석적으로 편리하고,
+없으면 CDF 피벗팅을 사용하는 것이 체계적이다.
+
+---
+
+## 코드 예시
+
+### Step 1: 순수 Python 구현 — CDF 피벗팅 원리
+
+```python
+import numpy as np
+from scipy import stats, optimize
+
+# 예시: 포아송 Garwood 신뢰구간 — 해석적 공식
+def poisson_ci_garwood(y0, n, alpha=0.05):
+    """포아송 CDF 피벗팅 신뢰구간 (Garwood, 1936)
+    y0: 관측값 sum(X_i)
+    n: 표본 크기
+    """
+    # 하한: chi^2_{2y0, 1-alpha/2} / (2n)
+    lower = stats.chi2.ppf(alpha/2, df=2*y0) / (2*n) if y0 > 0 else 0.0
+    # 상한: chi^2_{2(y0+1), alpha/2} / (2n)
+    upper = stats.chi2.ppf(1 - alpha/2, df=2*(y0+1)) / (2*n)
+    return lower, upper
+
+# 수치 예시: n=10, y0=6, alpha=0.10
+lower, upper = poisson_ci_garwood(y0=6, n=10, alpha=0.10)
+print(f"포아송 90% 신뢰구간: [{lower:.3f}, {upper:.3f}]")
+# 기대값: [0.261, 1.184]
+```
+
+```python
+# 예시: 이항 Clopper-Pearson 신뢰구간 — 베타 분위수 이용
+def clopper_pearson(x0, n, alpha=0.05):
+    """이항 CDF 피벗팅 신뢰구간 (Clopper-Pearson, 1934)
+    x0: 성공 횟수
+    n: 시도 횟수
+    """
+    # 하한: Beta(alpha/2; x0, n-x0+1)
+    lower = stats.beta.ppf(alpha/2, a=x0, b=n-x0+1) if x0 > 0 else 0.0
+    # 상한: Beta(1-alpha/2; x0+1, n-x0)
+    upper = stats.beta.ppf(1-alpha/2, a=x0+1, b=n-x0) if x0 < n else 1.0
+    return lower, upper
+
+# n=20, x0=8, alpha=0.05
+lower, upper = clopper_pearson(x0=8, n=20, alpha=0.05)
+print(f"이항 95% 신뢰구간 (Clopper-Pearson): [{lower:.3f}, {upper:.3f}]")
+
+# Wald 근사와 비교
+p_hat = 8/20
+se = np.sqrt(p_hat*(1-p_hat)/20)
+wald_lo = p_hat - 1.96*se
+wald_hi = p_hat + 1.96*se
+print(f"이항 95% 신뢰구간 (Wald 근사): [{wald_lo:.3f}, {wald_hi:.3f}]")
+```
+
+```python
+# 예시: 수치적 CDF 피벗팅 — 일반 분포에 적용
+# 위치 지수 분포 mu의 신뢰구간
+def location_exp_ci(y, n, alpha=0.05):
+    """위치 지수 f(x|mu)=exp(-(x-mu))의 mu 신뢰구간
+    y = min(X_1,...,X_n)
+    """
+    lower = y + np.log(alpha/2) / n
+    upper = y + np.log(1 - alpha/2) / n
+    return lower, upper
+
+rng = np.random.default_rng(42)
+mu_true = 3.0
+n = 15
+x = mu_true + rng.exponential(scale=1.0, size=n)
+y = x.min()  # 충분통계량
+
+lower, upper = location_exp_ci(y, n, alpha=0.05)
+print(f"\n위치 지수 95% 신뢰구간: [{lower:.3f}, {upper:.3f}]")
+print(f"참값 mu={mu_true}, Y={y:.3f}")
+print(f"포함: {lower <= mu_true <= upper}")
+```
+
+```python
+# 피복확률 시뮬레이션 — 보수성 확인 (포아송)
+N_sim = 10000
+n, lam_true, alpha = 10, 0.6, 0.10
+
+cover = 0
+for _ in range(N_sim):
+    y0 = rng.poisson(lam_true * n)
+    lo, hi = poisson_ci_garwood(y0, n, alpha)
+    cover += (lo <= lam_true <= hi)
+
+print(f"\n포아송 Garwood 구간 실제 피복률: {cover/N_sim:.4f} (목표: {1-alpha})")
+# 이산 분포의 보수성으로 실제 피복률 > 1-alpha
+```
+
+### Step 2: scipy / statsmodels 활용
+
+```python
+from scipy.stats import poisson, binom, beta
+
+# 포아송 신뢰구간 — scipy proportion_confint 없음, 직접 구현 또는 위 함수 사용
+# 또는 statsmodels 이용
+from statsmodels.stats.proportion import proportion_confint
+
+# 이항 신뢰구간 (exact = Clopper-Pearson)
+lo, hi = proportion_confint(count=8, nobs=20, alpha=0.05, method='exact')
+print(f"Clopper-Pearson (statsmodels): [{lo:.3f}, {hi:.3f}]")
+
+# 여러 방법 비교
+for method in ['exact', 'normal', 'wilson', 'agresti_coull']:
+    lo, hi = proportion_confint(count=8, nobs=20, alpha=0.05, method=method)
+    print(f"{method:15s}: [{lo:.3f}, {hi:.3f}]")
+```
+
+### R 구현
+
+```r
+# 포아송 Garwood 신뢰구간
+poisson_ci_garwood <- function(y0, n, alpha = 0.05) {
+  lower <- if (y0 == 0) 0 else qchisq(alpha/2, df = 2*y0) / (2*n)
+  upper <- qchisq(1 - alpha/2, df = 2*(y0+1)) / (2*n)
+  c(lower = lower, upper = upper)
+}
+
+# n=10, y0=6, alpha=0.10
+poisson_ci_garwood(y0 = 6, n = 10, alpha = 0.10)
+
+# 이항 Clopper-Pearson
+clopper_pearson <- function(x0, n, alpha = 0.05) {
+  lower <- if (x0 == 0) 0 else qbeta(alpha/2, shape1 = x0, shape2 = n - x0 + 1)
+  upper <- if (x0 == n) 1 else qbeta(1 - alpha/2, shape1 = x0 + 1, shape2 = n - x0)
+  c(lower = lower, upper = upper)
+}
+
+# n=20, x0=8, alpha=0.05
+clopper_pearson(x0 = 8, n = 20, alpha = 0.05)
+
+# 또는 내장 함수 이용
+binom.test(x = 8, n = 20, conf.level = 0.95)$conf.int
+
+# 위치 지수 분포 mu 신뢰구간
+location_exp_ci <- function(y, n, alpha = 0.05) {
+  lower <- y + log(alpha/2) / n
+  upper <- y + log(1 - alpha/2) / n
+  c(lower = lower, upper = upper)
+}
+
+set.seed(42)
+mu_true <- 3.0; n <- 15
+x <- mu_true + rexp(n, rate = 1)
+y <- min(x)
+location_exp_ci(y = y, n = n, alpha = 0.05)
+```
+
+---
+
+## 정리 — CDF 피벗팅 절차 요약
+
+**Step 1**: 충분통계량 $T$ 를 선택하고 CDF $F_T(t|\theta)$ 를 구한다.
+
+**Step 2**: $F_T(t|\theta)$ 가 $\theta$ 에 대해 단조인지 확인한다 (확률론적 단조성).
+
+**Step 3**: $\alpha_1 + \alpha_2 = \alpha$ 를 선택한다 (보통 $\alpha_1 = \alpha_2 = \alpha/2$).
+
+**Step 4**: 방정식을 풀어 끝점을 구한다:
+- 연속 경우: $\int_{-\infty}^{t_0} f_T(u|\theta_U) du = \alpha_1$ 과 $\int_{t_0}^{\infty} f_T(u|\theta_L) du = \alpha_2$
+- 이산 경우: $P(T \leq t_0|\theta_U) = \alpha_1$ 과 $P(T \geq t_0|\theta_L) = \alpha_2$
+
+**Step 5**: 해석적 해가 없으면 수치 최적화(bisection, scipy.optimize.brentq 등)로 푼다.
+
+::: {.callout-caution}
+## 이산 분포 주의사항
+
+- 정확한 피복확률이 $1-\alpha$ 임을 보장하지 않고, $\geq 1-\alpha$ 임만 보장한다 (보수적 구간)
+- $y_0 = 0$ 이면 $\theta_L = 0$ (또는 $\theta_L = \inf\Theta$)으로 정의한다
+- 피복확률 곡선이 $\theta$ 에 따라 들쑥날쑥할 수 있다 (Figure 9.2.5 참조)
+:::
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [구간추정 개요](./108-interval-estimation-overview.qmd) — 신뢰구간의 정의와 피복확률
+- [구간추정량 탐색 방법 개요](./109-methods-finding-intervals.qmd) — CDF 피벗팅의 위치
+- [피벗 양 (Pivotal Quantities)](./111-pivotal-quantities.qmd) — CDF 피벗팅과의 관계
+- [분포 함수 (Distribution Functions)](./44-distribution-functions.qmd) — CDF의 성질
+
+**후속 주제**
+
+- [베이즈 구간 (Bayesian Intervals)](./113-bayesian-intervals.qmd) — 사후분포 기반 구간
+- [구간추정 평가 (Methods of Evaluating Interval Estimators)](./114-evaluating-intervals.qmd) — 피복확률, 최단 기대 길이
+
+**관련 개념**
+
+- [검정의 역전 (Inverting a Test Statistic)](./110-inverting-test-statistic.qmd) — CDF 피벗팅은 PIT 피벗의 역전
+- [공통 분포족 — 포아송](./62-common-families-discrete-poisson.qmd) — 포아송 예시의 배경
+- [공통 분포족 — 이항](./61-common-families-discrete-binomial.qmd) — Clopper-Pearson 예시의 배경
