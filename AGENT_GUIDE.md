@@ -50,7 +50,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `/write [category] [topic]` | **새 포스트 작성** — 3-Layer 탐색 → 중복 판단 → .qmd 신규 작성 → index.qmd 링크 추가 → 렌더링 → 배포 | `guides/info-search.md` + `guides/write-post.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/fix [file-path]` | **기존 포스트 교정** — 지정 파일의 YAML·한다체·수식·구조를 현행 규칙에 맞게 직접 수정 (내용 삭제 금지) | `guides/retrofit-post.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/qa [question]` | **질문 답변** — 블로그→교재→사전지식 3-Layer 탐색 후 통합 답변 (파일 변경 없음) | `guides/info-search.md` + `guides/answer-question.md` |
-| `/convert [category]` | **TBD 메모→정식 포스트 전환** — TBD.qmd의 임시 메모를 정식 .qmd로 분리·재작성 → index 업데이트 | `guides/info-search.md` + `guides/convert-tbd.md` + `docs/blog/posts/{category}/GUIDE.md` |
+| `/convert [category]` | **TBD 메모→정식 포스트 전환** — TBD.qmd의 임시 메모를 정식 .qmd로 분리·재작성 → index 업데이트. Essay형 글(포트폴리오·단상·전략)은 `Data_Science/Essay/`로 이동 | `guides/info-search.md` + `guides/convert-tbd.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/series [category]` | **시리즈 재구성** — 카테고리 내 기존 .qmd 파일들의 중복·누락·순서 진단 → 파일 병합/분할/번호 재배치 → index.qmd 반영 | `guides/info-search.md` + `guides/organize-series.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/audit [file-path]` | **품질 감사 (읽기 전용)** — 지정 파일의 추상적 서술·누락 섹션·규칙 위반을 진단·보고만 함 (파일 수정 안 함) | `guides/audit.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/log` | **변경 이력 요약** — git 히스토리에서 .qmd 생성/수정/삭제 이력을 기간별로 조회·보고 (파일 변경 없음) | `guides/changelog-summary.md` |
@@ -134,6 +134,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `Engineering` | DevOps, Python, Infra |
 | `Agent` | RAG, LangChain, LangGraph |
 | `Data_Science` | CRISP-DM, EDA, Feature Engineering |
+| `Data_Science/Essay` | 포트폴리오 전략, 역량 전이, 산업 적용 단상 — **모두 draft:true** |
 | `Governance` | 데이터 거버넌스, 품질 |
 | `Strategy_Frameworks` | 비즈니스 분석, 전략 |
 | `Code_Test` | 알고리즘, SQL |
@@ -156,3 +157,35 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 - **Stack**: Quarto → Netlify
 - **Commands**: `quarto preview` / `quarto render`
 - **Key Files**: `_quarto.yml`, `docs/blog/posts/_metadata.yml`
+
+---
+
+## Essay 규칙
+
+`Data_Science/Essay/` 는 **draft:true 전용** 하위 카테고리다 (`_metadata.yml`로 자동 적용).
+
+### 어떤 글이 Essay로 가는가
+
+| 글 유형 | 목적지 |
+|---|---|
+| 특정 기술 주제의 정식 설명 | 해당 카테고리 (Statistics, Data_Science 등) |
+| 포트폴리오 전략·커리어 단상 | `Data_Science/Essay/` |
+| 역량 전이·산업 적용 분석 | `Data_Science/Essay/` |
+| 방법론 비교·선택 근거 | `Data_Science/Essay/` |
+| 임시 메모 (아직 미정리) | `docs/blog/posts/TBD.qmd` (inbox) |
+
+### TBD → Essay 전환 흐름
+
+```
+TBD.qmd (inbox, 단편 메모)
+  ↓  /convert essay  또는  /write Data_Science/Essay [topic]
+Data_Science/Essay/{slug}.qmd  (draft:true, 정리된 에세이)
+  ↓  발행 준비되면 draft:true 제거
+블로그 발행
+```
+
+### Essay 파일 명명 규칙
+
+- 형식: `{주제}-{키워드}.qmd`  (예: `pcr-portfolio-career-strategy.qmd`)
+- 수동 번호 금지 (number-sections: true 자동 적용)
+- 반드시 `categories: [Data Science, Essay]` 포함
