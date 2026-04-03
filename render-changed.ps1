@@ -5,9 +5,10 @@
 Set-Location $PSScriptRoot
 
 # 1. 변경/신규 .qmd 파일 수집 (git 기준)
-$staged    = git diff --name-only --cached 2>$null | Where-Object { $_ -match "\.qmd$" }
-$unstaged  = git diff --name-only         2>$null | Where-Object { $_ -match "\.qmd$" }
-$untracked = git ls-files --others --exclude-standard 2>$null | Where-Object { $_ -match "\.qmd$" }
+# @() 강제 배열 변환 — 단일 파일일 때 문자열 연결 버그 방지
+$staged    = @(git diff --name-only --cached 2>$null | Where-Object { $_ -match "\.qmd$" })
+$unstaged  = @(git diff --name-only         2>$null | Where-Object { $_ -match "\.qmd$" })
+$untracked = @(git ls-files --others --exclude-standard 2>$null | Where-Object { $_ -match "\.qmd$" })
 
 $targets = ($staged + $unstaged + $untracked) | Sort-Object -Unique | Where-Object { $_ -ne "" }
 
