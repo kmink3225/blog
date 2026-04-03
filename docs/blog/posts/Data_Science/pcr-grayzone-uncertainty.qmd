@@ -36,6 +36,20 @@ RT-PCR 진단에서 Ct 35~40 구간의 신호는 전체 샘플의 4~7%를 차지
 - 전체 샘플의 4-7% 차지 (Cepheid 데이터)
 - 재검 시 30%는 음성, 40%는 여전히 애매, 30%는 양성
 
+**왜 재검 시 결과가 달라지는가?**
+
+Ct 35~40 구간은 샘플 내 DNA 농도가 PCR 검출 임계값의 경계에 있다는 뜻이다:
+
+- 명확 양성의 DNA 농도: 약 10,000 copies/μL 이상 (Ct ≈ 22–28)
+- 그레이존의 DNA 농도: 약 1–10 copies/μL (Ct ≈ 35–40)
+- 씨젠 Allplex™ 검출 한계(LOD): 약 1–3 copies/μL
+
+농도가 LOD 경계에 있으면 각 PCR 반응마다 초기에 포집되는 DNA 분자 수가 **포아송 분포**를 따른다:
+
+$$P(\text{1개 이상 분자 포집}) = 1 - e^{-\lambda}$$
+
+예를 들어 평균 분자 수 $\lambda = 2$이면 포집 확률은 86.5%, $\lambda = 1$이면 63.2%다. 첫 사이클에서 포집되는 분자 수의 확률적 변동이 Ct를 1–2 cycle 단위로 흔든다. 재검 시 결과가 달라지는 것은 **측정 오류가 아니라 물리적 확률 과정**이다 — 그레이존 샘플은 본질적으로 결정 불가능한 상태에 있다.
+
 **2. 형광 염료·소모품 영향**
 - Lot-to-lot variation: ±5% 형광 강도 차이
 - Reagent aging: 6개월 후 -8% 감도 저하
@@ -148,7 +162,21 @@ class PCR_Probabilistic_Classifier:
         
         # Step 2: Calculate posterior
         p_positive = likelihood_pos / (likelihood_pos + likelihood_neg)
-        
+```
+
+**베이즈 정리와의 연결:**
+
+위 공식 `p_positive = likelihood_pos / (likelihood_pos + likelihood_neg)`는 **사전확률(prior)이 동등(0.5:0.5)할 때의 베이즈 정리**다:
+
+$$P(\text{Positive}|\theta) = \frac{P(\theta|\text{Positive}) \cdot P(\text{Positive})}{P(\theta|\text{Positive}) \cdot P(\text{Positive}) + P(\theta|\text{Negative}) \cdot P(\text{Negative})}$$
+
+$P(\text{Positive}) = P(\text{Negative}) = 0.5$를 대입하면 분자·분모에서 상쇄되어 위 코드와 같은 형태가 된다. 실제로는 유병률(사전확률)을 반영할 수 있다. 예: 독감 시즌에 $P(\text{Positive}) = 0.3$이면:
+
+$$P(\text{Positive}|\theta) = \frac{L_+ \cdot 0.3}{L_+ \cdot 0.3 + L_- \cdot 0.7}$$
+
+이 값은 동등 prior 기준보다 낮게 계산된다. 유병률 반영 여부는 시스템 설계 선택이며, 선택한 방식을 FDA 문서에 명시해야 한다.
+
+```python
         # Step 3: Estimate uncertainty (Bootstrap)
         ci_lower, ci_upper = self.bootstrap_confidence_interval(signal)
         
@@ -375,6 +403,17 @@ elif 0.40 <= probability <= 0.60:
 else:
     decision = "Borderline - Retest Recommended"
 ```
+
+**왜 0.95와 0.05인가? (FDA 임상 허용 수준과의 연결)**
+
+임계값은 임의적이지 않다. FDA가 IVD(In Vitro Diagnostic) 기기에 요구하는 성능 기준에서 도출된다:
+
+- **민감도(Sensitivity) 요구:** ≥ 95% → "양성을 양성으로 맞춰야 할 최저 기준"
+- **특이도(Specificity) 요구:** ≥ 95% → "음성을 음성으로 맞춰야 할 최저 기준"
+
+$P \geq 0.95$ 임계값은 "양성 분포에 95% 이상 속한다고 확신할 때만 양성 보고"로, FDA 민감도 요구와 직접 연결된다. $P \leq 0.05$는 특이도 요구와 연결된다.
+
+CI 하한 ≥ 0.90 조건은 안전 여유(safety margin)다: "확률 추정이 불안정해도 최악의 경우(하한)에서도 90% 이상이어야 한다." 이 이중 기준 덕분에 확률값이 0.95라도 CI가 넓으면 ([0.60, 0.99]) Invalid 처리된다.
 
 **단계 3: 임상 프로세스**
 - **Positive**: 치료 프로토콜 시작 (의사 판단)
