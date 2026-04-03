@@ -50,7 +50,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `/write [category] [topic]` | **새 포스트 작성** — 3-Layer 탐색 → 중복 판단 → .qmd 신규 작성 → index.qmd 링크 추가 → 렌더링 → 배포 | `guides/info-search.md` + `guides/write-post.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/fix [file-path]` | **기존 포스트 교정** — 지정 파일의 YAML·한다체·수식·구조를 현행 규칙에 맞게 직접 수정 (내용 삭제 금지) | `guides/retrofit-post.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/qa [question]` | **질문 답변** — 블로그→교재→사전지식 3-Layer 탐색 후 통합 답변 (파일 변경 없음) | `guides/info-search.md` + `guides/answer-question.md` |
-| `/convert [category]` | **TBD 메모→정식 포스트 전환** — TBD.qmd의 임시 메모를 정식 .qmd로 분리·재작성 → index 업데이트. Essay형 글(포트폴리오·단상·전략)은 `Data_Science/Essay/`로 이동 | `guides/info-search.md` + `guides/convert-tbd.md` + `docs/blog/posts/{category}/GUIDE.md` |
+| `/convert [category]` | **TBD 메모→정식 포스트 전환** — TBD.qmd의 임시 메모를 정식 .qmd로 분리·재작성 → index 업데이트. Essay형 글(포트폴리오·단상·전략)은 `Data_Science/Essay/`로 이동 | `guides/info-search.md` + `guides/convert-tbd.md` + `docs/blog/posts/{category}/GUIDE.md` + (Essay면) `docs/blog/posts/Data_Science/Essay/GUIDE.md` |
 | `/series [category]` | **시리즈 재구성** — 카테고리 내 기존 .qmd 파일들의 중복·누락·순서 진단 → 파일 병합/분할/번호 재배치 → index.qmd 반영 | `guides/info-search.md` + `guides/organize-series.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/audit [file-path]` | **품질 감사 (읽기 전용)** — 지정 파일의 추상적 서술·누락 섹션·규칙 위반을 진단·보고만 함 (파일 수정 안 함) | `guides/audit.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/log` | **변경 이력 요약** — git 히스토리에서 .qmd 생성/수정/삭제 이력을 기간별로 조회·보고 (파일 변경 없음) | `guides/changelog-summary.md` |
