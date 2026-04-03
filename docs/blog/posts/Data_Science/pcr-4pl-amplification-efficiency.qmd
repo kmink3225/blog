@@ -425,6 +425,217 @@ $$
 
 ---
 
+## 모델 선택과 정규화: 데이터 기반 설계 (Brunton & Kutz, 2022, Ch.4)
+
+Brunton & Kutz (2022, Ch.4)는 머신러닝에서 "정칙화의 선택이 모델의 복잡도와 해석 가능성을 결정한다"고 강조한다. 4PL 모델 역시 이 원칙이 그대로 적용된다.
+
+### AIC/BIC로 4PL vs 5PL 선택하기
+
+4PL이 필요한지, 5PL로 확장해야 하는지를 주관적으로 판단하는 대신 **정보 기준(Information Criteria)**으로 데이터에서 결정할 수 있다(Brunton & Kutz, 2022, Ch.4):
+
+$$\text{AIC} = 2k - 2\ln(\hat{L})$$
+$$\text{BIC} = k \ln(n) - 2\ln(\hat{L})$$
+
+여기서 $k$ = 자유 매개변수 수(4PL: 4, 5PL: 5), $n$ = 데이터 포인트 수(PCR에서는 cycle 수), $\hat{L}$ = 최대 우도다.
+
+**핵심 원리:** BIC는 AIC보다 더 강하게 모델 복잡도에 벌점을 부과한다. $n$ 이 클수록(cycle 수가 많을수록) 추가 매개변수에 대한 BIC의 벌점이 커진다.
+
+```python
+import numpy as np
+from scipy.optimize import curve_fit
+from scipy.stats import norm
+
+def compute_aic_bic(rfu: np.ndarray,
+                    fitted: np.ndarray,
+                    n_params: int) -> dict:
+    """
+    4PL(k=4)과 5PL(k=5) 모델 비교에 사용하는 AIC/BIC 계산.
+
+    Brunton & Kutz (2022, Ch.4): 더 낮은 AIC/BIC = 더 나은 모델.
+    두 모델의 ΔAIC > 2이면 낮은 AIC 모델을 선택한다.
+    """
+    n = len(rfu)
+    residuals = rfu - fitted
+    sigma2 = np.var(residuals, ddof=n_params)   # 불편 분산 추정
+
+    # 최대 우도: 정규 잔차 가정
+    log_likelihood = np.sum(norm.logpdf(residuals, scale=np.sqrt(sigma2)))
+
+    aic = 2 * n_params - 2 * log_likelihood
+    bic = n_params * np.log(n) - 2 * log_likelihood
+
+    return {"n_params": n_params, "log_L": round(log_likelihood, 3),
+            "AIC": round(aic, 3), "BIC": round(bic, 3)}
+
+
+def pcr_5pl(x, A, D, C, B, F):
+    """5PL 모델: F=1이면 4PL과 동일."""
+    return D + (A - D) / ((1 + (x / C) ** B) ** F)
+
+
+def compare_4pl_5pl(cycles: np.ndarray,
+                    rfu_noisy: np.ndarray) -> None:
+    """
+    동일한 데이터에 대해 4PL과 5PL을 피팅하고 AIC/BIC로 비교한다.
+    """
+    from pcr_4pl import pcr_4pl   # 위에서 정의한 4PL 함수
+
+    popt4, _ = curve_fit(pcr_4pl, cycles, rfu_noisy,
+                         p0=[50, 5000, 20, 0.3],
+                         bounds=([0, 0, 1, 0.01], [500, 50000, 45, 2.0]))
+    popt5, _ = curve_fit(pcr_5pl, cycles, rfu_noisy,
+                         p0=[50, 5000, 20, 0.3, 1.0],
+                         bounds=([0, 0, 1, 0.01, 0.1], [500, 50000, 45, 2.0, 5.0]))
+
+    fit4 = pcr_4pl(cycles, *popt4)
+    fit5 = pcr_5pl(cycles, *popt5)
+
+    stats4 = compute_aic_bic(rfu_noisy, fit4, n_params=4)
+    stats5 = compute_aic_bic(rfu_noisy, fit5, n_params=5)
+
+    print(f"{'모델':<8} {'k':>4} {'AIC':>10} {'BIC':>10}")
+    print(f"{'4PL':<8} {stats4['n_params']:>4} {stats4['AIC']:>10.2f} {stats4['BIC']:>10.2f}")
+    print(f"{'5PL':<8} {stats5['n_params']:>4} {stats5['AIC']:>10.2f} {stats5['BIC']:>10.2f}")
+
+    delta_aic = stats4['AIC'] - stats5['AIC']
+    if delta_aic > 2:
+        print(f"→ ΔAIC = {delta_aic:.2f} > 2: 5PL이 유의미하게 더 나음")
+    elif delta_aic < -2:
+        print(f"→ ΔAIC = {delta_aic:.2f} < -2: 4PL로 충분 (파르시모니 우선)")
+    else:
+        print(f"→ ΔAIC = {delta_aic:.2f}: 두 모델 동등 → 간결한 4PL 선택")
+```
+
+일반적으로 45 cycle qPCR 데이터에서는 4PL로 충분하다. ΔAIC가 2를 초과해야만 추가 매개변수를 정당화할 수 있다(Burnham & Anderson, 2002). PCR에서 5PL이 유의미하게 더 나은 경우는 고동적 범위 샘플(DNA 농도가 8 log₁₀ 이상 차이나는 경우)에 한정된다.
+
+### 교차검증: Ct 추정의 일반화 성능 평가
+
+단일 웰(well)에서 4PL 피팅이 잘 됐다고 모델이 **일반화**된다는 의미가 아니다. 교차검증은 "동일한 파라미터 범위에서 훈련된 모델이 보지 않은 웰에서도 안정적인 Ct를 추정하는가"를 평가한다(Brunton & Kutz, 2022, Ch.4).
+
+**Leave-One-Well-Out 교차검증:**
+
+```python
+from sklearn.model_selection import LeaveOneOut
+from sklearn.metrics import mean_squared_error
+import pandas as pd
+
+def loocv_ct_estimation(wells_data: list[np.ndarray],
+                         wells_true_ct: list[float]) -> pd.DataFrame:
+    """
+    웰 단위 Leave-One-Out 교차검증으로 Ct 추정의 일반화 성능을 평가한다.
+
+    wells_data: 각 웰의 RFU 시계열 리스트
+    wells_true_ct: 각 웰의 참 Ct값 (또는 다른 방법으로 결정된 참조 Ct)
+
+    Brunton & Kutz (2022, Ch.4): 훈련 오차만 보고하면 과적합을 놓친다.
+    교차검증 Ct 오차가 ±0.5 cycle 이내이어야 임상 진단 품질이다.
+    """
+    loo = LeaveOneOut()
+    results = []
+    wells_array = np.array(wells_data, dtype=object)
+    true_cts    = np.array(wells_true_ct)
+
+    for train_idx, test_idx in loo.split(wells_array):
+        # 훈련 웰 데이터로 피팅 파라미터 범위의 사전 분포 추정
+        train_rfu = np.vstack([wells_array[i] for i in train_idx])
+        b_values  = []
+        for rfu in train_rfu:
+            cycles = np.arange(1, len(rfu) + 1)
+            try:
+                popt, _ = curve_fit(pcr_4pl, cycles, rfu,
+                                    p0=[50, 5000, 20, 0.3],
+                                    bounds=([0,0,1,0.01],[500,50000,45,2.0]))
+                b_values.append(popt[3])
+            except RuntimeError:
+                pass
+
+        b_mean, b_std = np.mean(b_values), np.std(b_values)
+
+        # 테스트 웰에 좁힌 범위로 피팅
+        test_rfu = wells_array[test_idx[0]]
+        cycles   = np.arange(1, len(test_rfu) + 1)
+        b_lo     = max(0.01, b_mean - 2 * b_std)
+        b_hi     = min(2.0,  b_mean + 2 * b_std)
+        try:
+            popt, _ = curve_fit(pcr_4pl, cycles, test_rfu,
+                                p0=[50, 5000, 20, b_mean],
+                                bounds=([0,0,1,b_lo],[500,50000,45,b_hi]))
+            ct_pred = popt[2]
+        except RuntimeError:
+            ct_pred = float('nan')
+
+        results.append({
+            "well_idx": test_idx[0],
+            "ct_true":  true_cts[test_idx[0]],
+            "ct_pred":  ct_pred,
+            "ct_error": ct_pred - true_cts[test_idx[0]],
+        })
+
+    df = pd.DataFrame(results)
+    rmse = np.sqrt(mean_squared_error(df["ct_true"].dropna(),
+                                       df["ct_pred"].dropna()))
+    print(f"LOOCV Ct RMSE: {rmse:.3f} cycle")
+    print(f"|오차| > 0.5 cycle 비율: {(df['ct_error'].abs() > 0.5).mean():.1%}")
+    return df
+```
+
+### 정규화(Ridge/LASSO): bounds 제약의 대안
+
+`curve_fit`의 `bounds` 파라미터는 **하드 제약(hard constraint)**이다. 극단적 초기값에서 피팅 알고리즘이 경계로 수렴해버리면(boundary hitting), Ct 추정값이 부정확해진다.
+
+Brunton & Kutz (2022, Ch.4)에서 제안하는 대안은 **소프트 제약(soft constraint)**인 Ridge 정규화다. Ridge는 ℓ₂ 정규화와 동일하며, Bayesian 관점에서 파라미터에 **가우스 사전 분포**를 부여하는 것과 수학적으로 동치다:
+
+$$\text{Ridge 목적함수:} \quad \min_{\theta} \left\| \mathbf{y} - f(\mathbf{x}; \theta) \right\|^2_2 + \lambda \left\| \theta - \theta_0 \right\|^2_2$$
+
+여기서 $\theta = (A, D, C, B)$, $\theta_0 = (A_0, D_0, C_0, B_0)$ 는 사전 지식에서 온 기대값이다. $\lambda$ 가 클수록 파라미터가 기대값 근처에 머물고, $\lambda \to 0$ 이면 순수 최소제곱과 같아진다.
+
+```python
+from scipy.optimize import minimize
+
+def pcr_4pl_ridge_fit(cycles: np.ndarray,
+                       rfu: np.ndarray,
+                       theta0: np.ndarray,
+                       lambda_ridge: float = 0.01) -> np.ndarray:
+    """
+    Ridge 정규화 4PL 피팅.
+    bounds 대신 prior(theta0)에서 크게 벗어나면 패널티를 부과한다.
+
+    theta0 = [A0, D0, C0, B0]: 배경, 포화, Ct 기대값, 효율 기대값
+    lambda_ridge: 정규화 강도 (클수록 theta0에 가깝게 수렴)
+
+    Brunton & Kutz (2022, Ch.4): ℓ₂ 정규화는 파라미터에
+    정규 사전 분포를 부여하는 것과 Bayesian 동치다.
+    """
+    def objective(theta):
+        A, D, C, B = theta
+        fitted  = pcr_4pl(cycles, A, D, C, B)
+        rss     = np.sum((rfu - fitted) ** 2)
+        penalty = lambda_ridge * np.sum((theta - theta0) ** 2)
+        return rss + penalty
+
+    result = minimize(objective, x0=theta0, method='L-BFGS-B',
+                      bounds=[(0, None), (0, None), (1, 45), (0.01, 2.0)])
+    return result.x   # [A_fit, D_fit, C_fit, B_fit]
+```
+
+**bounds vs Ridge 비교:**
+
+| 방법 | 특성 | 적합 상황 |
+|------|------|---------|
+| Hard bounds | 파라미터를 절대 경계 밖으로 내보내지 않음 | 물리적 불가능 범위를 배제할 때 |
+| Ridge ($\lambda > 0$) | 기대값 근처에 부드럽게 당김 | 사전 지식이 있는 정상 범위 내에서 최적화할 때 |
+| LASSO ($\lambda > 0$, ℓ₁) | 일부 파라미터를 정확히 0으로 만듦 | 4PL에서는 비적합 (모든 파라미터가 필수) |
+
+LASSO는 4PL 피팅에 적합하지 않다. 4개 매개변수 모두 물리적 의미가 있어 0이 되어서는 안 된다. Ridge(ℓ₂)가 PCR 4PL 피팅의 소프트 정규화로 적합하다.
+
+::: {.callout-note}
+## λ 선택 기준
+
+$\lambda$ 를 어떻게 설정할지는 교차검증으로 결정한다. $\lambda \in \{0.001, 0.01, 0.1, 1.0\}$ 을 후보로 설정하고, LOOCV RMSE가 최소인 값을 선택한다. 일반적으로 PCR에서는 $\lambda = 0.01 \sim 0.1$ 범위에서 최적값이 나온다(노이즈 표준편차 대비 파라미터 스케일에 따라 달라진다).
+:::
+
+---
+
 ## 관련 주제
 
 **이 포스트를 읽은 후**
@@ -442,3 +653,7 @@ $$
 
 - [Surveilance](../Surveilance/index.qmd) — 진단 알고리즘의 규제 요구사항
 - [Statistics](../Statistics/index.qmd) — 비선형 회귀, 피팅 적합도 기준
+
+**참고 교재**
+
+- Brunton & Kutz, *Data-Driven Science and Engineering* (2022) — Ch.4 (회귀, AIC/BIC, 교차검증, 정규화)
