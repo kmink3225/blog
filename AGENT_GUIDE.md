@@ -184,8 +184,27 @@ Data_Science/Essay/{slug}.qmd  (draft:true, 정리된 에세이)
 블로그 발행
 ```
 
+### Essay 하위 도메인 폴더
+
+주제가 많아지면 `Essay/` 아래에 **도메인 폴더**를 생성할 수 있다.
+
+```
+Data_Science/Essay/
+├── _metadata.yml          ← draft:true 전체 적용 (하위 폴더 포함)
+├── index.qmd
+├── pcr/                   ← PCR 진단 관련 essay
+├── logistics/             ← 물류·리테일 관련 essay
+├── ecommerce/             ← e-커머스 관련 essay
+└── {새 도메인}/           ← 필요 시 추가
+```
+
+**폴더 생성 기준**: TBD 내용을 변환하거나 새 Essay를 작성할 때, 같은 도메인의 글이 **2개 이상** 예상되면 하위 폴더를 만든다. 단일 글이면 `Essay/` 바로 아래에 둔다.
+
+**`_metadata.yml` 상속**: 루트의 `Essay/_metadata.yml`(`draft: true`)은 모든 하위 폴더에 자동 적용된다. 하위 폴더에 별도 `_metadata.yml`을 만들 필요 없다.
+
 ### Essay 파일 명명 규칙
 
-- 형식: `{주제}-{키워드}.qmd`  (예: `pcr-portfolio-career-strategy.qmd`)
-- 수동 번호 금지 (number-sections: true 자동 적용)
+- 형식: `{주제}-{키워드}.qmd` (예: `pcr-portfolio-career-strategy.qmd`)
+- 도메인 폴더 내 배치: `Essay/pcr/`, `Essay/logistics/`, `Essay/ecommerce/` 등
+- 수동 번호 금지 (`number-sections: true` 자동 적용)
 - 반드시 `categories: [Data Science, Essay]` 포함
