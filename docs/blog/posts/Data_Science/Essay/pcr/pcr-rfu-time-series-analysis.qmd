@@ -1,0 +1,814 @@
+---
+title: "RT-PCR RFU 시계열 분석 — 품질관리, 정량 정확도, 배치 보정"
+subtitle: "외부 변수 포함 시계열 모델의 의료기기 진단 응용"
+description: |
+  RT-PCR에서 출력되는 cycle별 RFU(형광값) 데이터를 외부 변수 포함 시계열 모델로 분석하는 방법을 정리한다.
+  ARIMAX, ADL, VAR, BSTS를 활용한 이상 곡선 탐지, 농도 정량화 정확도 향상,
+  억제제 효과 분석, 배치 간 보정의 구체적 수행 절차와 해석 방법을 다룬다.
+  검사 시간 단축이 불가능한 이유(post-run 분석 구조)도 명확히 정리한다.
+categories:
+  - Data Science
+  - Statistics
+  - Surveilance
+author: Kwangmin Kim
+date: 03/28/2026
+---
+
+## RT-PCR 데이터 구조
+
+RT-PCR 장비는 cycle 1~45 동안 형광값을 측정한다. 각 cycle이 하나의 시점 $t$이고, RFU(Relative Fluorescence Unit)가 관측값이다.
+
+$$\text{데이터 구조}: \{RFU_1, RFU_2, \ldots, RFU_{45}\}$$
+
+전형적인 RFU 곡선 형태는 세 구간으로 나뉜다.
+
+```
+RFU
+ │                              ·····
+ │                         ····
+ │                    ·····
+ │             ·······
+ │·············
+ └─────────────────────────────── Cycle
+  1     10     20     30     40   45
+  노이즈구간   지수증폭   포화구간
+```
+
+- **Baseline (cycle 1~15)**: 노이즈 수준. 증폭 미발생
+- **Exponential (cycle 15~35)**: 지수적 증폭. Ct 결정 구간
+- **Plateau (cycle 35~45)**: 반응 포화. 기울기 감소
+
+## RFU 시계열의 정상성: 구간별 특성
+
+시계열 모델(ARIMA, ARIMAX, VAR, BSTS)을 RFU 데이터에 적용하기 전에 이 신호의 **정상성(stationarity)** 구조를 파악해야 한다. 일반 시계열 분석 교재(Hyndman & Athanasopoulos, 2021, Ch.9)에서는 ADF 검정과 1차 차분으로 비정상 시계열을 정상화하도록 권장한다. 그러나 RFU 곡선은 이 접근법이 그대로 통하지 않는다.
+
+**정상성이란 무엇인가?**
+
+정상 시계열(stationary time series)은 통계적 성질이 시간에 따라 변하지 않는 시계열이다:
+
+$$\text{정상:} \quad E[y_t] = \mu \text{ (상수)}, \quad \text{Var}(y_t) = \sigma^2 \text{ (상수)}, \quad \text{Cov}(y_t, y_{t-k}) = \gamma(k) \text{ ($t$에 무관)}$$
+
+$$\text{비정상:} \quad E[y_t] \text{가 } t \text{에 따라 변하거나 (트렌드), } \text{Var}(y_t) \text{가 } t \text{에 따라 변한다 (이분산)}$$
+
+직관적으로: 정상 시계열은 "어느 구간을 잘라도 비슷해 보인다". 비정상 시계열은 "초반과 후반이 뚜렷이 다르다."
+
+RFU 신호에 이를 적용하면:
+- **Baseline 구간 (1~10)**: 평균 ≈ 120 RFU로 일정, 분산 ≈ 100 RFU² → **정상**
+- **Exponential 구간 (15~35)**: cycle마다 RFU가 지수적으로 증가 → **비정상** (E[y_t]가 t에 따라 변함)
+- **Plateau 구간 (38~45)**: 평균 ≈ 3,000 RFU로 다시 일정 → **정상**
+
+경제 데이터의 "선형 추세 + 확률보행"과 달리, Exponential 구간은 **비선형 결정론적 성장**이다. 1차 차분으로는 제거할 수 없다.
+
+| 구간 | Cycle 범위 | 트렌드 | 분산 특성 | ADF 결과 | 정상성 |
+|------|-----------|--------|----------|---------|--------|
+| Baseline | 1~10 | 거의 없음 | 일정 (균일 노이즈) | p < 0.05 | 정상 |
+| Exponential | 15~35 | 지수 증가 | 분산 증가 | p > 0.05 | 비정상 |
+| Plateau | 38~45 | 없음 (포화) | 일정 | p < 0.05 | 정상 |
+
+경제 데이터의 "선형 추세 + 확률보행"과 달리, RFU의 Exponential 구간 비정상성은 **비선형 결정론적 성장**이다. 1차 차분으로는 제거할 수 없다. 이 구조가 모델 적용 전 전처리 전략을 결정한다.
+
+### 전처리 전략: 목적별 접근
+
+| 분석 목적 | 권장 전처리 | 근거 |
+|----------|-----------|------|
+| ARIMA 모델 차수 결정 | 기저선 보정 후 잔차에 ACF/PACF 적용 | 비선형 트렌드 제거 후 정상 잔차 분석 (Cryer & Chan, 2008, Ch.4) |
+| 이상 탐지 (BSTS) | 정상 샘플 기준 phase-aligned 잔차 모델링 | 구간 정렬된 기준선 구성 후 이탈 탐지 |
+| Exponential 구간 모델링 | 로그 변환 → 선형 추세 → 1차 차분 | 지수 성장 선형화 후 ARIMA 적용 가능 (Cryer & Chan, 2008, Ch.3) |
+| Baseline 노이즈 모델 | Cycle 1~10만 추출해 AR(1~2) 적합 | 정상 구간 분리 후 잡음 특성 파악 |
+
+```python
+import numpy as np
+from statsmodels.tsa.stattools import adfuller
+
+def phase_stationarity_test(rfu: np.ndarray) -> None:
+    """
+    RFU 시계열의 구간별 ADF 정상성 검정을 수행한다.
+    정상 구간(baseline, plateau)과 비정상 구간(exponential)의 차이를 확인한다.
+    """
+    phases = {
+        "baseline (1~10)":        rfu[0:10],
+        "exponential (15~35)":    rfu[14:35],
+        "log-exponential":        np.log(np.clip(rfu[14:35], 1e-6, None)),
+        "plateau (38~45)":        rfu[37:45],
+    }
+    print(f"{'구간':<25} {'ADF p-value':>12} {'정상성':>8}")
+    print("-" * 48)
+    for name, seg in phases.items():
+        if len(seg) < 4:
+            continue
+        try:
+            _, p, *_ = adfuller(seg, autolag='AIC')
+            label = "정상" if p < 0.05 else "비정상"
+            print(f"{name:<25} {p:>12.4f} {label:>8}")
+        except Exception:
+            print(f"{name:<25} {'계산 불가':>12}")
+```
+
+통상적으로 로그 변환 후 exponential 구간도 ADF 검정에서 p < 0.05에 가까워진다. 이는 **로그 변환 + 1차 차분**이 exponential 구간 정상화에 유효함을 시사한다(Shumway & Stoffer, 2017, Ch.3).
+
+---
+
+## RFU 신호의 LTI 시스템 해석
+
+RFU 곡선에 ARIMAX·VAR 등 시계열 모델을 적용하기 전에, PCR 반응 자체를 선형 시불변(LTI) 시스템으로 표현하면 왜 이 모델 구조들이 적합한지 이론적 근거가 명확해진다(Ljung, 1999, Ch.2).
+
+### 입출력 프레임워크
+
+PCR 반응을 입출력 시스템으로 정의한다:
+
+- **입력** $u$: 초기 template DNA 농도 $N_0$ (copies/μL)
+- **출력** $y(t)$: cycle $t$ 에서 측정된 RFU
+- **교란** $v(t) = H(q)e(t)$: 측정 노이즈, 억제제, 광학 변동
+
+LTI 표현 (Ljung, 1999, Ch.2):
+
+$$RFU_t = G(q) \cdot N_0 + H(q) \cdot e_t$$
+
+여기서 $q$ 는 시프트 연산자( $q \cdot x_t = x_{t+1}$ )이고, $G(q) = \sum_{k=1}^{45} g(k) q^{-k}$ 는 임펄스 응답 $\{g(k)\}$ 로 정의되는 전달함수다.
+
+**왜 $q^{-k}$ 형태인가?**
+
+$q^{-1}$은 "1 시점 과거로 이동"하는 연산자이고, $q^{-k}$는 $k$ 시점 과거를 나타낸다:
+
+$$G(q) \cdot N_0 = \sum_{k=1}^{45} g(k) q^{-k} N_0 = \sum_{k=1}^{45} g(k) N_0|_{t-k}$$
+
+이것은 "현재 RFU는 과거 $k$ 시점 전의 $N_0$에 $g(k)$만큼 영향받는다"는 뜻이다. 즉, 초기 DNA 농도 $N_0$가 cycle 10에서는 거의 영향이 없고($g(10) \approx 0$), cycle 25에서는 크게 영향을 미치며($g(25) \gg 0$), cycle 40에서는 포화로 추가 영향이 작아진다. $g(k)$의 형태가 PCR 증폭 곡선의 형태 자체다.
+
+### 임펄스 응답의 물리적 해석
+
+임펄스 응답 $g(k)$ 는 cycle $k$ 에서 $N_0$ 한 단위 증가가 RFU에 미치는 영향이다.
+
+- **Baseline 구간** ( $k = 1 \sim 10$ ): $g(k) \approx 0$ — $N_0$ 변화가 RFU에 거의 반영되지 않음
+- **Exponential 구간** ( $k = 15 \sim 35$ ): $g(k) \propto (1 + E)^k$ — 지수적으로 증가하는 임펄스 응답
+- **Plateau 구간** ( $k > 35$ ): $g(k) \to$ 상수 — 반응 포화로 추가 증가 없음
+
+이 구조가 앞서 확인한 RFU 정상성 패턴의 이론적 설명이다. Exponential 구간의 비정상성(ADF p > 0.05)은 $g(k) \propto (1+E)^k$ 라는 비선형 결정론적 성장에서 비롯된다. 1차 차분으로 제거되지 않는 이유도 여기에 있다 — 이 성장은 확률보행이 아닌 **물리 법칙에 의한 결정론적 지수 증가**이기 때문이다.
+
+### 이 프레임워크가 각 분석에 주는 의미
+
+| 분석 | LTI 관점에서의 역할 |
+|------|-------------------|
+| ARIMAX 잔차 모델 | 교란 $H(q)e_t$ 의 구조 추정 — 억제제·온도가 $H(q)$ 를 변화시킴 |
+| ADL 모델 | $G(q)N_0$ 의 lag 구조 직접 추정 — cycle별 임펄스 응답 $g(k)$ 의 비모수 추정 |
+| VAR 분석 | 다채널: $\mathbf{RFU}_t = \mathbf{G}(q)N_0 + \mathbf{H}(q)\mathbf{e}_t$ — 채널 간 $G_{ij}(q)$ 의 교차 응답 추정 |
+| 배치 보정 | 배치마다 $G(q)$ 의 이득이 달라짐 — ARIMAX가 이득 변화를 외부 변수 계수로 흡수 |
+
+::: {.callout-note}
+## 표준 곡선의 기울기와 정적 이득
+
+표준 곡선의 기울기 $m = -1/\log_{10}(1+E)$ 는 $G(q)$ 의 **정적 이득(static gain)**을 로그 스케일로 표현한 것이다. $G(1) = \sum_k g(k)$ 가 전체 반응에서 $N_0$ 를 RFU로 변환하는 총 이득이며, 이를 $\log_{10}$ 스케일로 표현하면 표준 곡선의 선형 기울기 -3.32가 나타난다. 기울기가 -3.32에서 벗어난다는 것은 $G(q)$ 의 이득이 이론값( $E=1$ )에서 이탈했다는 의미다.
+:::
+
+---
+
+## 중요한 전제: 검사 시간 단축은 불가능하다
+
+시계열 분석 맥락에서 "early cycle 데이터로 Ct를 조기 예측하면 검사 시간을 단축할 수 있다"는 아이디어가 자연스럽게 떠오른다. 그러나 이는 현실적으로 불가능하다.
+
+RT-PCR 분석 파이프라인의 실제 순서는 다음과 같다.
+
+```
+기계가 cycle 1~45 전부 실행
+    ↓
+zip 데이터 파일 출력
+    ↓
+전처리 (기저선 보정, 노이즈 제거)
+    ↓
+분석 (Ct 판정, 통계 모델 적용)
+```
+
+분석이 **post-run**으로만 가능하므로, 조기 예측이 검사 시간을 줄여주지 않는다. cycle 20 데이터로 Ct를 추정하더라도 기계는 이미 cycle 45까지 돌린 상태다.
+
+::: {.callout-important}
+## post-run 제약이 의미하는 것
+
+시계열 모델을 RT-PCR에 적용할 때는 **예측(prediction) 관점이 아니라 해석(inference) 관점**으로 접근해야 한다. "몇 cycle에서 결과가 나오나"가 아니라 "곡선 전체 형태에서 무엇을 더 정확히 읽어낼 수 있나"가 핵심 질문이다.
+:::
+
+## 현실적으로 가능한 분석
+
+| 분석 목적 | 실현 가능 | 모델 | 비고 |
+|----------|----------|------|------|
+| 이상 곡선 탐지 | O | BSTS / ARIMA | 비정상 증폭 자동 식별 |
+| 농도 정량화 정확도 향상 | O | ADL | 표준곡선 + 시차 보정 |
+| 억제제/품질 효과 분석 | O | ARIMAX | 곡선 형태로 품질 판정 |
+| 채널 간 상호작용 | O | VAR + IRF | 타겟 vs 내부 대조군 비교 |
+| **검사 시간 단축** | **X** | — | post-run 분석이므로 불가 |
+
+## 사전 진단: ACF/PACF와 ARIMA 차수 결정
+
+ARIMAX, ADL, VAR를 RFU 잔차에 적용할 때, 차수(p, q)를 잘못 설정하면 잔차에 자기상관이 남아 Ljung-Box 검정에서 기각된다. 차수 선택의 표준 도구는 ACF(자기상관함수)와 PACF(편자기상관함수)이다 (Cryer & Chan, 2008, Ch.4; Hyndman & Athanasopoulos, 2021, Ch.9).
+
+### ACF/PACF 해석 규칙
+
+| 패턴 | 권장 모델 |
+|------|---------|
+| ACF가 q 시차 이후 급감, PACF 서서히 감소 | MA(q) |
+| PACF가 p 시차 이후 급감, ACF 서서히 감소 | AR(p) |
+| ACF, PACF 모두 서서히 감소 | ARMA(p,q) |
+| ACF 모든 시차 유의 → 비정상 신호 | 차분 또는 기저선 재추정 후 재분석 |
+
+### RFU 잔차 진단 코드
+
+기저선 보정 후 잔차를 이 함수로 진단한다. 각 분석(BSTS, ADL, ARIMAX, VAR)의 모델 적합 후 동일하게 적용한다.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.stats.diagnostic import acorr_ljungbox
+
+def diagnose_rfu_residuals(residuals: np.ndarray,
+                            lags: int = 15,
+                            title: str = "RFU 잔차") -> None:
+    """
+    기저선 보정 후 RFU 잔차의 ACF/PACF와 Ljung-Box 검정을 수행한다.
+    ARIMA(p,q) 차수 결정 및 모델 적합도 진단에 사용한다.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    plot_acf(residuals,  lags=lags, ax=axes[0],
+             title=f"{title} — ACF (MA 차수 결정)")
+    plot_pacf(residuals, lags=lags, ax=axes[1],
+             title=f"{title} — PACF (AR 차수 결정)")
+    plt.tight_layout()
+    plt.show()
+
+    # Ljung-Box 검정: 잔차에 자기상관이 남아 있는지 확인
+    lb = acorr_ljungbox(residuals, lags=[5, 10, 15], return_df=True)
+    print(f"\nLjung-Box 검정 — {title}")
+    print(lb.to_string())
+    print("\n해석: p > 0.05 → 잔차 독립성 충족 (모델 적합)")
+    print("      p ≤ 0.05 → 잔차에 자기상관 잔류 → 차수 재검토 필요")
+```
+
+### PCR RFU 잔차에서 흔히 나타나는 패턴
+
+| 잔차 패턴 | 가능한 원인 | 권장 조치 |
+|----------|----------|---------|
+| lag 1~3 ACF 유의, 이후 감소 | 지수 → 고원 전환 구간 미포착 | MA(2) 추가 또는 구간 분리 모델 |
+| lag 1~2 PACF만 유의 | 인접 cycle 간 직접 의존성 | AR(1~2) 추가 |
+| 모든 시차 ACF 유의 | 기저선 보정 불충분 | 기저선 재추정 후 재분석 |
+| 이분산 패턴 (분산 증가) | Exponential 구간 분산 미처리 | 로그 변환 또는 구간 분리 |
+
+이 진단 절차는 이어지는 5가지 분석에서 각 모델의 잔차 검증 단계에 공통으로 적용한다.
+
+---
+
+## 분석 1: 이상 곡선 탐지 (BSTS)
+
+### 목적
+
+정상 증폭 패턴에서 벗어난 곡선을 자동으로 식별한다. 오염, 억제, 증폭 실패를 탐지한다.
+
+### 수행 절차
+
+```
+① 검증된 정상 샘플 N개의 RFU 곡선으로 BSTS 모델 학습
+② 새 샘플의 RFU를 학습된 모델에 입력
+③ 각 cycle에서 예측값 vs 실제값의 잔차 계산
+④ 잔차가 사후 신뢰구간(95% posterior interval)을 벗어나면 이상 플래그
+```
+
+### 해석
+
+- 잔차가 **초기 cycle에서 이탈**: 노이즈 비정상 → 시약 오염 의심
+- 잔차가 **지수 증폭 구간에서 이탈**: 증폭 효율 저하 → 억제제 존재 의심
+- 잔차가 **포화 구간에서 이탈**: plateau 도달 패턴 비정상 → 비특이 증폭 의심
+
+BSTS는 트렌드 성분, 계절성 성분, 회귀 성분을 분리할 수 있어 RFU 곡선의 구조적 변화를 포착하는 데 유리하다.
+
+## 분석 2: 농도 정량화 정확도 향상 (ADL)
+
+### 목적
+
+단순 Ct 컷오프 대신 RFU 곡선 전체 형태를 활용하여 초기 template 농도 추정의 정확도를 높인다.
+
+### Distributed Lag 구조
+
+$$RFU_t = \beta_0 C_0 + \beta_1 C_0^{(t-1)} + \beta_2 C_0^{(t-2)} + \cdots + \alpha \cdot RFU_{t-1} + \epsilon_t$$
+
+여기서 $C_0$는 초기 template 농도(표준곡선에서 유도)이다.
+
+### 해석 포인트
+
+- $\beta_k$: cycle $k$에서 농도 1단위 증가 시 RFU 증가량
+- **Long-run effect** $\sum_k \beta_k$: 전체 실험에서 농도가 RFU에 미치는 누적 효과
+- 어느 cycle부터 $\beta_k$가 유의해지는지 파악 → **최적 Ct 판정 구간 결정**에 활용
+
+::: {.callout-tip}
+## 경계값 샘플 판정 개선
+
+Ct 컷오프 근처의 경계값 샘플(예: Ct = 34~36)은 단순 임계값 판정에서 오류가 잦다.
+ADL로 추정한 long-run effect와 곡선 기울기를 함께 사용하면 경계값 샘플의 판정 신뢰도가 높아진다.
+:::
+
+## 분석 3: 억제제/품질 효과 분석 (ARIMAX)
+
+### 목적
+
+억제제 존재 여부, 샘플 품질 지표가 RFU 증폭률에 미치는 효과를 정량화한다.
+
+### 모델 구조
+
+$$RFU_t = \beta_1 \cdot \text{Inhibitor}_t + \beta_2 \cdot \text{QualityScore} + \underbrace{\text{ARIMA 구조}}_{\text{시간 의존성}}$$
+
+### 해석 포인트
+
+- $\beta_1$: 억제제 존재 시 RFU 즉각 감소량
+- ARIMA 잔차를 통해 억제 효과가 어느 cycle부터 누적되는지 추적 가능
+- 실무 활용: **억제 시작 cycle 자동 탐지** → 품질 불합격 기준 정량화
+
+## 분석 4: 채널 간 상호작용 분석 (VAR + IRF)
+
+### 목적
+
+타겟 유전자 채널과 내부 대조군(housekeeping gene) 채널 간의 상호 의존성을 분석한다.
+
+### 모델 구조
+
+$$\begin{pmatrix} RFU_t^{\text{target}} \\ RFU_t^{\text{control}} \end{pmatrix} = A_1 \begin{pmatrix} RFU_{t-1}^{\text{target}} \\ RFU_{t-1}^{\text{control}} \end{pmatrix} + \epsilon_t$$
+
+### 해석 포인트
+
+- **Impulse Response Function (IRF)**: 타겟 채널에 충격이 가해졌을 때 대조군 채널이 몇 cycle에 걸쳐 어떻게 반응하는지 시각화
+- 두 채널이 강하게 동조(co-movement)하면 → 반응 조건 변화의 공통 원인 의심
+- 두 채널이 분리(divergence)되면 → 타겟 특이적 문제 의심
+
+## 분석 5: 배치 간 보정 (ARIMAX)
+
+### 목적
+
+런(run)마다 달라지는 외부 조건(온도, 시약 lot, 장비 상태)이 RFU에 미치는 효과를 제거하여 배치 간 비교 가능성을 확보한다.
+
+### 모델 구조
+
+$$RFU_t = \beta_1 \cdot \text{Temperature} + \beta_2 \cdot \text{ReagentLot} + \beta_3 \cdot \text{RunID} + \text{ARIMA 잔차}$$
+
+### 보정 절차
+
+```
+① 복수 런의 RFU 데이터를 수집
+② 각 런의 외부 변수(온도, 시약 lot 등)를 함께 기록
+③ ARIMAX 적합 → 외부 변수 계수 추정
+④ 예측값 = ARIMAX 예측에서 외부 변수 효과를 제거한 값
+⑤ 보정된 RFU를 기준으로 런 간 Ct 비교
+```
+
+이 접근법은 단순 내부 대조군 정규화(normalization)보다 더 세밀한 배치 효과 분리가 가능하다.
+
+### 보정 파라미터의 불확실성 정량화 (Ljung, 1999, Ch.9)
+
+배치 보정 결과를 규제 제출 자료(FDA, MFDS)에 활용하려면 계수 추정값의 신뢰구간을 함께 보고해야 한다. Ljung (1999, Ch.9)의 예측 오차 방법(PEM) 점근 이론에 따르면, $N$ 개 런으로 추정한 $\hat{\beta}$ 의 점근 분포는 다음과 같다:
+
+$$\sqrt{N}(\hat{\beta} - \beta^*) \xrightarrow{d} \mathcal{N}(0,\ P_\beta)$$
+
+여기서 $P_\beta \approx \lambda_0 \left[\mathbb{E}\{\psi(t)\psi(t)^T\}\right]^{-1}$이고, $\lambda_0$ 는 잔차 분산, $\psi(t)$ 는 회귀 벡터다.
+
+실무 함의:
+
+| 런 수 $N$ | $\beta_1$ (온도 효과) CI 폭 상대값 | 해석 |
+|----------|-----------------------------------|------|
+| 10 | 1.000 | 기준 |
+| 40 | 0.500 | CI 폭 절반 (4배 런 필요) |
+| 160 | 0.250 | 추가 4배 수집시 또 절반 감소 |
+
+CI 폭이 $1/\sqrt{N}$ 에 비례하므로 CI를 절반으로 줄이려면 **4배**의 런 수가 필요하다. 검증 방법의 경제성을 계획할 때 이 원칙으로 필요 런 수를 사전 산정한다.
+
+```python
+import numpy as np
+import statsmodels.api as sm
+
+def batch_correction_arimax(rfu_series: np.ndarray,
+                             external_vars: np.ndarray,
+                             order: tuple = (1, 0, 1)) -> None:
+    """
+    다중 런 평균 RFU에 ARIMAX를 적합하고 계수의 95% CI를 출력한다.
+    Ljung (1999, Ch.9) 점근 이론 기반: CI 폭 ∝ 1/√N_runs
+
+    Parameters
+    ----------
+    rfu_series    : 배치 평균 RFU 시계열 (45,)
+    external_vars : 외부 변수 행렬 (45, k) — 온도, lot 지시변수 등
+    order         : ARIMA (p, d, q) 차수
+    """
+    model  = sm.tsa.statespace.SARIMAX(rfu_series,
+                                       exog=external_vars,
+                                       order=order)
+    result = model.fit(disp=False)
+
+    ci     = result.conf_int(alpha=0.05)
+    n_runs = external_vars.shape[0]   # 런 수 (분석 대상 cycle 수와 동일하게 사용)
+
+    print(f"=== 배치 보정 ARIMAX 결과 (N={n_runs}) ===")
+    print(result.summary().tables[1])
+    print(f"\n95% CI 폭 스케일 팩터 (1/√N): {1/np.sqrt(n_runs):.4f}")
+    print("CI를 절반으로 줄리면 4배 런 수 필요 (√4 = 2)")
+```
+
+## 분석 6: 주파수 영역 필터링과 STL 분해
+
+앞서 다룬 BSTS·ARIMAX 등 **시간 영역(time-domain)** 모델과 달리, 주파수 영역 필터링은 RFU 신호를 주파수 성분으로 분해하여 노이즈(고주파)와 증폭 신호(저주파)를 분리한다. Shumway & Stoffer (2017, Ch.4)에서 상세히 다루는 이 접근법은 기저선 보정과 노이즈 제거의 이론적 기반을 제공한다.
+
+### 주파수 성분 분리 원리
+
+RFU 신호를 주파수 성분으로 분해하면 세 영역이 뚜렷이 구분된다:
+
+- **저주파(0~0.05 Hz)**: 기저선 드리프트, 완만한 증폭 트렌드
+- **중간 주파수(0.05~0.3 Hz)**: 실제 증폭 신호 (sigmoid 형태)
+- **고주파(0.3~0.5 Hz)**: 측정 노이즈, 열 변동, 광학 잡음
+
+Low-pass 필터로 노이즈를 제거하고, Band-pass 필터로 증폭 신호 대역만 추출한다.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, filtfilt, periodogram
+
+def spectral_filter_rfu(rfu: np.ndarray,
+                         fs: float = 1.0,
+                         lowpass_cutoff: float = 0.30,
+                         bandpass: tuple = (0.05, 0.35)) -> dict:
+    """
+    RFU 시계열에 Low-pass 및 Band-pass Butterworth 필터를 적용한다.
+
+    Parameters
+    ----------
+    rfu            : RFU 측정값 배열 (길이 45)
+    fs             : 샘플링 주파수 (1 cycle = 1 샘플, fs=1.0)
+    lowpass_cutoff : Low-pass 컷오프 (Nyquist 기준 정규화)
+    bandpass       : Band-pass 통과 주파수 범위 (정규화)
+    """
+    nyquist = fs / 2.0
+
+    # Low-pass: 노이즈 제거, 평활화된 전체 곡선 획득
+    b_lp, a_lp = butter(N=4, Wn=lowpass_cutoff / nyquist, btype='low')
+    rfu_lowpass = filtfilt(b_lp, a_lp, rfu)
+
+    # Band-pass: 증폭 신호 성분만 추출
+    b_bp, a_bp = butter(N=4,
+                         Wn=[bandpass[0] / nyquist, bandpass[1] / nyquist],
+                         btype='band')
+    rfu_bandpass = filtfilt(b_bp, a_bp, rfu)
+
+    return {
+        "lowpass":  rfu_lowpass,          # 평활화 곡선
+        "bandpass": rfu_bandpass,         # 증폭 신호 성분
+        "noise":    rfu - rfu_lowpass,    # 고주파 잔류 노이즈
+    }
+
+def plot_spectral_decomposition(rfu: np.ndarray) -> None:
+    """RFU 주파수 영역 분해 결과를 시각화한다."""
+    comp = spectral_filter_rfu(rfu)
+    cycles = np.arange(1, len(rfu) + 1)
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 8))
+
+    axes[0, 0].plot(cycles, rfu, alpha=0.5, label="원본 RFU")
+    axes[0, 0].plot(cycles, comp["lowpass"], lw=2, label="Low-pass (노이즈 제거)")
+    axes[0, 0].set_title("Low-pass 필터링")
+    axes[0, 0].legend()
+
+    axes[0, 1].plot(cycles, comp["bandpass"])
+    axes[0, 1].set_title("Band-pass — 증폭 신호 성분")
+
+    axes[1, 0].plot(cycles, comp["noise"])
+    axes[1, 0].axhline(0, linestyle='--', color='gray')
+    axes[1, 0].set_title("고주파 노이즈 성분")
+
+    freq, psd = periodogram(rfu, fs=1.0)
+    axes[1, 1].semilogy(freq, psd)
+    axes[1, 1].axvline(0.30, color='red', linestyle='--', label="Low-pass 컷오프")
+    axes[1, 1].set_title("파워 스펙트럼 밀도 (PSD)")
+    axes[1, 1].set_xlabel("주파수 (1/cycle)")
+    axes[1, 1].legend()
+
+    plt.tight_layout()
+    plt.show()
+```
+
+### STL 분해를 이용한 기저선 보정
+
+주파수 영역 필터링의 대안으로 **STL(Seasonal-Trend decomposition using Loess)** 을 적용하면, 기저선 성분과 증폭 신호 성분을 더 유연하게 분리할 수 있다 (Hyndman & Athanasopoulos, 2021, Ch.3).
+
+```python
+from statsmodels.tsa.seasonal import STL
+
+def stl_baseline_correction(rfu: np.ndarray,
+                              period: int = 10) -> dict:
+    """
+    STL 분해로 RFU의 기저선(트렌드 성분)을 추출하고 증폭 잔차를 반환한다.
+
+    robust=True 옵션은 spike나 jump에 강건한 Loess 가중치를 적용한다.
+    period: 잠재적 반복 주기 추정값. PCR baseline ~ 10 cycle을 기본값으로 사용한다.
+    """
+    stl = STL(rfu, period=period, robust=True)
+    result = stl.fit()
+
+    return {
+        "trend":         result.trend,              # 기저선 성분
+        "residual":      result.resid,              # 증폭 잔차 성분
+        "seasonal":      result.seasonal,           # 주기적 변동 (통상 미미)
+        "corrected_rfu": rfu - result.trend,        # 기저선 보정된 RFU
+    }
+```
+
+`robust=True` 옵션이 중요하다. 오염된 샘플이나 초기 spike가 있는 경우, 일반 Loess는 이상치에 영향을 받아 기저선을 과도하게 들어올린다. Robust Loess는 이상치를 자동으로 downweight하여 기저선 추정이 안정된다.
+
+### 웨이블릿 변환 — 전환 시점 탐지 (Brunton & Kutz, 2022, Ch.2)
+
+푸리에 변환은 신호 전체에서 주파수 성분을 추출하지만, **어느 cycle에서** 그 성분이 나타나는지는 알 수 없다. 웨이블릿 변환은 시간-주파수 국소화가 가능하여 PCR 신호의 구간 전환 시점(exponential → plateau)을 자동으로 탐지할 수 있다(Brunton & Kutz, 2022, Ch.2).
+
+PCR 신호에서의 활용 가치:
+
+- **exponential → plateau 전환 cycle 자동 탐지**: 스케일로그램에서 중간 주파수 성분이 급감하는 cycle이 전환 시점
+- **비정상 증폭 패턴 식별**: 비특이 증폭이나 억제가 있으면 정상 신호와 다른 웨이블릿 패턴이 나타남
+- **저주파(저스케일) 성분**: 45개 포인트의 FFT보다 웨이블릿이 시간 해상도가 높아 구간 경계를 더 정밀하게 포착
+
+```python
+import numpy as np
+import pywt
+import matplotlib.pyplot as plt
+
+def wavelet_rfu_analysis(rfu: np.ndarray,
+                          wavelet: str = 'morl',
+                          scales: np.ndarray = None) -> dict:
+    """
+    RFU 시계열에 연속 웨이블릿 변환(CWT)을 적용한다.
+
+    wavelet='morl' (Morlet): 시간-주파수 해상도 균형이 PCR 신호에 적합하다.
+    scales 1~8  → 고주파 성분 (측정 노이즈)
+    scales 8~32 → 저주파 성분 (증폭 신호, 기저선)
+    """
+    if scales is None:
+        scales = np.arange(1, 33)
+
+    coeffs, freqs = pywt.cwt(rfu, scales, wavelet, sampling_period=1.0)
+    return {"coeffs": coeffs, "freqs": freqs, "scales": scales}
+
+def plot_wavelet_scalogram(rfu: np.ndarray) -> None:
+    """웨이블릿 스케일로그램과 원본 신호를 함께 시각화한다."""
+    result = wavelet_rfu_analysis(rfu)
+    cycles = np.arange(1, len(rfu) + 1)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+    ax1.plot(cycles, rfu)
+    ax1.set_ylabel("RFU")
+    ax1.set_title("원본 RFU 신호")
+
+    im = ax2.imshow(
+        np.abs(result["coeffs"]),
+        extent=[1, len(rfu), result["freqs"][-1], result["freqs"][0]],
+        aspect='auto', cmap='hot', origin='upper'
+    )
+    ax2.set_ylabel("주파수 (1/cycle)")
+    ax2.set_xlabel("Cycle")
+    ax2.set_title("웨이블릿 스케일로그램 — exponential→plateau 전환 탐지")
+    plt.colorbar(im, ax=ax2, label="|CWT 계수|")
+
+    plt.tight_layout()
+    plt.show()
+
+def detect_transition_cycle(rfu: np.ndarray,
+                              freq_band: tuple = (0.05, 0.20)) -> int:
+    """
+    웨이블릿 계수를 이용해 exponential→plateau 전환 cycle을 탐지한다.
+    freq_band 내 에너지 합이 정점에서 급감하는 cycle을 전환점으로 반환한다.
+    """
+    result = wavelet_rfu_analysis(rfu)
+    freqs  = result["freqs"]
+    coeffs = result["coeffs"]
+
+    # 증폭 신호 주파수 대역 마스크
+    mask   = (freqs >= freq_band[0]) & (freqs <= freq_band[1])
+    energy = np.sum(np.abs(coeffs[mask, :]) ** 2, axis=0)
+
+    return int(np.argmax(energy)) + 1   # 1-indexed cycle
+```
+
+**실제 적용 예시:**
+
+```python
+# 명확한 양성 샘플 (Ct=27.4): 지수 증폭 구간이 뚜렷
+rfu_positive = np.array([
+    102, 105, 101, 108, 103, 107, 104, 109, 105, 110,  # cycle 1-10 (baseline ~105 RFU)
+    112, 118, 125, 138, 162, 203, 285, 430, 720, 1100,  # cycle 11-20 (지수 증가)
+    1650, 2180, 2680, 3050, 3150, 3170, 3180, 3185, 3188, 3190,  # cycle 21-30
+    3192, 3191, 3193, 3190, 3195, 3191, 3193, 3190, 3191, 3193,  # cycle 31-40
+    3190, 3192, 3191, 3190, 3192])  # cycle 41-45 (plateau ~3190 RFU)
+
+transition = detect_transition_cycle(rfu_positive)
+# → transition = 29  (cycle 29에서 exponential → plateau 전환 탐지)
+
+# 그레이존 샘플 (Ct=36.8): 증폭이 매우 완만
+# rfu_gray ≈ [102, ..., 105, 107, 108, 110, 115, 120, ..., 180, 210, 230, 245, 255]
+# (포화 도달 미흡 — 최대 RFU ~255, plateau 불분명)
+# transition_gray ≈ 43  (전환점이 cycle 43 — 곡선이 거의 미분화, 그레이존 특성)
+```
+
+해석 기준:
+- 전환 cycle ≤ 35: 명확한 증폭 (clear positive 또는 high-load positive)
+- 전환 cycle 36~40: 경계 구간 (그레이존 의심)
+- 전환 cycle > 40 또는 탐지 불가: 음성 또는 증폭 실패
+
+| 영역 | 관찰 패턴 | PCR 의미 |
+|------|---------|---------|
+| 고주파 대역 (상단) | Baseline 구간에서 균일 분포 | 측정 노이즈 — cycle에 무관 |
+| 저주파 대역 (하단) | Exponential 구간에서 에너지 집중 | 증폭 신호의 주요 성분 |
+| 에너지 정점 cycle | 저주파 에너지가 최대인 cycle | exponential → plateau 전환 시점 |
+
+::: {.callout-tip}
+## FFT vs 웨이블릿 선택 기준
+
+45개 포인트의 FFT는 주파수 분해능이 약 0.022 Hz( $= 1/45$ )로 낮다. 웨이블릿은 저주파 성분에서 주파수 해상도가 높고, 고주파 성분에서 시간 해상도가 높은 **가변 해상도**를 제공한다(Brunton & Kutz, 2022, Ch.2). exponential → plateau처럼 **국소 전환 이벤트**를 탐지할 때는 웨이블릿이 FFT보다 적합하다. 반면 배치 수준의 전반적 스펙트럼 특성 비교에는 FFT가 더 간단하다.
+:::
+
+| 방법 | 장점 | 단점 | 적합 용도 |
+|------|------|------|---------|
+| Low-pass 필터 (Butterworth) | 즉각 적용, 컷오프 조절 간단 | 경계 효과, 위상 지연 가능 | 노이즈 제거, 시각화 |
+| Band-pass 필터 | 증폭 신호 대역만 추출 | 컷오프 범위 설정 필요 | 증폭 구간 집중 분석 |
+| 웨이블릿 변환 (CWT) | 시간-주파수 국소화, 전환점 탐지 | pywt 패키지 필요 | 전환 cycle 자동 탐지, 이상 패턴 식별 |
+| STL 분해 | 이상치 강건, 유연한 기저선 | period 파라미터 필요 | 기저선 보정, 트렌드 분리 |
+| BSTS (시간 영역) | 구조적 변화 포착, 불확실성 정량화 | 계산 비용 높음 | 이상 탐지, 확률적 진단 |
+| ARIMAX (시간 영역) | 외부 변수 포함, 계수 해석 용이 | 정상성 가정 필요 | 억제제 효과 정량화 |
+
+실무에서는 두 접근법을 결합하는 2단계 파이프라인이 효과적이다:
+
+```
+① 주파수 처리 (전처리)
+   Low-pass → 노이즈 제거
+   STL → 기저선 성분 분리
+   웨이블릿 CWT → 전환 cycle 탐지
+       ↓
+② 시간 영역 모델 (해석)
+   ARIMAX → 억제제 효과 정량화
+   BSTS   → 구조적 이상 탐지
+   VAR    → 채널 간 상호작용 분석
+   DMD    → 배치 수준 증폭 동역학 추출
+```
+
+---
+
+## 분석 7: 동적 모드 분해 (DMD) — 배치 수준 증폭 동역학
+
+**동기**: 앞선 분석 1~6은 모두 단일 샘플 또는 모델 파라미터 수준에서 동작한다. DMD는 **배치 내 N개 샘플의 RFU 행렬 전체**를 입력으로 받아, 데이터에서 직접 지배 동역학 모드를 추출한다(Brunton & Kutz, 2022, Ch.7).
+
+4PL 피팅이 "모델을 가정하고 파라미터를 맞춘다"면, DMD는 "데이터에서 선형 동역학 구조를 발견한다". 두 방법은 상호 보완적이다.
+
+### DMD 기본 원리
+
+배치 내 샘플 행렬을 구성한다:
+
+$$X = \begin{bmatrix} | & | & & | \\ \mathbf{x}_1 & \mathbf{x}_2 & \cdots & \mathbf{x}_{N-1} \\ | & | & & | \end{bmatrix}, \quad X' = \begin{bmatrix} | & | & & | \\ \mathbf{x}_2 & \mathbf{x}_3 & \cdots & \mathbf{x}_N \\ | & | & & | \end{bmatrix}$$
+
+여기서 $\mathbf{x}_j \in \mathbb{R}^{45}$ 는 $j$ 번째 샘플의 RFU 벡터(45 cycles). 열의 순서는 표준 곡선 희석 순서(예: 고농도 → 저농도)로 정렬한다. DMD는 샘플 간 변화를 선형 연산자 $A$ 로 표현한다:
+
+$$X' \approx AX$$
+
+$A$ 의 고유값 $\lambda_k$ 와 고유벡터(DMD 모드) $\boldsymbol{\phi}_k$ 가 배치 수준 증폭 동역학의 구조를 드러낸다.
+
+### SVD 기반 DMD 알고리즘
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+def pcr_batch_dmd(rfu_matrix: np.ndarray, r: int = 10) -> dict:
+    """
+    배치 내 N개 샘플의 RFU 행렬에 DMD를 적용한다.
+    Brunton & Kutz (2022, Ch.7) Algorithm 7.1 기반.
+
+    Parameters
+    ----------
+    rfu_matrix : shape (45, N) — 행=cycle, 열=샘플 (농도 순 정렬 권장)
+    r          : 절단 SVD 계수 (지배 모드 수, 특이값 감쇠 보고 plot으로 결정)
+
+    Returns
+    -------
+    modes  : DMD 모드 행렬 (45, r) — cycle별 모드 프로파일
+    eigs   : DMD 고유값 (r,) — |λ|>1: 성장 모드, |λ|<1: 감쇠 모드
+    sigmas : 전체 특이값 배열 — r 결정 참고용
+    """
+    X  = rfu_matrix[:, :-1]    # (45 × N-1)
+    Xp = rfu_matrix[:, 1:]     # (45 × N-1)
+
+    # Step 1: 경제적 SVD — X ≈ UΣV*
+    U, sigma, Vt = np.linalg.svd(X, full_matrices=False)
+    U_r  = U[:, :r]
+    S_r  = np.diag(sigma[:r])
+    Vt_r = Vt[:r, :]
+
+    # Step 2: 축소 행렬 A_tilde = U*·X'·V·Σ^{-1}
+    A_tilde = U_r.T @ Xp @ Vt_r.T @ np.linalg.inv(S_r)
+
+    # Step 3: 고유분해
+    eigs, W = np.linalg.eig(A_tilde)
+
+    # Step 4: DMD 모드 Φ = X'·V·Σ^{-1}·W
+    Phi = Xp @ Vt_r.T @ np.linalg.inv(S_r) @ W
+
+    return {"modes": Phi, "eigs": eigs, "sigmas": sigma}
+
+def plot_dmd_results(rfu_matrix: np.ndarray, r: int = 5) -> None:
+    """DMD 고유값 분포, 특이값 감쇠, 지배 모드 프로파일을 시각화한다."""
+    result = pcr_batch_dmd(rfu_matrix, r=r)
+    eigs   = result["eigs"]
+    modes  = result["modes"]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # 고유값 분포 (단위원 기준)
+    theta = np.linspace(0, 2 * np.pi, 300)
+    axes[0].plot(np.cos(theta), np.sin(theta), 'k--', alpha=0.3, label="단위원 |λ|=1")
+    sc = axes[0].scatter(eigs.real, eigs.imag, c=np.abs(eigs),
+                          cmap='RdYlGn', s=80, vmin=0.8, vmax=1.2)
+    plt.colorbar(sc, ax=axes[0], label="|λ|")
+    axes[0].set_xlim(-1.5, 1.5); axes[0].set_ylim(-1.5, 1.5)
+    axes[0].set_title("DMD 고유값 분포")
+    axes[0].set_xlabel("Re(λ)"); axes[0].set_ylabel("Im(λ)")
+    axes[0].set_aspect('equal')
+
+    # 특이값 감쇠 — 계수 r 결정
+    axes[1].semilogy(result["sigmas"][:20], 'o-')
+    axes[1].axvline(r - 1, color='red', linestyle='--', label=f"r={r}")
+    axes[1].set_title("특이값 감쇠 (r 결정 기준)")
+    axes[1].set_xlabel("모드 번호"); axes[1].set_ylabel("특이값 (log scale)")
+    axes[1].legend()
+
+    # 지배 모드 프로파일
+    cycles = np.arange(1, 46)
+    for i in range(min(r, 3)):
+        axes[2].plot(cycles, modes[:, i].real,
+                     label=f"Mode {i+1}  (|λ|={np.abs(eigs[i]):.3f})")
+    axes[2].set_title("지배 DMD 모드 (cycle 방향)")
+    axes[2].set_xlabel("Cycle"); axes[2].set_ylabel("모드 진폭")
+    axes[2].legend()
+
+    plt.tight_layout()
+    plt.show()
+```
+
+### DMD 고유값의 PCR 해석
+
+| DMD 모드 | 고유값 특성 | PCR 의미 |
+|---------|----------|---------|
+| Mode 1 | $|\lambda_1| > 1$, $\text{Im}(\lambda_1) \approx 0$ | 증폭 신호 주 모드 — 지수 성장 |
+| Mode 2 | $|\lambda_2| \approx 1$, $\text{Im}(\lambda_2) \approx 0$ | 기저선 드리프트 — 농도 변화에 무관한 공통 성분 |
+| Mode 3+ | $|\lambda_k| < 1$ | 측정 노이즈, 감쇠 성분 |
+
+주 DMD 고유값 $\lambda_1$ 과 증폭 효율의 관계:
+
+$$|\lambda_1| \approx 1 + E_{\text{batch}}$$
+
+여기서 $E_{\text{batch}}$ 는 해당 배치의 평균 증폭 효율이다. 표준 배치( $E = 1$ )에서 $|\lambda_1| \approx 2$ 가 기대값이다. 실측 $|\lambda_1| < 1.9$ 이면 배치 수준의 효율 저하를 의심한다.
+
+::: {.callout-note}
+## DMD와 4PL의 상호 보완
+
+4PL 피팅은 **단일 샘플의 비선형 곡선 형태**를 $\{A, D, C, B\}$ 4개 파라미터로 요약한다. DMD는 **배치 전체의 샘플 간 공통 동역학 구조**를 선형 연산자의 고유값으로 추출한다.
+
+실무 활용: 4PL로 개별 샘플의 Ct를 추정하고, DMD로 배치 수준의 이상(batch-wide anomaly)을 감지한다. 특정 배치에서 DMD 지배 고유값 $|\lambda_1|$ 이 이전 배치 대비 5% 이상 낮으면, 개별 샘플 이상이 아닌 **배치 전체의 증폭 효율 저하**로 판단하는 근거가 된다.
+:::
+
+::: {.callout-important}
+## r (계수) 선택 기준
+
+특이값 감쇠 plot(plot_dmd_results 중간 패널)에서 특이값이 급격히 감소하는 지점(elbow)을 r로 선택한다(Brunton & Kutz, 2022, Ch.1 — Eckart-Young 정리). PCR 배치에서는 통상 r=3~5면 전체 에너지의 95% 이상을 포착한다. r이 너무 크면 노이즈 모드까지 포함되어 고유값 해석이 복잡해진다.
+:::
+
+---
+
+## 응용 분석 요약
+
+| 분석 목적 | 모델 | 핵심 출력 | 실무 가치 |
+|----------|------|----------|---------|
+| 이상 곡선 탐지 | BSTS | 신뢰구간 이탈 cycle | 재검 여부 자동 판정 |
+| 농도 정량화 | ADL | cycle별 $\beta_k$, long-run effect | 경계값 샘플 판정 개선 |
+| 억제제 효과 | ARIMAX | 억제 시작 cycle, 억제 강도 | 품질 불합격 기준 정량화 |
+| 채널 상호작용 | VAR + IRF | 충격 반응 함수 | 비특이 증폭 vs 타겟 증폭 구분 |
+| 배치 간 보정 | ARIMAX + 점근 CI | 외부 변수 보정 RFU, CI 폭 | 런 간 비교 가능성 + 규제 제출 가능 신뢰구간 |
+| 전환 cycle 탐지 | 웨이블릿 CWT | exponential→plateau 전환 시점 | Ct 판정 구간 자동 최적화 |
+| 배치 동역학 추출 | DMD | 지배 고유값 $|\lambda_1|$, 모드 프로파일 | 배치 수준 증폭 효율 저하 조기 감지 |
+
+단순 Ct 컷오프 판정에 비해, RFU 곡선 전체 형태를 활용하는 시계열 분석은 더 풍부한 품질 정보를 추출할 수 있다. LTI 시스템 해석 프레임워크는 이 모든 분석이 동일한 이론 기반 위에 놓여 있음을 보여준다.
+
+## 관련 주제
+
+**이론 기반**
+
+- [시계열 회귀 vs 일반 회귀 — 오차항 독립성과 외부 변수 포함 모델](../../Statistics/65-time-series-regression-vs-ols.qmd)
+
+**선행 지식 (PCR 시리즈)**
+
+- [PCR 신호 처리 파이프라인 리팩토링](./pcr-signal-pipeline-refactoring.qmd)
+- [RT-PCR 4PL 모델 — 증폭 효율 계산](./pcr-4pl-amplification-efficiency.qmd)
+
+**후속 주제**
+
+- [RT-PCR 신호의 함수 자료 분석(FDA) 응용](../../Statistics/FDA/topics.qmd)
+
+**참고 교재**
+
+- Brunton & Kutz, *Data-Driven Science and Engineering* (2022) — Ch.2 (Fourier/Wavelet), Ch.7 (DMD)
+- Ljung, *System Identification: Theory for the User* (1999, 2nd ed.) — Ch.2 (LTI 시스템), Ch.9 (점근 분포)
+

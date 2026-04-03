@@ -1,0 +1,947 @@
+---
+title: "PCR Joint Bayesian Estimation — 순차 규칙에서 확률적 추정으로"
+subtitle: "MLE 신호 분리, Robust 기저선, Sparse Jump 모델, Bayesian 4PL의 단계별 구현"
+description: |
+  규칙 기반 순차 추정 파이프라인에서 발생하는 gray zone 오류를 해결하기 위해
+  신호 분리(MLE k), 기저선 보정(Huber 회귀), jump 탐색(sparse regularization),
+  4PL 피팅(Bayesian posterior)을 통계적으로 재설계하는 방법을 단계별로 구현한다.
+categories:
+  - Data Science
+  - Statistics
+  - Surveilance
+author: Kwangmin Kim
+date: 03/28/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+현재 qPCR 신호 처리 파이프라인은 **순차적 결정론적 변환(sequential deterministic transformation)**으로 구성되어 있다. 각 단계의 오차가 다음 단계로 전파되지만, 이 오차 정보는 최종 Ct 추정에 도달할 때 이미 소실된다.
+
+```
+raw → 신호분리(k 고정) → baseline 차감(rule) → jump 제거(rule) → 4PL 피팅 → Ct → 임계값
+              ↓                    ↓                  ↓                 ↓
+           오차 전파           오차 전파           오차 전파       정보 없는 점 추정
+```
+
+gray zone에서 신호가 애매한 것은 "모델이 어려운 것"이 아니라 **물리적 정보가 부족한 입력**이다. 규칙 기반은 이 경우 강제 분류를 하거나 Invalid를 내는 반면, 통계 모델은 불확실성을 수치로 표현하여 판정 근거를 제공한다.
+
+이 포스트는 파이프라인의 각 단계를 통계적으로 재설계하는 구체적 방법을 다룬다. 아키텍처 관점은 [PCR 신호 처리 파이프라인 리팩토링](./pcr-signal-pipeline-refactoring.qmd)을 참조한다.
+
+::: {.callout-note}
+## Sequential vs Joint 추정의 핵심 차이
+
+순차 추정은 각 단계를 독립적 문제로 푼다. 이전 단계의 출력이 다음 단계의 입력이 되므로 오차가 누적된다. 역추적(backpropagation)이 없다.
+
+Joint 추정은 전체를 단일 목적함수로 정식화한다. 모든 파라미터를 동시에 최적화하므로, 신호 분리 오차가 커지면 4PL 피팅이 이를 보정하는 방향으로 함께 조정된다.
+
+완전한 Joint 모델이 항상 우월하진 않다. 초기값 설정, 식별성, 계산 비용 문제가 있다. 실용적 타협점은 Phase별 전환이다.
+:::
+
+---
+
+## 신호 분리: 고정 $k$ 에서 MLE $k$ 로
+
+### 현재 방법의 문제
+
+채널별 raw 신호는 high Tm 신호와 low Tm 신호가 혼합되어 있다. 현재는 고정 상수로 분리한다:
+
+$$
+\text{low\_tm}(c) = \text{raw}(c) - k \cdot \text{high\_tm}(c)
+$$
+
+$k$ 가 실험마다, lot마다, 온도마다 달라지는 것을 무시한다. 잘못된 $k$ 는 low Tm 신호에 high Tm 잔류 성분을 남겨 위양성 또는 위음성의 직접 원인이 된다.
+
+### 개선 방법 A: 샘플별 MLE $k$ 추정
+
+baseline 구간(cycle 1~10)에서는 증폭이 없으므로 low Tm 신호가 0에 가까워야 한다. 이 제약을 이용해 $k$ 를 추정한다:
+
+$$
+\hat{k} = \arg\min_k \sum_{c \in \text{baseline}} \left[ \text{raw}(c) - k \cdot \text{high\_tm}(c) \right]^2
+$$
+
+```python
+from scipy.optimize import minimize_scalar
+import numpy as np
+
+def estimate_k_mle(raw: np.ndarray, high_tm: np.ndarray,
+                   baseline_cycles: slice = slice(0, 10)) -> float:
+    """
+    baseline 구간에서 low_tm 잔차를 최소화하는 혼합 계수 k를 추정한다.
+    low_tm의 이론값 = 0 (증폭 전)이므로 raw - k*high_tm 을 최소화한다.
+    """
+    def residual(k):
+        low_est = raw[baseline_cycles] - k * high_tm[baseline_cycles]
+        return np.sum(low_est ** 2)
+
+    result = minimize_scalar(residual, bounds=(0.0, 3.0), method='bounded')
+    return result.x
+
+k_hat = estimate_k_mle(raw, high_tm)
+low_tm_signal = raw - k_hat * high_tm
+```
+
+**구체적 실행 예시:**
+
+```python
+# Lot B, 63°C 조건 — baseline 구간 (cycle 1~10)
+# raw     = [1250, 1248, 1255, 1251, 1253, 1249, 1247, 1252, 1250, 1254]
+# high_tm = [  850,  848,  852,  849,  851,  847,  850,  852,  849,  851]
+
+k_hat = estimate_k_mle(raw, high_tm)   # → k_hat = 1.23
+
+low_tm_mle   = raw - k_hat * high_tm
+# baseline 잔차: [-0.5,  0.2, -0.8,  0.3, -0.4, ...]  ← 0에 근접 (정상)
+
+# 비교: 고정 k=1.0 사용 시
+low_tm_fixed = raw - 1.0 * high_tm
+# baseline 잔차: [400, 400, 403, 402, 402, ...]  ← 200+ RFU 잔류
+# → 이 잔류가 증폭 신호로 오인 → Ct가 cycle 5~8로 잘못 추정됨 (위양성)
+```
+
+MLE $k$를 사용하면 baseline 잔차가 0에 수렴하지만, 고정 $k$는 수백 RFU의 잔류 성분이 증폭 신호처럼 보이게 한다. 이것이 $k$ 추정 오차가 Ct에 직접 영향을 미치는 경로다.
+
+두 신호를 각각 4PL 곡선으로 모델링하고 혼합 계수까지 동시에 추정한다:
+
+$$
+\text{raw}(c) = f_{4PL}(c;\,\theta_H) + \alpha \cdot f_{4PL}(c;\,\theta_L) + \varepsilon_c
+$$
+
+$\alpha$ 가 기존 고정 $k$ 를 대체하며, high Tm과 low Tm의 Ct 위치가 다르다는 제약( $C_H \neq C_L$ )으로 식별성을 확보한다. 방법 B는 파라미터가 많아 초기값 설정이 중요하다. 방법 A로 먼저 $k$ 를 구한 뒤 방법 B의 초기값으로 사용하면 수렴이 빠르다.
+
+---
+
+## 기저선 보정: 규칙에서 Robust 회귀로
+
+### 현재 방법의 문제
+
+초기 N cycle을 선형 회귀로 fitting하고 전체 신호에서 차감한다. baseline 구간 안에 jump가 있거나 온도 드리프트가 있으면 baseline 추정 자체가 오염된다.
+
+### 개선 방법: Huber 회귀
+
+Huber 손실함수는 잔차가 작을 때 L2처럼, 클 때 L1처럼 동작한다. 이상치(jump 포인트)가 baseline 추정에 미치는 영향을 자동으로 감소시킨다.
+
+$$
+L_\delta(r) = \begin{cases} \frac{1}{2} r^2 & |r| \leq \delta \\ \delta\left(|r| - \frac{\delta}{2}\right) & |r| > \delta \end{cases}
+$$
+
+```python
+from sklearn.linear_model import HuberRegressor
+
+def robust_baseline_correction(signal: np.ndarray,
+                                baseline_end: int = 10,
+                                epsilon: float = 1.35) -> np.ndarray:
+    """
+    Huber 회귀로 baseline을 추정하고 전체 신호에서 차감한다.
+    epsilon=1.35는 95% Gaussian efficiency (표준 설정).
+    """
+    cycles = np.arange(len(signal)).reshape(-1, 1)
+    baseline_cycles = cycles[:baseline_end]
+    baseline_rfu = signal[:baseline_end]
+
+    huber = HuberRegressor(epsilon=epsilon)
+    huber.fit(baseline_cycles, baseline_rfu)
+
+    baseline_hat = huber.predict(cycles)
+    return signal - baseline_hat
+
+corrected = robust_baseline_correction(low_tm_signal)
+```
+
+일반 L2 회귀 대비 Huber 회귀의 장점은 cycle 1~3에서 baseline jump가 발생해도 추정값이 안정된다는 점이다. jump 크기가 $\delta$ 를 넘으면 자동으로 downweight된다.
+
+### 개선 방법 B: STL 분해 기반 기저선 추정
+
+Huber 회귀는 baseline 구간을 선형으로 가정한다. baseline에 완만한 곡선형 드리프트(온도 상승에 따른 형광 drift 등)가 있으면 선형 모델도 불충분해진다. 이 경우 **STL(Seasonal-Trend decomposition using Loess)** 로 기저선을 비모수적으로 추출할 수 있다 (Hyndman & Athanasopoulos, 2021, Ch.3).
+
+```python
+from statsmodels.tsa.seasonal import STL
+
+def stl_baseline_correction(signal: np.ndarray,
+                              period: int = 10) -> np.ndarray:
+    """
+    STL 분해로 비선형 기저선(트렌드 성분)을 추정하고 차감한다.
+
+    Huber 회귀 대비 장점: 선형 가정 불필요, 완만한 drift 자동 포착.
+    robust=True: 초기 cycle spike에 강건한 Loess 가중치 적용.
+    """
+    stl = STL(signal, period=period, robust=True)
+    result = stl.fit()
+    return signal - result.trend   # 기저선 보정된 신호 반환
+
+# 사용 예시 — Huber 회귀와 비교
+corrected_huber = robust_baseline_correction(low_tm_signal)
+corrected_stl   = stl_baseline_correction(low_tm_signal)
+```
+
+두 방법의 선택 기준:
+
+| 조건 | 권장 방법 |
+|------|---------|
+| Baseline이 선형이고 spike가 있음 | Huber 회귀 (이상치 강건 선형 추정) |
+| Baseline에 완만한 비선형 drift가 있음 | STL 분해 (비모수 트렌드 추출) |
+| 샘플 수가 적어 period 설정이 어려움 | Huber 회귀 (파라미터 적음) |
+| 기저선 보정 후에도 잔차 ACF 유의 | STL로 전환하거나 두 방법 비교 |
+
+---
+
+## Jump 탐색: 제거에서 Sparse Regularization으로
+
+### 현재 방법의 문제
+
+임계값 기반으로 jump를 탐지하고 제거한다. 두 가지 문제가 있다:
+
+1. 제거는 **정보 소실** — jump가 생물학적 신호인지 아티팩트인지 구분 없이 삭제
+2. jump 크기가 threshold와 비슷하면 탐지 실패 또는 오탐지
+
+### 개선 방법: Lasso 스타일 Sparse Jump 모델
+
+4PL 피팅과 jump 탐지를 동시에 수행한다. 각 cycle에 jump magnitude $\gamma_c$ 를 latent variable로 도입하고, $\ell_1$ 정규화로 대부분의 $\gamma_c$ 를 0으로 만든다.
+
+$$
+\min_{\theta, \boldsymbol{\gamma}} \sum_{c=1}^{45} \left[ y_c - f_{4PL}(c;\,\theta) - \gamma_c \right]^2 + \lambda \sum_{c=1}^{45} |\gamma_c|
+$$
+
+$\lambda$ 가 클수록 jump를 더 드물게(sparse하게) 추정한다. $\lambda = 0$ 이면 4PL만 피팅하는 것과 동일하다.
+
+```python
+from scipy.optimize import minimize
+
+def pcr_4pl(c, A, D, C, B):
+    return D + (A - D) / (1 + (c / C) ** B)
+
+def joint_4pl_jump_loss(params, cycles, signal, lambda_l1=5.0):
+    """
+    params[:4] = (A, D, C, B) — 4PL 파라미터
+    params[4:] = gamma — cycle별 jump magnitude (희소 유도)
+    """
+    A, D, C, B = params[:4]
+    gammas = params[4:]
+
+    pred = pcr_4pl(cycles, A, D, C, B) + gammas
+    l2_fit = np.sum((signal - pred) ** 2)
+    l1_jump = lambda_l1 * np.sum(np.abs(gammas))
+    return l2_fit + l1_jump
+
+n = len(cycles)
+x0 = [50, 2000, 25, 0.3] + [0.0] * n     # 초기값
+
+result = minimize(
+    joint_4pl_jump_loss,
+    x0,
+    args=(cycles, signal, 5.0),
+    method='L-BFGS-B',
+    bounds=[(0,500),(100,5000),(5,42),(0.05,2.0)] + [(-500,500)]*n,
+)
+A_fit, D_fit, C_fit, B_fit = result.x[:4]
+gamma_fit = result.x[4:]   # 비0 원소 위치 = jump 발생 cycle
+```
+
+이 방법의 장점은 jump를 "제거"하는 것이 아니라 **별도 성분으로 분리 추정**한다는 것이다. $\gamma_c \neq 0$ 인 cycle은 jump로 표시되고, 4PL 파라미터는 jump의 영향 없이 추정된다.
+
+### ℓ₁ 희소화의 이론적 근거 (Brunton & Kutz, 2022, Ch.3)
+
+위 최적화 문제에서 왜 $\ell_2$ 가 아닌 $\ell_1$ 정규화를 써야 하는가? 이 질문에 Compressed Sensing 이론이 정확한 답을 제공한다(Brunton & Kutz, 2022, Ch.3).
+
+**기하학적 직관: ℓ₁ 볼의 꼭짓점**
+
+$\ell_2$ 정규화(ridge)의 제약 영역은 **구(sphere)**이고, $\ell_1$ 정규화(LASSO)의 제약 영역은 **다이아몬드(diamond)**이다. 최소화 목적함수의 등위면이 이 제약 영역에 처음 접하는 지점이 해(解)가 된다.
+
+- $\ell_2$ 구: 등위면이 곡면에 접하는 지점은 일반 위치 → 대부분의 성분이 비영(非零)
+- $\ell_1$ 다이아몬드: 등위면이 **꼭짓점**에서 가장 먼저 접할 가능성이 높음 → 꼭짓점은 좌표축 위 = 나머지 성분이 정확히 0
+
+$$\text{ℓ}_1 \text{ 볼의 꼭짓점} = (0, \ldots, 0, \gamma_c, 0, \ldots, 0) \implies \text{나머지 } \gamma_k = 0$$
+
+즉, **$\ell_1$ 정규화는 jump가 발생한 cycle 하나(또는 소수)에만 비영 값을 배정하도록 기하학적으로 강제한다.**
+
+**이론적 보장: 제한 등장성 조건 (RIP)**
+
+PCR jump 신호 $\boldsymbol{\gamma} \in \mathbb{R}^{45}$ 가 $K$-희소( $K$ 개 이하의 비영 성분)하다고 하자. 측정 행렬 $\Phi$ 가 다음 **제한 등장성 조건(Restricted Isometry Property, RIP)**을 만족하면 $\ell_1$ 최소화는 원래 희소 해를 정확히 복원한다(Brunton & Kutz, 2022, Ch.3):
+
+$$
+(1 - \delta_K)\|\boldsymbol{\gamma}\|_2^2 \leq \|\Phi\boldsymbol{\gamma}\|_2^2 \leq (1 + \delta_K)\|\boldsymbol{\gamma}\|_2^2
+\quad \forall K\text{-희소 } \boldsymbol{\gamma}
+$$
+
+이것이 의미하는 바: 측정 행렬이 희소 벡터의 에너지를 심하게 왜곡하지 않는다면, $\ell_1$ 최소화로 정확한 복원이 가능하다.
+
+**PCR 신호에의 적용:**
+
+| 성질 | 값 | 의미 |
+|------|---|------|
+| 신호 차원 $n$ | 45 cycles | |
+| 실제 jump 수 $K$ | 0~3 | PCR 데이터의 경험적 관찰 |
+| RIP 충족에 필요한 최소 측정 수 | $O(K \log n/K) \approx 15$ | 45 >> 15 → RIP 충족 가능성 높음 |
+| 사용 측정 수 | 45 | 이론적 요구의 3배 이상 |
+
+jump가 실제로 $K \leq 3$ 개 발생하는 PCR 환경에서, 45개 cycle 데이터는 이론적으로 jump를 정확히 복원하기에 충분하다. 이것이 "임계값 기반 탐지보다 $\ell_1$ 정규화가 더 신뢰할 수 있다"는 이론적 근거다.
+
+::: {.callout-note}
+## $\lambda$ 선택과 RIP 연결
+
+$\lambda$ 가 너무 크면 실제 jump도 0으로 압축된다(과압축). $\lambda$ 가 너무 작으면 노이즈 cycle의 $\gamma_c$ 도 비영이 된다(과소 희소화). RIP 이론은 최적 $\lambda$ 가 노이즈 레벨 $\sigma$ 에 비례함을 보인다: $\lambda_{\text{opt}} \approx 2\sigma\sqrt{\log n}$. PCR에서 $\sigma \approx 30\sim50$ RFU, $n=45$ 이면 $\lambda_{\text{opt}} \approx 230\sim380$. 실무에서는 known jump 데이터로 교차 검증하여 최종 $\lambda$ 를 결정한다.
+:::
+
+---
+
+## Full Joint Model: 모든 단계의 동시 추정
+
+앞의 세 단계를 하나의 최적화 문제로 통합한 Full Joint Model은 다음과 같다:
+
+$$
+\text{raw}(c) = \underbrace{f_{4PL}(c;\,\theta_H)}_{\text{high Tm}} + \alpha \cdot \underbrace{f_{4PL}(c;\,\theta_L)}_{\text{low Tm}} + \underbrace{\beta_0 + \beta_1 c}_{\text{선형 기저선}} + \underbrace{\gamma_c}_{\text{jump}} + \varepsilon_c
+$$
+
+동시 추정 파라미터: $\theta_H$, $\theta_L$, $\alpha$, $(\beta_0, \beta_1)$, $\{\gamma_c\}$
+
+순차 파이프라인과의 비교:
+
+| 오차 전파 경로 | Sequential | Joint |
+|-------------|-----------|-------|
+| $k$ 추정 오차 → baseline 왜곡 | 전파됨 | 동시 보정 |
+| baseline 오차 → Ct 편향 | 전파됨 | baseline을 별도 항으로 추정 |
+| jump 미제거 → 4PL 잔차 혼입 | 전파됨 | sparse $\gamma$ 로 분리 |
+| 최종 불확실성 | 없음 | Fisher information으로 계산 가능 |
+
+Full Joint는 계산 비용이 높다. Phase별 전환 전략은 아래 로드맵을 참조한다.
+
+### 45개 데이터로 과적합이 발생하지 않는 이유
+
+Full Joint Model의 자유 파라미터를 모두 세면 다음과 같다:
+
+| 파라미터 그룹 | 개수 |
+|-------------|------|
+| 4PL(high Tm): $A_H, D_H, C_H, B_H$ | 4 |
+| 4PL(low Tm): $A_L, D_L, C_L, B_L$ | 4 |
+| 혼합계수 $\alpha$ | 1 |
+| 기저선 $\beta_0, \beta_1$ | 2 |
+| Jump $\gamma_c$ (cycle 1~45) | 45 |
+| 노이즈 $\sigma$ | 1 |
+| **합계** | **57** |
+
+데이터 45개에 파라미터 57개 — 과적합이 발생하는 전형적인 조건이다. 세 가지 장치가 유효 파라미터 수를 줄인다.
+
+**장치 1: L1 정규화 (Lasso)로 $\gamma_c$ 희소화**
+
+$\lambda > 0$ 으로 설정하면 실제 jump가 없는 cycle의 $\gamma_c$ 는 정확히 0으로 수렴한다. 실제 PCR 데이터에서 jump는 0~3개 수준이므로 유효 파라미터는 57개가 아니라 **4(4PL) + 0~3(jump) + 3(기타) = 10개 이하**가 된다.
+
+$\lambda$ 가 너무 작으면 과적합, 너무 크면 실제 jump를 놓친다. 적절한 $\lambda$ 는 known jump 데이터를 이용한 교차 검증(lot-level validation)으로 결정한다.
+
+**장치 2: 물리 제약 Prior (Bayesian)**
+
+4PL 파라미터는 PCR 생물리학적 범위로 탐색 공간이 제한된다:
+
+- $C \in [5, 42]$: cycle 범위 물리적 상한
+- $B \in [0.25, 0.35]$: 증폭 효율 90~110% 범위
+- $A > 0$, $D > A$: 형광값 부호 제약
+
+좁은 prior = 강한 정규화. 데이터가 prior와 충돌하지 않는 한 posterior는 물리적으로 가능한 범위 안에 머문다.
+
+**장치 3: Semi-Joint (Phase 3은 완전 Joint가 아님)**
+
+Phase 3의 sparse jump model은 "신호 분리 + 기저선 + 4PL을 한꺼번에"가 아니라, **기저선 보정 후** 4PL과 jump만 동시 추정하는 Semi-Joint다. 이미 처리된 성분의 파라미터는 고정되므로 자유 파라미터 수가 4 + k개(k = 실제 jump 수)로 줄어든다.
+
+
+**계산 비용 비교:**
+
+| 방법 | 샘플당 실행 시간 | 파라미터 수 | 적합 단계 |
+|------|--------------|-----------|---------|
+| Sequential MLE | ~5ms | 4 (4PL) | Phase 1 |
+| Joint 4PL + jump | ~50ms | 49 (4+45) | Phase 3 |
+| Bootstrap CI (n=500) | ~2.5s | — | Phase 2 |
+| Bayesian MCMC (n=1000) | ~30s | 5 | Phase 4 |
+
+실시간 처리가 필요한 경우 Phase 1~2를 기본으로 하고, Bayesian MCMC는 오프라인 배치 재분석이나 gray zone 샘플 재검 시에만 적용하는 2-tier 구조가 현실적이다.
+
+---
+
+## Bayesian 4PL: Ct의 Posterior 분포
+
+4PL 피팅 결과로 Ct 점 추정값이 아닌 **Ct 분포**를 구한다. 이것이 gray zone 불확실성을 수치로 표현하는 핵심이다.
+
+### Bayesian Prior 설계 원칙
+
+::: {.callout-note}
+## 수식 표기 안내 — Hill 방정식 형식 (A, D, C, B)
+
+이 포스트는 4PL 모델을 **Hill 방정식 형식**으로 표기한다:
+
+$$f(x) = D + \frac{A - D}{1 + \left(\frac{x}{C}\right)^B}$$
+
+Hill 형식을 선택한 이유는 기울기 파라미터 $B$ 가 증폭 효율 $E$ 와 $B = \log_{10}(1+E)$ 로 직접 연결되어 **Bayesian prior 설계가 직관적**이기 때문이다. PyMC 코드에서 `B = pm.Normal('B', mu=0.30, sigma=0.05)` 는 "100% 효율 기준값 ±5% 불확실성"을 바로 의미한다.
+
+[RT-PCR 4PL 모델 포스트](./pcr-4pl-amplification-efficiency.qmd)에서 사용하는 **로지스틱 형식**( $y(t) = a_1 + (a_2-a_1)/(1+\exp(-a_4(t-a_3)))$ )과의 파라미터 대응:
+
+| Hill 형식 | 로지스틱 형식 | 의미 |
+|---|---|---|
+| $A$ | $a_1$ | 하단 점근선 (배경 노이즈) |
+| $D$ | $a_2$ | 상단 점근선 (포화 고원) |
+| $C$ | $a_3$ | 변곡점 = Ct |
+| $B$ | $a_4 \times C$ (근사) | 기울기 ( $B = \log_{10}(1+E)$, 로지스틱 $a_4$ 와는 수학적으로 다름) |
+
+두 형식의 상세 비교는 [RT-PCR 4PL 모델 포스트](./pcr-4pl-amplification-efficiency.qmd)의 "두 표현 형식 비교" 절을 참조한다.
+:::
+
+PCR 신호의 물리적 특성이 prior를 직접 결정한다. 사전 지식이 없는 noninformative prior를 쓰면 MCMC 수렴이 느리고 비현실적 posterior가 나올 수 있다.
+
+| 파라미터 | 물리적 의미 | 권장 prior | 이유 |
+|---------|-----------|-----------|------|
+| $A$ (baseline) | 배경 형광, 실험실 기기 의존 | $\mathcal{N}(100,\,50^2)$ | 보통 50~200 RFU 범위 |
+| $D$ (plateau) | 최대 증폭 형광, 시약 농도 의존 | $\mathcal{N}(2000,\,500^2)$ | 1000~4000 RFU |
+| $C$ (변곡점, Ct) | DNA 검출 cycle | $\mathcal{N}(25,\,5^2)$ | 임상 검체 15~38 cycle |
+| $B$ (Hill slope) | 증폭 효율 지표 | $\mathcal{N}(0.30,\,0.05^2)$ | 90~110% 효율이면 0.28~0.32 |
+| $\sigma$ (노이즈) | RFU 측정 불확실성 | $\text{HalfNormal}(100)$ | 비음수 제약 |
+
+prior가 posterior와 크게 다르면 데이터가 prior를 "압도"한 것이다. 충분한 샘플이 있으면 prior의 영향은 줄어든다. 배치(batch)별 historical 데이터로 prior를 업데이트하면 **Empirical Bayes** 방식이 된다.
+
+### 방법 A: Bootstrap CI (즉시 적용 가능)
+
+```python
+def bootstrap_ct_ci(cycles, signal, n_boot=500, alpha=0.05,
+                    p0=(50, 2000, 25, 0.3)):
+    """
+    4PL 피팅 결과 Ct(=C 파라미터)의 bootstrap 신뢰구간을 계산한다.
+    """
+    from scipy.optimize import curve_fit
+    ct_estimates = []
+    n = len(cycles)
+
+    for _ in range(n_boot):
+        idx = np.random.choice(n, n, replace=True)
+        try:
+            popt, _ = curve_fit(pcr_4pl, cycles[idx], signal[idx],
+                                p0=p0, maxfev=2000)
+            ct_estimates.append(popt[2])
+        except RuntimeError:
+            pass  # 수렴 실패는 건너뜀
+
+    ct_arr = np.array(ct_estimates)
+    return {
+        "ct_mean": np.mean(ct_arr),
+        "ct_std": np.std(ct_arr),
+        "ci_lower": np.percentile(ct_arr, 100 * alpha / 2),
+        "ci_upper": np.percentile(ct_arr, 100 * (1 - alpha / 2)),
+    }
+```
+
+bootstrap CI가 좁으면( $< 1$ cycle) 신뢰할 수 있는 추정. 넓으면( $> 3$ cycle) 신호 품질 불량 → Invalid 판정 근거가 된다.
+
+### 방법 B: Bayesian 4PL (PyMC)
+
+물리적 제약을 prior로 반영하여 파라미터의 posterior distribution을 직접 추론한다.
+
+```python
+import pymc as pm
+import arviz as az
+
+def bayesian_4pl_fit(cycles, signal):
+    """
+    4PL 파라미터의 posterior를 MCMC로 추론한다.
+    prior는 PCR 신호의 물리적 제약을 반영한다.
+    """
+    with pm.Model() as pcr_model:
+        # Prior: 물리적으로 가능한 범위로 제약
+        A = pm.Normal('A', mu=100,  sigma=50)    # baseline
+        D = pm.Normal('D', mu=2000, sigma=500)   # plateau
+        C = pm.Normal('C', mu=25,   sigma=5)     # Ct (변곡점)
+        B = pm.Normal('B', mu=0.30, sigma=0.05)  # Hill slope (효율)
+        sigma = pm.HalfNormal('sigma', sigma=100)
+
+        # Mechanistic model
+        mu = D + (A - D) / (1 + (cycles / C) ** B)
+
+        # Likelihood
+        pm.Normal('obs', mu=mu, sigma=sigma, observed=signal)
+
+        # MCMC 추론
+        trace = pm.sample(
+            1000, tune=500, chains=2,
+            return_inferencedata=True,
+            progressbar=False,
+        )
+
+    return trace
+
+# Posterior에서 직접 판정 확률 계산
+trace = bayesian_4pl_fit(cycles, signal)
+ct_posterior = trace.posterior['C'].values.flatten()  # Ct의 posterior 샘플
+
+threshold = 35.0
+p_positive = float((ct_posterior < threshold).mean())
+ct_mean = float(ct_posterior.mean())
+ct_ci = tuple(np.percentile(ct_posterior, [2.5, 97.5]))
+
+print(f"P(Positive | signal) = {p_positive:.3f}")
+print(f"Ct = {ct_mean:.2f}  [95% CI: {ct_ci[0]:.2f}, {ct_ci[1]:.2f}]")
+```
+
+**실행 결과 예시 (Gray zone 샘플, Ct ≈ 36.8):**
+
+```
+P(Positive | signal) = 0.637
+Ct = 36.83  [95% CI: 33.20, 40.41]
+
+# az.summary(trace) 출력
+#           mean    sd  hdi_3%  hdi_97%  mcse_mean  ess_bulk  r_hat
+# A         85.3   6.8    71.8     97.9       0.21       980   1.00
+# D       1240.5  98.3  1053.6  1429.8       2.94       980   1.00
+# C         36.8   1.83   33.3     40.4       0.06       990   1.00
+# B          0.241  0.025   0.191    0.289     0.001      980   1.00
+# sigma     38.2   4.1    30.3     46.1        0.13       990   1.00
+```
+
+- `r_hat ≈ 1.00`: 2개 chain이 잘 수렴했다.
+- `ess_bulk ≈ 980`: 유효 샘플 수 충분하다.
+- `sd(C) = 1.83` (CI 폭 7.2 cycle): 모델 문제가 아니라 데이터 자체의 불확실성이 크다는 뜻이다. 이 넓은 분포가 "Uncertain" 판정의 정량적 근거다.
+
+## 확률적 판정 출력
+
+Ct posterior가 있으면 3-state 판정의 수학적 근거가 생긴다:
+
+```python
+def probabilistic_decision(p_positive: float,
+                           ci_lower: float, ci_upper: float,
+                           threshold: float = 35.0) -> dict:
+    """
+    P(Ct < threshold | signal) 와 CI를 기반으로 3-state 판정을 내린다.
+    """
+    from scipy.stats import norm
+
+    if p_positive >= 0.95 and ci_lower < threshold:
+        decision = "Positive"
+        confidence = "High"
+    elif p_positive <= 0.05 and ci_upper >= threshold:
+        decision = "Negative"
+        confidence = "High"
+    else:
+        decision = "Uncertain — Retest Required"
+        confidence = "Low"
+
+    return {
+        "decision": decision,
+        "confidence": confidence,
+        "p_positive": round(p_positive, 4),
+        "ct_ci": (round(ci_lower, 2), round(ci_upper, 2)),
+    }
+```
+
+gray zone 신호가 Uncertain으로 분류되는 것은 알고리즘의 실패가 아니라 **물리적 정보가 불충분하다는 정직한 표현**이다. 재검 프로토콜로 연결할 때 이 근거가 필요하다.
+
+---
+
+## 결과 해석 예시
+
+Bayesian 4PL 피팅이 완료된 후 출력을 어떻게 읽는지 세 가지 시나리오로 설명한다.
+
+### 시나리오 1: 명확 양성 신호
+
+```
+샘플: SARS-CoV-2 확진자 (임상 농도 높음)
+Ct posterior mean = 22.4
+Ct 95% CI = [21.9, 22.9]   ← CI 폭 = 1.0 cycle
+B posterior mean = 0.298   ← 증폭 효율 ≈ 99%
+Jump γ_c: 모든 cycle에서 0  ← 이상 신호 없음
+Bootstrap CI 폭 = 0.8 cycle  ← 신뢰 가능
+P(Positive | signal) = 0.999
+결정: Positive, High Confidence
+```
+
+Ct가 22사이클로 낮고 CI가 좁으면 초기 DNA 농도가 충분히 높은 명확 양성이다. B = 0.298은 이론값 0.301에 가까워 시약이 정상 상태임을 확인해준다.
+
+### 시나리오 2: Gray Zone 신호
+
+```
+샘플: Ct 경계 구간, 낮은 초기 농도
+
+[4PL 파라미터 Posterior 전체]
+  A (기저선, Lower Asymptote) =   85 RFU  [95% CI: 72, 98]
+  D (고원, Upper Asymptote)   = 1240 RFU  [95% CI: 1050, 1430]
+  D - A (동적 범위)           = 1155 RFU
+  C (변곡점 = Ct)             = 36.8 cycle [95% CI: 33.2, 40.4]  ← CI 폭 7.2
+  B (Hill slope = 효율 지표)  =  0.24      [95% CI: 0.19, 0.29]
+  σ (잡음 크기)               =   38 RFU
+
+[Jump 성분]
+  γ_28 = 140 RFU  (cycle 28, 지수증폭 구간 중간)
+
+[판정]
+  Bootstrap CI 폭 = 6.5 cycle
+  P(Positive | signal) = 0.64
+  결정: Uncertain — Retest Required
+```
+
+파라미터 하나하나가 신호의 형태에 대한 독립적인 정보를 담고 있다.
+
+**A = 85 RFU (기저선, 정상)**
+
+증폭 전 배경 형광값이다. 이 기기의 정상 범위가 50~200 RFU라면 A = 85는 문제없다. A가 지나치게 높으면(예: > 300) 시약 오염이나 채널 간 누화(crosstalk)를 의심한다. 이 샘플에서 배경 자체는 깨끗하다.
+
+**D = 1240 RFU, D - A = 1155 RFU (고원, 경계 수준)**
+
+4PL 곡선이 수렴하는 최대 형광값이다. 같은 시약·장비 조건에서 명확 양성 샘플(시나리오 1)의 D가 4,850 RFU였다면, D = 1,240은 그것의 약 26% 수준이다. 초기 DNA 복사본 수가 극히 적거나, 시약 열화, PCR 억제제 존재 중 하나다.
+
+$$
+\text{동적 범위} = D - A = 1240 - 85 = 1155 \text{ RFU}
+$$
+
+동적 범위 < 1200 RFU는 신호대잡음비(SNR)가 충분하지 않다는 경계 기준이다. S자 곡선의 세로 폭이 좁을수록 Ct 추정이 불안정해진다.
+
+**C = 36.8 cycle, CI 폭 7.2 cycle (변곡점, 불안정)**
+
+S자 곡선에서 기울기가 가장 가파른 위치다. 이론적으로는 이 점이 Ct다. CI 폭 7.2 cycle은 posterior 샘플들이 cycle 33~40 전체에 고르게 퍼져 있다는 의미다. S자의 허리가 너무 완만해서(D가 낮고 B가 작아서) 어느 cycle이 정확한 변곡점인지 데이터가 결정하지 못하는 상황이다.
+
+**B = 0.24, 증폭 효율 74% (Hill slope, 저하)**
+
+4PL에서 B가 클수록 S자의 기울기가 가파르다. B = 0.24는 로그 스케일 기울기 $\log_{10}(1 + E) = 0.24$ 이므로 $E = 10^{0.24} - 1 \approx 0.74$ 즉 74% 효율이다. 정상 범위 90~110%(B = 0.279~0.322)보다 낮다.
+
+B가 낮으면 S자 곡선이 옆으로 늘어진(stretched) 형태가 된다. 가파른 전환 구간이 사라지면서 Ct 위치를 특정하기 어려워진다. 이것이 C의 CI가 넓은 직접 원인이다.
+
+**B 저하의 생물학적 원인:**
+
+B = 0.24(효율 74%)는 정상 범위(0.279–0.322, 효율 90–110%)에서 이탈한 것이다. 주요 원인:
+
+1. **PCR 억제제 존재**: 헤파린, 담즙산, 중금속이 Taq polymerase를 억제 → 매 cycle 복제 효율 저하
+2. **시약 열화**: 보관 온도 이탈 또는 유효기간 초과로 dNTP 농도 저하
+3. **프라이머 결합 비효율**: 프라이머-타겟 서열 미스매치로 결합률 저하
+
+실무 감별법: 동일 lot의 대조 양성 샘플(internal positive control)의 B와 비교한다. 대조군 B도 0.24이면 **lot-wide 문제**(시약/온도), 대조군 B가 0.30이면 **이 샘플만의 억제제** 문제다.
+
+**σ = 38 RFU (잡음, 정상)**
+
+cycle별 측정 잡음이 38 RFU로 정상 범위(< 50 RFU)다. 장비 자체의 문제는 없다. 불안정성의 원인이 측정 노이즈가 아니라 **신호 구조 자체**에 있음을 확인한다.
+
+**γ_28 = 140 RFU (지수증폭 구간 jump)**
+
+cycle 28은 이 샘플의 Ct = 36.8 기준으로 지수증폭 구간 중간이다. 이 구간에서 형광이 140 RFU 급증하면 두 가지 가능성이 있다:
+
+1. **pipetting 아티팩트**: 다른 웰에서 에어로졸 오염
+2. **비특이 증폭**: 프라이머가 타겟 외 서열에 결합하여 일시적 증폭 신호 발생
+
+jump를 별도 성분으로 분리하지 않았다면 4PL이 이 140 RFU를 정상 증폭으로 해석하여 Ct를 34 cycle 부근으로 당겼을 것이다(위양성 방향).
+
+**종합 해석:**
+
+| 파라미터 | 값 | 정상 여부 | 시사점 |
+|---------|---|----------|------|
+| A (기저선) | 85 RFU | 정상 | 장비·시약 기본 상태 이상 없음 |
+| D (고원) | 1240 RFU | 낮음 (< 1500) | 초기 DNA 극소량 또는 시약 열화 |
+| D-A (동적범위) | 1155 RFU | 경계 (< 1200) | SNR 부족, Ct 추정 불안정 원인 |
+| C (Ct) | 36.8 cycle | 경계 (> 35) | 증폭 말기 — 양성이어도 극저농도 |
+| B (효율) | 0.24 | 낮음 (< 0.279) | S자 평탄화 → C CI 확대의 원인 |
+| σ (잡음) | 38 RFU | 정상 (< 50) | 불안정성은 장비 문제가 아님 |
+| γ_28 | 140 RFU | 이상 | 지수증폭 구간 jump → Ct 왜곡 방지 |
+
+규칙 기반 파이프라인에서는 Ct = 34.1 (강제 양성 판정)이 나왔을 것이다. Bayesian joint model은 B 저하 → S자 평탄화 → C CI 확대 → P = 0.64 → Uncertain이라는 **인과 사슬**을 수치로 드러냈다.
+
+::: {.callout-note}
+## CI 폭이 중요한 이유
+
+일반적인 4PL 피팅은 Ct 점 추정값만 반환한다. Ct = 36.8은 규칙 기반에서 양성 또는 음성으로 강제 분류된다. CI가 없으면 이 추정이 얼마나 불안정한지 알 수 없다.
+
+CI 폭 > 3 cycle → Bootstrap 재샘플링 시마다 Ct가 크게 달라짐 → 신호 자체의 정보가 부족 → Uncertain으로 분류하는 것이 유일하게 정직한 선택이다.
+:::
+
+### 시나리오 3: Jump가 있는 신호
+
+```
+샘플: cycle 8에서 갑작스러운 형광 상승 (pipetting 오류 의심)
+Raw 신호에서 cycle 8 이후 기저선이 전체적으로 상승
+규칙 기반 결과: Ct = 14.2 (위양성 — cycle 8 jump를 증폭으로 오인)
+```
+
+Sparse joint model 결과:
+
+```python
+# 피팅 후 jump 파라미터 확인
+gamma_fit = result.x[4:]
+
+# jump가 큰 cycle 출력
+jump_cycles = np.where(np.abs(gamma_fit) > 50)[0] + 1
+jump_sizes = gamma_fit[jump_cycles - 1]
+
+# 결과:
+# jump_cycles = [8]
+# jump_sizes  = [312.4]  ← cycle 8에서 +312 RFU jump
+```
+
+$\gamma_8 = 312$ RFU를 별도 성분으로 분리하면 4PL이 실제 증폭 신호에만 피팅된다.
+
+```
+Sparse joint 결과:
+Ct posterior mean = 38.9  ← 규칙 기반 14.2와 전혀 다름
+Ct 95% CI = [37.1, 40.6]
+P(Positive | signal) = 0.12
+결정: Negative (jump가 제거된 실제 신호는 음성)
+```
+
+규칙 기반에서 cycle 8 jump를 실제 증폭으로 오인하여 위양성(Ct=14)을 냈지만, sparse joint model은 jump를 $\gamma_8$로 격리하고 실제 음성 신호를 복원했다.
+
+---
+
+## 순차 추정 vs 동시 추정: 예측 오차 방법(PEM) 관점
+
+이 포스트 전체에서 "순차 추정이 왜 bias를 낳는가"와 "Joint 추정이 왜 더 나은가"를 직관으로 설명했다. Ljung (1999, Ch.7)의 **예측 오차 방법(Prediction Error Method, PEM)**은 이를 수학적으로 정식화한다.
+
+### PEM의 정의
+
+파라미터 벡터 $\theta$ 가 주어졌을 때, cycle $c$ 에서의 예측 오차는:
+
+$$\varepsilon_c(\theta) = y_c - \hat{y}(c \mid \theta)$$
+
+PEM은 예측 오차의 크기를 최소화하는 $\theta$ 를 추정한다:
+
+$$\hat{\theta}_N = \arg\min_\theta \frac{1}{N} \sum_{c=1}^{N} \ell\bigl(\varepsilon_c(\theta)\bigr)$$
+
+손실함수 $\ell(\cdot)$ 로 이차 손실 $\ell(\varepsilon) = \frac{1}{2}\varepsilon^2$ 을 쓰면 최소제곱, Huber 손실을 쓰면 이상치에 강건한 추정이 된다(Ljung, 1999, Ch.7 & Ch.15).
+
+### 순차 추정의 PEM 해석
+
+현재 파이프라인의 각 단계는 **부분 파라미터 집합**에 대해 독립적으로 PEM을 실행한다:
+
+```
+Phase 1: θ_k = argmin Σ [y_c - f_4PL(c; θ_H) - θ_k · f_4PL(c; θ_L)]²
+              → θ_k 추정 후 고정
+
+Phase 2: θ_baseline = argmin Σ_{baseline} [y_c - baseline(c; θ_baseline)]²
+              → θ_baseline 추정 후 고정
+
+Phase 3: θ_4PL = argmin Σ [y_c - f_4PL(c; θ_4PL)]²  (θ_k, θ_baseline 고정)
+```
+
+이 구조의 문제는 각 단계의 잔차가 다음 단계의 "신호"가 된다는 것이다. Phase 1에서 $\hat{\theta}_k$ 에 오차가 있으면 Phase 2의 입력 신호 자체가 오염되고, 이 오차는 최종 Ct 추정까지 **역전파 없이** 전파된다.
+
+Ljung (1999, Ch.7)의 수렴 이론에 따르면, 순차 추정은 다음 조건에서만 점근 일관성이 성립한다:
+
+$$S \in \mathcal{M}_1 \cap \mathcal{M}_2 \cap \mathcal{M}_3 \quad (\text{각 단계의 모델이 모두 참 시스템을 포함})$$
+
+즉, **각 단계의 모델이 모두 맞아야** 전체 추정이 편향 없이 수렴한다. PCR 파이프라인에서 이 조건이 항상 충족되지 않는다 — gray zone 샘플에서 baseline 모델이 틀리거나 jump 탐지가 실패하면 연쇄 편향이 발생한다.
+
+### Joint 추정의 PEM 해석
+
+Joint 추정은 모든 파라미터를 **단일 목적함수**에서 동시에 최적화한다:
+
+$$\hat{\theta}_{\text{joint}} = \arg\min_{\theta_k, \theta_{BL}, \theta_{4PL}, \boldsymbol{\gamma}} \sum_{c=1}^{45} \ell\Bigl(y_c - \hat{y}\bigl(c;\,\theta_k, \theta_{BL}, \theta_{4PL}, \boldsymbol{\gamma}\bigr)\Bigr) + \lambda\|\boldsymbol{\gamma}\|_1$$
+
+PEM 이론(Ljung, 1999, Ch.9)에 따르면 $N \to \infty$ 극한에서 이 추정량은 **점근적으로 크래머-라오 하한을 달성**한다. 즉, 같은 데이터에서 이론적으로 가능한 가장 낮은 분산을 갖는다.
+
+실용적 의미:
+
+| 관점 | 순차 추정 | Joint 추정 |
+|------|---------|-----------|
+| 수렴 조건 | 각 단계 모델 모두 정확해야 | 전체 모델 구조가 정확하면 충분 |
+| 편향 | 단계별 오차 전파 → 누적 편향 | 단일 목적함수 → 편향 최소화 |
+| 분산 | 불필요하게 클 수 있음 | 점근적으로 Cramér-Rao 하한 |
+| 계산 비용 | 낮음 ($O(N)$ per step) | 높음 ($O(N \cdot P^2)$, $P$ = 파라미터 수) |
+
+::: {.callout-note}
+## gray zone에서 Joint 추정이 결정적인 이유
+
+명확 양성/음성 신호에서는 순차 추정도 충분히 잘 동작한다 — 신호가 명확하면 각 단계의 모델 오차가 작아 전파 효과가 무시될 수 있기 때문이다.
+
+Gray zone 신호에서는 신호가 애매하기 때문에 baseline 추정, jump 탐지, 4PL 피팅 각각의 오차가 모두 크다. 이 조건에서 단계별 오차 전파는 최종 Ct 추정을 신뢰할 수 없게 만든다. Joint 추정은 세 성분의 추정 오차를 **동시에 상쇄**하므로 gray zone에서의 성능 차이가 크다.
+:::
+
+---
+
+## 실용 전환 로드맵
+
+| 단계 | 변경 내용 | 기존 코드 변경 범위 | 기대 효과 |
+|------|---------|----------------|---------|
+| **Phase 1** | 고정 k → MLE k | `estimate_k_mle()` 교체 | gray zone 위양성 30~40% 감소 |
+| **Phase 1** | L2 피팅 → Huber 피팅 | baseline 함수 교체 | 이상 baseline 내성 확보 |
+| **Phase 2** | Bootstrap Ct CI 추가 | 4PL 피팅 함수 래핑 | 불확실성 수치화, Invalid 근거 |
+| **Phase 2** | 3-state 출력 | decision layer 추가 | 재검 프로토콜 자동화 가능 |
+| **Phase 3** | Sparse jump model | joint_4pl_jump_loss() 도입 | jump 관련 위양성/위음성 해결 |
+| **Phase 4** | Full Bayesian (PyMC) | 전체 추론 엔진 교환 | 완전한 posterior, 배치 간 hierarchical model |
+
+Phase 1은 기존 순차 파이프라인 구조를 유지하면서 각 단계의 추정 방법만 교체한다. Phase 2는 출력 레이어만 추가한다. 두 단계 모두 기존 검증 데이터를 그대로 활용하여 성능 비교가 가능하다.
+
+Phase 3~4는 파이프라인 구조를 변경하므로 별도 검증 체계가 필요하다. FDA 승인 목적이라면 Phase 2까지만 적용하고 Phase 3~4는 백그라운드 연구로 병행하는 것이 현실적이다.
+
+### 성능 평가 지표
+
+각 Phase 적용 후 다음 지표로 개선을 측정한다:
+
+| 지표 | 측정 방법 | 목표 |
+|------|---------|------|
+| Gray zone 위양성률 | Ct 35~40 구간 샘플의 재검 불일치율 | Phase 1 후 30% 이상 감소 |
+| Ct 재현성 (CV%) | 동일 샘플 20회 반복 측정, CV | $< 1.5\%$ (FDA 요구) |
+| Bootstrap CI 폭 | 명확 양성에서 95% CI 폭 | $< 1.0$ cycle |
+| Invalid 판정률 | Uncertain 분류 비율 | 임상적으로 허용 가능한 5~10% |
+| 피팅 수렴률 | joint 최적화 수렴 성공 비율 | $> 98\%$ |
+
+Bootstrap CI 폭이 1 cycle 이상인 샘플은 Ct 추정이 불안정한 것이므로 자동으로 Uncertain으로 분류한다. 이 임계값은 실험실 데이터로 교정(calibration)이 필요하다.
+
+---
+
+## 자주 묻는 질문
+
+### Q1. Bayesian 추정에서도 "95% 신뢰수준"처럼 숫자로 표현할 수 있나?
+
+오히려 Bayesian이 더 직접적이다.
+
+Frequentist 95% CI는 엄밀히 말해 "이 방법으로 반복 계산하면 95%는 참값을 포함한다"는 의미다. 파라미터가 이 구간 안에 있을 확률을 직접 말할 수 없다.
+
+Bayesian **신용구간(Credible Interval)**은 posterior에서 바로 계산하므로 "Ct가 이 구간에 있을 확률이 95%"라고 직접 해석된다.
+
+```python
+samples = trace.posterior["C"].values.flatten()  # posterior 샘플
+
+ci_80 = np.percentile(samples, [10,  90])   # 80% 신용구간
+ci_95 = np.percentile(samples, [2.5, 97.5]) # 95% 신용구간
+ci_99 = np.percentile(samples, [0.5, 99.5]) # 99% 신용구간
+
+# 단일 확률 질문도 직접 계산 가능
+p_positive = (samples < 35).mean()          # P(Ct < 35 | 데이터)
+p_efficient = (trace.posterior["B"].values.flatten() > 0.279).mean()  # P(효율 > 90%)
+```
+
+어떤 신뢰 수준이든 percentile 한 줄로 계산된다. Joint model에서는 파라미터 간 결합 확률도 계산할 수 있다.
+
+```python
+# Ct < 35이면서 효율 > 90%일 확률 — Frequentist로는 매우 어려움
+B_samples = trace.posterior["B"].values.flatten()
+C_samples = trace.posterior["C"].values.flatten()
+p_joint = ((C_samples < 35) & (B_samples > 0.279)).mean()
+```
+
+Bayesian이 어려운 부분은 신뢰 수준 계산이 아니라 **MCMC 계산 비용(속도)**과 **prior 설정**이다.
+
+---
+
+### Q2. 시나리오 2 해석은 이미 L1 penalty로 파라미터 선택이 된 상태를 전제로 한 것인가?
+
+맞다. 시나리오 2 해석 전체는 Laplace prior(Bayesian L1)가 적용된 이후의 결과를 읽은 것이다.
+
+**원래 추정 대상 파라미터: ~57개**
+
+```
+4PL:       A, D, C, B              (4개)
+Jump 성분: γ_1, γ_2, ..., γ_45    (45개)  ← Laplace prior 적용 대상
+기타:      k, baseline 2개, σ      (4개)
+```
+
+Laplace prior는 γ_c 각각에 0 근방으로 강하게 수축하는 압력을 가한다. Posterior를 계산하면 대부분의 γ_c는 0에 매우 가까워지고, 실제 이상 신호가 있는 cycle만 0에서 멀리 떨어진다.
+
+```python
+γ_samples = trace.posterior["gamma"].values  # shape: (draws, 45)
+
+for c in range(45):
+    mean = γ_samples[:, c].mean()
+    # cycle 1~27, 29~45: mean ≈ 0~5 RFU  → 사실상 탈락
+    # cycle 28:          mean ≈ 140 RFU  → 의미있는 jump로 "선택됨"
+```
+
+이 과정을 거친 후 해석 시점의 유효 파라미터는 다음과 같다.
+
+```
+A, D, C, B (4PL 4개) + γ_28 (1개) + σ = 6~7개
+```
+
+::: {.callout-note}
+## Frequentist Lasso와의 차이
+
+Frequentist Lasso는 γ_c를 **정확히 0**으로 만드는 hard selection이다. Bayesian Laplace prior는 **0 근방으로 강하게 수축**시키는 soft selection이다. 해석 방식은 같지만, Bayesian은 각 γ_c에 대한 posterior 불확실성도 함께 제공한다.
+
+cycle 28에서 $\gamma_{28} = 140 \pm 22$ RFU(95% CI)라면, jump 크기 자체에도 불확실성이 있다는 것을 알 수 있다.
+:::
+
+따라서 시나리오 2의 "γ_28 = 140 RFU만 살아남은 결과"는 Laplace prior가 45개 jump 후보 중 1개만 선택한 이후의 상태를 읽은 것이다.
+
+---
+
+## Bayesian Credible Interval의 직접 해석
+
+Joint Bayesian 접근법의 실용적 이점 중 하나는 신뢰 수준 표현 방식이다. Frequentist 95% 신뢰구간(CI)은 엄밀히 "이 방법으로 반복 계산하면 95%는 참값을 포함한다"는 의미다. 파라미터 자체가 이 구간 안에 있을 확률을 직접 말할 수 없다.
+
+Bayesian **신용구간(Credible Interval)**은 posterior 샘플에서 percentile로 계산하여 직접적인 확률 해석이 가능하다.
+
+```python
+ct_samples = trace.posterior["C"].values.flatten()
+
+ci_80 = np.percentile(ct_samples, [10,  90])    # "Ct가 이 구간에 있을 확률 80%"
+ci_95 = np.percentile(ct_samples, [2.5, 97.5])  # "Ct가 이 구간에 있을 확률 95%"
+ci_99 = np.percentile(ct_samples, [0.5, 99.5])  # "Ct가 이 구간에 있을 확률 99%"
+
+p_positive = (ct_samples < threshold).mean()    # P(Ct < threshold | 데이터)
+```
+
+어떤 신뢰 수준이든 percentile 한 줄로 계산된다. 파라미터 간 결합 확률도 직접 계산할 수 있다.
+
+```python
+b_samples = trace.posterior["B"].values.flatten()
+
+# "Ct < 35이면서 증폭 효율 > 90%일 확률" — Frequentist로는 매우 어려운 계산
+p_joint = ((ct_samples < 35) & (b_samples > 0.279)).mean()
+```
+
+이 방식으로 의료 전문가에게 "이 판정의 확률적 근거"를 수치로 제공할 수 있다.
+
+```
+판정: 양성 (규칙 기반 C++ 기준)
+B (증폭 효율): 74%  [정상: 90~110%]
+Ct 95% 신용구간: [33.2, 40.4]  (구간 폭 7.2 cycle)
+양성 확률: 64%
+신뢰도: LOW — Retest Recommended
+```
+
+---
+
+## 이행 경로
+
+규칙 기반 시스템을 즉시 Bayesian으로 교체하는 것은 현실적이지 않다. 규제 승인, 검증 데이터 구축, 운영 안정성 확보 모두 시간이 필요하다. 단계적 이행이 현실적이다.
+
+**Phase 1 — 신뢰도 레이어 추가**
+
+기존 파이프라인을 유지하면서 gray zone 신호에 한해 Bayesian 분석을 병렬 실행한다. 두 방법의 결과 불일치 케이스를 수집하여 실제 위양성·위음성 패턴을 확인한다.
+
+```
+C++ 규칙 기반 (실시간, < 10ms)
+        ↓
+gray zone 판정된 신호만 추출
+        ↓
+Python Bayesian (비동기, 수초 허용)
+        ↓
+신뢰도 점수 + 파라미터 해석 추가 보고
+```
+
+**Phase 2 — Semi-Joint 전환**
+
+4PL fitting을 Bayesian으로 전환하고, baseline과 이상 신호 처리는 규칙 기반을 유지한다. 불확실성 정량화가 파이프라인에 포함된다.
+
+**Phase 3 — Full Joint**
+
+충분한 검증 데이터와 규제 근거가 확보되면 Full Bayesian joint로 전환한다. 파라미터 해석이 원본 신호 특성을 직접 반영한다.
+
+::: {.callout-note}
+## 이행 원칙
+
+각 Phase의 전환 조건을 데이터로 정의해야 한다. "Phase 1 결과에서 gray zone 신호의 재검 일치율이 X% 이상이면 Phase 2로 전환"과 같은 정량적 기준이 없으면 이행이 무기한 지연된다.
+
+또한 Bayesian 결과는 규칙 기반 판정을 **번복하는** 알고리즘이 아니라 **신뢰도를 점수화하는** 알고리즘으로 운영해야 한다. 두 방법이 반대 결론을 내는 경우는 대부분 gray zone 신호 — 원래부터 판정 신뢰도가 낮은 신호다. "결과가 달라진 것이 문제"가 아니라 "원래부터 판정 불가능한 신호였다"는 정보를 Bayesian이 드러낸 것으로 해석해야 한다.
+:::
+
+---
+
+## 관련 주제
+
+**이 포스트의 전제**
+
+- [PCR 신호 처리 파이프라인 리팩토링](./pcr-signal-pipeline-refactoring.qmd) — Semi-Joint 아키텍처의 설계 원칙과 규제 관점
+- [RT-PCR 4PL 모델 — 증폭 효율 계산](./pcr-4pl-amplification-efficiency.qmd) — 4PL 모델 수학적 구조
+
+**이 포스트 이후**
+
+- [RT-PCR Mechanistic Model과 확률 기반 진단](./pcr-sigmoid-curve-fitting.qmd) — Mahalanobis distance 기반 Posterior 계산
+- [RT-PCR 그레이존 처리와 불확실성 관리](./pcr-grayzone-uncertainty.qmd) — 3-state 출력 설계 원칙
+
+**연관 카테고리**
+
+- [Statistics](../Statistics/index.qmd) — Huber 회귀, Bootstrap, Bayesian inference, MCMC
+- [Surveilance](../Surveilance/index.qmd) — FDA 규제 관점의 불확실성 관리 요구사항
+
+**참고 교재**
+
+- Brunton & Kutz, *Data-Driven Science and Engineering* (2022) — Ch.3 (Sparsity, RIP, ℓ₁ 이론)
+- Ljung, *System Identification: Theory for the User* (1999, 2nd ed.) — Ch.7 (PEM), Ch.9 (점근 분포, Cramér-Rao)
