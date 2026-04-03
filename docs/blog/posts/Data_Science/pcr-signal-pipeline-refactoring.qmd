@@ -106,6 +106,29 @@ $$x \xrightarrow{f_1, f_2, f_3 \dots} \text{(분기)} \rightarrow g$$
 예외 케이스가 나올 때마다 rule을 추가하는 구조다.
 결과적으로 **$f$ 자체가 하나의 거대한 decision tree처럼 변질**되었다.
 
+**실제 레거시 파이프라인 분기 예시:**
+
+```python
+def legacy_baseline_correction(signal):
+    baseline_avg = np.mean(signal[:10])
+
+    if baseline_avg < 37:               # 분기 1: 낮은 baseline
+        trend = np.polyfit(range(10), signal[:10], 1)
+    elif baseline_avg < 60:             # 분기 2: 중간 baseline
+        trend = np.polyfit(range(15), signal[:15], 1)   # 더 긴 구간 사용
+    else:                               # 분기 3: 높은 baseline (시약 열화 의심)
+        if np.std(signal[:10]) > 20:    # 분기 3-1: 불안정한 baseline
+            trend = [0, np.median(signal[:10])]         # 중앙값으로 대체
+        else:                           # 분기 3-2: 안정적인 baseline
+            trend = np.polyfit(range(10), signal[:10], 2)  # 2차 다항식
+
+    corrected = signal - np.polyval(trend, range(len(signal)))
+    return corrected
+    # ... 이 다음에 jump 처리, 포화 판단, 노이즈 임계값 등 분기가 더 추가됨
+```
+
+`legacy_baseline_correction()` 하나에만 이미 4개 분기 경로가 있다. `jump_detection_rule()`, `saturation_check()`, `noise_threshold()` 등이 더해지면 분기 조합이 기하급수적으로 늘어난다. 분기 1에서 처리된 샘플이 `jump_detection_rule()`의 분기 5를 통과할 때, 두 분기의 조합이 어떤 결과를 낼지 추적이 불가능해진다.
+
 ### 왜 분기가 계속 추가되는가
 
 비유하면: 집에 빗물이 새는데, **지붕을 고치지 않고 양동이를 하나씩 추가하는 것**이다.
@@ -354,6 +377,38 @@ def extract_pcr_features(rfu: np.ndarray,
 ```
 
 Feature 설계의 핵심은 **domain 의미와 수치가 1:1로 대응**되어야 한다는 점이다. `jump_score = 4.5`는 "baseline 표준편차의 4.5배 급변이 있었다"고 바로 해석된다. rule의 "jump가 있으면 제외"와 달리, 모델이 이 수치를 다른 feature와 종합하여 판단한다.
+
+**실제 적용 예시: 양성 vs 그레이존 feature 비교**
+
+```python
+# 양성 샘플 (Ct=28.3, 명확한 S자 곡선)
+features_pos = extract_pcr_features(rfu_positive)
+# {
+#   'ct':                  28.3,    # 낮음 → 일찍 증폭 시작 (양성 방향)
+#   'noise_metric':        0.0312,  # 낮음 → baseline 대비 신호가 크고 안정
+#   'slope':               0.3015,  # 높음 → 지수 구간에서 가파른 증가
+#   'r_squared':           0.9823,  # 높음 → S자 곡선이 선형 구간에 잘 맞음
+#   'curvature':           48.3,    # 높음 → 뚜렷한 변곡점 (S자 형태 확인)
+#   'jump_score':          2.1,     # 낮음 → 이상 급변 없음 (정상 신호)
+#   'jump_frequency':      0,       # 0     → jump 없음
+#   'dominant_peak_ratio': 1.0      # 1.0   → 단일 증폭 피크 (정상)
+# }
+
+# 그레이존 샘플 (Ct=36.8, 완만한 곡선)
+features_gray = extract_pcr_features(rfu_grayzone)
+# {
+#   'ct':                  36.8,    # 높음 → 늦은 증폭 시작 (그레이존)
+#   'noise_metric':        0.0891,  # 높음 → 신호 범위가 좁아 noise 비율 증가
+#   'slope':               0.0812,  # 낮음 → 완만한 증폭 (S자가 늘어짐)
+#   'r_squared':           0.6412,  # 낮음 → 완만해서 선형 근사 불량
+#   'curvature':           8.7,     # 낮음 → 변곡점 불명확
+#   'jump_score':          3.8,     # 경계 → 노이즈 대비 급변이 있음
+#   'jump_frequency':      1,       # 1     → 1회 jump 발생
+#   'dominant_peak_ratio': 1.0
+# }
+```
+
+양성은 Ct 낮음, noise 낮음, slope 높음, R² 높음이 일관되게 나타난다. 그레이존은 반대 방향으로 8개 feature가 모두 이동한다. 단일 rule로는 이 패턴을 포착할 수 없지만, 모델은 8개를 종합하여 "전반적으로 음성 방향의 약한 신호"로 판단한다.
 
 ### 데이터 기반 Feature 후보 자동 발견: SINDy (Brunton & Kutz, 2022, Ch.7)
 
