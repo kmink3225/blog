@@ -1,0 +1,215 @@
+---
+title: "SQL 필수 구문 레퍼런스 (Level 3)"
+subtitle: "코딩 테스트 SQL Level 3를 위한 복합 쿼리 정리"
+description: |
+  Programmers SQL Level 3에서 반복적으로 등장하는 복합 JOIN, 상관 서브쿼리,
+  EXISTS, UNION, 조건부 집계를 DS·AIE 트랙 우선순위로 정리한다.
+categories:
+  - Code Test
+author: Kwangmin Kim
+date: 04/04/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+SQL Level 3은 단순 조회를 넘어 쿼리 안에서 논리적 추론을 수행하는 능력을 평가한다. 상관 서브쿼리, EXISTS, 자기 참조 JOIN 등 고급 패턴을 이해하면 복잡한 비즈니스 문제를 SQL 한 쿼리로 해결할 수 있다.
+
+## DS vs AIE 트랙 우선순위
+
+| 구문 | DS | AIE | 설명 |
+|-----|----|----|------|
+| 상관 서브쿼리 | ★★★ | ★★☆ | 외부 쿼리 참조 서브쿼리 |
+| EXISTS / NOT EXISTS | ★★★ | ★★☆ | 존재 여부 확인 |
+| UNION / UNION ALL | ★★★ | ★★☆ | 결과 집합 합치기 |
+| 다중 조건 집계 | ★★★ | ★★☆ | CASE WHEN + GROUP BY 조합 |
+| Self JOIN | ★★★ | ★★☆ | 같은 테이블 자기 참조 |
+| 날짜 고급 함수 | ★★★ | ★☆☆ | LAST_DAY, EXTRACT |
+| NULLIF | ★★★ | ★☆☆ | 특정 값을 NULL로 변환 |
+
+## 상관 서브쿼리 (Correlated Subquery)
+
+```sql
+-- 외부 쿼리의 각 행에 대해 서브쿼리가 반복 실행된다
+-- 각 직원의 급여가 자신이 속한 부서 평균보다 높은가?
+
+SELECT name, dept, salary
+FROM employees e1
+WHERE salary > (
+    SELECT AVG(salary)
+    FROM employees e2
+    WHERE e2.dept = e1.dept    -- 외부 쿼리의 e1.dept 참조
+);
+-- 결과: 부서 평균 이상의 직원만 반환
+-- 주의: 외부 행 수만큼 서브쿼리 반복 실행 → 대용량에서 느릴 수 있음
+
+-- 가장 최근 주문 날짜의 주문 조회 (상관 서브쿼리)
+SELECT *
+FROM orders o1
+WHERE order_date = (
+    SELECT MAX(order_date)
+    FROM orders o2
+    WHERE o2.customer_id = o1.customer_id    -- 고객별 최근 주문
+);
+-- 각 고객의 가장 최근 주문 1건씩 반환
+```
+
+## EXISTS / NOT EXISTS
+
+```sql
+-- EXISTS: 서브쿼리가 결과를 반환하면 TRUE
+-- IN과 유사하지만 서브쿼리 결과가 많을 때 EXISTS가 더 빠르다
+
+-- 입양된 적 있는 동물 조회
+SELECT a.NAME
+FROM ANIMAL_INS a
+WHERE EXISTS (
+    SELECT 1
+    FROM ANIMAL_OUTS o
+    WHERE o.ANIMAL_ID = a.ANIMAL_ID
+);
+-- 결과: ANIMAL_OUTS에 매칭 행이 있는 동물만 반환
+
+-- NOT EXISTS: 서브쿼리가 결과를 반환하지 않으면 TRUE
+-- 한 번도 입양되지 않은 동물 조회
+SELECT a.NAME
+FROM ANIMAL_INS a
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM ANIMAL_OUTS o
+    WHERE o.ANIMAL_ID = a.ANIMAL_ID
+);
+-- 결과: ANIMAL_OUTS에 매칭 행이 없는 동물 (LEFT JOIN WHERE IS NULL과 동일)
+
+-- IN vs EXISTS 성능 차이
+-- 서브쿼리 결과가 작으면: IN이 직관적
+-- 서브쿼리 결과가 크면: EXISTS가 빠름 (첫 매칭 발견 시 바로 중단)
+```
+
+## UNION / UNION ALL
+
+```sql
+-- UNION: 두 결과 집합을 합치고 중복 제거 (느림)
+-- UNION ALL: 두 결과 집합을 합치고 중복 유지 (빠름)
+
+-- 개와 고양이를 분리 조회 후 합치기
+SELECT '개' AS type, NAME FROM ANIMAL_INS WHERE ANIMAL_TYPE = 'Dog'
+UNION ALL
+SELECT '고양이', NAME FROM ANIMAL_INS WHERE ANIMAL_TYPE = 'Cat'
+ORDER BY type, NAME;
+-- 결과: 개 목록 + 고양이 목록 (중복 유지)
+
+-- 두 테이블에서 각각 조건에 맞는 행 합치기
+SELECT ANIMAL_ID, 'INS_ONLY' AS status
+FROM ANIMAL_INS
+WHERE ANIMAL_ID NOT IN (SELECT ANIMAL_ID FROM ANIMAL_OUTS)
+UNION ALL
+SELECT ANIMAL_ID, 'OUTS_ONLY'
+FROM ANIMAL_OUTS
+WHERE ANIMAL_ID NOT IN (SELECT ANIMAL_ID FROM ANIMAL_INS);
+```
+
+## Self JOIN
+
+```sql
+-- 같은 테이블을 두 번 참조하는 JOIN
+-- 예: employees(id, name, manager_id)에서 직원-상사 쌍 조회
+
+SELECT e.name AS 직원, m.name AS 상사
+FROM employees e
+JOIN employees m ON e.manager_id = m.id;
+-- 결과:
+-- 직원  | 상사
+-- ------|-----
+-- Lee   | Kim   (Kim이 Lee의 상사)
+-- Park  | Kim
+-- Choi  | Lee
+
+-- NULL 처리: manager_id가 NULL인 최상위 관리자 포함
+SELECT e.name AS 직원, COALESCE(m.name, '최상위') AS 상사
+FROM employees e
+LEFT JOIN employees m ON e.manager_id = m.id;
+```
+
+## 조건부 집계 (Conditional Aggregation)
+
+```sql
+-- CASE WHEN + 집계함수 조합으로 피벗 없이 통계 생성
+-- 예: 월별 완료/미완료 주문 수를 한 행으로
+
+SELECT
+    MONTH(order_date) AS 월,
+    COUNT(*) AS 전체,
+    SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS 완료,
+    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS 대기중,
+    AVG(CASE WHEN status = 'complete' THEN amount END) AS 완료_평균금액
+FROM orders
+GROUP BY 월
+ORDER BY 월;
+-- 결과: 월별로 완료/대기 건수와 완료 주문의 평균 금액이 한 행에
+
+-- 부서별 성별 인원 수 (피벗)
+SELECT
+    dept,
+    SUM(CASE WHEN gender = 'M' THEN 1 ELSE 0 END) AS 남성,
+    SUM(CASE WHEN gender = 'F' THEN 1 ELSE 0 END) AS 여성
+FROM employees
+GROUP BY dept;
+```
+
+## 고급 날짜 함수
+
+```sql
+-- LAST_DAY: 해당 월의 마지막 날
+SELECT LAST_DAY('2024-02-01');    -- → '2024-02-29' (2024년 윤년)
+SELECT LAST_DAY('2023-02-01');    -- → '2023-02-28'
+
+-- EXTRACT: 날짜 구성요소 추출
+SELECT EXTRACT(YEAR FROM '2024-03-15');    -- → 2024
+SELECT EXTRACT(QUARTER FROM '2024-03-15'); -- → 1 (1분기)
+SELECT EXTRACT(WEEK FROM '2024-03-15');    -- → 11 (11번째 주)
+
+-- DATE_FORMAT 고급
+SELECT DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s');  -- → '2024-03-15 09:30:00'
+SELECT DATE_FORMAT(NOW(), '%W, %M %d %Y');        -- → 'Friday, March 15 2024'
+
+-- TIMESTAMPDIFF: 두 날짜 차이를 원하는 단위로
+SELECT TIMESTAMPDIFF(MONTH, '2020-01-01', '2024-03-15');  -- → 50 (개월 수)
+SELECT TIMESTAMPDIFF(YEAR, birth_date, NOW()) AS age FROM users;
+-- 각 사용자의 만 나이 계산
+```
+
+## NULLIF
+
+```sql
+-- NULLIF(a, b): a = b이면 NULL 반환, 아니면 a 반환
+-- 0으로 나누기 오류 방지에 자주 사용
+
+SELECT
+    name,
+    total_sales / NULLIF(visit_count, 0) AS avg_per_visit
+    -- visit_count가 0이면 NULLIF가 NULL 반환 → 나누기 오류 방지
+FROM sales_reps;
+
+-- 특정 값을 NULL로 대체 (이후 COALESCE로 처리)
+SELECT COALESCE(NULLIF(status, 'N/A'), '미입력') AS clean_status FROM data;
+-- status가 'N/A'면 NULL로 변환 → COALESCE로 '미입력'으로 처리
+```
+
+## 유형별 패턴 매핑 (Level 3)
+
+| 문제 유형 | 핵심 구문 | 패턴 |
+|---------|---------|------|
+| 같은 테이블 비교 | Self JOIN | `FROM t a JOIN t b ON 조건` |
+| 행 존재 여부 | EXISTS/NOT EXISTS | `WHERE EXISTS (SELECT 1 FROM ...)` |
+| 두 쿼리 결합 | UNION ALL | `쿼리1 UNION ALL 쿼리2` |
+| 교차 통계 (피벗) | 조건부 집계 | `SUM(CASE WHEN ... THEN 1 ELSE 0 END)` |
+| 그룹 내 특정 행 | 상관 서브쿼리 | `WHERE col = (SELECT MAX(col) WHERE ...)` |
+| 0 나누기 방지 | NULLIF | `/ NULLIF(col, 0)` |
+| 월말 날짜 | LAST_DAY | `WHERE date <= LAST_DAY(target)` |
+
+## 관련 문서
+
+- [SQL 필수 구문 레퍼런스 (Level 2)](./sql_builtins_level2_reference.qmd)
+- [SQL 필수 구문 레퍼런스 (Level 4)](./sql_builtins_level4_reference.qmd)

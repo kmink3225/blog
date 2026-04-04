@@ -1,0 +1,250 @@
+---
+title: "SQL 필수 구문 레퍼런스 (Level 5)"
+subtitle: "코딩 테스트 SQL Level 5를 위한 재귀 CTE·고급 분석 정리"
+description: |
+  Programmers SQL Level 5의 재귀 CTE, Island & Gaps, PIVOT, 고급 윈도우 프레임을
+  DS·AIE 트랙 우선순위로 정리한다.
+categories:
+  - Code Test
+author: Kwangmin Kim
+date: 04/04/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+SQL Level 5는 재귀적 자기 참조, 연속 구간 탐지, 행과 열의 변환 등 SQL의 가장 고급 기법을 다룬다. 데이터 엔지니어링과 분석 현업에서도 자주 등장하는 패턴이므로 원리를 이해하고 재사용할 수 있는 수준으로 학습한다.
+
+## DS vs AIE 트랙 우선순위
+
+| 구문 | DS | AIE | 설명 |
+|-----|----|----|------|
+| 재귀 CTE | ★★★ | ★★☆ | 계층 구조·시퀀스 생성 |
+| Island & Gaps | ★★★ | ★☆☆ | 연속 구간 탐지 |
+| PIVOT (CASE 기반) | ★★★ | ★☆☆ | 행→열 변환 |
+| FIRST_VALUE / LAST_VALUE | ★★★ | ★★☆ | 그룹 내 첫/마지막 값 |
+| PERCENT_RANK / CUME_DIST | ★★★ | ★☆☆ | 상대 순위/누적 분포 |
+| 고급 프레임 (RANGE) | ★★★ | ★★☆ | 값 범위 기준 윈도우 |
+| 다중 집계 레벨 (ROLLUP) | ★★★ | ★☆☆ | 소계·총계 자동 생성 |
+
+## 재귀 CTE
+
+```sql
+-- 재귀 CTE 구조:
+-- WITH RECURSIVE 이름 AS (
+--     기저 케이스 (비재귀 부분)
+--     UNION ALL
+--     재귀 케이스 (자기 자신 참조)
+-- )
+
+-- 예1: 1부터 10까지 정수 생성
+WITH RECURSIVE numbers AS (
+    SELECT 1 AS n            -- 기저: n=1에서 시작
+    UNION ALL
+    SELECT n + 1             -- 재귀: 이전 값 +1
+    FROM numbers
+    WHERE n < 10             -- 종료 조건: n=10에서 멈춤
+)
+SELECT n FROM numbers;
+-- 결과: 1, 2, 3, ..., 10
+
+-- 예2: 날짜 시퀀스 생성 (달력 테이블)
+WITH RECURSIVE date_range AS (
+    SELECT '2024-01-01' AS dt
+    UNION ALL
+    SELECT DATE_ADD(dt, INTERVAL 1 DAY)
+    FROM date_range
+    WHERE dt < '2024-01-31'
+)
+SELECT dt FROM date_range;
+-- 결과: 2024-01-01부터 2024-01-31까지 31행
+
+-- 예3: 조직도 계층 탐색
+-- employees: (id, name, manager_id)
+WITH RECURSIVE org AS (
+    SELECT id, name, manager_id, 1 AS depth, name AS path
+    FROM employees
+    WHERE manager_id IS NULL      -- 최상위 관리자 (루트)
+    UNION ALL
+    SELECT e.id, e.name, e.manager_id, o.depth + 1,
+           CONCAT(o.path, ' > ', e.name)
+    FROM employees e
+    JOIN org o ON e.manager_id = o.id
+)
+SELECT name, depth, path FROM org ORDER BY depth, name;
+-- 결과:
+-- name | depth | path
+-- -----|-------|------------------------
+-- CEO  | 1     | CEO
+-- CFO  | 2     | CEO > CFO
+-- CTO  | 2     | CEO > CTO
+-- Dev1 | 3     | CEO > CTO > Dev1
+```
+
+## Island & Gaps — 연속 구간 분석
+
+```sql
+-- Island: 연속된 그룹(섬) 찾기
+-- 원리: 연속된 날짜는 (날짜 - ROW_NUMBER)가 일정하다
+-- 날짜:      1월1일, 1월2일, 1월3일,  1월5일, 1월6일
+-- ROW_NUMBER: 1,      2,      3,       4,      5
+-- 날짜-rn:   0,      0,      0,       1,      1  ← 같은 값끼리 같은 섬
+
+WITH numbered AS (
+    SELECT
+        active_date,
+        ROW_NUMBER() OVER (ORDER BY active_date) AS rn,
+        active_date - INTERVAL ROW_NUMBER() OVER (ORDER BY active_date) DAY AS grp_key
+    FROM active_dates
+),
+islands AS (
+    SELECT
+        MIN(active_date) AS island_start,
+        MAX(active_date) AS island_end,
+        COUNT(*) AS island_size
+    FROM numbered
+    GROUP BY grp_key
+)
+SELECT * FROM islands ORDER BY island_start;
+-- 결과:
+-- island_start | island_end | island_size
+-- -------------|------------|------------
+-- 2024-01-01   | 2024-01-03 | 3
+-- 2024-01-05   | 2024-01-06 | 2
+
+-- Gaps: 빈 구간(갭) 찾기
+SELECT
+    prev_end,
+    next_start,
+    DATEDIFF(next_start, prev_end) - 1 AS gap_days
+FROM (
+    SELECT
+        island_end AS prev_end,
+        LEAD(island_start) OVER (ORDER BY island_start) AS next_start
+    FROM islands
+) gaps
+WHERE next_start IS NOT NULL;
+-- 결과: 2024-01-03 다음 2024-01-05 사이 → gap = 1일 (2024-01-04)
+```
+
+## PIVOT (CASE 기반 행→열 변환)
+
+```sql
+-- MySQL은 PIVOT 키워드가 없으므로 CASE WHEN으로 구현
+-- 입력: quarterly_sales (year, quarter, revenue)
+-- 2023, Q1, 1000 / 2023, Q2, 1200 / 2023, Q3, 900 / 2023, Q4, 1500
+-- 2024, Q1, 1100 / 2024, Q2, 1300 / ...
+
+SELECT
+    year,
+    SUM(CASE WHEN quarter = 'Q1' THEN revenue ELSE 0 END) AS Q1,
+    SUM(CASE WHEN quarter = 'Q2' THEN revenue ELSE 0 END) AS Q2,
+    SUM(CASE WHEN quarter = 'Q3' THEN revenue ELSE 0 END) AS Q3,
+    SUM(CASE WHEN quarter = 'Q4' THEN revenue ELSE 0 END) AS Q4,
+    SUM(revenue) AS 연간합계
+FROM quarterly_sales
+GROUP BY year;
+-- 결과:
+-- year | Q1   | Q2   | Q3  | Q4   | 연간합계
+-- -----|------|------|-----|------|--------
+-- 2023 | 1000 | 1200 | 900 | 1500 | 4600
+-- 2024 | 1100 | 1300 | ... | ...  | ...
+```
+
+## FIRST_VALUE / LAST_VALUE
+
+```sql
+-- FIRST_VALUE: 윈도우 첫 번째 행의 값
+-- LAST_VALUE: 윈도우 마지막 행의 값
+
+SELECT
+    name, dept, salary,
+    FIRST_VALUE(name) OVER (PARTITION BY dept ORDER BY salary DESC) AS top_earner,
+    LAST_VALUE(name) OVER (
+        PARTITION BY dept ORDER BY salary DESC
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS lowest_earner
+FROM employees;
+-- top_earner: 부서 내 최고 급여자
+-- lowest_earner: 부서 내 최저 급여자
+-- 주의: LAST_VALUE는 기본 프레임이 현재 행까지이므로
+--       ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING 명시 필요
+```
+
+## PERCENT_RANK / CUME_DIST
+
+```sql
+-- PERCENT_RANK: 0~1 사이 상대 순위 (0 = 최저, 1 = 최고)
+-- CUME_DIST: 누적 분포 (현재 값 이하인 행의 비율)
+
+SELECT
+    name, score,
+    RANK() OVER (ORDER BY score) AS rank,
+    PERCENT_RANK() OVER (ORDER BY score) AS pct_rank,
+    CUME_DIST() OVER (ORDER BY score) AS cume_dist
+FROM exam_scores;
+-- score: 60, 70, 80, 90, 100 (5명)
+-- rank:   1,  2,  3,  4,   5
+-- pct_rank: 0.0, 0.25, 0.5, 0.75, 1.0
+-- cume_dist: 0.2, 0.4,  0.6,  0.8, 1.0
+
+-- 상위 20% 이내 학생 조회
+SELECT name, score
+FROM (
+    SELECT name, score,
+           PERCENT_RANK() OVER (ORDER BY score DESC) AS pr
+    FROM exam_scores
+) ranked
+WHERE pr <= 0.2;
+```
+
+## GROUP BY ROLLUP — 소계·총계
+
+```sql
+-- ROLLUP: 계층적 집계 (소계 + 총계 자동 생성)
+SELECT
+    dept,
+    job_title,
+    COUNT(*) AS cnt,
+    SUM(salary) AS total_sal
+FROM employees
+GROUP BY ROLLUP(dept, job_title);
+-- 결과:
+-- dept  | job_title | cnt | total_sal
+-- ------|-----------|-----|----------
+-- Sales | Manager   | 2   | 10000    ← 세부 그룹
+-- Sales | Staff     | 5   | 20000    ← 세부 그룹
+-- Sales | NULL      | 7   | 30000    ← Sales 소계 (ROLLUP 생성)
+-- IT    | Engineer  | 3   | 18000
+-- IT    | NULL      | 3   | 18000    ← IT 소계
+-- NULL  | NULL      | 10  | 48000    ← 전체 총계 (ROLLUP 생성)
+
+-- GROUPING(): ROLLUP이 만든 NULL vs 실제 NULL 구분
+SELECT
+    CASE WHEN GROUPING(dept) = 1 THEN '전체 합계' ELSE dept END AS dept,
+    SUM(salary)
+FROM employees
+GROUP BY ROLLUP(dept);
+```
+
+## Level 5 학습 전략
+
+```
+DS 트랙 우선 학습 순서:
+  1단계: Island & Gaps → 연속 구간 분석
+  2단계: 재귀 CTE → 계층 데이터, 날짜 시퀀스
+  3단계: PIVOT → 행→열 변환
+  4단계: ROLLUP → 다차원 집계
+  5단계: PERCENT_RANK → 분위수 분석
+
+AIE 트랙 우선 학습 순서:
+  1단계: 재귀 CTE → 그래프 탐색, 트리 구조
+  2단계: FIRST/LAST_VALUE → 상태 추적
+  3단계: Island & Gaps → 이벤트 시퀀스 분석
+```
+
+## 관련 문서
+
+- [SQL 필수 구문 레퍼런스 (Level 4)](./sql_builtins_level4_reference.qmd)
+- [SQL 필수 구문 레퍼런스 (Level 1)](./sql_builtins_level1_reference.qmd)
