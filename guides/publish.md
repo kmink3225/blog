@@ -108,26 +108,34 @@ git --no-pager diff --stat
 
 ### Step 2: git add
 
-변경 파일을 스테이징한다. 원칙은 **주제 단위로 묶어서 add**한다.
+**반드시 `git add -A` 를 사용한다. 파일을 수동으로 열거하지 않는다.**
 
-- 포스트 신규/수정 + 해당 index.qmd: 함께 add
-- 가이드 파일 수정: 별도 커밋 권장
-- `_site/`, `_freeze/` 등 빌드 산출물: 포함 여부를 `.gitignore` 기준으로 판단
+Quarto 렌더링은 `.qmd` 파일 외에도 `_site/카테고리/index.html`, `_site/search.json`,
+`_site/sitemap.xml` 등 예측하기 어려운 파일들을 갱신한다. 파일을 수동으로 나열하면
+이런 파일들이 누락되어 사이트에 반영되지 않는다.
 
 ```bash
-# 전체 add (단일 커밋으로 묶을 때)
-git add .
-
-# 선택적 add (주제별 커밋 분리 시)
-git add docs/blog/posts/Agent/24-Agent-Architecture/ docs/blog/posts/Agent/index.qmd
+# 항상 이렇게
+git add -A
 ```
+
+`.gitignore`에 제외 파일이 이미 정의되어 있으므로 의도치 않은 파일이 포함될 위험이 없다.
+
+::: {.callout-warning}
+## 절대 금지
+
+```bash
+# 금지 — 파일 수동 열거는 누락을 유발한다
+git add docs/blog/posts/Agent/index.qmd _site/docs/blog/index.xml ...
+```
+
+:::
 
 ::: {.callout-warning}
 ## add 전 확인 사항
 
 - 민감 정보(API 키, 비밀번호)가 포함된 파일이 없는지 확인
 - `draft: true`인 파일이 의도치 않게 포함되지 않는지 확인
-- 빌드 캐시(`_freeze/`)는 필요 시에만 포함
 :::
 
 ### Step 3: 커밋 메시지 작성
