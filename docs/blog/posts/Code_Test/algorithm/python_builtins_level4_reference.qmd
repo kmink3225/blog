@@ -1,0 +1,360 @@
+---
+title: "Python 필수 내장 함수·자료구조 레퍼런스 (Level 4)"
+subtitle: "코딩 테스트 Level 4를 위한 Python 무기 목록"
+description: |
+  Programmers Level 4에서 요구하는 Python 고급 도구와 알고리즘 패턴을
+  Data Scientist와 AI Engineer 트랙별 우선순위로 정리한다.
+  Dijkstra, DP 최적화, 유니온 파인드, SQL 윈도우 함수가 핵심이다.
+categories:
+  - Code Test
+author: Kwangmin Kim
+date: 04/04/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+Level 4는 DS 트랙과 AIE 트랙이 명확히 갈린다. DS 트랙은 SQL 고급 분석(Window Functions, CTE)과
+투 포인터 패턴을 중심으로 준비한다. AIE 트랙은 그래프 알고리즘(Dijkstra, Floyd-Warshall),
+Union-Find, 비트 마스킹 등 시스템 수준의 알고리즘 구현 능력을 요구한다.
+
+---
+
+## DS vs AIE 트랙 우선순위
+
+| 도구/개념 | DS 우선순위 | AIE 우선순위 | 설명 |
+|---------|-----------|------------|------|
+| Dijkstra (heapq 기반) | ★☆☆ | ★★★ | 가중치 그래프 최단 경로 |
+| Floyd-Warshall | ★☆☆ | ★★★ | 전체 쌍 최단 경로 |
+| Union-Find | ★☆☆ | ★★★ | 연결 성분, MST |
+| 배낭 문제 DP | ★★☆ | ★★★ | 선택 최적화 |
+| 투 포인터 / 슬라이딩 윈도우 | ★★★ | ★★★ | 구간 탐색 최적화 |
+| SQL Window Functions | ★★★ | ★★☆ | 분석 쿼리 |
+| SQL CTE (WITH) | ★★★ | ★★☆ | 복잡 쿼리 분해 |
+| 비트 마스킹 | ★☆☆ | ★★★ | 부분집합, 상태 압축 DP |
+| 모노톤 스택 | ★★☆ | ★★★ | 다음 큰 원소, 히스토그램 |
+
+---
+
+## Dijkstra — 가중치 그래프 최단 경로 (AIE 핵심)
+
+```python
+import heapq
+
+def dijkstra(graph, start, n):
+    """
+    graph: {node: [(neighbor, weight), ...]}
+    n: 전체 노드 수
+    """
+    INF = float('inf')
+    dist = [INF] * (n + 1)
+    dist[start] = 0
+
+    pq = [(0, start)]    # (거리, 노드)
+
+    while pq:
+        d, u = heapq.heappop(pq)    # 현재까지의 최단 거리 노드
+
+        if d > dist[u]:    # 이미 처리된 노드이면 skip
+            continue
+
+        for v, w in graph[u]:
+            if dist[u] + w < dist[v]:
+                dist[v] = dist[u] + w    # 거리 갱신
+                heapq.heappush(pq, (dist[v], v))
+
+    return dist
+
+# 예시
+graph = {
+    1: [(2, 2), (3, 5)],
+    2: [(3, 1), (4, 7)],
+    3: [(4, 3)],
+    4: []
+}
+dist = dijkstra(graph, 1, 4)
+# dist → [inf, 0, 2, 3, 6]
+# dist[1]=0(시작), dist[2]=2, dist[3]=3(1→2→3), dist[4]=6(1→2→3→4)
+```
+
+---
+
+## Floyd-Warshall — 전체 쌍 최단 경로 (AIE 핵심)
+
+```python
+def floyd_warshall(n, edges):
+    INF = float('inf')
+    dist = [[INF] * (n+1) for _ in range(n+1)]
+
+    for i in range(n+1):
+        dist[i][i] = 0
+
+    for u, v, w in edges:
+        dist[u][v] = w    # 방향 그래프
+
+    # 경유 노드 k를 순서대로 고려
+    for k in range(1, n+1):
+        for i in range(1, n+1):
+            for j in range(1, n+1):
+                if dist[i][k] + dist[k][j] < dist[i][j]:
+                    dist[i][j] = dist[i][k] + dist[k][j]
+
+    return dist
+
+# 시간 복잡도: O(V^3) — 노드 수 적을 때 (V <= 500 정도) 사용
+```
+
+---
+
+## Union-Find — 연결 성분, 사이클 감지 (AIE 핵심)
+
+```python
+class UnionFind:
+    def __init__(self, n):
+        self.parent = list(range(n+1))    # parent[i] = i (자기 자신이 루트)
+        self.rank = [0] * (n+1)
+
+    def find(self, x):
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])  # 경로 압축
+        return self.parent[x]
+
+    def union(self, x, y):
+        px, py = self.find(x), self.find(y)
+        if px == py:
+            return False    # 이미 같은 집합 → 사이클
+        if self.rank[px] < self.rank[py]:
+            px, py = py, px
+        self.parent[py] = px
+        if self.rank[px] == self.rank[py]:
+            self.rank[px] += 1
+        return True
+
+uf = UnionFind(5)
+uf.union(1, 2)           # → True  (1,2 연결)
+uf.union(3, 4)           # → True  (3,4 연결)
+uf.union(2, 3)           # → True  (1,2,3,4 연결)
+uf.union(1, 4)           # → False  (이미 같은 집합, 사이클 형성)
+uf.find(1) == uf.find(4) # → True  (같은 집합)
+```
+
+---
+
+## 배낭 문제 DP (Knapsack)
+
+```python
+# 0/1 배낭 문제: n개 물건, 무게 제한 W
+# items = [(weight, value), ...]
+
+def knapsack(items, W):
+    n = len(items)
+    dp = [[0] * (W+1) for _ in range(n+1)]
+
+    for i in range(1, n+1):
+        w, v = items[i-1]
+        for j in range(W+1):
+            dp[i][j] = dp[i-1][j]    # 물건 i를 넣지 않는 경우
+            if j >= w:
+                dp[i][j] = max(dp[i][j], dp[i-1][j-w] + v)   # 넣는 경우
+
+    return dp[n][W]
+
+items = [(2, 3), (3, 4), (4, 5), (5, 6)]  # (무게, 가치)
+knapsack(items, 8)    # → 9  (물건 2+3: 무게 7, 가치 9)
+```
+
+---
+
+## 투 포인터 / 슬라이딩 윈도우
+
+```python
+# 투 포인터 — 정렬 배열에서 두 수의 합
+def two_sum_count(arr, target):
+    arr.sort()
+    left, right = 0, len(arr) - 1
+    count = 0
+    while left < right:
+        s = arr[left] + arr[right]
+        if s == target:
+            count += 1
+            left += 1
+            right -= 1
+        elif s < target:
+            left += 1
+        else:
+            right -= 1
+    return count
+
+two_sum_count([1, 2, 3, 4, 5], 6)  # → 2  ([1,5], [2,4])
+
+# 슬라이딩 윈도우 — 고정 크기 k의 최대 부분합
+def max_subarray_sum(arr, k):
+    window_sum = sum(arr[:k])
+    max_sum = window_sum
+    for i in range(k, len(arr)):
+        window_sum += arr[i] - arr[i-k]   # 윈도우 이동
+        max_sum = max(max_sum, window_sum)
+    return max_sum
+
+max_subarray_sum([1, 3, -1, -3, 5, 3, 6, 7], 3)  # → 16  (3+6+7)
+```
+
+---
+
+## 비트 마스킹 (AIE 핵심)
+
+```python
+# 부분집합 열거
+n = 3  # [0, 1, 2] 세 원소
+for mask in range(1 << n):    # 0 ~ 2^n - 1 = 0 ~ 7
+    subset = [i for i in range(n) if mask & (1 << i)]
+    print(f"mask={mask:03b}: {subset}")
+# mask=000: []
+# mask=001: [0]
+# mask=010: [1]
+# mask=011: [0, 1]
+# mask=100: [2]
+# mask=101: [0, 2]
+# mask=110: [1, 2]
+# mask=111: [0, 1, 2]
+
+# 비트 연산 기본
+5 & 3       # → 1   (101 & 011 = 001)
+5 | 3       # → 7   (101 | 011 = 111)
+5 ^ 3       # → 6   (101 ^ 011 = 110)
+~5          # → -6  (부호 있는 보수)
+5 << 1      # → 10  (왼쪽 시프트 = x 2)
+5 >> 1      # → 2   (오른쪽 시프트 = // 2)
+bin(5)      # → '0b101'  (이진수 표현)
+```
+
+---
+
+## 모노톤 스택 (단조 스택)
+
+```python
+# 오른쪽 첫 번째 더 큰 값 찾기 — Next Greater Element
+def next_greater(arr):
+    n = len(arr)
+    result = [-1] * n
+    stack = []    # 인덱스 저장
+
+    for i in range(n):
+        while stack and arr[stack[-1]] < arr[i]:
+            j = stack.pop()
+            result[j] = arr[i]    # j번째 원소의 다음 큰 값 = arr[i]
+        stack.append(i)
+
+    return result
+
+next_greater([2, 1, 5, 3, 4])
+# → [5, 5, -1, 4, -1]
+# 2의 다음 큰 값=5, 1의 다음 큰 값=5, 5는 없음(-1), 3의 다음 큰 값=4, 4는 없음(-1)
+```
+
+---
+
+## SQL Window Functions (DS 핵심)
+
+```sql
+-- ROW_NUMBER: 각 행에 고유 번호 부여
+SELECT
+    name,
+    salary,
+    department,
+    ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary DESC) AS rank_in_dept
+FROM employees;
+-- 부서별로 급여 내림차순 순위를 매긴다. 동점도 다른 번호를 받는다.
+
+-- RANK vs DENSE_RANK
+SELECT
+    name, score,
+    RANK() OVER (ORDER BY score DESC) AS rank,           -- 동점이면 같은 순위, 다음 순위 건너뜀
+    DENSE_RANK() OVER (ORDER BY score DESC) AS dense_rank -- 동점이면 같은 순위, 다음 순위 이어감
+FROM scores;
+-- score: 100, 100, 90
+-- RANK:       1,   1,  3
+-- DENSE_RANK: 1,   1,  2
+
+-- LAG / LEAD: 이전/다음 행 값 참조
+SELECT
+    date, revenue,
+    LAG(revenue) OVER (ORDER BY date) AS prev_revenue,
+    revenue - LAG(revenue) OVER (ORDER BY date) AS change
+FROM sales;
+-- 전날 대비 매출 변화를 계산한다
+
+-- 이동 평균 (3일)
+SELECT
+    date, revenue,
+    AVG(revenue) OVER (ORDER BY date ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS ma3
+FROM sales;
+
+-- 누적 합
+SELECT
+    date, revenue,
+    SUM(revenue) OVER (ORDER BY date ROWS UNBOUNDED PRECEDING) AS cumsum
+FROM sales;
+```
+
+---
+
+## SQL CTE (WITH) (DS 핵심)
+
+```sql
+-- CTE로 복잡한 쿼리 분해
+WITH
+dept_avg AS (
+    SELECT department, AVG(salary) AS avg_salary
+    FROM employees
+    GROUP BY department
+),
+above_avg AS (
+    SELECT e.name, e.salary, e.department, d.avg_salary
+    FROM employees e
+    JOIN dept_avg d ON e.department = d.department
+    WHERE e.salary > d.avg_salary
+)
+SELECT * FROM above_avg
+ORDER BY department, salary DESC;
+-- 부서 평균보다 급여가 높은 직원을 조회한다
+
+-- 다중 CTE
+WITH
+monthly_sales AS (
+    SELECT DATE_FORMAT(date, '%Y-%m') AS month, SUM(amount) AS total
+    FROM orders
+    GROUP BY month
+),
+ranked AS (
+    SELECT *, RANK() OVER (ORDER BY total DESC) AS rnk
+    FROM monthly_sales
+)
+SELECT month, total
+FROM ranked
+WHERE rnk <= 3;   -- 매출 Top 3 월 조회
+```
+
+---
+
+## 유형별 사용 도구 매핑 (Level 4)
+
+| 문제 유형 | DS 도구 | AIE 도구 |
+|---------|--------|---------|
+| 최단 경로 (가중치) | - | Dijkstra (heapq) |
+| 전체 쌍 최단 경로 | - | Floyd-Warshall |
+| 연결 성분 / MST | - | Union-Find |
+| 선택 최적화 | DP (배낭) | DP (배낭) |
+| 구간 탐색 | 투포인터 | 투포인터 |
+| 부분집합 탐색 | - | 비트 마스킹 |
+| 다음 큰 원소 | 모노톤 스택 | 모노톤 스택 |
+| 분석 쿼리 순위 | SQL Window | - |
+| 복잡 쿼리 분해 | SQL CTE | SQL CTE |
+
+---
+
+## 관련 문서
+
+- [Python 필수 내장 함수·자료구조 레퍼런스 (Level 3)](./python_builtins_level3_reference.qmd)
+- [Python 필수 내장 함수·자료구조 레퍼런스 (Level 5)](./python_builtins_level5_reference.qmd)
