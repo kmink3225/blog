@@ -1,0 +1,695 @@
+---
+title: "M-추정량 (M-Estimators)"
+subtitle: "Casella & Berger §10.2.2 + §10.6.4 — 손실함수 통합 프레임워크, 영향함수, 척도 추정"
+description: |
+  M-추정량을 손실함수 최소화의 통합 프레임워크로 정의하고, 주요 ρ 함수 계열(Huber, Bisquare,
+  Andrews, Hampel)을 비교한다. 점근 정규성의 완전한 유도, 영향함수(influence function)와
+  점근 분산의 연결, 붕괴점과 ψ 유계성의 관계를 다룬다. 척도 미지 시 MAD 기반 처리와
+  IRLS 알고리즘을 포함한다.
+categories:
+  - Statistics
+author: Kwangmin Kim
+date: 04/05/2026
+execute:
+  eval: false
+---
+
+## 이 절의 위치
+
+§10.2.1에서 평균 대비 중앙값의 강건성 trade-off를 분석했다.
+두 추정량은 각각 손실함수의 극단에 해당한다.
+
+$$
+\bar X: \quad \hat\theta = \arg\min_a \sum_i (x_i - a)^2, \qquad
+M_n: \quad \hat\theta = \arg\min_a \sum_i |x_i - a|.
+$$
+
+$\ell_2$ 손실은 효율적이지만 이상치에 취약하고, $\ell_1$ 손실은 강건하지만 정규 모형에서 비효율적이다.
+§10.2.2 M-추정량은 이 두 극단 사이의 **연속 스펙트럼**을 제공한다 (Casella & Berger, 2002, Ch.10).
+
+---
+
+## M-추정량 통합 프레임워크
+
+::: {.callout-note}
+## 정의: M-추정량 (M-Estimator)
+
+대칭 손실함수 $\rho$ 에 대해, M-추정량은 다음을 최소화한다:
+
+$$
+\hat\theta_M = \arg\min_\theta \sum_{i=1}^n \rho(x_i - \theta).
+$$
+
+$\rho$ 가 미분가능하면, $\psi = \rho'$ 로 정의하여 **점수 방정식(score equation)**을 만족하는 해이다:
+
+$$
+\sum_{i=1}^n \psi(x_i - \hat\theta_M) = 0.
+$$
+
+이름 "M"은 "maximum-likelihood-type"에서 유래한다 — $\rho = -\log f(x|\theta)$ 로 놓으면 MLE와 일치한다.
+:::
+
+**통합 프레임워크의 특수 케이스**:
+
+| 추정량 | $\rho(x)$ | $\psi(x) = \rho'(x)$ | 대응 모형 |
+|--------|-----------|----------------------|----------|
+| 표본 평균 | $\frac{1}{2}x^2$ | $x$ | $N(\mu, \sigma^2)$의 MLE |
+| 표본 중앙값 | $|x|$ | $\text{sign}(x)$ | 이중지수(라플라스)의 MLE |
+| MLE | $-\log f(x|\theta)$ | $-\partial\log f/\partial\theta$ | 가정된 모형의 MLE |
+| Huber | (식 10.2.2) | $\text{trunc}(x, \pm k)$ | 정규/이중지수 혼합 |
+
+---
+
+## 주요 ρ 함수 계열
+
+### Huber 함수 (§10.2.2)
+
+$$
+\rho_H(x; k) = \begin{cases}
+\frac{1}{2}x^2 & \text{if } |x| \leq k \\
+k|x| - \frac{1}{2}k^2 & \text{if } |x| > k
+\end{cases}, \qquad
+\psi_H(x; k) = \begin{cases}
+x & \text{if } |x| \leq k \\
+k \cdot \text{sign}(x) & \text{if } |x| > k
+\end{cases}
+$$
+
+- $\psi_H$ 는 **단조 증가**하여 점수 방정식의 해가 유일하다.
+- $|x| > k$ 에서 $\psi_H$ 가 포화(saturate)되므로 이상치 영향이 $\pm k$ 로 제한된다.
+- 튜닝 상수 $k$: 실무 권장값은 $k = 1.345\hat\sigma$ (정규에서 95% 효율 달성).
+
+### Tukey 이중제곱 함수 (Bisquare / Biweight)
+
+$$
+\rho_T(x; c) = \begin{cases}
+\frac{c^2}{6}\left[1 - \left(1 - \frac{x^2}{c^2}\right)^3\right] & \text{if } |x| \leq c \\
+\frac{c^2}{6} & \text{if } |x| > c
+\end{cases}
+$$
+
+$$
+\psi_T(x; c) = \begin{cases}
+x\left(1 - \frac{x^2}{c^2}\right)^2 & \text{if } |x| \leq c \\
+0 & \text{if } |x| > c
+\end{cases}
+$$
+
+- **재하강(redescending)**: $|x| > c$ 이면 $\psi_T = 0$ — 극단적 이상치는 추정에 **아무 기여도 하지 않는다**.
+- 점수 방정식의 해가 유일하지 않을 수 있어 좋은 초기값이 필요하다.
+- 튜닝 상수 $c$: 실무 권장값은 $c = 4.685\hat\sigma$ (정규에서 95% 효율).
+
+### Andrews 사인 함수
+
+$$
+\psi_A(x; c) = \begin{cases}
+\sin\!\left(\frac{x}{c}\right) & \text{if } |x| \leq c\pi \\
+0 & \text{if } |x| > c\pi
+\end{cases}
+$$
+
+- Bisquare와 유사하게 재하강하여 극단 이상치를 완전히 배제한다.
+- 부드럽고(smooth) 연속 미분가능하다는 장점이 있다.
+
+### Hampel 3구간 함수
+
+$$
+\psi_{Hm}(x; a, b, r) = \begin{cases}
+x & \text{if } |x| \leq a \\
+a \cdot \text{sign}(x) & \text{if } a < |x| \leq b \\
+a \cdot \frac{r - |x|}{r - b} \cdot \text{sign}(x) & \text{if } b < |x| \leq r \\
+0 & \text{if } |x| > r
+\end{cases}
+$$
+
+- 세 구간: 정규 구간(선형) → 포화 구간(일정) → 재하강 구간 → 완전 배제.
+- 세 파라미터 $(a, b, r)$ 로 각 구간의 경계를 직접 제어한다.
+
+**ρ 함수 계열 비교**:
+
+```
+ψ(x)
+  │
+  k │        ┌─────────── Huber (포화 후 유지)
+  │      ╱
+  │    ╱
+  │  ╱       ↗ Bisquare (포화 없음, 점진적 재하강 → 0)
+  0─────────────────────── x
+  │  ╲       ↘ Bisquare
+  │    ╲
+ -k │      ╲
+   │        └─────────── Huber
+
+   |x| 증가 → Huber는 k에서 멈춤, Bisquare는 0으로 수렴
+```
+
+---
+
+## 점근 정규성: 완전한 유도
+
+### 설정
+
+$X_1, \ldots, X_n \stackrel{\text{iid}}{\sim} f(x - \theta_0)$ 에서 M-추정량 $\hat\theta_M$ 이
+$\sum_i \psi(x_i - \hat\theta_M) = 0$ 을 만족한다.
+
+$\theta_0$ 은 $E_{\theta_0}[\psi(X - \theta_0)] = 0$ 을 만족하는 참값이다.
+
+### 1단계: Taylor 전개
+
+$\hat\theta_M$ 근방에서 $\theta_0$ 를 중심으로 Taylor 전개:
+
+$$
+0 = \sum_{i=1}^n \psi(x_i - \hat\theta_M)
+\approx \sum_{i=1}^n \psi(x_i - \theta_0) + (\hat\theta_M - \theta_0) \sum_{i=1}^n \psi'(x_i - \theta_0).
+$$
+
+### 2단계: 재배열 및 $\sqrt{n}$ 정규화
+
+$$
+\sqrt{n}(\hat\theta_M - \theta_0) = \frac{-\frac{1}{\sqrt{n}}\sum_{i=1}^n \psi(x_i - \theta_0)}{\frac{1}{n}\sum_{i=1}^n \psi'(x_i - \theta_0)}.
+$$
+
+### 3단계: 분자의 극한 분포 (CLT 적용)
+
+$E[\psi(X-\theta_0)] = 0$ 이고 $\text{Var}[\psi(X-\theta_0)] = E[\psi(X-\theta_0)^2]$ 이므로:
+
+$$
+\frac{1}{\sqrt{n}}\sum_{i=1}^n \psi(X_i - \theta_0)
+\xrightarrow{d} N\bigl(0,\; E[\psi(X-\theta_0)^2]\bigr).
+$$
+
+### 4단계: 분모의 극한값 (LLN 적용)
+
+$$
+\frac{1}{n}\sum_{i=1}^n \psi'(X_i - \theta_0) \xrightarrow{p} E[\psi'(X-\theta_0)].
+$$
+
+### 5단계: Slutsky 정리로 결합
+
+::: {.callout-note}
+## 정리 (M-추정량의 점근 정규성, 식 10.2.6)
+
+$$
+\sqrt{n}(\hat\theta_M - \theta_0) \xrightarrow{d}
+N\!\left(0,\; \frac{E[\psi(X-\theta_0)^2]}{[E\psi'(X-\theta_0)]^2}\right).
+$$
+
+표기 편의상 다음을 정의한다:
+
+$$
+A \equiv E[\psi(X-\theta_0)^2], \qquad B \equiv E[\psi'(X-\theta_0)],
+\qquad \text{점근 분산} = \frac{A}{B^2}.
+$$
+:::
+
+**직관**: 분자 $A$ 는 $\psi$ 가 노이즈에 얼마나 반응하는지(sensitivity), 분모 $B^2$ 는 $\psi$ 가 $\theta$ 에 대해 얼마나 빠르게 변화하는지(precision) 를 측정한다. 노이즈 반응이 작고 변화율이 크면 추정이 정밀해진다.
+
+---
+
+## 영향함수 (Influence Function)
+
+### 정의
+
+::: {.callout-note}
+## 정의 10.6.1: 영향함수 (Influence Function)
+
+통계량 $T = T(F_n)$ 의 영향함수는:
+
+$$
+IF(T, x) = \lim_{\delta \to 0} \frac{T(F_\delta) - T(F)}{\delta},
+$$
+
+여기서 $F_\delta$ 는 $F$ 와 점 $x$ 의 혼합 분포:
+
+$$
+X \sim F_\delta \iff X \sim \begin{cases} F & \text{확률 } 1-\delta \\ \delta_x & \text{확률 } \delta. \end{cases}
+$$
+:::
+
+**해석**: $IF(T, x)$ 는 점 $x$ 에 단위 오염을 가했을 때 추정량 $T$ 의 1차 변화율이다.
+미적분학의 Gâteaux 미분에 해당한다.
+
+### 평균의 영향함수
+
+$T(F) = \int t \, dF(t) = \mu$ 이면 $T(F_\delta) = (1-\delta)\mu + \delta x$ 이므로:
+
+$$
+IF(\bar X, x) = x - \mu.
+$$
+
+영향함수가 $x$ 에 대해 **무한히 증가**한다. 극단적 이상치 하나가 추정량을 임의로 크게 이동시킬 수 있다.
+
+### 중앙값의 영향함수 (Ex 10.6.2)
+
+중앙값 $m$ 의 영향함수:
+
+$$
+IF(M, x) = \begin{cases}
+\dfrac{1}{2f(m)} & \text{if } x > m \\[6pt]
+-\dfrac{1}{2f(m)} & \text{if } x < m
+\end{cases}
+$$
+
+$|IF(M, x)| = 1/(2f(m))$ 로 **유계(bounded)**이다. 이상치가 아무리 극단적이어도 중앙값에 미치는 영향이 제한된다.
+
+### M-추정량의 영향함수
+
+M-추정량 $\hat\theta_M$ 의 영향함수:
+
+$$
+IF(\hat\theta_M, x) = \frac{\psi(x - \theta_0)}{-E[\psi'(X - \theta_0)]} = \frac{\psi(x - \theta_0)}{-B}.
+$$
+
+$\psi$ 가 유계이면 $IF$ 도 유계이다 — Huber, Bisquare, Andrews 모두 $\psi$ 가 유계이므로 영향함수가 유계이다.
+표본 평균의 $\psi(x) = x$ 는 비유계이므로 영향함수도 비유계이다.
+
+::: {.callout-important}
+## 영향함수 ↔ 점근 분산 연결 (§10.6.4)
+
+$$
+\sqrt{n}(\hat\theta_M - \theta_0) \to N\!\left(0,\; E_{\theta_0}\!\left[IF(\hat\theta_M, X)^2\right]\right).
+$$
+
+점근 분산은 영향함수의 제곱 기댓값이다.
+
+**확인**:
+$$
+E\!\left[IF(\hat\theta_M, X)^2\right] = E\!\left[\frac{\psi(X-\theta_0)^2}{B^2}\right] = \frac{A}{B^2}.
+$$
+
+이는 (10.2.6)과 일치한다. 영향함수가 크면 점근 분산도 크다.
+:::
+
+**영향함수의 세 가지 역할**:
+
+| 역할 | 설명 |
+|------|------|
+| 강건성 진단 | $IF$ 가 유계이면 추정량이 강건함 |
+| 점근 분산 계산 | $\text{Var} = E[IF^2]$ |
+| 오염 민감도 측정 | 단위 오염이 추정량을 얼마나 이동시키는가 |
+
+---
+
+## 붕괴점과 ψ 유계성의 연결
+
+::: {.callout-note}
+## 정리: 재하강 M-추정량의 50% 붕괴점
+
+$\psi$ 가 유계이고(bounded) 재하강(redescending — 즉 $|x| \to \infty$ 이면 $\psi(x) \to 0$)이면,
+해당 M-추정량의 붕괴점은 50%에 근사한다.
+:::
+
+**직관**:
+- $\psi$ 비유계 (평균): 이상치 하나가 $\psi(x_i - \theta) = x_i - \theta \to \infty$ 로 가면 추정량도 $\infty$ 로 끌려간다 → BD = 0
+- $\psi$ 유계 (Huber): 이상치가 아무리 커도 $\psi(x_i - \theta) \leq k$ → 이상치의 영향이 제한 → BD > 0
+- $\psi$ 재하강 (Bisquare): $|x_i| > c$ 이면 $\psi = 0$ → 이상치는 완전히 무시 → BD = 50%
+
+**추정량별 붕괴점 비교**:
+
+| 추정량 | ψ 특성 | 붕괴점 | 정규 ARE |
+|--------|--------|--------|---------|
+| 표본 평균 | 비유계 | 0% | 1.00 |
+| Huber ($k=1.345\hat\sigma$) | 유계·단조 | ~0 ~ 50% | 0.95 |
+| Bisquare ($c=4.685\hat\sigma$) | 유계·재하강 | ~50% | 0.95 |
+| 표본 중앙값 | 재하강 (sign) | 50% | 0.637 |
+
+Huber와 Bisquare는 모두 정규에서 약 95% 효율을 유지하면서 강건성을 달성한다.
+차이는 극단 이상치 처리: Huber는 영향을 제한하고, Bisquare는 완전히 배제한다.
+
+---
+
+## 척도 미지 문제와 해결
+
+### 문제: 척도(σ)를 모른다
+
+지금까지는 데이터 척도 $\sigma$ 가 알려져 있다고 가정했다.
+실무에서는 $\sigma$ 를 추정해야 하며, 잘못된 척도 추정은 추정량의 강건성을 무너뜨린다.
+
+M-추정량은 일반적으로 다음과 같이 척도를 포함한다:
+
+$$
+\sum_{i=1}^n \psi\!\left(\frac{x_i - \theta}{\hat\sigma}\right) = 0.
+$$
+
+### MAD 척도 추정
+
+가장 강건한 척도 추정량은 **중앙절댓편차(Median Absolute Deviation, MAD)**이다:
+
+$$
+\hat\sigma = \text{MAD} = b \cdot \text{median}\!\left(|x_i - \hat m|\right),
+$$
+
+여기서 $\hat m = \text{median}(\mathbf{x})$, $b = 1/\Phi^{-1}(3/4) \approx 1.4826$ 은 정규 일치 인수이다.
+
+**MAD의 성질**:
+- 붕괴점 = 50% (최대로 강건한 척도 추정량)
+- 정규 분포에서 $\text{MAD} \approx 0.6745\sigma$, 따라서 $b \cdot \text{MAD} \approx \sigma$
+- 이상치가 표본의 절반 미만이면 $\hat\sigma$ 가 finite하게 유지된다
+
+비교:
+
+| 척도 추정량 | 붕괴점 | 정규 효율 |
+|------------|--------|----------|
+| 표본 표준편차 $S$ | 0% | 100% |
+| IQR / 1.349 | 25% | 37% |
+| MAD / 0.6745 | 50% | 37% |
+| $S_n$ (Rousseeuw) | 50% | 58% |
+
+### 동시 추정 (위치 + 척도)
+
+위치 $\theta$ 와 척도 $\sigma$ 를 동시에 M-추정하는 연립 방정식:
+
+$$
+\begin{cases}
+\displaystyle\sum_{i=1}^n \psi\!\left(\frac{x_i - \theta}{\sigma}\right) = 0 \\[8pt]
+\displaystyle\sum_{i=1}^n \chi\!\left(\frac{x_i - \theta}{\sigma}\right) = 0
+\end{cases}
+$$
+
+$\chi$ 는 척도 추정용 함수 (예: $\chi(x) = \psi(x)^2 - \beta$, $\beta = E_{N(0,1)}[\psi(Z)^2]$).
+
+실무에서는 대개 **2단계 접근**을 사용한다:
+1. **1단계**: MAD로 초기 척도 $\hat\sigma_0$ 추정
+2. **2단계**: $\hat\sigma_0$ 를 고정하고 $\theta$ 에 대해 M-추정 반복
+
+---
+
+## IRLS 알고리즘 (반복 가중 최소제곱)
+
+M-추정량의 점수 방정식 $\sum_i \psi(r_i/\hat\sigma) = 0$ 은 닫힌 해가 없어 반복법이 필요하다.
+
+**가중치 재공식화**:
+
+$$
+\psi(r_i/\hat\sigma) = 0 \iff
+\underbrace{\frac{\psi(r_i/\hat\sigma)}{r_i/\hat\sigma}}_{w_i} \cdot r_i = 0.
+$$
+
+따라서 M-추정량은 가중 평균 $\hat\theta = \sum_i w_i x_i / \sum_i w_i$ 이다.
+단, 가중치 $w_i$ 가 $\hat\theta$ 에 의존하므로 반복이 필요하다.
+
+::: {.callout-note}
+## IRLS 알고리즘 (위치 추정)
+
+**초기화**: $\hat\theta^{(0)} = \text{median}(\mathbf{x})$, $\hat\sigma = 1.4826 \cdot \text{MAD}$
+
+**반복** ($t = 0, 1, 2, \ldots$):
+
+1. 잔차 계산: $r_i^{(t)} = x_i - \hat\theta^{(t)}$
+2. 표준화: $u_i^{(t)} = r_i^{(t)} / \hat\sigma$
+3. 가중치 계산: $w_i^{(t)} = \psi(u_i^{(t)}) / u_i^{(t)}$ ($u_i = 0$ 이면 $w_i = \psi'(0)$)
+4. 갱신: $\hat\theta^{(t+1)} = \sum_i w_i^{(t)} x_i / \sum_i w_i^{(t)}$
+
+**수렴 판정**: $|\hat\theta^{(t+1)} - \hat\theta^{(t)}| < \epsilon$ (예: $\epsilon = 10^{-8}$)
+:::
+
+**수렴 성질**:
+- Huber 추정량: 단조 $\psi$ → 단일 해로 반드시 수렴
+- Bisquare: 재하강 $\psi$ → 여러 해가 존재할 수 있어 초기값 선택이 중요
+
+**회귀에서의 IRLS**: 위치 $\theta$ 를 $\mathbf{x}_i^\top \boldsymbol\beta$ 로 대체하면 강건 회귀가 된다:
+
+$$
+\hat{\boldsymbol\beta} = (\mathbf{X}^\top \mathbf{W} \mathbf{X})^{-1} \mathbf{X}^\top \mathbf{W} \mathbf{y},
+\quad W = \text{diag}(w_1, \ldots, w_n).
+$$
+
+---
+
+## ARE 상한: Cauchy-Schwarz 부등식
+
+M-추정량의 ARE 대비 MLE는 항상 1 이하이다.
+
+$$
+\text{ARE}(\hat\theta_M, \hat\theta_\text{MLE}) =
+\frac{[E_\theta \psi(X-\theta_0) l'(\theta|X)]^2}
+{E[\psi(X-\theta)^2] \cdot E[l'(\theta|X)^2]} \leq 1.
+$$
+
+**유도**:
+
+분모 $E[\psi^2] \cdot E[(l')^2]$ 는 코시-슈바르츠 부등식 $[E(UV)]^2 \leq E(U^2)E(V^2)$ 에서
+$U = \psi(X-\theta_0)$, $V = l'(\theta|X)$ 로 놓으면 $[E(\psi \cdot l')]^2$ 이하임을 알 수 있다.
+
+따라서 ARE $\leq 1$ 이며, 등호 성립 조건은 $\psi \propto l'$ — 즉 $\psi$ 가 점수 함수에 비례할 때이다.
+이는 M-추정량이 곧 MLE인 경우에 해당한다.
+
+**Huber 추정량 ARE** ($k=1.345\hat\sigma$):
+
+| 분포 | vs 평균(MLE) | vs 중앙값 |
+|------|------------|---------|
+| 정규 | 0.95 | 1.49 |
+| 로지스틱 | 1.07 | 1.30 |
+| 이중지수 | 1.35 | 0.68 |
+| 코시 | $\infty$ (평균 비일치) | 유한 |
+
+코시 분포에서는 표본 평균이 일치추정량이 아니므로 ARE 비교가 무의미하지만,
+Huber 추정량은 코시 분포에서도 일치하며 점근 정규성을 갖는다.
+
+---
+
+## 응용 분야
+
+| 분야 | 활용 예시 | 선택 추정량 |
+|------|----------|------------|
+| 이상치 포함 회귀 | 지가/임금 데이터 | Huber 회귀 ($k=1.345\hat\sigma$) |
+| 신호 처리 | 충격 잡음 포함 신호 복원 | Bisquare (극단 잡음 완전 배제) |
+| 금융 위험 | 수익률 위치 추정 | Huber (꼬리 분포 대응) |
+| 센서 퓨전 | 불량 센서 포함 측정 | Huber IRLS |
+| 이미지 복원 | 에지 보존 평활화 | Huber 정규화 |
+| 메타분석 | 이질성 연구 통합 | 강건 효과크기 추정 |
+
+---
+
+## 예시: 다양한 추정량의 이상치 반응 비교
+
+데이터: $\mathbf{x} = \{-1.28, -0.96, -0.46, -0.44, -0.26, -0.21, -0.063, 0.39, 3, 6, 9\}$
+
+정규 관측값 8개의 진짜 중심은 약 0 근방, 이상치 3개가 양수 방향으로 강하게 당긴다.
+
+| 추정량 | 값 | 이상치 처리 |
+|--------|-----|------------|
+| 표본 평균 | 1.33 | 이상치 $\{3,6,9\}$ 에 강하게 당김 |
+| Huber ($k=1.5$) | ≈ 0.29 | 이상치 영향 제한 |
+| Bisquare ($c=4.685$) | ≈ -0.10 | 이상치 거의 배제 |
+| 표본 중앙값 | -0.21 | 이상치 무시 (BD=50%) |
+
+**해석**: Bisquare는 이상치 $\{9\}$ 에 가중치 0을 부여하므로 사실상 이상치 없는 정규 관측값만으로 추정한다.
+Huber는 이상치에 제한된 가중치를 부여하여 정보를 일부 보존한다.
+
+---
+
+## 코드 예시
+
+### Step 1: 순수 Python 구현 (ρ 함수 계열 비교)
+
+```python
+import numpy as np
+from scipy.optimize import brentq
+
+# 다양한 ψ 함수 정의
+def psi_huber(x, k=1.345):
+    """Huber ψ: 포화 함수"""
+    return np.where(np.abs(x) <= k, x, k * np.sign(x))
+
+def psi_bisquare(x, c=4.685):
+    """Tukey bisquare ψ: 재하강 함수"""
+    return np.where(np.abs(x) <= c, x * (1 - (x/c)**2)**2, 0.0)
+
+def psi_andrews(x, c=1.339):
+    """Andrews sine ψ: 재하강 함수"""
+    return np.where(np.abs(x) <= c * np.pi, np.sin(x / c), 0.0)
+
+def psi_median(x):
+    """표본 중앙값 (완전 재하강)"""
+    return np.sign(x)
+
+def psi_mean(x):
+    """표본 평균 (비유계)"""
+    return x
+
+
+# 영향함수 시각화 (수치 출력)
+def print_influence(psi_fn, name, x_vals=[-10, -5, -2, -1, 0, 1, 2, 5, 10]):
+    B = 1.0  # 정규화 상수 (단순화)
+    print(f"\n[{name}] IF(x) = ψ(x) / (-B)")
+    for x in x_vals:
+        print(f"  x = {x:5.1f}  →  IF = {psi_fn(x) / B:8.4f}")
+
+print_influence(psi_mean,     "평균 (비유계)")
+print_influence(psi_huber,    "Huber (k=1.345)")
+print_influence(psi_bisquare, "Bisquare (c=4.685)")
+
+
+# IRLS 구현: 위치 M-추정
+def robust_location(data, psi_fn, sigma=None, max_iter=100, tol=1e-8):
+    """
+    IRLS로 위치 M-추정량 계산.
+
+    Parameters
+    ----------
+    data   : array-like
+    psi_fn : callable, ψ 함수 (rho의 미분)
+    sigma  : float or None, 척도 — None이면 MAD로 추정
+    """
+    data = np.asarray(data, dtype=float)
+
+    # 척도 추정: MAD (붕괴점 50%)
+    if sigma is None:
+        median = np.median(data)
+        sigma = 1.4826 * np.median(np.abs(data - median))
+        if sigma < 1e-10:
+            return np.median(data)
+
+    # IRLS 반복
+    theta = np.median(data)   # 초기값: 중앙값
+
+    for _ in range(max_iter):
+        residuals = (data - theta) / sigma
+
+        # 가중치: w_i = ψ(r_i) / r_i (r_i → 0이면 ψ'(0))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            weights = np.where(
+                np.abs(residuals) < 1e-10,
+                1.0,                              # ψ'(0) = 1 for Huber/Bisquare
+                psi_fn(residuals) / residuals
+            )
+        weights = np.maximum(weights, 0)          # 음의 가중치 방지
+
+        w_sum = np.sum(weights)
+        if w_sum < 1e-10:
+            break
+        theta_new = np.dot(weights, data) / w_sum
+
+        if abs(theta_new - theta) < tol:
+            theta = theta_new
+            break
+        theta = theta_new
+
+    return theta
+
+
+# 데이터 예시: 정규 + 이상치
+x = np.array([-1.28, -0.96, -0.46, -0.44, -0.26, -0.21, -0.063, 0.39, 3, 6, 9])
+
+print("\n추정량 비교:")
+print(f"표본 평균:          {np.mean(x):.4f}")
+print(f"표본 중앙값:        {np.median(x):.4f}")
+print(f"Huber M-추정량:     {robust_location(x, psi_huber):.4f}")
+print(f"Bisquare M-추정량:  {robust_location(x, psi_bisquare):.4f}")
+print(f"Andrews M-추정량:   {robust_location(x, psi_andrews):.4f}")
+```
+
+### Step 2: statsmodels / 실무 활용 (강건 회귀)
+
+```python
+import numpy as np
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+# ─── 데이터 생성 ───
+np.random.seed(42)
+n = 100
+x = np.linspace(0, 10, n)
+y_true = 2.0 * x + 1.0
+
+# 5개의 이상치 주입
+y = y_true + np.random.normal(0, 1, n)
+outlier_idx = [10, 20, 30, 40, 50]
+y[outlier_idx] += np.array([10, -15, 12, -18, 20])   # 큰 이상치
+
+X = sm.add_constant(x)
+
+# ─── 1. OLS (이상치에 민감) ───
+ols_model = sm.OLS(y, X).fit()
+print("OLS 회귀:")
+print(f"  절편 = {ols_model.params[0]:.4f}  (참값: 1.0)")
+print(f"  기울기 = {ols_model.params[1]:.4f}  (참값: 2.0)")
+
+# ─── 2. Huber M-추정 회귀 ───
+huber_model = sm.RLM(y, X, M=sm.robust.norms.HuberT(t=1.345)).fit()
+print("\nHuber M-추정 회귀:")
+print(f"  절편 = {huber_model.params[0]:.4f}  (참값: 1.0)")
+print(f"  기울기 = {huber_model.params[1]:.4f}  (참값: 2.0)")
+
+# ─── 3. Bisquare M-추정 회귀 ───
+bisquare_model = sm.RLM(y, X, M=sm.robust.norms.TukeyBiweight(c=4.685)).fit()
+print("\nBisquare M-추정 회귀:")
+print(f"  절편 = {bisquare_model.params[0]:.4f}  (참값: 1.0)")
+print(f"  기울기 = {bisquare_model.params[1]:.4f}  (참값: 2.0)")
+
+# ─── 이상치별 가중치 확인 ───
+print("\n이상치 인덱스별 Huber 가중치:")
+for idx in outlier_idx:
+    w = huber_model.weights[idx]
+    print(f"  idx {idx}: y={y[idx]:.1f}, 가중치={w:.4f}")
+
+# ─── 4. 영향함수 수치 비교 ───
+print("\n영향함수 비교 (정규(0,1)에서의 값):")
+from scipy.stats import norm
+f_mu = norm.pdf(0)                # f(0) = 1/√(2π) ≈ 0.399
+sigma_median = 1 / (4 * f_mu**2) # 중앙값 점근 분산
+
+print(f"  평균:     IF(x=5)  = 5.0000  (비유계)")
+print(f"  중앙값:   |IF| ≡  {1/(2*f_mu):.4f}  (유계)")
+print(f"  Huber:    IF(x=5)  = {psi_huber(5.0/1.0) / 1.0:.4f}  (k=1.345 포화)")
+print(f"  Bisquare: IF(x=5)  = {psi_bisquare(5.0/1.0) / 1.0:.4f}  (c=4.685, 재하강)")
+
+def psi_huber(x, k=1.345):
+    return np.where(np.abs(x) <= k, x, k * np.sign(x))
+
+def psi_bisquare(x, c=4.685):
+    return np.where(np.abs(x) <= c, x * (1 - (x/c)**2)**2, 0.0)
+```
+
+---
+
+## 핵심 요약
+
+```
+M-추정량 스펙트럼:
+
+  평균          Huber          Bisquare         중앙값
+  (BD=0%)  ───────────────────────────────────  (BD=50%)
+  ARE=1.0      ARE≈0.95         ARE≈0.95        ARE=0.637
+
+  ψ 비유계     ψ 유계·단조     ψ 유계·재하강     ψ 재하강
+  IF 비유계    IF 유계          IF 유계(→0)       IF 유계
+
+  "효율 최대화"  "타협"           "타협"         "강건 최대화"
+```
+
+| 핵심 공식 | 내용 |
+|-----------|------|
+| M-추정량 정의 | $\sum_i \psi(x_i - \hat\theta) = 0$ |
+| 점근 분산 (10.2.6) | $A/B^2 = E[\psi^2]/(E\psi')^2$ |
+| 영향함수 | $IF = \psi(x-\theta_0) / (-B)$ |
+| IF ↔ 분산 | $\text{Var} = E[IF^2]$ |
+| ARE ≤ 1 | Cauchy-Schwarz, $\psi \propto l'$ 이면 등호 |
+| MAD 척도 | $\hat\sigma = 1.4826 \cdot \text{median}(|x_i - \hat m|)$ |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [점근적 강건성: 평균과 중앙값](./121-asymptotic-robustness.qmd) — 붕괴점, ARE, 강건성 동기
+- [부트스트랩 표준오차](./120-bootstrap-standard-errors.qmd) — 비모수 분산 추정
+
+**후속 주제**
+
+- [점근적 가설검정 (Asymptotic Hypothesis Testing)](./123-asymptotic-hypothesis-testing.qmd) — Wald, Score, LRT
+
+**관련 개념**
+
+- [점추정: 효율성 (Point Estimation: Efficiency)](./118-point-estimation-efficiency.qmd) — 크래머-라오 하한
+- [최대우도추정 (MLE)](./101-maximum-likelihood-estimators.qmd) — M-추정량의 특수 케이스
+
+## 참고 문헌
+
+- Casella, G. & Berger, R. L. (2002). *Statistical Inference* (2nd ed.). Duxbury. §10.2.2, §10.6.4.
+- Huber, P. J. (1964). Robust estimation of a location parameter. *Annals of Mathematical Statistics*, 35(1), 73–101.
+- Huber, P. J. (1981). *Robust Statistics*. Wiley.
+- Hampel, F. R. (1974). The influence curve and its role in robust estimation. *JASA*, 69, 383–393.
+- Rousseeuw, P. J. & Croux, C. (1993). Alternatives to the median absolute deviation. *JASA*, 88, 1273–1283.
