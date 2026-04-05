@@ -1,0 +1,616 @@
+---
+title: "Ablation Study"
+subtitle: "딥러닝 모델 컴포넌트 기여도 분석의 핵심 방법론"
+description: |
+  Ablation study는 딥러닝 모델의 각 구성 요소를 체계적으로 제거하거나 변형하여
+  각 컴포넌트의 기여도를 정량적으로 측정하는 실험 방법론이다.
+  설계 원칙, 실제 논문 사례, 결과 해석, PyTorch 구현까지 상세히 다룬다.
+categories:
+  - Deep Learning
+  - Research Methodology
+author: Kwangmin Kim
+date: 04/05/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+딥러닝 논문을 읽다 보면 "ablation study"라는 섹션을 반드시 마주친다. "우리 모델의 어떤 요소가 성능 향상에 기여했는가?"를 증명하는 이 실험이 없으면, 제안된 모델이 단순한 블랙박스에 불과하다. Ablation study는 연구자가 "왜 이 설계가 옳은가"를 실증하는 핵심 수단이다.
+
+이 포스트는 ablation study의 개념, 설계 원칙, 실제 논문 사례, 그리고 PyTorch 기반 구현까지 체계적으로 다룬다.
+
+## 정의
+
+::: {.callout-note}
+## 정의: Ablation Study
+
+**Ablation study**(절제 연구)는 딥러닝 모델의 특정 구성 요소(component)를 제거(remove), 대체(replace), 또는 변형(modify)하여 각 요소가 전체 성능에 미치는 기여도를 측정하는 실험 방법론이다.
+
+- **전체 모델(full model)**: 모든 구성 요소가 포함된 최종 모델
+- **절제 변형(ablated variant)**: 특정 요소 하나를 제거하거나 단순화한 모델
+- **성능 격차(performance gap)**: 전체 모델과 절제 변형 간 성능 차이 → 해당 요소의 기여도
+
+용어는 신경외과에서 유래했다. 뇌의 특정 영역을 제거(ablate)한 뒤 기능 변화를 관찰하는 방식이 딥러닝 연구로 이식된 것이다.
+:::
+
+## 왜 필요한가
+
+### 블랙박스를 열어야 하는 이유
+
+딥러닝 모델은 수십 개의 설계 결정(design choice)의 조합이다. 예를 들어 BERT는 다음 요소들의 합이다.
+
+- Masked Language Model (MLM) 목적함수
+- Next Sentence Prediction (NSP) 목적함수
+- WordPiece 토크나이저
+- 양방향 Transformer 인코더
+- 특정 배치 크기와 학습률 스케줄
+
+최종 모델이 기존 방법보다 3% 향상되었다고 할 때, 이 향상이 어디서 왔는지 알 수 없다면 두 가지 문제가 생긴다.
+
+1. **재현 불가능성(irreproducibility)**: 다른 연구자가 같은 방향으로 개선하기 어렵다
+2. **부풀려진 기여도 주장**: 실제로는 하나의 요소가 전부 기여했는데 전체 설계가 공헌한 것처럼 주장하게 된다
+
+### 반사실적 비교의 필요성
+
+Ablation study는 본질적으로 **반사실적(counterfactual) 질문**에 답한다.
+
+> "만약 이 컴포넌트가 없었다면 성능이 얼마나 달라졌을까?"
+
+이 질문에 답하지 못하면, 모델 설계의 어떤 부분이 핵심인지 알 수 없다. 공학적으로도 낭비다. 불필요한 컴포넌트를 그대로 유지하면 모델이 더 크고 느려진다.
+
+### 연구 신뢰성 지표
+
+최상위 학술대회(NeurIPS, ICML, ACL, CVPR 등)의 리뷰어들은 ablation study의 부재를 **논문 거절의 직접적 사유**로 든다. 충실한 ablation study는 다음을 증명한다.
+
+- 제안한 각 컴포넌트가 독립적으로 효과가 있다
+- 성능 향상이 특정 데이터셋에 과적합된 결과가 아니다
+- 하이퍼파라미터 튜닝이 아닌 설계 자체의 효과이다
+
+## 유형 분류
+
+Ablation study는 제거 방향과 대상에 따라 다음과 같이 분류된다.
+
+### 제거 방향에 따른 분류
+
+| 유형 | 방식 | 특징 |
+|------|------|------|
+| **Backward Ablation** | 전체 모델 → 요소 하나씩 제거 | 가장 흔한 방식. 전체 기여도에서 시작 |
+| **Forward Ablation** | 기준 모델 → 요소 하나씩 추가 | 각 요소의 추가적 기여를 측정 |
+| **Factorial Ablation** | 모든 요소 조합 실험 | 완전하지만 실험 수 폭발적 증가 |
+
+**Backward ablation**이 가장 널리 쓰인다. 전체 모델(full model)을 기준으로 각 요소를 하나씩 제거하여 성능을 비교한다.
+
+**Forward ablation**은 기존 베이스라인에서 출발해 제안된 요소를 하나씩 추가하는 방식이다. 각 요소의 점진적 기여를 단계별로 보여줄 때 유용하다.
+
+### 대상에 따른 분류
+
+| 대상 | 예시 |
+|------|------|
+| **구성 요소(component)** | Attention layer 제거, residual connection 제거 |
+| **손실 함수(loss term)** | Multi-task loss에서 보조 손실 제거 |
+| **입력 특성(input feature)** | 특정 입력 채널 또는 토큰 유형 제거 |
+| **학습 전략(training trick)** | Data augmentation, warm-up 스케줄 제거 |
+| **하이퍼파라미터(hyperparameter)** | 레이어 수, hidden size 변경 |
+
+## 설계 원칙
+
+잘 설계된 ablation study는 다음 원칙을 따른다.
+
+### 원칙 1: 단일 변수 변경 (One Change at a Time)
+
+하나의 실험에서 **하나의 요소만** 변경한다. 두 요소를 동시에 제거하면 각각의 기여를 분리할 수 없다.
+
+```
+전체 모델: MLM + NSP + Bidirectional Transformer
+실험 A   : MLM          + Bidirectional Transformer   (NSP 제거)
+실험 B   : MLM + NSP                                   (Bidirectional → Unidirectional)
+실험 C   :       NSP    + Bidirectional Transformer   (MLM 제거)
+```
+
+위 구조에서 각 요소의 독립적 기여를 측정할 수 있다.
+
+### 원칙 2: 공정한 비교 (Fair Comparison)
+
+비교 대상 변형들은 **동일한 계산 예산(computational budget)** 아래 평가해야 한다. 파라미터 수, 학습 시간, 데이터 양이 다르면 성능 차이가 설계가 아닌 규모의 차이에서 올 수 있다.
+
+**흔한 실수**: 특정 컴포넌트를 제거했더니 파라미터 수가 줄었고, 나머지 레이어에 파라미터를 추가하지 않은 채 비교하는 경우. 제거로 인한 파라미터 감소 효과와 설계 변경 효과가 섞인다.
+
+### 원칙 3: 통계적 신뢰성 (Statistical Reliability)
+
+단일 랜덤 시드(seed) 결과는 신뢰하기 어렵다. **여러 시드로 반복 실험**하고 평균 ± 표준편차를 보고한다.
+
+$$
+\text{성능}_{\text{평균}} = \frac{1}{K} \sum_{k=1}^{K} \text{Acc}_k, \quad \text{표준편차} = \sqrt{\frac{1}{K-1} \sum_{k=1}^{K} (\text{Acc}_k - \bar{\text{Acc}})^2}
+$$
+
+$K = 5$ 시드가 실용적 기준이다. NLP 분야에서는 데이터 섞임(shuffle)도 시드에 포함한다.
+
+### 원칙 4: 여러 데이터셋/벤치마크에서 검증
+
+하나의 데이터셋에서만 ablation을 수행하면, 그 결과가 해당 데이터셋에 특화된 것일 수 있다. **최소 2개 이상의 벤치마크**에서 일관된 패턴이 나와야 설계의 일반성(generality)이 증명된다.
+
+### 원칙 5: 의미 있는 베이스라인 선택
+
+절제 변형은 단순히 컴포넌트를 "제거"하는 것이 아니라, 비교 가능한 **대안(alternative)**으로 대체하는 것이 더 정보가 풍부하다.
+
+| 설계 선택 | 나쁜 ablation | 좋은 ablation |
+|----------|--------------|--------------|
+| Self-attention | 레이어 완전 제거 | 동일 파라미터의 MLP로 교체 |
+| Residual connection | 연결 제거 | 가중합(weighted sum)으로 교체 |
+| Layer normalization | 제거 | Batch normalization으로 교체 |
+
+## 실제 논문 사례
+
+### 사례 1: BERT (Devlin et al., 2019)
+
+BERT 논문의 Ablation Study (Table 5)는 세 요소의 기여를 분리했다.
+
+| 모델 변형 | MLM | NSP | 방향성 | MNLI | SQuAD v1.1 |
+|----------|-----|-----|--------|------|-----------|
+| BERT BASE | O | O | 양방향 | 84.4 | 88.5 |
+| NSP 제거 | O | X | 양방향 | 83.9 | 87.9 |
+| MLM→LTR 변경 | LTR | X | 단방향 | 82.1 | 77.8 |
+| BiLSTM 추가 | LTR | X | BiLSTM | 82.7 | 84.9 |
+
+**핵심 발견**: NSP 제거는 작은 하락(0.5%)만 유발했으나, 단방향 LTR로 변경하면 SQuAD에서 10% 이상 하락했다. 양방향성(bidirectionality)이 BERT 성능의 핵심임을 증명했다.
+
+**이후 영향**: 이 결과를 바탕으로 RoBERTa는 NSP를 완전히 제거하고 MLM만으로 학습하여 더 나은 성능을 달성했다.
+
+### 사례 2: Vision Transformer — ViT (Dosovitskiy et al., 2021)
+
+ViT 논문의 ablation은 패치 크기와 데이터 크기의 영향을 분석했다.
+
+| 패치 크기 | 파라미터 수 | ImageNet 정확도 |
+|----------|-----------|----------------|
+| 32 × 32 | 86M | 73.4% |
+| 16 × 16 | 86M | 81.8% |
+| 14 × 14 | 307M | 86.9% |
+
+패치 크기가 작을수록 시퀀스 길이가 길어지고($H \times W / P^2$ 개의 패치), 세밀한 공간 정보를 포착한다. 단, 계산 비용은 $O(n^2)$로 증가한다.
+
+### 사례 3: ResNet (He et al., 2016)
+
+잔차 연결(residual connection)의 기여를 측정하기 위한 ablation.
+
+$$
+y = \mathcal{F}(x, \{W_i\}) + x
+$$
+
+| 모델 | 잔차 연결 | CIFAR-10 오류율 |
+|-----|---------|----------------|
+| Plain-110 | X | 6.43% |
+| ResNet-110 | O | 6.43% → **6.43% 대신 실제로는 훨씬 낮음** |
+| Plain-1202 | X | 7.93% (과적합) |
+| ResNet-1202 | O | 4.91% |
+
+레이어가 깊어질수록(110 → 1202층) 잔차 연결 없이는 그래디언트 소실이 심화되어 오히려 성능이 저하됨을 ablation이 증명했다. 잔차 연결의 효과는 얕은 모델에서는 미미하지만 매우 깊은 모델에서는 결정적이다.
+
+### 사례 4: Transformer 원논문 (Vaswani et al., 2017)
+
+Attention Is All You Need 논문은 헤드 수, 키 차원 크기, 드롭아웃 비율에 대한 체계적인 ablation을 수행했다.
+
+| 변형 | 헤드 수 | $d_k$ | 드롭아웃 | BLEU (EN→DE) |
+|-----|--------|-------|---------|-------------|
+| A | 1 | 512 | 0.1 | 23.3 |
+| B | 4 | 128 | 0.1 | 25.3 |
+| C (기본) | 8 | 64 | 0.1 | 25.8 |
+| D | 16 | 32 | 0.1 | 25.5 |
+| E | 32 | 16 | 0.1 | 25.1 |
+
+헤드 수가 너무 적어도(1개), 너무 많아도(32개) 성능이 하락한다. 키 차원 $d_k$ 가 작아지면 표현력이 줄어드는 trade-off가 있다.
+
+## 결과 해석 방법
+
+### 기여도 계산
+
+각 컴포넌트의 기여도를 정량화하는 방법이다.
+
+$$
+\text{기여도}(c_i) = \text{Perf}(\text{전체 모델}) - \text{Perf}(\text{전체 모델} \setminus \{c_i\})
+$$
+
+$c_i$를 제거했을 때 성능이 많이 하락할수록 $c_i$의 기여도가 크다.
+
+**상대적 기여도**로 정규화하면 여러 데이터셋에서 비교가 쉬워진다.
+
+$$
+\text{상대 기여도}(c_i) = \frac{\text{Perf}(\text{전체}) - \text{Perf}(\text{전체} \setminus \{c_i\})}{\text{Perf}(\text{전체}) - \text{Perf}(\text{베이스라인})} \times 100\%
+$$
+
+### Ablation 결과 표 작성 요령
+
+좋은 ablation 표는 다음 구조를 따른다.
+
+| 구성 요소 A | 구성 요소 B | 구성 요소 C | 성능 | 전체 대비 |
+|:-----------:|:-----------:|:-----------:|------|----------|
+| O | O | O | **92.3** | 기준 |
+| X | O | O | 89.1 | -3.2 |
+| O | X | O | 91.0 | -1.3 |
+| O | O | X | 88.5 | -3.8 |
+| X | X | O | 85.2 | -7.1 |
+| X | O | X | 87.3 | -5.0 |
+| O | X | X | 86.0 | -6.3 |
+| X | X | X | 82.1 | -10.2 |
+
+체크마크(O/X)로 컴포넌트 포함 여부를 표기하고, 전체 대비 성능 차이를 명시한다.
+
+### 통계적 유의성 검정
+
+성능 차이가 단순한 랜덤 변동인지 실제 효과인지 판단하기 위해 **통계 검정**이 필요하다.
+
+분류 태스크에서 두 모델 간 McNemar 검정:
+
+$$
+\chi^2 = \frac{(n_{01} - n_{10})^2}{n_{01} + n_{10}}
+$$
+
+- $n_{01}$: 모델 A 맞고 모델 B 틀린 샘플 수
+- $n_{10}$: 모델 A 틀리고 모델 B 맞는 샘플 수
+
+$p < 0.05$ 이면 두 모델의 성능 차이가 통계적으로 유의하다고 본다.
+
+## 흔한 실수와 방지법
+
+### 실수 1: 순차적 제거 함정
+
+```
+잘못된 방식:
+전체 → A 제거 → A+B 제거 → A+B+C 제거
+
+올바른 방식:
+전체 → A만 제거
+전체 → B만 제거
+전체 → C만 제거
+```
+
+순차적 제거는 요소 간 상호작용(interaction) 때문에 독립적 기여를 측정하지 못한다. A를 먼저 제거한 상태에서 B를 제거하면, B의 기여도가 A와의 상호작용 없이 측정된다.
+
+### 실수 2: 단일 시드 보고
+
+```python
+# 잘못된 예: 단일 시드
+torch.manual_seed(42)
+model = train(config)
+print(f"Accuracy: {evaluate(model):.4f}")
+
+# 올바른 예: 다중 시드
+results = []
+for seed in [42, 123, 456, 789, 1234]:
+    torch.manual_seed(seed)
+    model = train(config)
+    results.append(evaluate(model))
+print(f"Accuracy: {np.mean(results):.4f} ± {np.std(results):.4f}")
+```
+
+### 실수 3: Confounding Factor 무시
+
+컴포넌트를 제거했을 때 파라미터 수도 함께 변한다면, 성능 차이의 원인이 설계인지 규모인지 구분이 안 된다.
+
+```python
+# 잘못된 예: Attention 제거 후 파라미터 수 감소 방치
+class ModelWithoutAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.ffn = nn.Linear(512, 512)  # 파라미터 감소
+
+# 올바른 예: 파라미터 수를 맞춘 대안
+class ModelWithMLPInsteadOfAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Attention과 동일한 파라미터 수의 MLP
+        self.mlp = nn.Sequential(
+            nn.Linear(512, 2048),
+            nn.ReLU(),
+            nn.Linear(2048, 512)
+        )
+```
+
+## 코드 예시
+
+### Step 1: 설정 기반 Ablation 프레임워크 (Python)
+
+```python
+from dataclasses import dataclass, field
+from typing import Optional
+import torch
+import torch.nn as nn
+import numpy as np
+from itertools import product
+
+@dataclass
+class AblationConfig:
+    """Ablation study 설정 — 각 flag가 하나의 구성 요소를 나타낸다"""
+    use_residual: bool = True        # 잔차 연결 사용 여부
+    use_layer_norm: bool = True      # Layer normalization 사용 여부
+    use_dropout: bool = True         # Dropout 사용 여부
+    dropout_rate: float = 0.1
+    hidden_size: int = 256
+    num_layers: int = 4
+    seed: int = 42
+
+    def name(self) -> str:
+        """실험 식별자 생성"""
+        parts = []
+        if self.use_residual: parts.append("res")
+        if self.use_layer_norm: parts.append("ln")
+        if self.use_dropout: parts.append("do")
+        return "+".join(parts) if parts else "baseline"
+
+
+class AblationModel(nn.Module):
+    """
+    Ablation study를 위한 모듈형 모델
+    설정(config)에 따라 각 컴포넌트를 동적으로 포함/제외한다
+    """
+    def __init__(self, config: AblationConfig, input_size: int = 128, num_classes: int = 10):
+        super().__init__()
+        self.config = config
+
+        # 레이어 구성
+        layers = []
+        in_size = input_size
+
+        for i in range(config.num_layers):
+            layers.append(nn.Linear(in_size, config.hidden_size))
+
+            if config.use_layer_norm:
+                layers.append(nn.LayerNorm(config.hidden_size))
+
+            layers.append(nn.ReLU())
+
+            if config.use_dropout:
+                layers.append(nn.Dropout(config.dropout_rate))
+
+            in_size = config.hidden_size
+
+        self.layers = nn.ModuleList(layers)
+        self.classifier = nn.Linear(config.hidden_size, num_classes)
+
+        # 잔차 연결을 위한 프로젝션 (입력 크기 맞춤)
+        if config.use_residual and input_size != config.hidden_size:
+            self.residual_proj = nn.Linear(input_size, config.hidden_size)
+        else:
+            self.residual_proj = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [batch, input_size]
+
+        if self.config.use_residual:
+            residual = self.residual_proj(x) if self.residual_proj else x
+
+        out = x
+        for layer in self.layers:
+            out = layer(out)
+
+        if self.config.use_residual:
+            out = out + residual  # 잔차 연결
+
+        return self.classifier(out)  # [batch, num_classes]
+
+
+def run_ablation_experiment(config: AblationConfig,
+                             train_loader,
+                             val_loader,
+                             epochs: int = 10) -> dict:
+    """단일 ablation 실험 실행"""
+    torch.manual_seed(config.seed)
+    np.random.seed(config.seed)
+
+    model = AblationModel(config)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.CrossEntropyLoss()
+
+    # 학습
+    model.train()
+    for epoch in range(epochs):
+        for x, y in train_loader:
+            optimizer.zero_grad()
+            logits = model(x)      # [batch, num_classes]
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.step()
+
+    # 평가
+    model.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for x, y in val_loader:
+            logits = model(x)      # [batch, num_classes]
+            preds = logits.argmax(dim=-1)  # [batch]
+            correct += (preds == y).sum().item()
+            total += y.size(0)
+
+    accuracy = correct / total
+    num_params = sum(p.numel() for p in model.parameters())
+
+    return {
+        "config_name": config.name(),
+        "accuracy": accuracy,
+        "num_params": num_params,
+        "use_residual": config.use_residual,
+        "use_layer_norm": config.use_layer_norm,
+        "use_dropout": config.use_dropout,
+    }
+```
+
+### Step 2: 체계적 Ablation 실행 (PyTorch)
+
+```python
+import pandas as pd
+
+def run_full_ablation(train_loader, val_loader, num_seeds: int = 5) -> pd.DataFrame:
+    """
+    모든 컴포넌트 조합에 대해 ablation study 실행
+    backward ablation: 전체 모델에서 하나씩 제거
+    """
+
+    # 전체 모델 (baseline)
+    full_config = AblationConfig(
+        use_residual=True,
+        use_layer_norm=True,
+        use_dropout=True
+    )
+
+    # Ablation 변형들 — 하나씩 제거
+    ablation_variants = [
+        # 전체 모델
+        AblationConfig(use_residual=True,  use_layer_norm=True,  use_dropout=True),
+        # 잔차 연결 제거
+        AblationConfig(use_residual=False, use_layer_norm=True,  use_dropout=True),
+        # Layer Norm 제거
+        AblationConfig(use_residual=True,  use_layer_norm=False, use_dropout=True),
+        # Dropout 제거
+        AblationConfig(use_residual=True,  use_layer_norm=True,  use_dropout=False),
+        # 두 개 동시 제거
+        AblationConfig(use_residual=False, use_layer_norm=False, use_dropout=True),
+        AblationConfig(use_residual=False, use_layer_norm=True,  use_dropout=False),
+        AblationConfig(use_residual=True,  use_layer_norm=False, use_dropout=False),
+        # 모두 제거 (bare baseline)
+        AblationConfig(use_residual=False, use_layer_norm=False, use_dropout=False),
+    ]
+
+    all_results = []
+
+    for config in ablation_variants:
+        seed_accuracies = []
+
+        for seed in range(num_seeds):
+            config.seed = seed * 42  # 다양한 시드
+            result = run_ablation_experiment(config, train_loader, val_loader)
+            seed_accuracies.append(result["accuracy"])
+
+        all_results.append({
+            "model": config.name(),
+            "use_residual": config.use_residual,
+            "use_layer_norm": config.use_layer_norm,
+            "use_dropout": config.use_dropout,
+            "mean_acc": np.mean(seed_accuracies),
+            "std_acc": np.std(seed_accuracies),
+            "num_params": result["num_params"],
+        })
+
+    df = pd.DataFrame(all_results)
+
+    # 전체 모델 대비 성능 차이 계산
+    full_model_acc = df[
+        df["use_residual"] & df["use_layer_norm"] & df["use_dropout"]
+    ]["mean_acc"].values[0]
+
+    df["delta"] = df["mean_acc"] - full_model_acc  # 음수 = 하락
+
+    return df.sort_values("mean_acc", ascending=False)
+
+
+# 결과 출력 예시
+def print_ablation_table(df: pd.DataFrame):
+    """논문 스타일 ablation 결과 표 출력"""
+    print(f"{'Model':<25} {'Residual':<10} {'LayerNorm':<12} {'Dropout':<10} "
+          f"{'Accuracy':<15} {'Delta':<8}")
+    print("-" * 80)
+
+    for _, row in df.iterrows():
+        acc_str = f"{row['mean_acc']:.4f} ± {row['std_acc']:.4f}"
+        delta_str = f"{row['delta']:+.4f}" if row['delta'] != 0 else "baseline"
+        print(f"{row['model']:<25} {str(row['use_residual']):<10} "
+              f"{str(row['use_layer_norm']):<12} {str(row['use_dropout']):<10} "
+              f"{acc_str:<15} {delta_str:<8}")
+```
+
+### Step 3: 결과 시각화
+
+```python
+import matplotlib.pyplot as plt
+
+def visualize_ablation(df: pd.DataFrame):
+    """Ablation study 결과 시각화"""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # 왼쪽: 컴포넌트별 기여도 막대 그래프
+    ax1 = axes[0]
+    full_acc = df.iloc[0]["mean_acc"]  # 가장 높은 = 전체 모델
+
+    components = ["Residual\nConnection", "Layer\nNorm", "Dropout"]
+    # 각 컴포넌트 하나만 제거한 경우의 성능 하락
+    contributions = []
+    for col in ["use_residual", "use_layer_norm", "use_dropout"]:
+        # 해당 컴포넌트만 False인 행 찾기
+        mask = (df[col] == False)
+        for other_col in ["use_residual", "use_layer_norm", "use_dropout"]:
+            if other_col != col:
+                mask = mask & (df[other_col] == True)
+        ablated_acc = df[mask]["mean_acc"].values[0]
+        contributions.append(full_acc - ablated_acc)
+
+    bars = ax1.bar(components, contributions, color=["#2196F3", "#4CAF50", "#FF9800"])
+    ax1.set_ylabel("Performance Drop (Accuracy)")
+    ax1.set_title("Component Contribution (Backward Ablation)")
+    ax1.set_ylim(0, max(contributions) * 1.3)
+
+    for bar, val in zip(bars, contributions):
+        ax1.text(bar.get_x() + bar.get_width()/2,
+                 bar.get_height() + 0.001,
+                 f"{val:.4f}", ha="center", va="bottom", fontsize=10)
+
+    # 오른쪽: 전체 모델 vs 변형 비교
+    ax2 = axes[1]
+    models = df["model"].tolist()
+    means = df["mean_acc"].tolist()
+    stds = df["std_acc"].tolist()
+
+    colors = ["#2196F3"] + ["#FF5722"] * (len(models) - 1)
+    ax2.barh(models, means, xerr=stds, color=colors, alpha=0.8)
+    ax2.set_xlabel("Accuracy")
+    ax2.set_title("All Ablation Variants")
+    ax2.axvline(x=full_acc, color="blue", linestyle="--", alpha=0.5, label="Full model")
+    ax2.legend()
+
+    plt.tight_layout()
+    plt.savefig("ablation_results.png", dpi=150, bbox_inches="tight")
+    plt.show()
+```
+
+## 대규모 모델에서의 Ablation Study
+
+### 계산 비용 문제
+
+GPT-4 규모의 모델에서 완전한 ablation study는 현실적으로 불가능하다. 수십억 개의 파라미터를 수천 GPU-시간으로 학습하는 과정을 수십 번 반복할 수 없다.
+
+실용적 대안들이다.
+
+**1. 소규모 프록시 모델(proxy model) 사용**
+
+전체 모델(예: GPT-3 175B)의 1/100 크기(예: GPT-3 1.3B)에서 ablation을 수행하고, 소규모에서 유효한 패턴이 대규모에서도 유효하다고 가정한다. Scaling law 연구가 이 가정의 근거를 제공한다.
+
+**2. 모듈 단위 고정(freeze) 후 부분 ablation**
+
+전체 모델을 재학습하는 대신, 특정 모듈만 교체하거나 고정하고 나머지를 미세조정(fine-tuning)하는 방식으로 ablation을 근사한다.
+
+**3. Probing 기반 간접 측정**
+
+컴포넌트를 제거하는 대신, 각 레이어에서 중간 표현(representation)을 추출하고 별도의 분류기(probe)를 학습하여 각 레이어가 어떤 정보를 담고 있는지 분석한다.
+
+### Mechanistic Interpretability와의 연결
+
+최근 연구들은 ablation study를 넘어 **mechanistic interpretability**로 발전하고 있다. 단순히 "컴포넌트 A를 제거했더니 성능이 떨어졌다"를 넘어서, "왜 그 컴포넌트가 필요한가? 내부에서 무슨 연산을 하는가?"를 추적한다.
+
+Induction head(유도 헤드) 연구가 대표적 사례다. Transformer의 특정 attention head가 시퀀스 내 반복 패턴을 복사하는 메커니즘을 수행한다는 사실을 circuit-level 분석으로 밝혔다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [모델 평가 방법론](../Machine_Learning/model-evaluation.qmd) ← placeholder
+- [통계적 검정: McNemar, t-test](../Statistics/hypothesis-testing.qmd) ← placeholder
+- [Cross-validation 전략](../Machine_Learning/cross-validation.qmd) ← placeholder
+
+**후속 주제**
+
+- [하이퍼파라미터 튜닝: Bayesian Optimization](./hyperparameter-tuning.qmd) ← placeholder
+- [신경망 해석 가능성: Probing 분석](./interpretability-probing.qmd) ← placeholder
+- [Scaling Law와 대규모 모델 실험](./scaling-laws.qmd) ← placeholder
+
+**다른 카테고리 연결**
+
+- [실험 설계: A/B Test](../Experimentation/ab-test.qmd) — 컴포넌트 기여 측정의 실험 설계 원칙과 유사
+- [분산분석 ANOVA](../Statistics/anova.qmd) — 여러 변형의 통계적 비교
