@@ -1,0 +1,527 @@
+---
+title: "Simultaneous Estimation of Contrasts"
+subtitle: "가계 오류율, Scheffé, Tukey HSD, Dunnett, Holm, FDR (Casella §11.2.5 심화)"
+description: |
+  일원분류 ANOVA 의 사후 분석(post-hoc)에서 여러 대비를 동시에 추론할 때 발생하는
+  다중비교 문제를 체계적으로 다룬다. 가계 오류율(FWER)과 개별 오류율의 구분,
+  Bonferroni 의 한계, Scheffé 의 완전 동시성, Tukey HSD 의 쌍별 최적성, Dunnett 의
+  대조군 비교, Holm step-down, Benjamini-Hochberg FDR 을 비교하고, 언제 어느 방법을
+  선택해야 하는지를 이론적 근거와 실무 지침으로 정리한다.
+categories:
+  - Statistics
+author: Kwangmin Kim
+date: 04/06/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+일원분류 ANOVA 의 F 검정은 "적어도 두 집단 평균이 다르다"는 전체적 결론만 제공한다.
+이어지는 실무 질문은 항상 "**어느 집단이, 얼마나 다른가**?" 이다. 이를 답하려면
+여러 개의 대비(contrast)를 동시에 검정·추정해야 하는데, 이 순간 다중비교 문제
+(multiple comparison problem)가 발생한다.
+
+예를 들어 $k = 10$ 집단에서 모든 쌍별 비교를 수행하면 $\binom{10}{2} = 45$ 개의 t 검정을
+개별 $\alpha = 0.05$ 로 수행하는 셈이다. 모든 $H_0$ 가 참이어도 적어도 하나를 우연히
+기각할 확률은 $1 - 0.95^{45} \approx 0.90$ — 거의 확실히 위양성이 발생한다.
+
+Casella & Berger(2002, §11.2.5)는 이 문제를 **Scheffé 동시 신뢰구간**으로 해결한다.
+이 포스트는 그 해법의 엄밀한 유도를 다시 살펴본 뒤, 현대 실무에서 함께 쓰이는
+Tukey HSD, Dunnett, Holm, FDR 까지 포괄적으로 비교한다.
+
+선행 포스트([Oneway ANOVA: 고전적 가설과 F 검정](./127-oneway-anova-hypothesis.qmd))
+에서 Scheffé 의 기본 결과를 다뤘다. 이 포스트는 그 결과를 **다른 다중비교 방법들과의
+비교 맥락**에서 재조명하고, 각 방법의 상대적 강점과 선택 기준을 제시한다.
+
+---
+
+## 다중비교 문제의 구조
+
+### 오류율의 세 가지 수준
+
+다중 가설 검정에서는 "오류" 의 정의 자체가 여러 가지다.
+
+| 오류율 | 정의 | 보장하는 것 |
+|---|---|---|
+| **CER** (Comparison-wise Error Rate) | 개별 검정의 Type I 오류 확률 | 각 검정이 독립적으로 $\alpha$ 유지 |
+| **FWER** (Family-Wise Error Rate) | $m$ 개 검정 중 **하나 이상** 잘못 기각할 확률 | $P(\text{at least one false rejection}) \leq \alpha$ |
+| **FDR** (False Discovery Rate) | 기각된 가설 중 **잘못 기각된 비율의 기댓값** | $E[V/R] \leq \alpha$, $V$ = 위양성 수, $R$ = 전체 기각 수 |
+
+고전 ANOVA 사후 분석은 **FWER 제어**가 표준이다. 최근 유전체·대규모 탐색 연구에서는
+수천 개 가설을 동시에 검정하므로 **FDR** 이 더 적합하다.
+
+### 본페로니 부등식: 가장 기본적 경계
+
+$m$ 개 사건 $A_1, \ldots, A_m$ 에 대해:
+
+$$
+P\!\left(\bigcup_{i=1}^m A_i\right) \leq \sum_{i=1}^m P(A_i)
+$$
+
+각 $A_i$ 가 "가설 $i$ 의 Type I 오류" 이면:
+
+$$
+\text{FWER} = P\!\left(\bigcup_{i=1}^m \text{오류}_i\right) \leq \sum_{i=1}^m \alpha_i
+$$
+
+각 개별 유의수준을 $\alpha/m$ 으로 설정하면 $\text{FWER} \leq \alpha$ 가 보장된다.
+이것이 **Bonferroni 보정**이다.
+
+::: {.callout-important}
+## Bonferroni 의 한계
+
+Bonferroni 는 극단적으로 보수적이다. 왜 그런가?
+
+1. **합집합 부등식의 느슨함**: 검정들이 독립에 가깝거나 양의 상관이 있으면, 실제 FWER 은
+   $\sum \alpha_i$ 보다 훨씬 작다. 예를 들어 검정들이 독립이고 $m = 20$ 이면
+   실제 FWER $= 1 - (1 - \alpha/20)^{20} \approx 0.0488$ 로, 경계값 0.05 에 가깝지만 미달한다.
+2. **$m$ 이 클 때 검정력 폭락**: $m = 100$ 이면 개별 $\alpha = 0.0005$. 이 수준에서 유의해지려면
+   효과크기가 매우 커야 한다 → 검정력 거의 0.
+3. **탐색적 분석 부적합**: 대비를 데이터 보고 고르면 $m$ 이 정의되지 않는다.
+
+Bonferroni 는 **사전 계획된 소수 대비**에서만 쓰는 것이 정석이다.
+:::
+
+---
+
+## Scheffé 방법 — 모든 대비에 대한 동시 추론
+
+### 이론적 기반
+
+Scheffé(1953)의 핵심 아이디어는 "가능한 **모든** 대비에 대해 동시에 유효한 구간"을
+만드는 것이다. 대비의 개수가 무한하므로 Bonferroni 로는 처리 불가능하다.
+
+기본 원리는 127 포스트에서 다룬 Lemma 11.2.7(Cauchy-Schwarz 부등식의 이차형식 적용)과
+Theorem 11.2.8 이다. 핵심 결과만 다시 적으면:
+
+$$
+\sup_{a : \sum a_i = 0} T_a^2 = \frac{\sum_{i=1}^k n_i (\bar{Y}_{i\cdot} - \bar{\bar{Y}})^2}{S_p^2} \sim (k-1) F_{k-1, N-k}
+$$
+
+이로부터 Scheffé 동시 신뢰구간(Casella & Berger 2002, Theorem 11.2.10):
+
+$$
+\sum_{i=1}^{k} a_i \theta_i \in \sum_{i=1}^{k} a_i \bar{Y}_{i\cdot} \pm M \sqrt{S_p^2 \sum_{i=1}^{k} \frac{a_i^2}{n_i}}
+$$
+
+여기서 $M = \sqrt{(k-1) F_{k-1, N-k, \alpha}}$ 이다.
+
+### 왜 Scheffé 는 "탐색적 분석"을 허용하는가
+
+고전 통계학에서는 데이터를 보고 가설을 설정하면 Type I 오류율이 망가진다(data snooping).
+그런데 Scheffé 는 "데이터를 보고 가장 유의해 보이는 대비를 골라서 검정" 해도 유효하다.
+
+이유는 명확하다. Scheffé 의 임계값 $M$ 은 **모든 가능한 대비의 sup** 에 대한 분포를 기반으로
+한다. 데이터 보고 고른 대비도 "가능한 모든 대비" 의 부분집합이므로, 이미 커버되어 있다.
+대가는 구간이 매우 넓어진다는 것 — 단일 t 검정보다 항상 보수적이다.
+
+### F 검정과의 동치성
+
+::: {.callout-note}
+## Scheffé 의 아름다운 성질
+
+$\alpha$ 수준의 F 검정으로 $H_0 : \theta_1 = \cdots = \theta_k$ 를 기각할 필요충분조건은
+**적어도 하나의 대비**에 대한 Scheffé $1 - \alpha$ 신뢰구간이 0 을 포함하지 않는 것이다.
+
+즉, F 가 유의하면 "어떤 대비가 유의한가"를 Scheffé 로 찾을 수 있고,
+F 가 유의하지 않으면 어떤 Scheffé 구간도 0 을 배제하지 않는다.
+
+이는 Scheffé 가 F 검정과 "같은 가설 공간" 을 다루기 때문이다.
+:::
+
+### Scheffé 의 단점
+
+- **쌍별 비교에는 과도하게 보수적**: 쌍별 비교만 관심이라면, Scheffé 보다 Tukey HSD 가
+  훨씬 좁은 구간을 준다(같은 FWER 에서).
+- **해석의 부담**: "모든 대비" 라는 무한 공간을 커버하므로, $m$ 개 구체적 대비만 관심일 때
+  손해가 크다.
+
+Scheffé 는 **탐색적·사후적 대비**가 주 관심일 때 선택하는 도구이다.
+
+---
+
+## Tukey HSD — 쌍별 비교의 최적 방법
+
+### 스튜던트화 범위 분포
+
+Tukey(1953)는 쌍별 비교에 특화된 방법을 제안했다. 핵심은 **스튜던트화 범위
+(studentized range)** 분포이다.
+
+$Y_1, \ldots, Y_k$ 가 $\text{iid } N(\mu, \sigma^2)$ 이고 $\sigma^2$ 의 독립 추정량
+$S^2$ ($\nu$ 자유도)이 있을 때, 스튜던트화 범위는:
+
+$$
+Q = \frac{\max_i Y_i - \min_i Y_i}{S}
+$$
+
+$Q$ 의 분포는 $k, \nu$ 에만 의존하며, $q_{k, \nu, \alpha}$ 로 임계값을 표기한다.
+
+### Tukey HSD (Honestly Significant Difference)
+
+균형 설계($n_i = n$)에서 $k$ 집단의 모든 쌍에 대해 동시에:
+
+$$
+\theta_i - \theta_j \in \bar{Y}_{i\cdot} - \bar{Y}_{j\cdot} \pm q_{k, N-k, \alpha} \sqrt{\frac{S_p^2}{n}}
+$$
+
+**FWER**: 정확히 $\alpha$ (근사가 아님).
+
+불균형 설계에서는 Tukey-Kramer 수정(조화평균 사용):
+
+$$
+\theta_i - \theta_j \in \bar{Y}_{i\cdot} - \bar{Y}_{j\cdot} \pm q_{k, N-k, \alpha} \sqrt{\frac{S_p^2}{2}\!\left(\frac{1}{n_i} + \frac{1}{n_j}\right)}
+$$
+
+이 경우 FWER 은 근사적으로 $\alpha$ 이하이다.
+
+### Scheffé vs. Tukey — 언제 어느 쪽?
+
+| 상황 | 권장 | 이유 |
+|---|---|---|
+| 쌍별 비교만 관심 | **Tukey HSD** | 같은 FWER 에서 구간이 가장 좁음 |
+| 복잡한 대비 포함 (예: $\theta_1 - (\theta_2+\theta_3)/2$) | **Scheffé** | Tukey 는 쌍별 전용, 복잡 대비 커버 안 됨 |
+| 데이터 보고 대비 탐색 | **Scheffé** | "모든 대비" 커버 → data snooping 허용 |
+| 사전 계획된 소수 대비 | **Bonferroni** | $m$ 이 작으면 둘보다 좁음 |
+
+**실무 규칙**: 쌍별만 볼 거면 Tukey, 한 번이라도 "A vs B+C 평균" 같은 복잡한 대비가 나오면 Scheffé.
+
+---
+
+## Dunnett 검정 — 대조군과의 비교
+
+### 구조
+
+임상시험과 산업 실험에서 자주 나타나는 시나리오: $k - 1$ 개 처리군을 **하나의 대조군** 과
+비교한다. 관심은 $\theta_i - \theta_0$ ($i = 1, \ldots, k-1$) 의 $k - 1$ 개 차이뿐이다.
+
+Dunnett(1955)은 이 경우 Tukey 보다 더 좁은 구간을 제공한다.
+Tukey 는 $\binom{k}{2}$ 개 쌍을 모두 커버하지만, Dunnett 은 $k - 1$ 개만 커버하면 되므로
+더 좁은 임계값이 가능하다.
+
+### 다변량 t 분포
+
+Dunnett 의 임계값은 다변량 t 분포(multivariate t)로부터 나온다. $k - 1$ 개 대비
+$\bar{Y}_{i\cdot} - \bar{Y}_{0\cdot}$ 은 $S_p^2$ 를 공유하므로 상관된 다변량 t 를 이룬다.
+Dunnett 의 임계값 $d_{k-1, N-k, \alpha, \rho}$ 는 이 분포로부터 수치적으로 계산된다.
+여기서 $\rho$ 는 대조군 크기와 처리군 크기의 함수이다.
+
+균형 설계에서는 모든 $\rho = 1/2$ 이고, 표로 제공된다.
+
+::: {.callout-note}
+## Dunnett 은 "일방향" 으로도 자주 쓰인다
+
+신약 개발에서는 "처리가 대조보다 **더 좋다**" 만 관심이다(한 방향).
+Dunnett 의 one-sided 버전을 쓰면 임계값이 더 작아져 검정력이 상승한다.
+단, 해석 시 양방향 가설로 전환하면 안 된다(p-hacking).
+:::
+
+---
+
+## Holm-Bonferroni — Step-down 방법
+
+Bonferroni 보정을 개선한 **순차적(step-down)** 방법이다. Holm(1979) 제안.
+
+### 절차
+
+1. $m$ 개 p-value 를 오름차순 정렬: $p_{(1)} \leq p_{(2)} \leq \cdots \leq p_{(m)}$
+2. $j = 1$ 부터 시작해 $p_{(j)} > \alpha / (m - j + 1)$ 가 되는 첫 $j$ 를 찾는다
+3. 그 $j$ 번째 가설부터는 **기각하지 않음**, 그 이전은 모두 기각
+
+### 비교
+
+| 가설 | Bonferroni 임계값 | Holm 임계값 |
+|---|---|---|
+| 1번째 (가장 작은 p) | $\alpha/m$ | $\alpha/m$ (동일) |
+| 2번째 | $\alpha/m$ | $\alpha/(m-1)$ (느슨) |
+| 3번째 | $\alpha/m$ | $\alpha/(m-2)$ (느슨) |
+| $m$ 번째 | $\alpha/m$ | $\alpha$ (가장 느슨) |
+
+Holm 은 FWER $\leq \alpha$ 를 여전히 보장하면서 검정력이 항상 Bonferroni 이상이다
+(**일양 우월**, uniformly more powerful). **Bonferroni 를 써야 할 이유가 거의 없다**.
+
+### Hochberg 와 Hommel
+
+Holm 의 step-down 을 반대 방향으로 뒤집은 Hochberg(1988), 그리고 더 복잡한 조건에서
+작동하는 Hommel(1988) 이 있다. 이들은 검정 통계량들이 양의 상관일 때 Holm 보다 검정력이
+높지만, 가정이 더 강하다.
+
+---
+
+## FDR — Benjamini-Hochberg 방법
+
+### 동기
+
+$m$ 이 수천~수만일 때(유전체 연구, 뇌영상, 대규모 A/B 테스트 배치) FWER 제어는
+너무 엄격하다. "하나도 틀리지 마라" 대신 "**기각한 것 중 잘못 기각한 비율**이 $q$ 이하"
+로 기준을 완화한다. 이것이 **False Discovery Rate (FDR)** 이다.
+
+### Benjamini-Hochberg 절차 (BH, 1995)
+
+1. $m$ 개 p-value 정렬: $p_{(1)} \leq \cdots \leq p_{(m)}$
+2. $p_{(j)} \leq \frac{j}{m} q$ 를 만족하는 가장 큰 $j$ 를 찾는다
+3. 그 $j$ 까지의 모든 가설을 기각
+
+**보장**: 검정들이 독립 또는 양의 의존일 때, $\text{FDR} \leq q$.
+
+### FWER vs FDR 의 차이
+
+| 시나리오 | FWER $\alpha$ 제어 | FDR $q$ 제어 |
+|---|---|---|
+| 1000 가설 중 20개 기각, 1개 위양성 | $\alpha = 0.05$ 유지 어려움 | $q = 0.05$ 에서 허용 (1/20 = 5%) |
+| 10 가설 중 2개 기각, 0개 위양성 | 보장 | 보장 |
+| 해석 | 한 건이라도 틀리면 실패 | 평균적으로 $q$ 비율 틀려도 괜찮음 |
+
+**ANOVA 사후 분석에서의 FDR**: $k$ 가 10 이상이고 쌍별 $\binom{k}{2} \geq 45$ 개의 비교에서
+탐색적 관심이 강할 때 FDR 이 유용하다. 전통적 ANOVA(소수 집단)에서는 여전히 FWER 이 기본.
+
+---
+
+## 방법 비교 종합
+
+### 이론적 비교
+
+| 방법 | 제어 기준 | 대상 | 균형 요구 | 검정력 순위 |
+|---|---|---|---|---|
+| **Bonferroni** | FWER (엄격) | 사전 지정 $m$ 개 대비 | 불필요 | 가장 낮음 |
+| **Holm** | FWER | 사전 지정 $m$ 개 대비 | 불필요 | Bonferroni 이상 |
+| **Scheffé** | FWER (가장 엄격) | 무한 개의 모든 대비 | 불필요 | 쌍별에서 가장 낮음 |
+| **Tukey HSD** | FWER | 쌍별 비교 전체 | 권장 (Kramer 확장) | 쌍별에서 최고 |
+| **Dunnett** | FWER | vs 대조군 $k-1$ 비교 | 권장 | Tukey 이상 (제한된 가설) |
+| **Benjamini-Hochberg** | FDR | 대규모 다중 검정 | 불필요 | 가장 높음 (기준 다름) |
+
+### 결정 플로우차트
+
+```
+사후 분석 필요?
+├─ 대조군과 비교만? → Dunnett
+├─ 쌍별 비교 전체만? → Tukey HSD
+├─ 복잡한 대비 포함? (예: A vs B+C)
+│    ├─ 사전 계획된 소수 → Holm (구 Bonferroni)
+│    └─ 탐색적, 많음 → Scheffé
+└─ 가설 수 수백~수천? → FDR (Benjamini-Hochberg)
+```
+
+---
+
+## 코드 예시
+
+### Step 1: 순수 Python — 각 방법 직접 구현
+
+```python
+import numpy as np
+from scipy import stats
+
+# 네 집단 데이터
+np.random.seed(20260406)
+groups_dict = {
+    "Ctrl": np.random.normal(10, 1.5, 15),
+    "T1":   np.random.normal(11, 1.5, 15),
+    "T2":   np.random.normal(13, 1.5, 15),
+    "T3":   np.random.normal(12, 1.5, 15),
+}
+labels = list(groups_dict.keys())
+groups = list(groups_dict.values())
+k = len(groups)
+ns = np.array([len(g) for g in groups])
+N = ns.sum()
+means = np.array([np.mean(g) for g in groups])
+SSW = sum(np.sum((g - m) ** 2) for g, m in zip(groups, means))
+Sp2 = SSW / (N - k)
+df_err = N - k
+alpha = 0.05
+
+# ─── 1. 모든 쌍별 p-value (비보정) ───
+pairs = []
+for i in range(k):
+    for j in range(i + 1, k):
+        diff = means[i] - means[j]
+        se = np.sqrt(Sp2 * (1/ns[i] + 1/ns[j]))
+        t_stat = diff / se
+        p = 2 * stats.t.sf(abs(t_stat), df_err)
+        pairs.append((f"{labels[i]}-{labels[j]}", diff, se, p))
+
+# ─── 2. Bonferroni ───
+m = len(pairs)
+print("Bonferroni alpha =", alpha / m)
+for name, diff, se, p in pairs:
+    print(f"  {name}: diff={diff:+.3f}, p={p:.4f}, 기각={p < alpha/m}")
+
+# ─── 3. Holm-Bonferroni ───
+sorted_pairs = sorted(pairs, key=lambda x: x[3])
+print("\nHolm:")
+for j, (name, diff, se, p) in enumerate(sorted_pairs, start=1):
+    threshold = alpha / (m - j + 1)
+    reject = p < threshold
+    print(f"  rank {j}: {name}, p={p:.4f}, threshold={threshold:.4f}, 기각={reject}")
+    if not reject:
+        print("  (이후 모두 기각 안 함)")
+        break
+
+# ─── 4. Scheffé ───
+M = np.sqrt((k - 1) * stats.f.ppf(1 - alpha, k - 1, df_err))
+print(f"\nScheffé M = {M:.4f}")
+for name, diff, se, p in pairs:
+    ci_half = M * se
+    reject = abs(diff) > ci_half
+    print(f"  {name}: diff={diff:+.3f} ± {ci_half:.3f}, 기각={reject}")
+
+# ─── 5. Tukey HSD (studentized range) ───
+from scipy.stats import studentized_range
+q_crit = studentized_range.ppf(1 - alpha, k, df_err)
+print(f"\nTukey q_{{{k},{df_err},{alpha}}} = {q_crit:.4f}")
+for name, diff, se, p in pairs:
+    # 불균형: se = sqrt(Sp2 * (1/n_i + 1/n_j) / 2) * sqrt(2)  (Kramer)
+    i, j = labels.index(name.split("-")[0]), labels.index(name.split("-")[1])
+    se_tukey = np.sqrt(Sp2 / 2 * (1/ns[i] + 1/ns[j]))
+    hsd = q_crit * se_tukey
+    reject = abs(diff) > hsd
+    print(f"  {name}: diff={diff:+.3f}, HSD={hsd:.3f}, 기각={reject}")
+
+# ─── 6. Benjamini-Hochberg FDR ───
+q_fdr = 0.05
+sorted_pairs = sorted(pairs, key=lambda x: x[3])
+print(f"\nBenjamini-Hochberg (q={q_fdr}):")
+largest_j = 0
+for j, (name, diff, se, p) in enumerate(sorted_pairs, start=1):
+    threshold = (j / m) * q_fdr
+    if p <= threshold:
+        largest_j = j
+    print(f"  rank {j}: {name}, p={p:.4f}, BH threshold={threshold:.4f}")
+print(f"  → rank 1 ~ {largest_j} 까지 기각")
+```
+
+### Step 2: statsmodels / scipy / pingouin
+
+```python
+import pandas as pd
+import numpy as np
+from scipy import stats
+from statsmodels.stats.multicomp import pairwise_tukeyhsd, MultiComparison
+from statsmodels.stats.multitest import multipletests
+import pingouin as pg
+
+# 데이터프레임 구성
+df_list = []
+for name, g in groups_dict.items():
+    df_list.append(pd.DataFrame({"y": g, "group": name}))
+df = pd.concat(df_list, ignore_index=True)
+
+# ─── Tukey HSD ───
+tukey = pairwise_tukeyhsd(df["y"], df["group"], alpha=0.05)
+print(tukey.summary())
+
+# ─── Holm, Bonferroni, FDR 일괄 ───
+mc = MultiComparison(df["y"], df["group"])
+# 모든 쌍별 t 검정 p-value
+pvals_raw = mc.allpairtest(stats.ttest_ind, method=None)[0]
+# 각 보정 방법
+for method in ["bonferroni", "holm", "fdr_bh"]:
+    reject, p_adj, _, _ = multipletests(
+        [row[-1] for row in pvals_raw.data[1:]], alpha=0.05, method=method
+    )
+    print(f"\n{method}:")
+    for row, r, pa in zip(pvals_raw.data[1:], reject, p_adj):
+        print(f"  {row[0]}-{row[1]}: p_adj={pa:.4f}, 기각={r}")
+
+# ─── Scheffé (pingouin 에는 없음, 수동) ───
+# 위 Step 1 의 공식 사용
+
+# ─── Dunnett (vs Ctrl) — scipy 1.11+ ───
+from scipy.stats import dunnett
+# 첫 번째 인자들이 처리군, control 이 대조군
+result = dunnett(groups_dict["T1"], groups_dict["T2"], groups_dict["T3"],
+                 control=groups_dict["Ctrl"])
+print(f"\nDunnett statistics: {result.statistic}")
+print(f"Dunnett p-values:   {result.pvalue}")
+
+# ─── pingouin 종합 ───
+post = pg.pairwise_tests(data=df, dv="y", between="group", padjust="holm")
+print(post)
+```
+
+---
+
+## 실무 가이드
+
+### 상황별 권장
+
+| 상황 | 방법 | 이유 |
+|---|---|---|
+| 임상 3상: 신약 3종 vs 위약 | **Dunnett (one-sided)** | 대조군 비교, 검정력 최대화 |
+| 의학 연구: 4개 치료법 상호 비교 | **Tukey HSD** | 쌍별 비교, 균형 설계 |
+| 농학 실험: 6개 비료 + 복합 대비 | **Scheffé** | 복잡한 대비 포함 |
+| 사회과학: 사전 가설 3개 | **Holm** | 소수 계획된 검정 |
+| 유전체: 20,000 SNP 비교 | **BH FDR** ($q = 0.05$) | FWER 제어는 불가능 |
+| 뇌영상 fMRI | **FWER (Random Field)** 또는 **FDR** | 도메인 표준 |
+| 대규모 A/B 배치 | **BH FDR** | 실험 수 많음 |
+
+### 결과 보고 체크리스트
+
+사후 검정 결과를 보고할 때 반드시 포함:
+
+1. **사용한 방법**과 **제어 기준**(FWER/FDR)
+2. **유의수준** $\alpha$ (또는 $q$)
+3. 각 비교의 **추정 차이**, **표준오차**, **조정된 p-value**, **신뢰구간**
+4. 사후 검정 이전에 수행한 **전체 F 검정의 결과**
+5. **효과크기** (Cohen's $d$, $\eta^2$) — 통계적 유의성과 임상적 중요성은 다르다
+
+::: {.callout-important}
+## "다중비교 보정을 하지 않았다"는 보고는 위양성의 고백이다
+
+일부 연구 분야에서 "탐색적 연구이므로 보정하지 않았다"는 문구가 관행처럼 쓰이지만,
+이는 Type I 오류율 폭증을 정당화하지 못한다. 올바른 접근:
+
+- **사전 등록**(pre-registration): 어떤 가설을 사전 계획으로, 어떤 것을 탐색으로 할지 명시
+- **사전 가설**: 엄격한 FWER 보정
+- **탐색 가설**: FDR 보정 또는 "발견(discovery)" 으로만 라벨링, 후속 연구로 재현 필요
+:::
+
+---
+
+## 핵심 정리
+
+| 개념 | 요지 |
+|---|---|
+| 다중비교 문제 | $m$ 개 독립 $\alpha$ 검정 → FWER $\approx 1 - (1-\alpha)^m$ 로 폭증 |
+| FWER vs FDR | 전자는 "하나도 틀리지 마라", 후자는 "기각 중 틀린 비율 $\leq q$" |
+| Bonferroni | 가장 간단, 매우 보수적, $m$ 작을 때만 |
+| Holm | Bonferroni 대체 — 항상 검정력 우월 |
+| Scheffé | 모든 대비, data snooping 허용, 대가는 넓은 구간 |
+| Tukey HSD | 쌍별 비교 최적, 스튜던트화 범위 기반 |
+| Dunnett | vs 대조군 특화, 다변량 t 분포 |
+| BH FDR | 대규모 다중 검정의 표준 |
+
+::: {.callout-important}
+## Casella 가 Scheffé 를 선택한 이유
+
+Casella & Berger(2002, §11.2.5)는 Scheffé 를 ANOVA 챕터의 중심 다중비교 방법으로 다룬다.
+그 이유는 Scheffé 가 F 검정과 **같은 이론적 구조**(UIT, $\sup T_a^2$)를 공유하기 때문이다.
+F 검정의 유도에서 자연스럽게 Scheffé 가 따라 나오고, 이것이 교과서적 일관성을 만든다.
+
+실무에서는 Tukey 와 Dunnett 이 더 자주 쓰이지만, **이론적 기반**을 이해하는 데는 Scheffé 가
+가장 교육적이다. Scheffé 를 이해하면 나머지 방법들이 "특정 조건에서의 개선"으로 자연스럽게
+자리 잡는다.
+:::
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [ANOVA와 회귀의 통합 관점](./126-anova-regression-overview.qmd) — 셀 평균 모형
+- [Oneway ANOVA: 고전적 가설과 F 검정](./127-oneway-anova-hypothesis.qmd) — Scheffé 의 기본 유도
+- [Oneway ANOVA: 선형결합의 추론](./128-oneway-anova-linear-combinations.qmd) — 단일 대비 검정
+- [The ANOVA F Test: 기하학적 유도와 실무 진단](./129-anova-f-test-deepdive.qmd) — 가정과 효과크기
+
+**후속 주제**
+
+- [Multiple Linear Regression](./131-multiple-linear-regression.qmd) — 회귀 계수의 동시 추론
+- [False Discovery Rate 이론](./132-fdr-theory.qmd) — BH 의 증명과 확장
+
+**관련 개념**
+
+- [p-value](./26-p-value.qmd) — 개별 검정의 기초
+- [가설검정 평가](./104-methods-evaluating-estimators.qmd) — Type I/II 오류
+- [A/B Test와 다중 검정](../Experimentation/ab-test.qmd) — 산업 실무 응용
