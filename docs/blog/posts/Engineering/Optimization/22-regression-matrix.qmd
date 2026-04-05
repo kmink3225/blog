@@ -1,0 +1,175 @@
+---
+title: "회귀 구현 방식의 계산 복잡도 — for-loop vs 행렬 연산"
+subtitle: "n >> p 조건에서 수식 기반 DS의 알고리즘이 압도적으로 빠른 이유"
+description: |
+  선형 회귀를 for-loop으로 구현하는 방식과 정규 방정식(Normal Equation) 기반 행렬 연산으로
+  구현하는 방식의 계산 복잡도, 하드웨어 효율, 수치 안정성을 비교한다.
+  n >> p 조건에서 행렬 방식이 빠른 이유와 p가 커질 때의 분기 전략을 다룬다.
+categories:
+  - Engineering
+  - Statistics
+  - Machine_Learning
+author: Kwangmin Kim
+date: 04/05/2026
+---
+
+## 개요
+
+같은 선형 회귀 모델을 구현하더라도 "어떤 알고리즘으로 구현하느냐"에 따라 실행 속도가 수백 배 이상 차이 날 수 있다. 일반 엔지니어는 수학 공식을 직접 for-loop으로 구현하는 반면, 선형대수를 이해하는 데이터 과학자(DS)는 동일한 연산을 **행렬 방정식**으로 변환하여 하드웨어 가속을 최대한 활용한다.
+
+이 포스트는 두 구현 방식의 차이를 알고리즘 복잡도와 하드웨어 관점에서 분석하고, 어떤 상황에서 어떤 방식을 선택해야 하는지 판단 기준을 제시한다.
+
+## 선형 회귀의 두 가지 구현 방식
+
+데이터 행렬 $X$ ( $n \times p$ ), 타겟 벡터 $\mathbf{y}$ ( $n \times 1$ ), 회귀 계수 $\hat{\beta}$ ( $p \times 1$ ) 에 대해 최소제곱법을 풀 때 두 가지 접근이 있다.
+
+### 방식 A: for-loop (일반 엔지니어)
+
+수학적 정의를 그대로 반복문으로 옮긴다. 손실 함수 $L = \sum (y_i - \hat{y}_i)^2$ 의 그레디언트를 구해 가중치를 반복적으로 업데이트한다.
+
+```python
+def regression_loop(X: list, y: list, lr: float = 0.01, epochs: int = 1000):
+    n, p = len(X), len(X[0])
+    beta = [0.0] * p
+
+    for _ in range(epochs):
+        # 각 샘플을 순회하며 예측과 오차를 계산
+        for i in range(n):
+            y_hat = sum(X[i][j] * beta[j] for j in range(p))
+            error = y_hat - y[i]
+            # 각 가중치를 업데이트
+            for j in range(p):
+                beta[j] -= lr * 2 * error * X[i][j] / n
+    return beta
+```
+
+- 3중 루프: epochs × $n$ × $p$
+- 이터레이션당 시간 복잡도: $O(n \times p)$
+- 총 복잡도: $O(\text{epochs} \times n \times p)$
+
+### 방식 B: 정규 방정식 (수식 기반 DS)
+
+선형 회귀의 닫힌 형(closed-form) 해는 정규 방정식(Normal Equation)으로 한 번에 계산된다.
+
+$$\hat{\beta} = (X^T X)^{-1} X^T \mathbf{y}$$
+
+```python
+import numpy as np
+
+def regression_matrix(X: np.ndarray, y: np.ndarray) -> np.ndarray:
+    # 정규 방정식: beta = (X^T X)^{-1} X^T y
+    return np.linalg.lstsq(X, y, rcond=None)[0]
+```
+
+- $X^T X$ 계산: $O(n p^2)$
+- $X^T \mathbf{y}$ 계산: $O(np)$
+- 역행렬 또는 분해: $O(p^3)$
+- 총 복잡도: $O(n p^2 + p^3)$ — $n \gg p$ 이면 $O(np^2)$ 이 지배
+
+## "$O(np^2)$이 더 크지 않냐"는 질문
+
+복잡도 표를 처음 보면 "$O(np^2)$ 이 $O(np)$ 보다 크니까 행렬 방식이 느린 것 아닌가?"라는 의문이 생긴다. 이 직관은 **Big-O만 볼 때는 옳지만, 실제 Wall-clock time에서는 틀린다**.
+
+### $n \gg p$ 조건에서의 수치 예시
+
+정형 데이터 분석의 전형적인 조건: $n = 1{,}000{,}000$ (샘플), $p = 100$ (피처)
+
+| 구현 방식 | 복잡도 | 연산 횟수 | 실행 단위 |
+|-----------|--------|-----------|-----------|
+| Loop (이터레이션당) | $O(np)$ | $10^8$ | 스칼라 (1개씩) |
+| Matrix (정규 방정식) | $O(np^2)$ | $10^{10}$ | 벡터/행렬 (수천 개 동시) |
+
+연산 횟수는 행렬 방식이 100배 많아 보인다. 그러나 Loop 방식은 **CPU가 명령어를 하나씩 처리**하는 반면, 행렬 방식은 **GPU나 CPU AVX 가속을 통해 수천 개의 연산을 한 번에 처리**한다. 결과적으로 Wall-clock time은 행렬 방식이 수십~수백 배 빠르다.
+
+### 하드웨어 가속의 원리
+
+**SIMD(Single Instruction, Multiple Data)**  
+CPU의 AVX-512 레지스터는 한 명령으로 8개의 64-bit float 값을 동시에 계산한다. 행렬 곱셈 $X^T X$ 는 이 병렬 처리의 이상적인 형태다.
+
+**BLAS Level 3 — 캐시 효율**  
+행렬 곱셈 알고리즘은 데이터를 작은 블록(Tile)으로 나누어 CPU 캐시에 가둬두고 연산한다. 메모리에서 데이터를 가져오는 횟수를 획기적으로 줄여, 연산량이 늘어나는 손해보다 **데이터 이동 비용을 줄이는 이득**이 크다.
+
+**캐시 지역성(Cache Locality)**  
+Loop 방식은 반복문 내에서 $X[i][j]$, $\beta[j]$ 에 인덱스로 접근할 때마다 캐시 미스(Cache Miss) 확률이 높다. 행렬 연산은 데이터를 연속된 메모리 블록으로 처리하므로 Prefetching이 효과적으로 작동한다.
+
+## 수치 안정성: DS가 추가로 고려하는 것
+
+수학적 지식이 있는 DS는 단순히 정규 방정식을 사용하는 것에 그치지 않는다. $X^T X$ 가 역행렬을 구할 수 없는(Singular) 상황을 인지하고 적절한 수치 기법을 선택한다.
+
+**다중공선성(Multicollinearity) 문제**  
+변수들이 강하게 상관될 때 $X^T X$ 의 Condition Number가 커져 역행렬 계산이 수치적으로 불안정해진다. Loop만 짜는 엔지니어는 결과값이 `NaN` 이 나오면 원인을 찾지 못하지만, DS는 **Ridge Regularization**을 수식에 추가하여 시스템을 안정화한다.
+
+$$\hat{\beta}_{\text{Ridge}} = (X^T X + \lambda I)^{-1} X^T \mathbf{y}$$
+
+**직접 역행렬 대신 분해 사용**  
+`numpy.linalg.lstsq()` 는 내부적으로 역행렬을 직접 구하지 않고 **SVD(특이값 분해)**를 사용한다. 이는 $X^T X$ 가 Singular에 가까울 때도 수치적으로 안정적인 해를 반환한다.
+
+```python
+# 비추천: 직접 역행렬 (수치 불안정)
+beta = np.linalg.inv(X.T @ X) @ X.T @ y
+
+# 추천: lstsq (SVD 내장, 수치 안정)
+beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+```
+
+## $p$ 가 커질 때의 분기 전략
+
+$O(np^2 + p^3)$ 복잡도에서 $p^3$ 항은 $p$ 가 커질수록 급격히 성장한다. DS는 아래 기준으로 알고리즘을 전환한다.
+
+| 상황 | 조건 | 최적 알고리즘 |
+|------|------|-------------|
+| 일반 정형 데이터 | $n \gg p$, $p < 10{,}000$ | 정규 방정식 + SVD |
+| 고차원 데이터 | $p \to n$ 또는 $p > 10{,}000$ | SGD (벡터화된 미니배치) |
+| 희소 행렬 | 0이 많은 $X$ | Sparse Matrix Algebra |
+| 초거대 모델 | $p > 10^8$ (LLM 등) | 일차 미분 기반 $O(np)$ SGD + 전용 가속기 |
+
+$p = 100{,}000$ 이라면 $p^3 = 10^{15}$ 이 되어 현대 서버로도 수일이 걸린다. 이때는 정규 방정식 대신 SGD를 사용하되, SGD 내부의 행렬-벡터 곱셈 $X_{\text{batch}} \mathbf{w}$ 를 벡터화하여 Loop 방식보다 여전히 훨씬 빠르게 구현한다.
+
+## 코드 성능 비교
+
+```python
+import numpy as np
+import time
+
+# 데이터 생성: n=100,000, p=100
+n, p = 100_000, 100
+X = np.random.randn(n, p)
+y = np.random.randn(n)
+
+# 방법 1: 정규 방정식 (행렬 연산)
+t0 = time.perf_counter()
+beta_matrix, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+t1 = time.perf_counter()
+print(f"행렬 방식: {(t1-t0)*1000:.1f} ms")
+
+# 방법 2: 경사하강법 (벡터화 미니배치)
+lr, epochs, batch_size = 0.01, 100, 256
+beta_sgd = np.zeros(p)
+t0 = time.perf_counter()
+for _ in range(epochs):
+    idx = np.random.choice(n, batch_size, replace=False)
+    X_b, y_b = X[idx], y[idx]
+    grad = X_b.T @ (X_b @ beta_sgd - y_b) / batch_size  # 벡터화 그레디언트
+    beta_sgd -= lr * grad
+t1 = time.perf_counter()
+print(f"벡터화 SGD: {(t1-t0)*1000:.1f} ms")
+```
+
+일반적으로 위 코드에서 정규 방정식은 수십 ms, 벡터화 SGD는 수백 ms 수준으로 정규 방정식이 더 빠르다. $p$ 가 수만을 넘어서면 역전된다.
+
+## 두 방식의 종합 비교
+
+| 비교 항목 | For-loop (일반 엔지니어) | 행렬 연산 (DS) |
+|-----------|------------------------|----------------|
+| 시간 복잡도 | $O(\text{epochs} \times n \times p)$ | $O(np^2 + p^3)$ |
+| Wall-clock time (일반 조건) | 매우 느림 | 매우 빠름 (수백 배) |
+| 수치 안정성 | 학습률에 의존, 발산 위험 | SVD, Ridge로 제어 가능 |
+| 확장성 | 데이터 증가 시 지선형 지연 | 미니배치 + GPU 병렬화 용이 |
+| 구현 난이도 | 낮음 | 선형대수 지식 필요 |
+| $p$ 가 매우 클 때 | 여전히 가능 | $p^3$ 폭발로 대안 필요 |
+
+## 관련 주제
+
+- 분산 계산에서 Single-pass와 Welford 비교: [분산 계산 알고리즘](./variance-algorithms.qmd)
+- Big-O 기초와 상수 무시 원칙: [알고리즘 복잡도와 Big-O 표기법](./07-1-python-algorithm-complexity.qmd)
+- NumPy 벡터화 상세: [Vectorization](./vectorization.qmd)

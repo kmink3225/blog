@@ -1,0 +1,199 @@
+---
+title: "분산 계산 알고리즘 — Two-pass, Single-pass, Welford, 벡터화"
+subtitle: "Big-O가 같아도 실무 성능이 다른 이유: 알고리즘 선택의 네 가지 기준"
+description: |
+  분산을 계산하는 세 가지 알고리즘(Two-pass, Single-pass, Welford)의 계산 복잡도,
+  수치적 안정성, 벡터화 친화성을 비교하고 NumPy/Pandas가 내부적으로 어떤 방식을 채택하는지 설명한다.
+categories:
+  - Engineering
+  - Statistics
+author: Kwangmin Kim
+date: 04/05/2026
+---
+
+## 개요
+
+분산(Variance)을 계산하는 방법은 하나가 아니다. 고등학교 교과서에 나오는 정의 수식부터 실시간 스트리밍 데이터에서도 작동하는 온라인 알고리즘까지, 동일한 결과를 내는 여러 알고리즘이 존재한다. 그런데 이들의 Big-O 복잡도는 모두 $O(n)$ 으로 같다. 그렇다면 무엇이 다른가?
+
+이 포스트는 세 가지 분산 계산 알고리즘을 **계산 복잡도, 수치 안정성, 메모리 효율, 벡터화 적합성** 네 가지 기준으로 비교한다.
+
+## 분산의 두 가지 수식
+
+분산을 정의하는 동치(equivalent) 수식이 두 개 있다.
+
+**수식 A — 정의 수식 (편차 제곱합)**
+
+$$\text{Var}(X) = \frac{1}{n} \sum_{i=1}^{n} (x_i - \bar{x})^2$$
+
+**수식 B — 전개 수식 (제곱 평균 - 평균 제곱)**
+
+$$\text{Var}(X) = E[X^2] - (E[X])^2 = \frac{\sum x_i^2}{n} - \left(\frac{\sum x_i}{n}\right)^2$$
+
+두 수식은 수학적으로 동치이지만, 알고리즘으로 구현했을 때 성능과 정확도에서 차이가 발생한다.
+
+## Three 알고리즘 비교
+
+### Two-pass Algorithm (수식 A 기반)
+
+수식 A를 그대로 구현하면 데이터를 **두 번** 순회해야 한다.
+
+```python
+def variance_two_pass(data: list[float]) -> float:
+    n = len(data)
+    mean = sum(data) / n          # Pass 1: 평균 계산
+    sq_diff = sum((x - mean) ** 2 for x in data)  # Pass 2: 편차 제곱합
+    return sq_diff / n
+```
+
+- **Pass 1**: 전체 데이터를 순회하여 평균 $\bar{x}$ 를 계산한다 ($n$ 번 연산)
+- **Pass 2**: 다시 처음부터 순회하여 $(x_i - \bar{x})^2$ 를 합산한다 ($n$ 번 연산)
+
+Big-O 표기로는 $O(n)$ 이지만, 실제로는 데이터를 **두 번** 읽는다. 데이터가 CPU 캐시보다 클 경우 메인 메모리(RAM)나 디스크에서 데이터를 두 번 불러와야 하므로, $2n$ 의 I/O 비용이 실질적인 병목이 된다.
+
+### Single-pass Algorithm (수식 B 기반)
+
+수식 B를 사용하면 데이터를 **한 번만** 순회하면서 두 누적합 $\sum x_i$ 와 $\sum x_i^2$ 를 동시에 계산할 수 있다.
+
+```python
+def variance_single_pass(data: list[float]) -> float:
+    n = len(data)
+    sum_x = 0.0
+    sum_x2 = 0.0
+    for x in data:
+        sum_x += x
+        sum_x2 += x * x          # 한 번의 순회에서 두 값을 동시에 누적
+    return sum_x2 / n - (sum_x / n) ** 2
+```
+
+데이터를 한 번만 읽으므로 스트리밍 데이터(Streaming Data)나 파일을 메모리에 한꺼번에 올릴 수 없는 환경에서 결정적인 이점을 제공한다.
+
+::: {.callout-note}
+## Big-O에서 상수배를 무시하는 이유
+
+Big-O 표기법은 $2n$ 과 $n$ 을 동일하게 $O(n)$ 으로 표현한다. 이유는 세 가지다.
+
+1. **하드웨어 독립성**: 동일한 알고리즘도 CPU 클럭, 메모리 대역폭에 따라 실행 시간이 다르다. 상수를 포함하면 하드웨어마다 복잡도 순위가 뒤바뀌는 모순이 생긴다.
+2. **고차항의 지배력**: $n$ 이 충분히 커지면 $O(n)$ 과 $O(n^2)$ 의 차이가 어떤 상수 배보다 크다. 예: $n=1000$ 에서 $100n = 10^5$ vs $n^2 = 10^6$ .
+3. **알고리즘의 성장률 비교**: Big-O는 "입력이 커질수록 연산 횟수가 어떻게 증가하는가"라는 성장률만 측정한다.
+
+그러나 **시스템 최적화(Performance Tuning)** 단계에서는 상수가 중요하다. 특히 현대 컴퓨팅에서 가장 비용이 큰 작업은 순수 산술 연산이 아니라 **메모리에서 CPU로 데이터를 가져오는 I/O**이다. 데이터가 캐시(수 MB)보다 클 경우, $2n$ 방식은 RAM에서 데이터를 두 번 읽어 성능이 실제로 2배 근처로 느려진다.
+:::
+
+### Welford's Online Algorithm
+
+Single-pass의 효율을 유지하면서 수치 안정성 문제를 해결한 알고리즘이다. 데이터를 하나씩 처리할 때마다 평균과 분산을 점진적으로 업데이트한다.
+
+$$M_k = M_{k-1} + \frac{x_k - M_{k-1}}{k}$$
+
+$$S_k = S_{k-1} + (x_k - M_{k-1})(x_k - M_k)$$
+
+최종 분산은 $\text{Var} = S_n / n$ 이다.
+
+```python
+def variance_welford(data: list[float]) -> float:
+    n = 0
+    mean = 0.0
+    M2 = 0.0
+    for x in data:
+        n += 1
+        delta = x - mean
+        mean += delta / n          # 현재까지의 표본 평균 업데이트
+        delta2 = x - mean
+        M2 += delta * delta2       # 편차 제곱합 누적
+    return M2 / n if n > 1 else 0.0
+```
+
+핵심은 `delta * delta2` 항이다. $x_k$ 가 도착하기 **전** 평균과 **후** 평균의 차이를 곱하여 편차 제곱합을 안정적으로 누적한다. 이 방식은 큰 수끼리의 뺄셈을 피하므로 수치 오차가 발생하지 않는다.
+
+## 수치적 불안정성 문제
+
+Single-pass 알고리즘의 가장 큰 약점은 **Catastrophic Cancellation(치명적 소거)**이다.
+
+예를 들어, 값이 매우 크고 분산이 매우 작은 데이터를 생각해보자.
+
+```python
+data = [1_000_000.001, 1_000_000.002, 1_000_000.003]
+```
+
+수식 B에서:
+- $\sum x_i^2 \approx 3 \times 10^{12}$
+- $({\sum x_i}/{n})^2 \approx 3 \times 10^{12}$
+
+두 거대한 수의 차이에서 분산 $\approx 10^{-6}$ 이 나와야 하는데, 부동소수점 연산에서는 유효 숫자(significant digits)가 급격히 사라져 결과가 0이 되거나 음수가 나올 수 있다.
+
+```python
+import numpy as np
+
+# 수치 불안정성 시연
+data = [1e8 + x for x in [1, 2, 3, 4, 5]]
+
+var_single = sum(x**2 for x in data)/len(data) - (sum(data)/len(data))**2
+var_two_pass = sum((x - sum(data)/len(data))**2 for x in data) / len(data)
+var_numpy = np.var(data)
+
+print(f"Single-pass: {var_single:.6f}")   # 부정확할 수 있음
+print(f"Two-pass:    {var_two_pass:.6f}")  # 상대적으로 안정
+print(f"NumPy:       {var_numpy:.6f}")    # Welford 기반, 가장 안정
+```
+
+## 알고리즘별 종합 비교
+
+| 항목 | Two-pass | Single-pass | Welford |
+|------|----------|-------------|---------|
+| 데이터 순회 횟수 | 2번 | 1번 | 1번 |
+| Big-O | $O(n)$ | $O(n)$ | $O(n)$ |
+| 수치 안정성 | 좋음 | 나쁨 (큰 값에서 불안정) | 최고 |
+| 스트리밍 지원 | 불가 | 가능 | 가능 |
+| 벡터화 친화성 | 낮음 | 높음 | 낮음 |
+| 메모리 추가 사용 | $O(n)$ (중간 배열) | $O(1)$ | $O(1)$ |
+
+## 벡터화가 왜 중요한가
+
+Single-pass 수식 $E[X^2] - (E[X])^2$ 는 NumPy 벡터 연산으로 변환하면 실행 속도를 수십 배 향상시킬 수 있다.
+
+```python
+import numpy as np
+
+data = np.random.randn(1_000_000)
+
+# 방법 1: Python 루프 (느림)
+def var_loop(arr):
+    n = len(arr)
+    s, s2 = 0.0, 0.0
+    for x in arr:
+        s += x
+        s2 += x * x
+    return s2/n - (s/n)**2
+
+# 방법 2: NumPy 벡터 연산 (빠름)
+def var_numpy(arr):
+    return np.mean(arr**2) - np.mean(arr)**2
+
+# 방법 3: NumPy 내장 (Welford 기반, 가장 안정적)
+def var_builtin(arr):
+    return np.var(arr)
+```
+
+NumPy의 벡터 연산이 빠른 이유는 **SIMD(Single Instruction, Multiple Data)** 명령어를 활용하기 때문이다. CPU의 AVX 레지스터는 한 번의 명령으로 8개 이상의 double 값을 동시에 처리한다. Python 루프는 한 번에 하나씩 처리하므로, 데이터 크기가 클수록 격차가 벌어진다.
+
+또한 $\sum x_i^2$ 연산은 데이터 벡터 $\mathbf{x}$ 의 내적(Dot Product) $\mathbf{x}^T \mathbf{x}$ 와 동일하다. 이는 BLAS(Basic Linear Algebra Subprograms) 라이브러리가 가장 잘 최적화한 연산 형태이다.
+
+::: {.callout-important}
+## NumPy/Pandas는 어떤 알고리즘을 사용하는가
+
+`numpy.var()` 와 `pandas.Series.var()` 는 내부적으로 Two-pass 방식을 사용하되, 각 pass를 벡터화된 C 코드로 실행한다. 데이터를 메모리에 모두 올릴 수 있는 배열 연산에서는 Two-pass 방식이 수치 안정성과 벡터화 효율을 동시에 챙길 수 있다. Welford 알고리즘은 주로 온라인/스트리밍 환경(예: `river`, `scikit-learn`의 `IncrementalPCA` 등)에서 활용된다.
+:::
+
+## 실무 선택 가이드
+
+| 상황 | 추천 알고리즘 | 이유 |
+|------|-------------|------|
+| 배열이 메모리에 모두 올라감 | `numpy.var()` (내장) | 벡터화 + 수치 안정성 모두 확보 |
+| 데이터가 스트리밍으로 들어옴 | Welford | 한 번에 하나씩 처리, 안정적 |
+| 직접 구현이 필요한 경우 | Welford | Single-pass 속도 + 정밀도 |
+| 교육/이해 목적 | Two-pass | 수식이 직관적 |
+
+## 관련 주제
+
+- 회귀 분석에서 행렬 연산이 루프보다 빠른 이유: [회귀 구현 방식의 계산 복잡도](./regression-matrix-complexity.qmd)
+- Big-O 표기법 기초: [알고리즘 복잡도와 Big-O 표기법](./07-1-python-algorithm-complexity.qmd)
