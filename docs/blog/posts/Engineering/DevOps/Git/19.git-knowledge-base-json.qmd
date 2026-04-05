@@ -1,0 +1,166 @@
+---
+title: "Git을 AI Agent 지식 베이스로 활용하기 — xlsx → JSON 변환"
+subtitle: "비정형 파일을 Agent가 읽을 수 있는 구조로 변환하는 실전 가이드"
+description: |
+  xlsx, csv, md 등 다양한 형식의 문서를 AI Copilot Agent가 읽을 수 있는 JSON으로 변환하여
+  Git 저장소를 팀 지식 베이스로 활용하는 방법과 DRM 주의사항을 다룬다.
+categories:
+  - Engineering
+  - Agent
+author: Kwangmin Kim
+date: 04/05/2026
+---
+
+## 개요
+
+Git은 단순한 코드 버전 관리 도구가 아니다. Copilot Agent, RAG 파이프라인, LLM 기반 챗봇이 팀 내부 지식을 읽고 답변하는 **지식 베이스(Knowledge Base)**로 활용할 수 있다. 이를 위해서는 Agent가 실제로 파일 내용을 파싱할 수 있는 형식으로 문서를 저장해야 한다.
+
+이 포스트는 가장 흔한 시나리오인 "엑셀 파일을 JSON으로 변환하여 Git에 저장하고 Agent가 읽게 하는" 전체 흐름을 다룬다.
+
+## 형식별 Agent 접근성 비교
+
+AI Agent가 파일을 읽는 방식은 파일 형식에 따라 크게 달라진다.
+
+| 형식 | Agent 접근성 | 이유 |
+|------|------------|------|
+| `.xlsx` | 나쁨 | 바이너리 포맷, Agent가 직접 파싱 불가 |
+| `.csv` | 좋음 | 텍스트이지만 서술형 셀(쉼표 포함)에서 구조가 깨질 수 있음 |
+| `.json` | 최고 | 구조화된 텍스트, 긴 문장도 키-값으로 안전하게 표현 |
+| `.md` | 좋음 | 서술형 문서에 적합하나 구조화 데이터에는 부적합 |
+
+xlsx가 "나쁨"인 이유는 Python을 포함한 대부분의 Agent 도구가 바이너리 파일을 직접 읽지 못하기 때문이다. Agent는 텍스트 기반 파일의 내용을 컨텍스트로 가져오는 방식으로 작동하므로, 구조화된 텍스트인 JSON이 가장 적합하다.
+
+## xlsx → JSON 변환 절차
+
+### 사전 조건: DRM 해제
+
+::: {.callout-warning}
+## DRM이 걸린 파일은 Python도 읽지 못한다
+
+회사 내부 문서에는 DRM(디지털 저작권 관리)이 적용된 경우가 많다. DRM이 걸린 xlsx는 Excel에서 열리더라도 `openpyxl`이나 `pandas`가 파일을 파싱하지 못한다. 변환 전 반드시 DRM을 해제한다.
+
+DRM 해제 방법은 조직의 보안 정책에 따라 다르므로, 사내 IT 부서에 문의한다.
+:::
+
+### Copilot에게 변환 스크립트 요청
+
+Copilot Agent에게 변환 스크립트를 직접 요청할 수 있다.
+
+```
+pandas를 사용해서 고객명부.xlsx의 모든 시트를
+고객명부.json으로 변환하는 Python 스크립트 작성해줘
+```
+
+### 변환 스크립트
+
+```python
+import pandas as pd
+import json
+
+def xlsx_to_json(xlsx_path: str, json_path: str) -> None:
+    """xlsx 파일의 모든 시트를 JSON으로 변환한다."""
+    xl = pd.ExcelFile(xlsx_path)
+    result = {}
+
+    for sheet in xl.sheet_names:
+        df = xl.parse(sheet)
+        # NaN → None으로 변환 (JSON 직렬화 호환)
+        result[sheet] = df.where(pd.notna(df), None).to_dict(orient="records")
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    print(f"변환 완료: {json_path}")
+
+# 사용 예시
+xlsx_to_json("고객명부.xlsx", "고객명부.json")
+```
+
+`ensure_ascii=False` 옵션은 한글이 유니코드 이스케이프 시퀀스( `\uXXXX`)로 변환되지 않고 그대로 저장되도록 한다.
+
+### 변환 결과 예시
+
+```json
+{
+  "Sheet1": [
+    {
+      "고객명": "홍길동",
+      "부서": "영업팀",
+      "이메일": "hong@example.com"
+    },
+    {
+      "고객명": "김철수",
+      "부서": "개발팀",
+      "이메일": null
+    }
+  ]
+}
+```
+
+## Git에 저장하고 Agent가 읽는 흐름
+
+```
+xlsx (원본, DRM 해제 후)
+    ↓ Python 스크립트 실행
+json (변환 완료)
+    ↓ git add / commit / push
+Git 저장소 (지식 베이스)
+    ↓ Agent가 파일 내용 읽음
+Copilot Agent (내용 파악 완료)
+    ↓
+분석 / 요약 / 질의응답
+```
+
+Agent가 Git 저장소를 지식 베이스로 활용하는 방식은 두 가지로 나뉜다.
+
+- **직접 읽기**: Copilot CLI, Claude Code 등 편집기 통합 에이전트는 저장소 내 파일을 직접 컨텍스트로 가져온다
+- **RAG 파이프라인**: Azure AI Search, LangChain 등을 통해 JSON 파일을 임베딩 후 검색 기반으로 질의응답
+
+## 다중 파일 배치 변환
+
+여러 xlsx 파일을 한 번에 변환할 때는 아래 스크립트를 활용한다.
+
+```python
+from pathlib import Path
+import pandas as pd
+import json
+
+def batch_convert(source_dir: str, output_dir: str) -> None:
+    """디렉토리 내 모든 xlsx 파일을 JSON으로 일괄 변환한다."""
+    source = Path(source_dir)
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+
+    for xlsx_file in source.glob("*.xlsx"):
+        json_path = output / xlsx_file.with_suffix(".json").name
+        xl = pd.ExcelFile(xlsx_file)
+        result = {
+            sheet: xl.parse(sheet).where(pd.notna(xl.parse(sheet)), None).to_dict(orient="records")
+            for sheet in xl.sheet_names
+        }
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        print(f"{xlsx_file.name} → {json_path.name}")
+
+batch_convert("./data/raw", "./data/json")
+```
+
+## 주의사항 및 팁
+
+**원본 xlsx 파일 관리**  
+변환 후에도 원본 xlsx를 삭제하지 않는다. xlsx는 `.gitignore`에 추가하거나 별도 브랜치로 관리하고, Agent가 읽는 JSON만 메인 브랜치에 유지한다.
+
+**컬럼명 정제**  
+Excel 헤더에 공백이나 특수문자가 포함된 경우, JSON 키로 변환하기 전에 정제한다.
+
+```python
+df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower()
+```
+
+**대용량 파일**  
+JSON 파일이 수 MB를 초과하면 Agent의 컨텍스트 한계를 벗어날 수 있다. 이 경우 RAG 파이프라인(임베딩 + 벡터 검색)을 구성한다.
+
+## 관련 주제
+
+- [Git - 비개발자를 위한 Git 시작 가이드](./0.git_for_nondev.qmd)
+- Azure AI Search를 활용한 RAG 구성: [Azure AI Search 개요 및 구성](../../Infra/Cloud/Azure/24-az-ai-search-overview.qmd)
