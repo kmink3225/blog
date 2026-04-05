@@ -32,7 +32,8 @@ cross_references:
 | 하위 영역 | 패턴 | 예시 |
 |-----------|------|------|
 | Data_Engineering/ | `번호.토픽명.qmd` | `01.intro.qmd` |
-| Data_Structure/ | `날짜_토픽명.qmd` | `2023-01-17_data_structure_overview.qmd` |
+| Optimization/ | `번호-토픽명.qmd` 또는 `토픽명.qmd` | `variance-algorithms.qmd` |
+| Optimization/Data_Structure/ | `날짜_토픽명.qmd` | `2023-01-17_data_structure_overview.qmd` |
 | DevOps/ | `번호.토픽명.qmd` 또는 `번호-토픽명.qmd` | `01.git_intro.qmd`, `01-poetry-intro.qmd` |
 | Infra/ | `번호-토픽명.qmd` 또는 `날짜_토픽명.qmd` | `01-azure-intro.qmd` |
 | Python/ | `번호-토픽명.qmd` | `01-variables.qmd` |
@@ -134,6 +135,12 @@ numpy = "^1.24"        # 수치 연산
 
 - **Airflow**: DAG 정의, Operator, Scheduler, Executor 등을 다룬다
 - **Spark, Kafka**: 빅데이터 처리 파이프라인
+
+### 최적화 (Optimization/)
+
+- **Data_Structure/**: 배열, 연결리스트, 스택, 큐, 트리, 그래프 등 기본 자료구조와 시간/공간 복잡도(Big-O)
+- **알고리즘 복잡도**: Big-O 표기법, 정렬 알고리즘 패러다임, 벡터화(NumPy 수치 연산 최적화)
+- **수치 알고리즘**: 분산 계산(Two-pass, Welford), 행렬 연산 기반 회귀 등 통계/수치 연산의 구현 최적화
 
 ### 자료구조 (Data_Structure/)
 
