@@ -71,10 +71,52 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `/audit` | `/audit Statistics/56-common-families-discrete.qmd` |
 | `/log` | `/log` |
 | `/reindex` | `/reindex Statistics` |
-| `/algo` | `/algo AIE Level 3 DFS 문제 풀자` |
-| `/algo` | `/algo DS Level 2 정렬 연습` |
-| `/sql` | `/sql Programmers SELECT Level 1 문제 풀자` |
+| `/algo` (Mode B 바로 출제) | `/algo DS Lv1 문자열 random go` |
+| `/algo` (Mode B 유형 지정) | `/algo AIE Lv3 DFS go` |
+| `/algo` (Mode A 실전) | `/algo AIE Lv2 Programmers 완주하지못한선수` |
+| `/algo` (Mode C 개념) | `/algo 공통 Hash concept` |
+| `/sql` (Mode B 바로 출제) | `/sql DS Lv1 random go` |
+| `/sql` (Mode B 유형 지정) | `/sql Lv2 JOIN go` |
+| `/sql` (Mode A 실전) | `/sql Programmers 조건에맞는회원수구하기` |
+| `/sql` (Mode C 개념) | `/sql WindowFunction concept` |
 | `/publish` | `/publish` |
+
+### `/algo` · `/sql` 바로 출제 단축 문법
+
+튜터가 설정 질문(트랙·모드·주제·푸시 타이밍 확인)을 **건너뛰고 즉시 Step 1(문제 제시)부터 시작**하도록 하려면 아래 트리거 키워드를 명령어에 포함한다.
+
+| 트리거 | 효과 |
+|--------|------|
+| `random` | 주제 랜덤 선정. 별도 확인 없이 바로 선정 결과를 문제 상단에 표기하고 진행 |
+| `go` 또는 `!` | 모든 확인 단계 건너뛰고 Step 1부터 시작. Self-Check·푸시 확인은 세션 종료 시 일괄 처리 |
+| 유형명 직접 지정 | `문자열`, `Hash`, `DFS`, `JOIN`, `NULL처리` 등 — Mode B 출제, 해당 유형 고정 |
+| `Programmers {문제명}` / URL | Mode A 실전 문제 튜터링 |
+| `concept` 또는 `concept:{주제}` | Mode C 개념 설명 |
+
+**최소 필수 정보 조합** (이 조합이면 바로 출제됨):
+
+```
+/algo <track> <level> (<type>|random) go
+/sql  [track] <level> (<type>|random) go
+```
+
+- `track`: DS / AIE / 공통 (sql은 생략 시 DS 가정)
+- `level`: Lv1~Lv5 (또는 Level 1~5)
+- `type`: 유형명 또는 `random`
+- `go`: 확인 스킵 플래그
+
+**예시 비교**:
+
+| 입력 | 동작 |
+|------|------|
+| `/algo DS Lv1 문자열` | 주제 선정·앵커·기대 시간 확인 후 진행 (확인 단계 유지) |
+| `/algo DS Lv1 문자열 random go` | 문자열 하위 유형 중 랜덤 선정 → 즉시 출제 |
+| `/algo DS Lv1 random go` | DS Lv.1 전체 유형 중 랜덤 → 즉시 출제 |
+| `/sql Lv2 JOIN` | 유형 확인·앵커 공개 후 진행 |
+| `/sql Lv2 JOIN go` | JOIN 고정 → 즉시 출제 |
+| `/sql DS Lv1 random go` | DS Lv.1 전체 랜덤 → 즉시 출제 |
+
+**주의**: `go` 트리거는 **Mode B·C에서만** 유효하다. Mode A(실전 문제)는 앵커 문제가 명확히 지정되어 있어야 하므로 `go` 없이도 바로 진행한다.
 
 ### `/fix` vs `/audit` 차이
 
