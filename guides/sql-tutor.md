@@ -8,6 +8,7 @@ prerequisite:
   - AGENT_GUIDE.md (공통 코어)
   - docs/blog/posts/Code_Test/GUIDE.md (카테고리 가이드)
 sub-guides:
+  - guides/sql-weakness.md (사용자 취약점 트래커 — 세션 시작 시 필수 로드, 세션 종료 후 업데이트)
   - guides/sql-concepts.md (SQL 난이도별 개념 레퍼런스)
   - guides/sql-flow-b-rules.md (Flow B 주제 선정 + 문제 설계 + Isomorphism Rules — Mode B 트리거 시 필수 로드)
   - guides/senior-analysis.md (시니어 레벨 면접 방어 해설)
