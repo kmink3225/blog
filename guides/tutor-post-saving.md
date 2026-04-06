@@ -55,6 +55,18 @@ description: >
 | 4. 파일명 | `유형_난이도범위_problems.qmd` | 동일 |
 | 5. GUIDE 준수 | Code_Test GUIDE.md 포스트 구조 | 동일 |
 | 6. index 업데이트 | `Code_Test/index.qmd`에 링크 추가 (신규 시) | 동일 |
+| 7. **weakness 파일 업데이트** | `guides/algo-weakness.md` (있는 경우) | `guides/sql-weakness.md` |
+
+### 7단계: weakness 파일 자동 업데이트 (필수)
+
+포스트 저장 후 **반드시** 해당 weakness 파일을 업데이트한다. 사용자 지시 없이 자동 실행한다.
+
+업데이트 기준은 `guides/sql-weakness.md` (또는 `algo-weakness.md`) 내 **업데이트 프로토콜** 섹션을 따른다:
+
+- 이번 세션에서 발생한 실수 패턴 → Active에 추가 또는 누적 횟수 +1
+- 3회 연속 미발생한 Active 패턴 → Resolved로 이동
+- `last_updated` 날짜 갱신
+- **3문제 미만 세션은 업데이트하지 않는다** (노이즈 방지)
 
 ---
 
