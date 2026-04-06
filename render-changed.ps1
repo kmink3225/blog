@@ -8,6 +8,9 @@ param(
     [switch]$SkipRender   # 렌더링을 건너뛰고 git add -A → commit → push만 실행
 )
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 Set-Location $PSScriptRoot
 
 if (-not $SkipRender) {
