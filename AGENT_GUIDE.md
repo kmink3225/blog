@@ -64,7 +64,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | 명령어 | 예시 |
 |--------|------|
 | `/write` | `/write Statistics continuous distributions` |
-| `/fix` | `/fix Statistics/22-mle.qmd` |
+| `/fix` | `/fix Statistics/101-maximum-likelihood-estimators.qmd` |
 | `/qa` | `/qa 포아송과 음이항의 차이는?` |
 | `/convert` | `/convert Statistics` |
 | `/series` | `/series Statistics` |
@@ -137,7 +137,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
   → CORE + info-search + answer-question
   → 로드 안 함: write-post, retrofit, audit, category GUIDE, ...
 
-/fix Statistics/22-mle.qmd
+/fix Statistics/101-maximum-likelihood-estimators.qmd
   → CORE + retrofit-post + Statistics/GUIDE.md
   → 로드 안 함: info-search(전체), write-post, changelog, ...
 

@@ -62,14 +62,14 @@ git push origin
 #### 특정 파일만 렌더링
 
 ```powershell
-conda run -n blog quarto render docs/blog/posts/Statistics/22-mle.qmd
+conda run -n blog quarto render docs/blog/posts/Statistics/101-maximum-likelihood-estimators.qmd
 ```
 
 개별 파일 렌더링 시 HTML이 `_site/` 하위에 생성된다.
 단, `blog/index.qmd`가 업데이트되지 않으므로 새 포스트라면 index도 함께 렌더해야 한다.
 
 ```powershell
-conda run -n blog quarto render docs/blog/posts/Statistics/22-mle.qmd
+conda run -n blog quarto render docs/blog/posts/Statistics/101-maximum-likelihood-estimators.qmd
 conda run -n blog quarto render docs/blog/index.qmd
 ```
 
