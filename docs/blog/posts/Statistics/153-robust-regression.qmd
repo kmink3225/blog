@@ -1,0 +1,513 @@
+---
+title: "Robust Regression"
+subtitle: "OLS 취약성, LAD 회귀, M-추정 회귀, Huber ρ, 점근 정규성, ARE 비교 — Casella §12.4"
+description: |
+  이상치에 취약한 최소제곱(OLS) 회귀의 한계를 이론과 실례로 보이고,
+  강건 대안으로 최소절대편차(LAD) 회귀와 M-추정 회귀를 전개한다.
+  평균-중앙값 유추에서 OLS-LAD 유추를 도출하고,
+  LAD 추정량의 점근 정규성을 테일러 전개로 엄밀하게 유도하며,
+  Huber ρ 함수를 이용한 회귀 M-추정량을 정의하고 IRLS로 계산하는 절차를 Casella & Berger §12.4 기반으로 전개한다.
+categories:
+  - Statistics
+  - Regression
+author: Kwangmin Kim
+date: 04/07/2026
+execute:
+  eval: false
+---
+
+## 이 포스트의 위치
+
+Casella & Berger(2002) Ch.12 회귀 모형의 세 번째 주제 §12.4 — 강건 회귀(Robust Regression)이다. 앞서 [로지스틱 회귀](./151-logistic-regression-model.qmd)가 반응변수의 분포를 바꾸었다면, 이 포스트는 **적합 기준 자체를 바꾼다** — 제곱합 손실을 강건한 손실함수로 교체한다.
+
+[M-추정량 포스트](./122-m-estimators.qmd)에서 위치 모수에 대한 M-추정을 다루었다. 이 포스트는 그것을 **회귀 설정**(절편 + 기울기 추정)으로 확장한다.
+
+핵심 질문: **OLS의 이상치 취약성을 어떻게 수량화하고, 어떤 대안이 효율성과 강건성을 함께 달성하는가?**
+
+---
+
+## 평균-중앙값 유추: OLS-LAD 유추
+
+### 위치 추정에서의 대응
+
+위치 모수 추정에서 평균과 중앙값은 각각 다른 손실함수의 최솟값이다 (Casella & Berger, 2002, §12.4):
+
+$$\bar{x}: \quad \min_m \sum_{i=1}^n (x_i - m)^2, \qquad \text{중앙값}: \quad \min_m \sum_{i=1}^n |x_i - m|$$
+
+- 평균: $\ell_2$ 손실 최소화 → 효율적이지만 이상치에 취약 (붕괴점 0%)
+- 중앙값: $\ell_1$ 손실 최소화 → 강건 (붕괴점 50%), 정규 모형에서 ARE = $2/\pi \approx 64\%$
+
+### 회귀에서의 대응
+
+단순 선형 회귀에서 이 유추가 그대로 성립한다:
+
+$$\text{최소제곱(OLS)}: \quad \min_{a,b} \sum_{i=1}^n [y_i - (a + bx_i)]^2$$
+
+$$\text{최소절대편차(LAD)}: \quad \min_{a,b} \sum_{i=1}^n |y_i - (a + bx_i)|$$
+
+LAD는 중앙값의 회귀 유사체이다. LAD 추정량은 고유하지 않을 수 있다 (Exercise 12.25).
+
+이 유추가 의미하는 것: OLS가 이상치에 취약한 것처럼(큰 잔차를 제곱하면 더 크게 증폭됨), LAD는 절댓값을 쓰기 때문에 잔차를 선형적으로 패널티한다. 큰 잔차가 있어도 제곱 형태로 증폭되지 않는다.
+
+---
+
+## OLS 강건성 분석
+
+### 소규모 오염 하의 OLS
+
+모형 $Y_i = \alpha + \beta x_i + \varepsilon_i$ 에서, OLS 기울기 추정량을 $b = \sum d_i Y_i$ ($d_i = (x_i - \bar{x})/\sum(x_i - \bar{x})^2$) 로 쓸 때, $b$ 는 $\beta$ 의 BLUE이다.
+
+소규모 오염을 모형화한다: 확률 $1-\delta$ 로 $\text{Var}(\varepsilon_i) = \sigma^2$, 확률 $\delta$ 로 $\text{Var}(\varepsilon_i) = \tau^2$ 이면 (Casella & Berger, 2002, §12.4):
+
+$$\text{Var}(b) = \sum_{i=1}^n d_i^2 \text{Var}(\varepsilon_i) = \frac{(1-\delta)\sigma^2 + \delta\tau^2}{\sum(x_i - \bar{x})^2}$$
+
+소규모 오염($\delta$ 작음)에서 OLS는 표본 평균과 마찬가지로 성능이 비교적 양호하다. 그러나 코시(Cauchy) 분포처럼 분산이 무한한 오염이 발생하면 OLS가 완전히 무력해진다.
+
+이것이 말하는 것: **OLS의 취약성은 잔차의 "크기 증폭"이 아니라 오염 분포의 꼬리 두께에 달려 있다.** 정규 오염은 비교적 관대하지만, 중꼬리 오염에서 OLS는 심각하게 왜곡된다.
+
+---
+
+## 포토루 데이터 예시
+
+### 대참사 관측치의 효과
+
+McPherson(1990)의 포토루(potoroo, 유대류) 실험 데이터를 Casella & Berger(2002)가 예시로 사용한다 (Table 12.4.1). 23마리의 주머니 내 CO₂ 농도(%)를 O₂ 농도(%)에 회귀한다. 예상 기울기는 -1.
+
+**원본 데이터**:
+- OLS: $\hat{y} = 18.67 - 0.89x$
+- LAD: $\hat{y} = 18.59 - 0.89x$
+
+두 추정량이 거의 일치한다. 오염 없는 데이터에서 OLS와 LAD가 비슷하게 작동한다는 것을 확인한다.
+
+**오류 입력 데이터** (Animal 15의 O₂ = 18이 10으로 잘못 입력):
+- OLS: $\hat{y} = 6.41 - 0.23x$ — 기울기가 -0.89에서 -0.23으로 **대폭 변화**
+- LAD: $\hat{y} = 15.95 - 0.75x$ — 비교적 안정적
+
+이상치 하나가 OLS에 미치는 영향이 LAD보다 훨씬 크다. OLS의 **붕괴점(breakdown point)은 0%**, LAD의 붕괴점은 **50%**이다.
+
+붕괴점이란: 추정량을 무한히 망가뜨리는 데 필요한 최소 오염 관측 비율이다. 0%는 관측치 하나만 바꿔도 추정량이 무한대로 발산할 수 있다는 의미이다.
+
+---
+
+## LAD 추정량의 점근 정규성
+
+### 모형 단순화
+
+절편 $\alpha = 0$ 으로 설정한 단순 모형 $Y_i = \beta x_i + \varepsilon_i$ 를 분석한다 (Casella & Berger, 2002, §12.4). 이는 이변량 극한 분포 처리를 피하기 위한 단순화이다.
+
+LAD 추정량은 M-추정량의 특수 케이스로, $\rho(u) = |u|$ 를 최소화하는 것이다 (Casella & Berger, 2002, 식 12.4.1):
+
+$$\hat{\beta}_L = \arg\min_\beta \sum_{i=1}^n |y_i - \beta x_i|$$
+
+### $\psi$ 함수와 추정 방정식
+
+$\psi = \rho'$ 를 계산하면:
+
+$$\psi(y_i - \beta x_i) = x_i \, I(y_i > \beta x_i) - x_i \, I(y_i < \beta x_i)$$
+
+추정 방정식 $\sum_i \psi(y_i - \hat{\beta}_L x_i) = 0$ 을 풀어 $\hat{\beta}_L$ 을 구한다.
+
+### 테일러 전개를 통한 점근 분포 유도
+
+참 값 $\beta$ 주변에서 테일러 전개를 적용한다 (Casella & Berger, 2002, 식 12.4.2):
+
+$$\sum_{i=1}^n \psi(y_i - \hat{\beta}_L x_i) \approx \sum_{i=1}^n \psi(y_i - \beta x_i) + (\hat{\beta}_L - \beta) \cdot \frac{d}{d\hat{\beta}_L} \sum_{i=1}^n \psi(y_i - \hat{\beta}_L x_i)\bigg|_{\hat{\beta}_L = \beta}$$
+
+좌변이 0에 수렴한다고 가정하면:
+
+$$\sqrt{n}(\hat{\beta}_L - \beta) = \frac{-\frac{1}{\sqrt{n}}\sum_{i=1}^n \psi(y_i - \beta x_i)}{\frac{1}{n}\frac{d}{d\hat{\beta}_L}\sum_{i=1}^n \psi(y_i - \hat{\beta}_L x_i)\big|_{\hat{\beta}_L = \beta}}$$
+
+**분자 분석** (Casella & Berger, 2002, 식 12.4.3):
+
+$E_\beta[\psi(Y_i - \beta x_i)] = 0$ 이고 $\text{Var}[\psi(Y_i - \beta x_i)] = x_i^2$ 이므로 CLT에 의해:
+
+$$\frac{-1}{\sqrt{n}}\sum_{i=1}^n \psi(Y_i - \beta x_i) \xrightarrow{d} N\!\left(0, \sigma_x^2\right), \quad \sigma_x^2 = \lim_{n\to\infty} \frac{1}{n}\sum_{i=1}^n x_i^2$$
+
+**분모 분석** (Casella & Berger, 2002, 식 12.4.4):
+
+$\psi$ 가 미분 불가능한 점이 있으므로 먼저 대수의 법칙을 적용한 후 미분한다:
+
+$$\frac{1}{n}\frac{d}{d\beta_0}\sum_{i=1}^n \psi(y_i - \beta_0 x_i)\bigg|_{\beta_0 = \beta} \approx \frac{1}{n}\sum_{i=1}^n x_i^2 \frac{d}{d\beta_0} E_\beta[\psi(Y_i - \beta_0 x_i)]\bigg|_{\beta_0 = \beta}$$
+
+$E_\beta[\psi(Y_i - \beta_0 x_i)] = x_i[P_\beta(Y_i > \beta_0 x_i) - P_\beta(Y_i < \beta_0 x_i)]$ 를 $\beta_0$ 로 미분하여 $\beta_0 = \beta$ 에서 평가하면:
+
+$$\frac{1}{n}\frac{d}{d\beta_0}\sum \psi\bigg|_{\beta_0=\beta} \approx 2f(0) \cdot \frac{1}{n}\sum_{i=1}^n x_i^2 = 2f(0)\sigma_x^2$$
+
+여기서 $f$ 는 오차 $\varepsilon_i$ 의 밀도함수이다.
+
+**LAD의 점근 분포** (Casella & Berger, 2002, 식 12.4.5):
+
+$$\sqrt{n}(\hat{\beta}_L - \beta) \xrightarrow{d} N\!\left(0,\; \frac{1}{4f(0)^2 \sigma_x^2}\right)$$
+
+### OLS와의 ARE 비교
+
+같은 모형에서 OLS 추정량 $\hat{\beta} = \sum x_i y_i / \sum x_i^2$ 의 점근 분포:
+
+$$\sqrt{n}(\hat{\beta} - \beta) \xrightarrow{d} N\!\left(0,\; \frac{\sigma^2}{\sigma_x^2}\right)$$
+
+여기서 $\sigma^2 = \text{Var}(\varepsilon_i)$ 이다. 따라서 LAD 대비 OLS의 **점근 상대 효율(ARE)**:
+
+$$\text{ARE}(\hat{\beta}_L, \hat{\beta}) = \frac{\sigma^2/\sigma_x^2}{1/(4f(0)^2\sigma_x^2)} = 4f(0)^2\sigma^2$$
+
+이것은 평균 대비 중앙값의 ARE와 **수학적으로 동일한 형태**이다 (Casella & Berger, 2002, §12.4). 따라서 다음 결과가 그대로 적용된다:
+
+| 오차 분포 | $f(0)$ | $\sigma^2$ | ARE(LAD, OLS) |
+|:---|:---|:---|:---|
+| 정규 $N(0,\sigma^2)$ | $1/(\sigma\sqrt{2\pi})$ | $\sigma^2$ | $2/\pi \approx 64\%$ |
+| 이중지수 $\text{DE}(0,\sigma)$ | $1/(2\sigma)$ | $2\sigma^2$ | $50\% < \text{ARE} = $ ?... |
+| 로지스틱 | $1/4$ | $\pi^2/3$ | $\pi^2/3 \approx 33\%$... |
+
+**정규 오차**: ARE = $2/\pi \approx 64\%$. LAD는 OLS보다 정규 모형에서 36%의 효율을 잃는다.
+
+**결론**: LAD는 이상치에 강건하지만, 정규 모형에서 OLS보다 비효율적이다. 이것이 회귀 M-추정량이 필요한 이유이다.
+
+---
+
+## 회귀 M-추정량
+
+### 정의
+
+회귀 M-추정량은 아래를 최소화하는 $(\hat{\alpha}, \hat{\beta})$ 이다 (Casella & Berger, 2002, 식 12.4.6):
+
+$$\min_{a,b} \sum_{i=1}^n \rho_i(a, b)$$
+
+Huber의 $\rho$ 함수 (튜닝 파라미터 $k > 0$):
+
+$$\rho(u) = \begin{cases} \frac{1}{2}u^2 & \text{if } |u| \leq k \\ k|u| - \frac{1}{2}k^2 & \text{if } |u| > k \end{cases}$$
+
+여기서 $u = y_i - a - bx_i$ (잔차)이다.
+
+$\rho$ 의 미분 $\psi = \rho'$:
+
+$$\psi(u) = \begin{cases} u & \text{if } |u| \leq k \\ k \cdot \text{sign}(u) & \text{if } |u| > k \end{cases}$$
+
+**직관**: 잔차가 $k$ 이하면 OLS처럼 행동하고, $k$ 이상이면 LAD처럼 선형 패널티를 부과한다. 이상치의 영향을 제한하면서 정상 관측에서는 효율성을 유지한다.
+
+### 추정 방정식 (스코어 방정식)
+
+최솟값 조건 $\sum_i \partial \rho_i / \partial a = 0$, $\sum_i \partial \rho_i / \partial b = 0$:
+
+$$\sum_{i=1}^n \psi\!\left(\frac{y_i - \hat{\alpha} - \hat{\beta}x_i}{\hat{\sigma}}\right) = 0$$
+
+$$\sum_{i=1}^n \psi\!\left(\frac{y_i - \hat{\alpha} - \hat{\beta}x_i}{\hat{\sigma}}\right) x_i = 0$$
+
+여기서 $\hat{\sigma}$ 는 잔차의 척도 추정량이다. 척도를 모를 때는 MAD (Median Absolute Deviation)로 추정한다:
+
+$$\hat{\sigma} = \frac{\text{MAD}(\mathbf{r})}{0.6745}, \quad \mathbf{r} = (r_1, \ldots, r_n), \quad r_i = y_i - \hat{\alpha} - \hat{\beta}x_i$$
+
+0.6745는 정규 분포에서 MAD와 표준편차의 비율을 맞추는 정규화 상수이다.
+
+### 포토루 예시 결과
+
+Casella & Berger(2002)는 $k = 1.50$ 으로 M-추정량을 계산하였다 (Example 12.4.4):
+
+- 원본 데이터: $\hat{y} = 18.5 - 0.89x$ (OLS·LAD와 거의 일치)
+- 오류 입력 데이터: $\hat{y} = 14.67 - 0.68x$ (OLS보다 LAD에 훨씬 가까움)
+
+M-추정량은 이상치 하나에 대해 OLS보다 훨씬 안정적이다.
+
+---
+
+## ARE 비교: M-추정량 vs OLS vs LAD
+
+Casella & Berger(2002)의 시뮬레이션 결과 (Example 12.4.5, $k = 1.5$, 10,000회):
+
+모형: $Y_i = \alpha + \beta x_i + \varepsilon_i$, $x_i \in \{-2,-1,0,1,2\}$, $\alpha = 0$, $\beta = 1$
+
+| 분포 | M-추정량 vs OLS | M-추정량 vs LAD |
+|:---|:---:|:---:|
+| 정규 | 0.98 | 1.39 |
+| 로지스틱 | 1.03 | 1.27 |
+| 이중지수 | 1.07 | 1.14 |
+
+해석:
+- **정규 오차**: M-추정량 분산은 OLS 분산의 약 98% — 정규 모형에서 OLS와 거의 동등
+- **비정규 오차**: M-추정량이 OLS보다 오히려 더 효율적 (ARE > 1)
+- **LAD 대비**: M-추정량이 모든 분포에서 LAD보다 효율적
+
+이것이 M-추정량의 핵심 장점이다: **이상치 강건성과 정규 효율성을 동시에 달성**한다.
+
+---
+
+## IRLS for M-Regression
+
+### M-추정 방정식의 WLS 재표현
+
+추정 방정식 $\sum \psi(r_i/\hat{\sigma}) x_i = 0$ 을 WLS 형태로 변환한다.
+
+$u_i = r_i/\hat{\sigma}$ 로 표기하면, $\psi(u_i)$ 를 이용한 가중치:
+
+$$w_i = \frac{\psi(u_i)/u_i}{1} = \begin{cases} 1 & |u_i| \leq k \\ k/|u_i| & |u_i| > k \end{cases}$$
+
+$w_i = \psi(u_i)/u_i$ 로 정의하면 추정 방정식이 WLS 정규방정식과 같은 형태가 된다:
+
+$$\sum_{i=1}^n w_i (y_i - \hat{\alpha} - \hat{\beta}x_i) x_i = 0, \qquad \sum_{i=1}^n w_i (y_i - \hat{\alpha} - \hat{\beta}x_i) = 0$$
+
+이것은 현재 잔차로 계산된 가중치 $w_i$ 를 가진 WLS 문제이다.
+
+### IRLS 알고리즘 (M-회귀)
+
+::: {.callout-note}
+## M-회귀 IRLS 알고리즘
+
+**초기화**: OLS로 $(\hat{\alpha}^{(0)}, \hat{\beta}^{(0)})$ 계산, $\hat{\sigma}^{(0)} = \text{MAD}(\mathbf{r}^{(0)})/0.6745$
+
+**각 반복 $t = 0, 1, 2, \ldots$에서**:
+
+1. 표준화 잔차: $u_i^{(t)} = (y_i - \hat{\alpha}^{(t)} - \hat{\beta}^{(t)}x_i)/\hat{\sigma}^{(t)}$
+2. Huber 가중치: $w_i^{(t)} = \psi(u_i^{(t)})/u_i^{(t)} = \min(1,\; k/|u_i^{(t)}|)$
+3. WLS 풀기: $(\hat{\alpha}^{(t+1)}, \hat{\beta}^{(t+1)}) = \arg\min_{a,b} \sum_i w_i^{(t)}(y_i - a - bx_i)^2$
+4. 척도 갱신: $\hat{\sigma}^{(t+1)} = \text{MAD}(\mathbf{r}^{(t+1)})/0.6745$
+5. 수렴 확인: $\|\hat{\boldsymbol{\beta}}^{(t+1)} - \hat{\boldsymbol{\beta}}^{(t)}\| < \epsilon$
+:::
+
+IRLS는 각 반복에서 가중 OLS를 풀기 때문에 표준 선형대수 루틴을 재사용할 수 있다.
+
+---
+
+## 코드 예시
+
+### Step 1: 순수 Python 구현 (OLS, LAD, M-추정 비교)
+
+```python
+import numpy as np
+from scipy.optimize import linprog, minimize
+
+# ──────────────────────────────────────
+# 포토루 데이터 (Casella & Berger Table 12.4.1)
+# ──────────────────────────────────────
+O2  = np.array([20.0, 19.6, 19.6, 19.4, 18.4, 19.0, 19.0, 18.3,
+                18.2, 18.6, 19.2, 18.2, 18.7, 18.5, 18.0, 17.4,
+                16.5, 17.2, 17.3, 17.8, 17.3, 18.4, 16.9])
+CO2 = np.array([1.0, 1.2, 1.1, 1.4, 2.3, 1.7, 1.7, 2.4,
+                2.1, 2.1, 1.2, 2.3, 1.9, 2.4, 2.6, 2.9,
+                4.0, 3.3, 3.0, 3.4, 2.9, 1.9, 3.9])
+
+n = len(O2)
+
+# Animal 15의 O2 값을 오류 입력 (18 → 10)
+O2_err = O2.copy()
+O2_err[14] = 10.0  # 0-indexed, Animal 15 = index 14
+
+def ols(x, y):
+    """최소제곱 추정"""
+    n = len(x)
+    X = np.column_stack([np.ones(n), x])
+    beta = np.linalg.solve(X.T @ X, X.T @ y)
+    return beta
+
+def huber_psi(u, k=1.5):
+    """Huber ψ 함수"""
+    return np.where(np.abs(u) <= k, u, k * np.sign(u))
+
+def huber_weights(u, k=1.5):
+    """Huber 가중치 w_i = ψ(u_i)/u_i"""
+    w = np.where(np.abs(u) <= k, 1.0, k / np.maximum(np.abs(u), 1e-10))
+    return w
+
+def m_regression_irls(x, y, k=1.5, tol=1e-6, max_iter=50):
+    """
+    IRLS로 M-추정 회귀를 계산한다.
+    반환: (alpha_hat, beta_hat, n_iter)
+    """
+    n = len(x)
+    X = np.column_stack([np.ones(n), x])
+
+    # 초기화: OLS
+    beta = ols(x, y)
+
+    for t in range(max_iter):
+        resid = y - X @ beta
+        # 척도 추정: MAD / 0.6745
+        sigma = np.median(np.abs(resid - np.median(resid))) / 0.6745
+        if sigma < 1e-10:
+            break
+
+        # 표준화 잔차와 가중치
+        u = resid / sigma
+        w = huber_weights(u, k)
+
+        # WLS
+        W = np.diag(w)
+        beta_new = np.linalg.solve(X.T @ W @ X, X.T @ (w * y))
+
+        delta = np.linalg.norm(beta_new - beta)
+        beta = beta_new
+        if delta < tol:
+            return beta, t + 1
+    return beta, max_iter
+
+# ──────────────────────────────────────
+# 원본 데이터
+# ──────────────────────────────────────
+beta_ols_orig  = ols(O2, CO2)
+beta_m_orig, _ = m_regression_irls(O2, CO2)
+
+print("=== 원본 데이터 ===")
+print(f"OLS:     CO2 = {beta_ols_orig[0]:.2f} + {beta_ols_orig[1]:.2f} * O2")
+print(f"M-추정:  CO2 = {beta_m_orig[0]:.2f} + {beta_m_orig[1]:.2f} * O2")
+print(f"Casella 예시: OLS = 18.67 - 0.89x, M = 18.5 - 0.89x")
+
+# ──────────────────────────────────────
+# 오류 입력 데이터
+# ──────────────────────────────────────
+beta_ols_err  = ols(O2_err, CO2)
+beta_m_err, _ = m_regression_irls(O2_err, CO2)
+
+print("\n=== 오류 입력 데이터 (Animal 15: O2=10) ===")
+print(f"OLS:     CO2 = {beta_ols_err[0]:.2f} + {beta_ols_err[1]:.2f} * O2")
+print(f"M-추정:  CO2 = {beta_m_err[0]:.2f} + {beta_m_err[1]:.2f} * O2")
+print(f"Casella 예시: OLS = 6.41 - 0.23x, M = 14.67 - 0.68x")
+
+# ──────────────────────────────────────
+# ARE 시뮬레이션 (Casella Table)
+# ──────────────────────────────────────
+from scipy.stats import norm, logistic, laplace
+import numpy as np
+
+np.random.seed(42)
+x_sim = np.array([-2., -1., 0., 1., 2.])
+n_sim = 5
+alpha_true, beta_true = 0.0, 1.0
+n_rep = 5000
+k_tuner = 1.5
+
+results = {}
+for dist_name, sampler in [
+    ("정규", lambda: norm.rvs(size=n_sim)),
+    ("로지스틱", lambda: logistic.rvs(size=n_sim)),
+    ("이중지수", lambda: laplace.rvs(size=n_sim)),
+]:
+    beta_ols_sims, beta_m_sims = [], []
+    for _ in range(n_rep):
+        eps = sampler()
+        y = alpha_true + beta_true * x_sim + eps
+        b_ols = ols(x_sim, y)[1]
+        b_m, _ = m_regression_irls(x_sim, y, k=k_tuner)
+        beta_ols_sims.append(b_ols)
+        beta_m_sims.append(b_m[1])
+    var_ols = np.var(beta_ols_sims)
+    var_m   = np.var(beta_m_sims)
+    are_vs_ols = var_ols / var_m
+    results[dist_name] = {'var_ols': var_ols, 'var_m': var_m,
+                          'ARE_M_vs_OLS': are_vs_ols}
+    print(f"\n{dist_name}: Var(OLS)={var_ols:.4f}, Var(M)={var_m:.4f}, "
+          f"ARE(M,OLS)={are_vs_ols:.2f}")
+```
+
+### Step 2: statsmodels/scipy 기반 실무 활용
+
+```python
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from statsmodels.robust.robust_linear_model import RLM
+import statsmodels.robust.norms as sm_norms
+
+# 포토루 데이터
+O2  = np.array([20.0, 19.6, 19.6, 19.4, 18.4, 19.0, 19.0, 18.3,
+                18.2, 18.6, 19.2, 18.2, 18.7, 18.5, 18.0, 17.4,
+                16.5, 17.2, 17.3, 17.8, 17.3, 18.4, 16.9])
+CO2 = np.array([1.0, 1.2, 1.1, 1.4, 2.3, 1.7, 1.7, 2.4,
+                2.1, 2.1, 1.2, 2.3, 1.9, 2.4, 2.6, 2.9,
+                4.0, 3.3, 3.0, 3.4, 2.9, 1.9, 3.9])
+
+O2_err = O2.copy(); O2_err[14] = 10.0
+
+def fit_all(x, y, label):
+    """OLS, LAD(quantile), M-추정 비교"""
+    X = sm.add_constant(x)
+    n = len(x)
+
+    # OLS
+    ols_res = sm.OLS(y, X).fit()
+
+    # LAD (분위 회귀, tau=0.5)
+    qr_res = sm.QuantReg(y, X).fit(q=0.5)
+
+    # M-추정 (Huber, k=1.5)
+    m_res = RLM(y, X, M=sm_norms.HuberT(t=1.5)).fit()
+
+    print(f"\n=== {label} ===")
+    print(f"{'방법':<12} {'절편':>8} {'기울기':>8}")
+    print(f"{'OLS':<12} {ols_res.params[0]:>8.3f} {ols_res.params[1]:>8.3f}")
+    print(f"{'LAD':<12} {qr_res.params[0]:>8.3f} {qr_res.params[1]:>8.3f}")
+    print(f"{'M-추정':<12} {m_res.params[0]:>8.3f} {m_res.params[1]:>8.3f}")
+
+    return ols_res, qr_res, m_res
+
+ols_o, lad_o, m_o = fit_all(O2, CO2, "원본 데이터")
+ols_e, lad_e, m_e = fit_all(O2_err, CO2, "오류 입력 데이터")
+
+# 시각화: 원본 vs 오류 입력 데이터
+fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+x_grid = np.linspace(9, 21, 200)
+X_grid = sm.add_constant(x_grid)
+
+for ax, (x_data, y_data, ols_r, lad_r, m_r, title) in zip(
+    axes,
+    [(O2, CO2, ols_o, lad_o, m_o, "원본 데이터"),
+     (O2_err, CO2, ols_e, lad_e, m_e, "오류 입력 데이터 (Animal 15: O2=10)")]
+):
+    ax.scatter(x_data, y_data, color='k', alpha=0.6, s=30, label='관측치')
+    ax.plot(x_grid, X_grid @ ols_r.params, 'b-',  lw=2, label='OLS')
+    ax.plot(x_grid, X_grid @ lad_r.params, 'g--', lw=2, label='LAD')
+    ax.plot(x_grid, X_grid @ m_r.params,   'r:',  lw=2, label='M-추정 (Huber)')
+    ax.axhline(-1, color='gray', lw=0.8, ls='-.', label='예상 기울기 -1')
+    ax.set_xlabel('O₂ (%)')
+    ax.set_ylabel('CO₂ (%)')
+    ax.set_title(title)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+plt.suptitle("OLS vs LAD vs M-추정 회귀 강건성 비교 (포토루 데이터)", fontsize=12)
+plt.tight_layout()
+plt.show()
+
+# M-추정 결과 상세 (원본)
+print(m_o.summary())
+print("\nHuber 가중치 (이상치 관측치는 낮은 가중치):")
+weights_o = m_o.weights
+for i in np.where(weights_o < 0.8)[0]:
+    print(f"  Animal {i+1}: O2={O2[i]}, CO2={CO2[i]}, weight={weights_o[i]:.3f}")
+```
+
+---
+
+## 요약
+
+| 항목 | 핵심 내용 |
+|:---:|:---|
+| **OLS-LAD 유추** | 평균-중앙값 유추의 회귀 버전. OLS($\ell_2$) vs LAD($\ell_1$) |
+| **OLS 붕괴점** | 0% — 관측치 하나로 추정량 무한 왜곡 가능 |
+| **LAD 붕괴점** | 50% — 과반수 이하 오염에서 저항 |
+| **LAD 점근 분포** | $\sqrt{n}(\hat{\beta}_L - \beta) \to N(0, 1/(4f(0)^2\sigma_x^2))$ |
+| **ARE(LAD, OLS)** | $4f(0)^2\sigma^2$ — 정규 오차에서 $2/\pi \approx 64\%$ |
+| **Huber ρ** | $|u| \leq k$: OLS, $|u| > k$: LAD. 튜닝 파라미터 $k$ |
+| **M-회귀 가중치** | $w_i = \psi(u_i)/u_i$ — 이상치에 낮은 가중치 부여 |
+| **M-회귀 IRLS** | 각 반복: WLS($\mathbf{X}^T\mathbf{W}\mathbf{X}\hat{\boldsymbol{\beta}} = \mathbf{X}^T\mathbf{W}\mathbf{y}$) 반복 |
+| **ARE M vs OLS** | 정규 0.98, 로지스틱 1.03, 이중지수 1.07 — 비정규에서 OLS 초과 |
+| **포토루 예시** | 오류 입력: OLS 기울기 -0.89 → -0.23, M-추정 -0.89 → -0.68 |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [M-추정량](./122-m-estimators.qmd) — 위치 모수 M-추정, Huber/Bisquare ψ 함수, 영향함수
+- [SLR: BLUE와 통계적 해법](./134-slr-blue-statistical-solution.qmd) — OLS의 Gauss-Markov 최적성
+- [점근 강건성](./121-asymptotic-robustness.qmd) — 영향함수, 붕괴점 이론
+
+**후속 주제**
+
+- LAD 다중 회귀 — 분위 회귀의 일반화 ($\tau = 0.5$)
+- S-추정량, MM-추정량 — 고붕괴점 강건 회귀
+- 강건 표준오차 (HC0-HC4) — 오차 분산 이분산 하의 추론
+
+**관련 개념**
+
+- [회귀 모형 개관](./146-regression-models-overview.qmd) — EIV·로지스틱·강건 회귀의 계보
+- [로지스틱 회귀: 추정](./152-logistic-regression-estimation.qmd) — IRLS의 GLM 버전
+- [EIV: 직교 LS](./148-eiv-least-squares-solution.qmd) — 다른 기준 교체의 예
