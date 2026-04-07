@@ -5,7 +5,7 @@ parent: sql-tutor
 description: >
   사용자의 SQL 실수 패턴 추적 파일. 세션 시작 시 필수 로드.
   Active = 현재 약점, Resolved = 극복 완료. 세션 종료 후 agent가 업데이트한다.
-last_updated: 2026-04-07
+last_updated: 2026-04-07 (2차)
 ---
 
 # SQL 취약점 트래커
@@ -26,6 +26,9 @@ last_updated: 2026-04-07
 | ORDER BY 다중 정렬 문법 | 2026-04-07 | 2 | `AND` 사용 → 쉼표(`,`)로 구분해야 함. 2026-04-07: 1차 통과 1회 후 AND 오류 재발 → 연속 카운트 리셋, 누적 2 |
 | BETWEEN 문법 혼동 | 2026-04-07 | 2 | 컬럼명 누락(`BETWEEN 20000`), 비교연산자 혼용. 2026-04-07: 힌트 후 수정 → 연속 카운트 리셋 |
 | LIKE 문법 혼동 | 2026-04-07 | 1 | 포함 검색에 `=` 또는 `IN` 먼저 시도 → `LIKE '%값%'` 필요. 2026-04-07: 1차 통과 (연속 +1) |
+| GROUP BY 다중 컬럼 누락 | 2026-04-07 | 1 | `GROUP BY user_id`만 쓰고 `product_id` 누락 → 조합별 집계 시 모든 그룹 기준 컬럼 포함 필요. 힌트 후 수정 |
+| JOIN 구조 오류 | 2026-04-07 | 1 | WHERE를 FROM/JOIN보다 앞에 위치, 컬럼 테이블 귀속 혼동 (`b.author_name` → `a.author_name`). 힌트 후 수정 |
+| CASE WHEN END 누락 | 2026-04-07 | 1 | `END` 키워드 누락, grade를 독립 컬럼으로 나열 → `CASE WHEN ... END AS grade` 구조 필요. 힌트 후 수정 |
 
 ---
 
