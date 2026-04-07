@@ -57,6 +57,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `/reindex [category]` | **index.qmd 재편성** — 카테고리 내 모든 .qmd 메타데이터를 읽고 논리적 그룹핑·순서로 index.qmd를 재작성 | `guides/reorganize-index.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/algo [track] [problem]` | **Python 알고리즘 튜터** — AIE/DS 트랙 Level 1~5 문제를 대화식으로 풀이 → 세션을 .qmd 포스트로 저장 | `guides/algo-tutor.md` + `docs/blog/posts/Code_Test/GUIDE.md` |
 | `/sql [problem]` | **SQL 코딩 테스트 튜터** — Programmers Level 1~5 문제를 평가·교정·해설 → 세션을 .qmd 포스트로 저장 | `guides/sql-tutor.md` + `docs/blog/posts/Code_Test/GUIDE.md` |
+| `/writing [level] [lang] [topic]` | **논리적 글쓰기 튜터** — Lv.1~7 × 한국어/영어 글쓰기 채점·피드백 → 세션을 .qmd 포스트로 저장 | `guides/writing-tutor.md` + `guides/writing-rubric.md` + `guides/writing-weakness.md` + `docs/blog/posts/Writing/GUIDE.md` |
 | `/publish` | **배포** — 변경된 .qmd를 HTML 렌더링 → git add (.qmd + _site/ + _freeze/) → commit → push → 충돌 해결 | `guides/publish.md` |
 
 ### 커맨드별 사용 예시
@@ -75,6 +76,9 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `/algo` (Mode B 유형 지정) | `/algo AIE Lv3 DFS go` |
 | `/algo` (Mode A 실전) | `/algo AIE Lv2 Programmers 완주하지못한선수` |
 | `/algo` (Mode C 개념) | `/algo 공통 Hash concept` |
+| `/writing` (Mode A 글 제출) | `/writing Lv3 ko` |
+| `/writing` (Mode B 주제 출제) | `/writing Lv5 en random go` |
+| `/writing` (Mode C 개념) | `/writing concept R4` |
 | `/sql` (Mode B 바로 출제) | `/sql DS Lv1 random go` |
 | `/sql` (Mode B 유형 지정) | `/sql Lv2 JOIN go` |
 | `/sql` (Mode A 실전) | `/sql Programmers 조건에맞는회원수구하기` |
@@ -180,6 +184,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `Governance` | 데이터 거버넌스, 품질 |
 | `Strategy_Frameworks` | 비즈니스 분석, 전략 |
 | `Code_Test` | 알고리즘, SQL |
+| `Writing` | 논리적 글쓰기, 비판적 사고, Lv.1~7 |
 | `Surveilance` | 의료기기 규제, FDA/EMA |
 
 ---
