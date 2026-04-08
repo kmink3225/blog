@@ -39,19 +39,30 @@ sub-guides:
 `random` 키워드가 포함된 명령어를 받으면 아래 절차를 따른다.
 
 ```
-1. guides/writing-topics.md 로드
-2. 그룹 1~15 중 uniform random 선택 → 그룹 확정
-3. 레벨 → 티어 매핑:
-     Lv.1~2 → 티어 A
-     Lv.3~4 → 티어 B
-     Lv.5~6 → 티어 C
-     Lv.7   → 티어 D
-4. 해당 그룹·티어의 후보 3개 중 uniform random 선택 → 주제 확정
-5. 출력: "[그룹 N: {그룹명}] {주제}" → 즉시 출제 진행
+1. scripts/writing_topic_picker.py 실행 (uniform random 보장)
+   - 그룹 지정 없으면: --level N
+   - 그룹 지정 있으면: --level N --group {키워드|번호}
+   - 재현 필요 시:    --level N --seed {숫자}
+
+   예:
+     python scripts/writing_topic_picker.py --level 5
+     python scripts/writing_topic_picker.py --level 2 --group art
+     python scripts/writing_topic_picker.py --level 7 --seed 42
+
+2. JSON 출력에서 topic 필드 추출
+3. 출력: "[그룹 N: {group_name}] {topic}" → 즉시 출제 진행
 ```
 
-**주의**: 그룹 선정 시 직전 세션에서 사용한 그룹과 동일한 그룹이 선택되면 재추첨한다.
-이를 통해 동일 주제 반복을 방지한다.
+**레벨 → 티어 매핑 (스크립트 내부 처리)**
+
+| 레벨 | 티어 |
+|------|------|
+| Lv.1~2 | A |
+| Lv.3~4 | B |
+| Lv.5~6 | C |
+| Lv.7   | D |
+
+**그룹 키워드 목록**: art, education, tech, environment, society, economy, politics, ethics, health, media, law, community, science, history, sports (또는 그룹 번호 1~15)
 
 ---
 
