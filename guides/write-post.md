@@ -76,12 +76,25 @@ prerequisite:
 - YAML 헤더 필수 필드를 모두 포함한다 (AGENT_GUIDE.md §3 "작성 규칙" 참조)
 - **정보 탐색은 이미 완료된 상태**여야 한다 (`guides/info-search.md` 참조). 탐색 결과를 기반으로 포스트를 작성한다
 
-## Step 5: index.qmd 업데이트
+## Step 5: index.qmd 업데이트 및 렌더링
 
 - 해당 카테고리의 `index.qmd`를 읽는다
 - 기존 링크 패턴(날짜 형식, 번호 형식, 들여쓰기 등)을 확인한다
 - 적절한 섹션에 새 포스트 링크를 추가한다
 - 섹션이 없으면 기존 구조에 맞게 새 섹션을 추가한다
+
+::: {.callout-important}
+## index.qmd 수정 후 반드시 렌더링
+
+`index.qmd`를 수정하면 **반드시 HTML을 재렌더링**해야 사이트에 반영된다.
+링크를 추가하고 렌더링을 빠뜨리면 `.qmd`만 커밋되고 사이트는 구버전 목록을 그대로 표시한다.
+
+```bash
+quarto render docs/blog/posts/{category}/index.qmd
+```
+
+새 포스트 `.qmd`와 `index.qmd` 모두 수정했다면 두 파일 모두 렌더링한다.
+:::
 
 ## Step 6: 검증
 

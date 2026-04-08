@@ -199,6 +199,7 @@ guides/publish.md 로드 → git add → commit → push → 충돌 해결
 - [ ] YAML 필수 필드 (`title`, `description`, `categories`, `author`, `date`) 모두 있음
 - [ ] `date` 형식 `MM/DD/YYYY`
 - [ ] index.qmd 링크 패턴이 기존과 동일
+- [ ] index.qmd 렌더링 완료 — 링크 추가 후 `quarto render docs/blog/posts/{category}/index.qmd` 실행했는가
 - [ ] 수식 `$...$` 양쪽 공백 있음
 - [ ] 포스트 분량: 섹션 완성도 기준 — 정의·원리·응용·코드 포함 여부, 수식/주장 뒤 해석 존재, 독립 이해 가능 (200줄은 참고 하한, 줄 수보다 내용 밀도 우선)
 - [ ] 모든 주장·숫자·수식 뒤에 "왜/so what/직관" 해석이 있음
