@@ -1,0 +1,382 @@
+---
+title: "Fine-tuning 클래스당 샘플 수 추정: 모델별 이론과 Learning Curve 실험"
+subtitle: "KoBERT·BiLSTM·fastText·TF-IDF별 근거와 PAC-Bayes 이론, 실험으로 확정하는 방법"
+description: |
+  사전학습 모델 fine-tuning에 필요한 클래스당 샘플 수는 모델마다 크게 다르다.
+  KoBERT / ALBERT / BiLSTM / fastText / TF-IDF+SVM 각각의 추정 근거와 PAC-Bayes 이론적 지지를
+  분석하고, 이론 추정의 한계를 Learning Curve 실험으로 보완하는 방법을 다룬다.
+categories:
+  - Deep Learning
+  - Machine Learning
+  - NLP
+author: Kwangmin Kim
+date: 04/09/2026
+execute:
+  eval: false
+---
+
+## 배경: 이 포스트가 다루는 문제
+
+한국어 14-class 도메인 분류 모델을 개발할 때 직면하는 핵심 질문이다:
+
+> "클래스당 몇 개의 학습 샘플을 만들어야 하는가?"
+
+이 질문에 답하려면 두 가지가 필요하다.
+
+1. **이론적 추정**: 모델 아키텍처에 따른 경험적·이론적 하한선 파악
+2. **실험적 확정**: Learning Curve로 실제 데이터에서 필요량을 직접 측정
+
+---
+
+## 핵심 개념: 모델이 "사전에 얼마나 알고 있는가"
+
+샘플 수 추정의 핵심은 **모델이 학습 시작 전에 이미 알고 있는 지식의 양**이다.
+
+```
+사전 지식 많음 ──────────────────────→ 사전 지식 없음
+KoBERT / ALBERT    fastText / BiLSTM    TF-IDF + SVM
+(문맥까지 앎)      (통계 패턴만 앎)      (아무것도 모름)
+필요 샘플 ↓              ↓                    ↑
+```
+
+데이터가 하는 역할은 **"모델이 모르는 부분을 채우는 것"** 이다. 이미 많이 아는 모델일수록 적은 데이터로 충분하다.
+
+---
+
+## KoBERT / ALBERT: 왜 200~500인가
+
+### Fine-tuning에서 실제로 학습되는 것
+
+KoBERT를 fine-tuning할 때 일어나는 일:
+
+```
+[KoBERT 사전학습 완료 상태]
+  - 한국어 형태소 패턴 학습 완료
+  - "일시", "비율", "여부" 같은 단어의 의미 이미 표현 가능
+  - 문맥에 따른 의미 변화 이미 학습됨
+
+[Fine-tuning 시 새로 학습해야 하는 것]
+  - Classification head만 새로 추가
+  - 파라미터 수: 14 × hidden_size(768) = 10,752개
+  - Transformer body는 "약간 조정" 수준
+```
+
+10,752개 파라미터를 안정적으로 추정하려면 이론상 그 몇 배의 샘플이 필요하다. 클래스당 200개 × 14 = 2,800개 샘플이면 파라미터 대비 샘플 비율이 약 0.26이다. 이것이 다른 모델이었다면 턱없이 부족하지만, Transformer body가 고품질 표현을 이미 제공하므로 classification head의 학습이 매우 쉬운 문제가 된다.
+
+### BERT 원 논문에서 나온 실증
+
+Devlin et al. (2018) BERT 논문의 fine-tuning 실험:
+
+| 태스크 | 전체 샘플 수 | 클래스 수 | 클래스당 샘플 수 |
+|---|---|---|---|
+| RTE | 2,490 | 2 | ~1,245 |
+| MRPC | 3,668 | 2 | ~1,834 |
+| CoLA | 8,551 | 2 | ~4,275 |
+
+2-class 기준이므로, 14-class로 확장하면 **클래스당 200~500** 수준에서 의미있는 학습이 가능하다는 경험적 기준이 된다.
+
+### 이 태스크는 더 유리하다
+
+```
+실험시작  일시  → 날짜 그룹
+시약농도  비율  → 율 그룹
+완료      여부  → 분류 그룹
+```
+
+KoBERT는 "일시", "비율", "여부"가 어떤 종류의 단어인지 이미 안다. 모델에게 필요한 것은 "이 표현이 14개 중 몇 번 레이블인지"를 맵핑하는 것뿐이다. **하한선을 200까지 낮게 잡을 수 있는 이유가 여기에 있다.**
+
+ALBERT는 KoBERT보다 파라미터를 더 효율적으로 쓰는 구조(parameter sharing)라서 같은 범위 안에 있다.
+
+---
+
+## 200~500은 수식으로 유도 가능한가
+
+결론부터: **정확히 200~500을 수식으로 유도하는 것은 불가능하다.**
+
+다만 "왜 사전학습 모델이 적은 데이터로도 되는가"를 이론적으로 지지하는 프레임워크는 존재한다.
+
+### 시도 1: PAC / VC 이론 — 실패
+
+고전적 통계학습 이론은 다음 bound를 준다.
+
+$$m \geq O\left(\frac{d_{VC} \cdot \log(1/\epsilon) + \log(1/\delta)}{\epsilon}\right)$$
+
+BERT의 파라미터 수 ≈ 1억 1천만. VC dimension이 이와 비례한다고 보면 필요 샘플 수는 **수십억** 단위가 나온다. 실제 관찰(수백 개로 동작)과 10만 배 이상 차이가 난다. PAC bound는 딥러닝에 적용하면 실용적으로 무의미하다.
+
+### 시도 2: 파라미터 수 휴리스틱 — 실패
+
+통계학의 전통적 경험칙: "파라미터당 10~20개 샘플"
+
+KoBERT classification head: $14 \times 768 = 10{,}752$ 파라미터
+
+$$m \geq 10 \times 10{,}752 = 107{,}520$$
+
+실제 관찰(2,800~7,000개)과 10~40배 차이난다. 이 경험칙은 선형 모델 기준이라 사전학습의 효과를 전혀 반영하지 못한다.
+
+### 이론적으로 지지 가능한 프레임워크: PAC-Bayes
+
+완전한 유도는 아니지만, **방향을 설명하는** 가장 정직한 이론 도구다.
+
+$$\mathbb{E}_{h \sim Q}\left[L(h)\right] \leq \mathbb{E}_{h \sim Q}\left[\hat{L}(h)\right] + \sqrt{\frac{KL(Q \| P) + \ln\frac{2\sqrt{m}}{\delta}}{2m}}$$
+
+- $P$: 사전학습 완료 후 가중치 분포 (prior)
+- $Q$: fine-tuning 후 가중치 분포 (posterior)
+- $KL(Q \| P)$: fine-tuning으로 가중치가 얼마나 이동했는가
+- $m$: 학습 샘플 수
+
+일반화 오차의 상한이 $\sqrt{\frac{KL(Q \| P)}{2m}}$ 에 지배된다. 핵심:
+
+$$KL(Q \| P) \text{ 이 작을수록, 같은 } m \text{ 으로 더 tight한 bound를 얻는다}$$
+
+사전학습 모델은 fine-tuning 시 가중치가 크게 움직이지 않으므로 $KL(Q \| P)$ 이 작다. **적은 $m$ 으로도 일반화 bound가 tight해질 수 있다는 이론적 근거다.** 그러나 실제 $KL(Q \| P)$ 를 측정하지 않으면 200~500이라는 구체적 수는 여전히 나오지 않는다.
+
+### 결론: 200~500은 경험적 관찰의 누적
+
+| 이론 도구 | 결과 | 이유 |
+|---|---|---|
+| PAC / VC bound | 수십억 → 무의미 | 딥러닝의 inductive bias 미반영 |
+| 파라미터 수 휴리스틱 | ~107,000 → 실제와 괴리 | 선형 모델 기준, 사전학습 효과 미반영 |
+| PAC-Bayes | 방향만 설명 가능 | $KL(Q \| P)$ 실측 없이 수 산출 불가 |
+
+200~500은 BERT 원 논문 이후 수백 편의 fine-tuning 실험에서 누적된 커뮤니티 경험칙이다. PAC-Bayes로 "왜 적어도 되는가"의 방향은 설명 가능하지만, 정확한 숫자는 이론이 아닌 실험에서 나왔다.
+
+---
+
+## BiLSTM: 동일 범위인가, 다른가
+
+**pre-trained embedding 사용 여부가 결정적이다.**
+
+### Case 1: 랜덤 초기화 (embedding from scratch)
+
+```
+BiLSTM 파라미터 (hidden=256, 2layer 기준):
+  Embedding layer: vocab_size × 256  (vocab에 따라 수십만)
+  LSTM weights:    ~4 × (256 + 256) × 256 × 2 ≈ 1M+
+  Classifier:      14 × 256 = 3,584
+```
+
+수백만 파라미터를 처음부터 학습해야 한다. 클래스당 200개로는 완전히 under-determined이다. **최소 500~1,000개** 이상이 필요하다.
+
+### Case 2: Pre-trained embedding 사용 (KoBERT embedding or fastText)
+
+KoBERT의 embedding layer만 가져와서 BiLSTM encoder에 연결하면:
+
+- Embedding weights는 freeze 또는 천천히 업데이트
+- LSTM과 classifier만 새로 학습
+- 실질적으로 학습해야 하는 파라미터가 크게 줄어듦
+
+이 경우 **300~500** 범위로 내려온다.
+
+### BiLSTM 조건별 필요 샘플 수
+
+| BiLSTM 조건 | 필요 샘플 수 |
+|---|---|
+| 랜덤 초기화 | 500 ~ 1,000+ |
+| fastText embedding 사용 | 400 ~ 800 |
+| KoBERT embedding frozen | 300 ~ 500 |
+
+---
+
+## 전통 ML (TF-IDF + SVM/LogReg): 왜 더 많이 드나
+
+전통 ML이 단순히 "더 많이 든다"고 말하기엔 이 태스크는 예외가 있어서 정확히 설명한다.
+
+### 일반적으로 더 많이 드는 이유
+
+TF-IDF는 **단어/n-gram 빈도를 그대로 feature로 쓴다.** 아무런 사전 의미 지식이 없다.
+
+```
+"실험시작일시"  →  TF-IDF  →  [실험:0.3, 시작:0.2, 일시:0.4, 시작일:0.3, ...]
+"장비등록일시"  →  TF-IDF  →  [장비:0.3, 등록:0.2, 일시:0.4, 등록일:0.3, ...]
+```
+
+"일시"가 날짜 그룹임을 모델이 처음부터 직접 학습해야 한다. 이를 위해 다양한 수식어+주제어 조합이 충분히 들어와야 일반화된 결정경계를 만들 수 있다.
+
+### 그러나 이 태스크에서는 상황이 다르다
+
+character n-gram TF-IDF를 쓰면, suffix를 직접 feature로 잡는다:
+
+```python
+# character 2-gram, 3-gram
+"실험시작일시"  →  ["실험", "험시", "시작", "작일", "일시"]  ← "일시"가 feature로 직접 등장
+```
+
+SVM은 "일시" feature가 날짜 그룹에만 나타남을 빠르게 학습할 수 있다. 이 태스크에서는 **500개 이하로도 SVM이 잘 동작할 가능성이 있다.**
+
+### 그럼에도 더 많이 필요한 상황
+
+- 분류단어 어휘가 그룹 간 겹치는 경우 (예: "코드"가 여러 그룹에 등장)
+- 처음 보는 수식어+주제어 조합 (rare combination)
+- Semantic generalization이 필요한 경우
+
+이런 상황에서 TF-IDF는 의미 기반 일반화가 안 되므로 충분한 커버리지가 필요하다. **"수백 ~ 1,000개"** 는 이를 감안한 보수적 추정이다.
+
+---
+
+## fastText / 경량 임베딩: 왜 더 많이 드나
+
+fastText는 사전학습된 subword 임베딩을 사용한다. KoBERT처럼 적게 들어야 할 것 같은데, 왜 더 많이 드는가?
+
+### 이유 1: Static embedding (문맥이 없다)
+
+```
+KoBERT: "시작일시"에서 "일시" → 문맥에 따라 다른 벡터 생성
+fastText: "시작일시"에서 "일시" → 항상 동일한 벡터
+```
+
+Contextual representation이 없으면, 같은 분류단어라도 다양한 문맥에서 나타나는 패턴을 학습하려면 더 많은 샘플이 필요하다.
+
+### 이유 2: Classifier가 단순하다
+
+```
+fastText 구조:
+  input → subword n-gram 평균 벡터 (300d) → linear classifier (14 class)
+
+KoBERT fine-tuning:
+  input → 12-layer transformer (768d, contextual) → linear classifier
+```
+
+표현력이 훨씬 낮다. 낮은 표현력을 데이터로 보완해야 한다.
+
+### 이유 3: Subword 평균이 정보를 희석시킨다
+
+```
+"실험시작일시" → ["실험", "시작", "일시", "실험시", "시작일"] → 평균 벡터
+```
+
+모든 subword의 평균이라 마지막 "일시"의 정보가 다른 성분들에 의해 희석된다. KoBERT의 attention mechanism은 "일시"에 집중할 수 있지만, fastText 평균은 그게 안 된다.
+
+---
+
+## 전체 비교 요약
+
+| 모델 | 사전 지식 | Contextual | 표현력 | 클래스당 추정 |
+|---|---|---|---|---|
+| KoBERT fine-tuning | 높음 | O | 높음 | 200 ~ 500 |
+| ALBERT fine-tuning | 높음 | O | 높음 | 200 ~ 500 |
+| BiLSTM (KoBERT embedding frozen) | 중간 | △ | 중간 | 300 ~ 500 |
+| BiLSTM (fastText embedding) | 중간 | X | 중간 | 400 ~ 800 |
+| BiLSTM (랜덤 초기화) | 없음 | X | 중간 | 500 ~ 1,000+ |
+| fastText | 중간 (subword) | X | 낮음 | 500 ~ 2,000 |
+| TF-IDF + SVM/LR | 없음 | X | 낮음 | 수백 ~ 1,000 |
+
+::: {.callout-warning}
+위 추정은 전부 **"일반 텍스트 분류 태스크 기준"** 이다. suffix 패턴이 매우 강한 신호인 태스크에서는 전 모델에서 하한선을 낮게 볼 수 있다. 최종적으로 신뢰할 수 있는 숫자는 Learning Curve 실험을 통해 직접 확인해야 한다.
+:::
+
+---
+
+## Learning Curve로 샘플 수 결정하기
+
+이론적 추정이 200~500이라는 범위를 주었다면, Learning Curve 실험은 **이 범위 안에서 실제로 몇 개면 충분한지를 데이터로 확인하는 과정**이다.
+
+### 실험 설계 원칙
+
+Learning Curve 실험의 구조는 하나다: **샘플 수를 바꾸면서 동일 조건으로 학습하고, 고정된 test set에서 정확도를 비교한다.**
+
+```python
+SIZES_PER_GROUP = [50, 100, 200, 300]  # 실험할 그룹당 샘플 수
+```
+
+세 가지 원칙이 결과의 신뢰도를 결정한다.
+
+**원칙 1: Stratified sampling — 모든 클래스를 균등하게**
+
+```python
+sampled = pd.concat([
+    g.sample(n=min(n, len(g)), random_state=42)
+    for _, g in df_train.groupby('label')
+])
+```
+
+그룹당 정확히 `n`개씩 샘플링한다. 단순 random sampling을 쓰면 희소 클래스가 누락되어 클래스 불균형 효과와 샘플 수 효과가 뒤섞인다. Stratified sampling은 두 효과를 분리한다.
+
+**원칙 2: 매 실험마다 모델 재초기화 — 이전 학습 결과를 이어받지 않는다**
+
+```python
+def train_and_evaluate(X_tr, y_tr, X_te, y_te, epochs=5, ...):
+    m = KoBertClassifier(MODEL_NAME, num_classes).to(device)  # 새 모델
+    ...
+    return acc
+```
+
+샘플 수가 늘어날 때 성능이 오르는 것이 "더 많은 데이터 덕분"인지 "더 많은 학습 스텝 덕분"인지 구분해야 한다. 매번 새 모델을 만들어 동일한 epoch 수로 학습하면 순수하게 데이터 양의 효과만 측정된다.
+
+**원칙 3: 고정된 test set — 모든 실험에 동일한 기준자**
+
+```python
+acc = train_and_evaluate(
+    sampled['domain'].tolist(), sampled['label'].values,
+    X_test, y_test,   # ← 항상 동일
+    epochs=LC_EPOCHS
+)
+```
+
+test set이 바뀌면 정확도 변화가 데이터 양의 효과인지 test set 구성의 차이인지 알 수 없다.
+
+---
+
+### 실험 결과
+
+| 그룹당 샘플 수 | 전체 학습 데이터 | Test Accuracy | 구간 증가 |
+|:---:|:---:|:---:|:---:|
+| 50 | 700 | 59.1% | — |
+| 100 | 1,400 | 89.2% | **+30.1%p** |
+| 200 | 2,800 | 95.9% | +6.7%p |
+| 300 | 4,200 | 96.8% | +0.9%p |
+| 302 (전체) | 4,501 | 97.4% | +0.6%p |
+
+50→100 구간의 +30.1%p가 압도적으로 크고, 200개부터 증가폭이 급격히 줄어든다. 300개 이후는 사실상 plateau다.
+
+---
+
+### Plateau 판정 로직
+
+```python
+accs = lc_df['accuracy'].values
+last_gain = (accs[-1] - accs[-2]) * 100   # 마지막 구간 정확도 향상 (%p)
+
+if abs(last_gain) < 1.0:
+    print("→ 이미 plateau 도달. 현재 데이터 양이 충분합니다.")
+elif last_gain > 0:
+    print("→ 아직 상승 중. 데이터를 더 늘리면 개선 여지가 있습니다.")
+else:
+    print("→ 오히려 하락. 데이터 품질 문제일 수 있습니다.")
+```
+
+이 실험의 판정:
+
+```
+마지막 구간 정확도 향상: +0.62%p
+→ 이미 plateau 도달. 현재 데이터 양이 충분합니다.
+```
+
+임계값 **1.0%p**는 절대적인 기준이 아니다. 목표 정확도와 업무 맥락에 따라 조정한다. 이 태스크에서는 97% 수준이 실용적으로 충분하므로 0.62%p 추가 이득을 위해 데이터를 더 수집할 필요가 없다.
+
+하락(-) 케이스는 데이터 품질 문제를 시사한다. 샘플 수를 늘렸는데 성능이 떨어지면, 추가된 합성 데이터가 실제 분포를 왜곡하고 있다는 신호다.
+
+---
+
+### 이 실험이 이론 추정보다 신뢰할 수 있는 이유
+
+| 비교 항목 | 이론 추정 | Learning Curve |
+|---|---|---|
+| 근거 | 커뮤니티 경험칙, PAC-Bayes 방향성 | 실제 데이터 + 실제 모델로 직접 측정 |
+| 태스크 특성 반영 | 부분적 (suffix 신호 강도 등 미반영) | 완전 반영 |
+| 출력 형태 | 범위 (200~500) | 구체적 숫자 (300개면 충분) |
+| 모델 아키텍처 의존성 | 높음 (모델마다 다시 추정) | 낮음 (실험이 자동 반영) |
+
+이론 추정은 "어느 범위를 실험해야 하는가"를 정하는 데 유용하고, Learning Curve는 그 범위 안에서 실제 필요량을 확정하는 데 쓴다. 두 접근이 순서상 보완 관계다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [가설검정과 검정력 분석](../Statistics/140-normality-check.qmd)
+
+**관련 개념**
+
+- [DL 학습 데이터가 거의 없을 때: 도메인 분류기 증강 전략](../Data_Science/data-standardizer-hybrid-dl-engine.qmd)
+- [BERT Fine-tuning GPU 최적화](./pytorch-bert-finetuning-gpu-optimization.qmd)
