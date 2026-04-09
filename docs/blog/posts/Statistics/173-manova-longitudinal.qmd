@@ -1,0 +1,826 @@
+---
+title: "MANOVA Approaches to Longitudinal Data"
+subtitle: "다변량 반복측정 분석의 수식과 직관 — 일표본·다표본 모형, 성장곡선 분석, 다변량 검정 통계량, 예제"
+description: |
+  Hedeker & Gibbons(2006) Ch.3을 뼈대로, MANOVA를 종단 데이터에 적용하는
+  다변량 접근법을 수식과 직관으로 상세히 설명한다.
+  데이터 배치(long vs wide), 일표본 MANOVA 모형, 직교 다항식 성장곡선 분석,
+  SSCP 행렬 분해, Wilks' Λ·Roy 최대근 등 다변량 검정 통계량, 다표본 집단×시간 교호작용,
+  그리고 RM ANOVA와의 검정력 비교까지 다룬다.
+categories:
+  - Statistics
+  - Longitudinal Data Analysis
+author: Kwangmin Kim
+date: 04/10/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+종단 데이터의 고전적 분석법은 두 가지다: **반복측정 ANOVA**(univariate mixed-model, split-plot ANOVA)와
+**MANOVA**(Multivariate Analysis of Variance). 이전 포스트([반복측정 ANOVA](./170-anova-longitudinal-overview.qmd))에서
+반복측정 ANOVA를 다뤘다. 이 포스트는 MANOVA 접근법에 집중한다.
+
+두 접근법의 핵심 차이는 **공분산 구조에 대한 가정**이다.
+
+| 특성 | 반복측정 ANOVA | MANOVA |
+|------|--------------|--------|
+| 공분산 가정 | 복합대칭(compound symmetry) — 모든 시점 쌍의 상관이 동일 | 비구조적(unstructured) — 아무 제약 없음 |
+| 결측치 처리 | 불균형 부분 허용 | 완전 데이터만 가능 (Achilles' heel) |
+| 시점 조건 | 피험자 간 동일 시점 | 피험자 간 동일 시점 |
+| 시변 공변량 | 불가 | 불가 |
+| 개인별 성장곡선 | 정보 없음 | 정보 없음 |
+
+::: {.callout-note}
+## 왜 지금도 배우는가?
+
+MANOVA와 반복측정 ANOVA는 현재 일상적 사용이 권장되지 않는다.
+그러나 이 방법들은 혼합효과 모형(LMM)과 GEE가 어떤 문제를 해결하기 위해 등장했는지
+이해하는 **개념적 발판**이다 (Hedeker & Gibbons, 2006, Ch.3).
+특히 MANOVA의 SSCP 행렬 분해는 공분산 패턴 모형(Ch.6)의 직접적 선구다.
+:::
+
+---
+
+## 데이터 배치: Long vs Wide
+
+반복측정 ANOVA와 MANOVA는 **데이터 배치 방식이 다르다**.
+
+### Long format (반복측정 ANOVA)
+
+ANOVA에서 피험자의 $n$ 시점 관측은 **$n$개의 별도 행**으로 표현된다.
+
+| Subject | Time | $y$ |
+|---------|------|-----|
+| 1 | 1 | $y_{11}$ |
+| 1 | 2 | $y_{12}$ |
+| 1 | 3 | $y_{13}$ |
+| 2 | 1 | $y_{21}$ |
+| 2 | 2 | $y_{22}$ |
+| 2 | 3 | $y_{23}$ |
+
+종속변수가 하나( $y$ )이고, 시간은 별도의 분류 변수로 존재한다. "단변량 배치(univariate setup)"라고도 한다.
+
+### Wide format (MANOVA)
+
+MANOVA에서 피험자의 $n$ 시점 관측은 **$n$개의 별도 변수**(한 행)로 표현된다.
+
+| Subject | $y_1$ | $y_2$ | $y_3$ |
+|---------|-------|-------|-------|
+| 1 | $y_{11}$ | $y_{12}$ | $y_{13}$ |
+| 2 | $y_{21}$ | $y_{22}$ | $y_{23}$ |
+
+시간 변수가 명시적으로 없고, 반복 횟수( $n = 3$ )에 암묵적으로 포함된다.
+"다변량 배치(multivariate setup)"라고 한다.
+
+**직관**: MANOVA는 반복 측정값들을 "하나의 다변량 관측 벡터"로 취급한다.
+그래서 벡터의 어느 한 원소라도 결측이면, 그 피험자 전체를 분석에서 제외한다.
+이것이 MANOVA의 아킬레스건이다.
+
+---
+
+## 일표본 MANOVA 모형
+
+$N$ 명의 피험자( $i = 1, \ldots, N$ )가 각각 $n$ 시점에 완전 측정된다고 하자.
+MANOVA는 각 피험자의 반복 측정값을 $n \times 1$ **반응 벡터** $\mathbf{y}_i$ 로 다룬다.
+
+::: {.callout-note}
+## 정의: 일표본 MANOVA 모형
+
+$$
+\mathbf{y}_i = \boldsymbol{\mu} + \boldsymbol{\varepsilon}_i, \quad i = 1, \ldots, N
+$$
+
+- $\boldsymbol{\mu}$: 시점별 평균을 담은 $n \times 1$ 벡터
+- $\boldsymbol{\varepsilon}_i$: $n \times 1$ 오차 벡터, $\boldsymbol{\varepsilon}_i \sim N(\mathbf{0}, \boldsymbol{\Sigma})$
+
+핵심은 오차 공분산 행렬 $\boldsymbol{\Sigma}$ 에 **아무 구조적 제약이 없다**는 점이다.
+반복측정 ANOVA가 복합대칭( $\boldsymbol{\Sigma} = \sigma_\pi^2 \mathbf{1}\mathbf{1}' + \sigma_e^2 \mathbf{I}$ )을 가정하는 것과 대조된다.
+:::
+
+**직관**: 반복측정 ANOVA는 "4시점 데이터에서 1주차-2주차 상관 = 1주차-4주차 상관"이라고 강요한다.
+실제로는 가까운 시점일수록 더 강하게 상관되는 경우가 많다.
+MANOVA는 이 제약을 해제하여, 공분산 행렬을 데이터로부터 자유롭게 추정한다.
+
+---
+
+## 성장곡선 분석과 직교 다항식 표현
+
+### 평균 벡터의 다항식 분해
+
+시점 벡터 $\boldsymbol{\mu}$ 를 시간의 다항식으로 표현하면, "평균 궤적의 형태"를 모수로 추정할 수 있다.
+
+$$
+\boldsymbol{\mu} = \mathbf{T}' \boldsymbol{\beta}
+$$
+
+여기서 $\mathbf{T}$ 는 $q \times n$ 시간 행렬이고 $\boldsymbol{\beta}$ 는 $q \times 1$ 다항 계수 벡터다.
+$q \leq n$ 은 다항식 차수이며, $t_1, t_2, \ldots, t_n$ 은 시점 값이다.
+
+$$
+\mathbf{T} = \begin{bmatrix}
+1 & 1 & \cdots & 1 \\
+t_1 & t_2 & \cdots & t_n \\
+t_1^2 & t_2^2 & \cdots & t_n^2 \\
+\vdots & & & \vdots \\
+t_1^{q-1} & t_2^{q-1} & \cdots & t_n^{q-1}
+\end{bmatrix}
+$$
+
+### 직교 다항식 변환
+
+$\mathbf{T}$ 를 그대로 사용하면 다공선성(collinearity) 문제가 생긴다.
+이를 해결하기 위해 **직교 다항식 행렬** $\mathbf{P}$ 로 변환한다.
+
+$$
+\boldsymbol{\mu} = \mathbf{P}' \boldsymbol{\theta}, \quad \mathbf{P} = \mathbf{S}^{-1} \mathbf{T}
+$$
+
+$\mathbf{S}$ 는 $\mathbf{T}\mathbf{T}'$ 의 Cholesky 인수분해의 하삼각 행렬이다.
+균등 간격 4시점 ( $n = 4$ )의 경우, 직교 다항식 행렬은
+
+$$
+\mathbf{P}_4 = \begin{bmatrix}
+1 & 1 & 1 & 1 \\
+-3 & -1 & 1 & 3 \\
+1 & -1 & -1 & 1 \\
+-1 & 3 & -3 & 1
+\end{bmatrix} \oslash \begin{bmatrix} \sqrt{4} \\ \sqrt{20} \\ \sqrt{4} \\ \sqrt{20} \end{bmatrix}
+\quad (p_0, p_1, p_2, p_3)
+$$
+
+(각 행을 해당 행원소 제곱합의 제곱근으로 나눈다.)
+
+**직관**: 직교 다항식은 "평균 수준(상수항), 선형 증가, 2차 가속/감속, 3차 변곡" 을
+서로 무관한(직교하는) 성분으로 분리한다.
+각 성분이 독립적이므로, 한 차수의 검정이 다른 차수의 추정에 영향을 주지 않는다.
+
+### 변환된 모형
+
+$\mathbf{P}$ 로 양변을 곱하면
+
+$$
+\mathbf{P}\mathbf{y}_i = \mathbf{P}\boldsymbol{\mu} + \mathbf{P}\boldsymbol{\varepsilon}_i = \boldsymbol{\theta} + \boldsymbol{\varepsilon}_i^*
+$$
+
+여기서 $\boldsymbol{\theta} = \mathbf{P}\boldsymbol{\mu}$ 는 직교 다항 계수 벡터,
+$\boldsymbol{\varepsilon}_i^* \sim N(\mathbf{0}, \boldsymbol{\Sigma}^* = \mathbf{P}\boldsymbol{\Sigma}\mathbf{P}')$ 이다.
+
+**중요한 연결**: 반복측정 ANOVA의 구형성 가정은
+"$\mathbf{P}\boldsymbol{\Sigma}\mathbf{P}'$ 의 하 $(n-1) \times (n-1)$ 부분행렬이 대각 요소가 같고 비대각 요소가 0인가?"
+와 동치다. 즉 MANOVA는 구형성 검정 결과에 따라 RM ANOVA 결과를 **추출**할 수도 있다.
+
+---
+
+## SSCP 행렬 분해
+
+MANOVA는 제곱합 대신 **제곱합과 교차곱 행렬(SSCP)** 을 이용한다.
+직교 다항 변환 후의 MANOVA 분산 분해 표는 다음과 같다.
+
+| 변동원 | df | SSCP ( $n \times n$ ) | $E(\text{SSCP})$ |
+|--------|----|-----------------------|-----------------|
+| 시간 (Time) | 1 | $\mathbf{SST}^* = N\mathbf{P}\bar{\mathbf{y}}_{..}\bar{\mathbf{y}}_{..}'\mathbf{P}'$ | $\mathbf{P}[\boldsymbol{\Sigma} + N\boldsymbol{\mu}\boldsymbol{\mu}']\mathbf{P}'$ |
+| 잔차 (Residual) | $N-1$ | $\mathbf{SSR}^* = \mathbf{P}(\mathbf{Y}'\mathbf{Y} - N\bar{\mathbf{y}}_{..}\bar{\mathbf{y}}_{..}')\mathbf{P}'$ | $(N-1)\mathbf{P}\boldsymbol{\Sigma}\mathbf{P}'$ |
+| 전체 | $N$ | $\mathbf{SSY}^* = \mathbf{P}\mathbf{Y}'\mathbf{Y}\mathbf{P}'$ | |
+
+$\mathbf{Y}$ 는 $N \times n$ 전체 데이터 행렬, $\bar{\mathbf{y}}_{..}$ 는 $n \times 1$ 시점별 전체 평균 벡터다.
+
+### 대각원소의 의미
+
+$\mathbf{SST}^*$ 의 대각원소는
+
+$$
+\mathbf{SST}^* = \text{diag}(\underbrace{N \cdot n\bar{y}_{..}^2}_{\text{상수}},\; \underbrace{sst_1}_{\text{선형}},\; \underbrace{sst_2}_{\text{2차}},\; \ldots, \; \underbrace{sst_{n-1}}_{(n-1)\text{차}})
+$$
+
+$\mathbf{SSR}^*$ 의 대각원소는
+
+$$
+\mathbf{SSR}^* = \text{diag}(\underbrace{ssr_0}_{\text{피험자}},\; \underbrace{ssr_1}_{\text{피험자}\times\text{선형}},\; \underbrace{ssr_2}_{\text{피험자}\times\text{2차}},\; \ldots, \; \underbrace{ssr_{n-1}}_{\text{피험자}\times(n-1)\text{차}})
+$$
+
+이 두 행렬이 반복측정 ANOVA 결과를 추출하는 데도, MANOVA 검정을 수행하는 데도 필요한 **모든 정보를 담고 있다**.
+
+---
+
+## RM ANOVA 결과 추출 (구형성 충족 시)
+
+구형성 가정이 성립하면, $\mathbf{SST}^*$ 와 $\mathbf{SSR}^*$ 에서 **일변량 반복측정 ANOVA 결과를 직접 추출**할 수 있다.
+
+$$
+SS_T = \sum_{j=1}^{n-1} sst_j \quad (\mathbf{SST}^* \text{의 하 } n-1 \text{개 대각원소 합})
+$$
+
+$$
+SS_R = \sum_{j=1}^{n-1} ssr_j \quad (\mathbf{SSR}^* \text{의 하 } n-1 \text{개 대각원소 합})
+$$
+
+$$
+SS_S = ssr_0 \quad (\mathbf{SSR}^* \text{의 첫 번째 대각원소})
+$$
+
+| 변동원 | df | SS | MS | $E(\text{MS})$ |
+|--------|----|----|-----|----------------|
+| 피험자 | $N-1$ | $SS_S = n\sum_i(\bar{y}_{i.} - \bar{y}_{..})^2$ | $MS_S = SS_S/(N-1)$ | $\sigma_e^2 + n\sigma_\pi^2$ |
+| 시간 | $n-1$ | $SS_T = N\sum_j(\bar{y}_{.j} - \bar{y}_{..})^2$ | $MS_T = SS_T/(n-1)$ | $\sigma_e^2 + \frac{N\sum_j \tau_j^2}{n-1}$ |
+| 잔차 | $(N-1)(n-1)$ | $SS_R = \sum_i\sum_j(y_{ij} - \bar{y}_{i.} - \bar{y}_{.j} + \bar{y}_{..})^2$ | $MS_R = SS_R/[(N-1)(n-1)]$ | $\sigma_e^2$ |
+
+F-검정: $F_T = MS_T / MS_R$
+
+**직관**: $MS_R$ 은 $n-1$ 개의 $ssr_j/(N-1)$ 을 평균한 값이다.
+구형성이 성립해야 이 "평균된" 오차 항이 정당화된다.
+구형성이 위반되면 이 평균 자체가 부정확해진다 — MANOVA는 이 문제를 회피한다.
+
+---
+
+## 다변량 시간 효과 검정
+
+### 일표본: 전체 시간 효과
+
+귀무가설 $H_0: \boldsymbol{\tau} = \mathbf{0}$ (모든 시점 평균이 같다) 를 검정하려면,
+$\mathbf{SST}^*$ 와 $\mathbf{SSR}^*$ 의 하 $(n-1) \times (n-1)$ 부분행렬을 비교한다.
+
+행렬은 단순히 나눌 수 없으므로, **행렬식 방정식(determinantal equation)** 을 푼다:
+
+$$
+|\mathbf{SST}_{(n-1)}^* - \lambda \mathbf{SSR}_{(n-1)}^*| = 0
+\tag{3.4}
+$$
+
+이 방정식은 고유값(latent root) $\lambda_1$ 을 하나 갖는다.
+$H_0$ 이 참이면 $\mathbf{SST}_{(n-1)}^* \approx \mathbf{SSR}_{(n-1)}^*$ 이므로 $\lambda_1 \approx 1$ 이다.
+시간 효과가 클수록 $\lambda_1 > 1$ 이 된다.
+
+**직관**: 일변량 F-검정이 $MS_T / MS_R$ (두 수의 비)를 계산하듯,
+MANOVA는 $\mathbf{SST}^* / \mathbf{SSR}^*$ (두 행렬의 비)를 고유값 문제로 계산한다.
+고유값은 "이 행렬의 비가 얼마나 1에서 벗어나는가"를 스칼라 하나로 요약한다.
+
+Cholesky 분해 $\mathbf{SSR}_{(n-1)}^* = \mathbf{E}\mathbf{E}'$ 를 이용하면 일행렬 고유값 문제로 단순화된다:
+
+$$
+|\mathbf{E}^{-1}\mathbf{SST}_{(n-1)}^*(\mathbf{E}^{-1})' - \lambda \mathbf{I}_{(n-1)}| = 0
+\tag{3.5}
+$$
+
+### 다변량 검정 통계량 4종
+
+::: {.callout-note}
+## 정의: 네 가지 다변량 검정 통계량
+
+$\lambda_1 \geq \lambda_2 \geq \cdots$ 를 고유값이라 하자.
+
+| 통계량 | 정의 | 직관 |
+|--------|------|------|
+| **Roy 최대근** | $\lambda_1$ | 가장 분리가 큰 방향의 효과 크기 |
+| **Wilks' $\Lambda$** | $\prod_h \frac{1}{1+\lambda_h}$ | 오차 분산의 전체 신호 대비 비율 |
+| **Hotelling-Lawley 적률** | $\sum_h \lambda_h$ | 모든 방향의 신호를 합산 |
+| **Pillai-Bartlett 적률** | $\sum_h \frac{\lambda_h}{1+\lambda_h}$ | 분리 강도의 합, 가장 견고한 검정 |
+
+이 통계량들은 귀무가설 하에서 근사적으로 F-분포를 따른다.
+:::
+
+**각 통계량의 특성**:
+
+- **Wilks' $\Lambda$**: 가장 널리 사용. $\Lambda = 1$ 이면 효과 없음, $\Lambda \to 0$ 이면 효과 최대.
+- **Roy 최대근**: 가장 강력하지만 가정에 민감. 집단 분리 방향이 하나일 때 유리.
+- **Pillai's trace**: 귀무가설 위반에 가장 견고(robust). 소표본·비정규에서 선호.
+- **Hotelling-Lawley trace**: 효과 크기 해석이 직관적.
+
+일표본에서는 $H_0: \boldsymbol{\tau} = \mathbf{0}$ 에 대해 비영(non-zero) 고유값이 하나뿐이므로
+$\Lambda = 1/(1+\lambda_1)$ 이고 모든 통계량이 같은 결론을 준다.
+
+---
+
+## 개별 시간 성분 검정
+
+전체 시간 효과 검정 후, 어떤 차수(선형, 2차, 3차)의 추세가 유의한지 검정한다.
+
+### 구형성 충족 시 (RM ANOVA)
+
+공통 분모 $MS_R$ 을 사용하는 "평균된(averaged)" F-검정:
+
+$$
+F_k = \frac{sst_k}{\displaystyle\sum_{j=1}^{n-1} ssr_j / [(n-1)(N-1)]}, \quad k = 1, 2, \ldots, n-1
+\tag{3.6}
+$$
+
+분모 자유도: $(n-1)(N-1)$.
+
+### 구형성 위반 시 (MANOVA)
+
+각 성분마다 **고유한 오차 항**을 사용:
+
+$$
+F_k = \frac{sst_k}{ssr_k/(N-1)}, \quad k = 1, 2, \ldots, n-1
+\tag{3.7}
+$$
+
+분모 자유도: $N-1$.
+
+**검정력 비교**:
+
+MANOVA는 분모 자유도가 $(N-1)$ 뿐이지만,
+RM ANOVA는 $(n-1)(N-1)$ 자유도의 공통 분모를 사용한다.
+자유도가 더 크면 기각역이 작아져 검정력이 높다.
+따라서 구형성이 성립하면 **RM ANOVA가 더 강력**하다.
+
+구형성이 위반되면 RM ANOVA의 공통 분모 자체가 부적절해지므로 MANOVA가 더 타당하다.
+
+---
+
+## 다표본 MANOVA 모형
+
+$s$ 개 집단( $h = 1, \ldots, s$ ), 집단 $h$ 에 $N_h$ 명, 총 $N = \sum N_h$ 명이 각각 $n$ 시점에 측정된다.
+
+::: {.callout-note}
+## 정의: 다표본 MANOVA 모형
+
+$$
+\mathbf{y}_{hi} = \boldsymbol{\mu} + \boldsymbol{\gamma}_h + \boldsymbol{\varepsilon}_{hi}
+\tag{3.8}
+$$
+
+- $\boldsymbol{\mu}$: $n \times 1$ 전체 평균 벡터
+- $\boldsymbol{\gamma}_h$: $n \times 1$ 집단 $h$ 의 효과 벡터 (시점별 집단 효과)
+- $\boldsymbol{\varepsilon}_{hi} \sim N(\mathbf{0}, \boldsymbol{\Sigma})$: 집단 공통 오차 공분산 행렬 (동분산 가정)
+:::
+
+**직관**: $\boldsymbol{\gamma}_h$ 가 스칼라가 아닌 **벡터**임에 주목하라.
+집단 효과가 시점마다 다를 수 있다는 것을 허용한다.
+이것이 바로 "집단 × 시간 교호작용"의 수학적 표현이다.
+
+직교 다항 변환을 적용하면
+
+$$
+\mathbf{P}\mathbf{y}_{hi} = \mathbf{P}\boldsymbol{\mu} + \mathbf{P}\boldsymbol{\gamma}_h + \mathbf{P}\boldsymbol{\varepsilon}_{hi}
+= \boldsymbol{\theta} + \boldsymbol{\delta}_h + \boldsymbol{\varepsilon}_{hi}^*
+\tag{3.9}
+$$
+
+### 다표본 SSCP 분해
+
+| 변동원 | df | SSCP ( $n \times n$ ) |
+|--------|----|-----------------------|
+| 시간 (Time) | 1 | $\mathbf{SST}^* = N\mathbf{P}\bar{\mathbf{y}}_{..}\bar{\mathbf{y}}_{..}'\mathbf{P}'$ |
+| 집단 간 (Between Groups) | $s-1$ | $\mathbf{SSG}^* = \mathbf{P}\!\left(\sum_h N_h \bar{\mathbf{y}}_{h.}\bar{\mathbf{y}}_{h.}' - N\bar{\mathbf{y}}_{..}\bar{\mathbf{y}}_{..}'\right)\!\mathbf{P}'$ |
+| 잔차 (Subjects within Groups) | $N-s$ | $\mathbf{SSR}^* = \mathbf{P}\!\left(\sum_h\sum_i \mathbf{y}_{hi}\mathbf{y}_{hi}' - \sum_h N_h\bar{\mathbf{y}}_{h.}\bar{\mathbf{y}}_{h.}'\right)\!\mathbf{P}'$ |
+
+$\mathbf{SSG}^*$ 의 대각원소가 담는 정보:
+
+$$
+\mathbf{SSG}^* = \text{diag}(\underbrace{ssg_0}_{\text{집단}},\; \underbrace{ssg_1}_{\text{집단}\times\text{선형}},\; \underbrace{ssg_2}_{\text{집단}\times\text{2차}},\; \ldots, \; \underbrace{ssg_{n-1}}_{\text{집단}\times(n-1)\text{차}})
+$$
+
+$\mathbf{SSR}^*$ 의 대각원소:
+
+$$
+\mathbf{SSR}^* = \text{diag}(\underbrace{ssr_0}_{\text{집단 내 피험자}},\; \underbrace{ssr_1}_{s(g)\times\text{선형}},\; \ldots)
+$$
+
+### 다표본에서 RM ANOVA 결과 추출
+
+$$
+\begin{aligned}
+SS_T &= \sum_{j=1}^{n-1} sst_j \quad &(\mathbf{SST}^* \text{의 하 } n-1 \text{개 대각원소}) \\
+SS_G &= ssg_0 \quad &(\mathbf{SSG}^* \text{의 첫 번째 대각원소}) \\
+SS_{GT} &= \sum_{j=1}^{n-1} ssg_j \quad &(\mathbf{SSG}^* \text{의 하 } n-1 \text{개 대각원소}) \\
+SS_{S(G)} &= ssr_0 \quad &(\mathbf{SSR}^* \text{의 첫 번째 대각원소}) \\
+SS_R &= \sum_{j=1}^{n-1} ssr_j \quad &(\mathbf{SSR}^* \text{의 하 } n-1 \text{개 대각원소})
+\end{aligned}
+$$
+
+분할구획 ANOVA F-검정:
+
+| 변동원 | df | MS | F |
+|--------|----|----|---|
+| 시간 | $n-1$ | $MS_T = SS_T/(n-1)$ | $MS_T / MS_R$ |
+| 집단 | $s-1$ | $MS_G = SS_G/(s-1)$ | $MS_G / MS_{S(G)}$ |
+| 집단 × 시간 | $(s-1)(n-1)$ | $MS_{GT} = SS_{GT}/[(s-1)(n-1)]$ | $MS_{GT} / MS_R$ |
+| 집단 내 피험자 | $N-s$ | $MS_{S(G)} = SS_{S(G)}/(N-s)$ | $MS_{S(G)} / MS_R$ |
+| 잔차 | $(N-s)(n-1)$ | $MS_R = SS_R/[(N-s)(n-1)]$ | |
+
+**왜 집단 효과의 분모가 $MS_{S(G)}$ 인가?**
+집단 간 비교는 피험자-간(between-subjects) 변동을 이용하므로,
+피험자-간 오차 $MS_{S(G)}$ 가 올바른 분모다.
+시간 효과와 집단 × 시간 교호작용은 피험자-내(within-subjects) 비교이므로 $MS_R$ 을 사용한다.
+
+### 다변량 집단 × 시간 교호작용 검정
+
+전체 교호작용 검정은 $\mathbf{SSG}_{(n-1)}^*$ 와 $\mathbf{SSR}_{(n-1)}^*$ 의 하 $(n-1) \times (n-1)$ 부분행렬을 비교한다:
+
+$$
+|\mathbf{SSG}_{(n-1)}^* - \lambda\, \mathbf{SSR}_{(n-1)}^*| = 0
+\tag{3.11}
+$$
+
+이 방정식은 $\min(s-1, n-1)$ 개의 비영(non-zero) 고유값 $\lambda_1 \geq \lambda_2 \geq \cdots$ 를 갖는다.
+
+Wilks' $\Lambda$ 는
+
+$$
+\Lambda = \prod_{h=1}^{\min(s-1,n-1)} \frac{1}{1+\lambda_h}
+\tag{3.12}
+$$
+
+교호작용의 개별 성분(집단 × 선형, 집단 × 2차 등) F-검정은 각자의 오차를 사용:
+
+$$
+F_{GT_k} = \frac{ssg_k/(s-1)}{ssr_k/(N-s)}, \quad k = 1, 2, \ldots, n-1
+\tag{3.14}
+$$
+
+각 $F_{GT_k}$ 는 자유도 $s-1$ 과 $N-s$ 로 평가된다.
+
+**직관**: 교호작용의 $k$ 번째 다항 성분은 "집단 간 $k$ 차 시간 추세의 차이"를 검정한다.
+예컨대 $F_{GT_1}$ 은 "집단별 선형 성장률이 다른가?",
+$F_{GT_2}$ 는 "집단별 가속/감속 패턴이 다른가?"를 묻는다.
+
+---
+
+## 예제: 어휘 성장 데이터 (Bock, 1975)
+
+Bock(1975)이 제시한 어휘 성장 데이터로 MANOVA 절차를 시연한다.
+이 데이터는 64명의 학생이 4학년, 5학년, 6학년, 7학년에 걸쳐 어휘 점수를 측정한 것이다.
+
+### 시점별 기술통계
+
+| 학년 | 평균 | 표준편차 |
+|------|------|----------|
+| 4학년 | 1.14 | — |
+| 5학년 | 2.54 | — |
+| 6학년 | 2.99 | — |
+| 7학년 | 3.47 | — |
+
+평균이 학년에 따라 증가하지만, 증가 속도가 점점 줄어드는 패턴이 보인다.
+이는 **선형 추세 + 음의 2차 추세**를 암시한다.
+
+### 직교 다항 변환
+
+균등 4시점에 대한 직교 다항식 행렬:
+
+$$
+\mathbf{P} = \begin{bmatrix}
+0.5 & 0.5 & 0.5 & 0.5 \\
+-0.6708 & -0.2236 & 0.2236 & 0.6708 \\
+0.5 & -0.5 & -0.5 & 0.5 \\
+-0.2236 & 0.6708 & -0.6708 & 0.2236
+\end{bmatrix}
+$$
+
+$\mathbf{P}$ 와 평균 벡터 $\bar{\mathbf{y}} = (1.14, 2.54, 2.99, 3.47)'$ 를 곱하면 직교 다항 추정값을 얻는다:
+
+| 성분 | 추정값 | 해석 |
+|------|--------|------|
+| 상수 | 5.0694 | 전체 평균 수준 |
+| 선형 | 1.6658 | 학년별 선형 증가 → 양수, 매우 유의함 예상 |
+| 2차 | -0.4606 | 증가 속도 감소 → 음수, 유의할 가능성 |
+| 3차 | 0.2224 | 변곡 → 작은 값, 유의하지 않을 가능성 |
+
+### 다변량 시간 효과 검정
+
+$N = 64$, $n = 4$. 행렬식 방정식 (3.5)를 풀면
+
+$$
+\lambda_1 = 4.7432, \quad \Lambda = \frac{1}{1+4.7432} = 0.1741
+$$
+
+이 $\Lambda$ 를 Finn(1974) 근사를 통해 F-값으로 변환하면:
+
+$$
+F(3, 61) = 96.45, \quad p < 0.0001
+$$
+
+학년 효과가 명확히 유의하다.
+
+### 개별 추세 성분 비교: MANOVA vs RM ANOVA
+
+선형 성분을 예로 들면:
+
+**MANOVA (각자의 오차 사용)**:
+$$
+F_{\text{선형}} = \frac{sst_1}{ssr_1/(N-1)} = \frac{177.59}{50.42/63} = 221.88
+$$
+분모 자유도: 63.
+
+**RM ANOVA (공통 평균 오차 사용)**:
+$$
+F_{\text{선형}} = \frac{sst_1}{(50.42 + 43.95 + 60.57)/(3 \times 63)} = \frac{177.59}{0.8201} = 216.63
+$$
+분모 자유도: 189.
+
+양쪽 모두 $p < 0.0001$ 로 유의하다.
+그러나 RM ANOVA의 분모 자유도(189)가 더 커서 기각역이 낮으므로 검정력이 더 높다.
+이 데이터에서 구형성 검정이 기각되지 않았기 때문에 RM ANOVA가 적절하다.
+
+**결론**: 어휘 점수는 학년에 따라 유의하게 증가(선형 및 2차 추세 모두 유의)하지만,
+증가 속도는 학년이 높아질수록 둔화된다.
+
+---
+
+## MANOVA의 장점과 한계
+
+### 장점
+
+1. **비구조적 공분산 허용**: 반복측정 ANOVA의 구형성 가정 없이, 임의의 공분산 구조를 허용한다.
+2. **구형성 검정 불필요**: Mauchly 검정이나 Greenhouse-Geisser 보정이 필요 없다.
+3. **RM ANOVA 내포**: 구형성이 성립하면 MANOVA에서 RM ANOVA 결과를 직접 추출할 수 있다.
+
+### 한계
+
+1. **완전 데이터 요구**: 결측값이 하나라도 있는 피험자는 전체 제외. 소표본 연구에서 심각한 편향.
+2. **시변 공변량 불가**: 시점마다 달라지는 예측변수를 모형에 포함할 수 없다.
+3. **공분산 모수 급증**: 시점 $n$ 이 커지면 비구조적 $\boldsymbol{\Sigma}$ 의 모수가 $n(n+1)/2$ 개로 증가.
+4. **개인별 성장곡선 없음**: 집단 평균 수준의 비교만 가능. 개인 간 이질성을 모형화하지 못한다.
+5. **동일 시점 필수**: 피험자마다 서로 다른 시점에 측정된 불균형 설계를 처리하지 못한다.
+
+::: {.callout-important}
+## MANOVA vs LMM
+
+이 모든 한계를 극복하는 것이 **혼합효과 회귀모형(LMM)** 이다.
+LMM은 결측에 대해 MAR(Missing At Random)까지 허용하고,
+시변 공변량을 포함하며, 불균형 설계를 자연스럽게 처리한다.
+MANOVA는 LMM 이해를 위한 개념적 발판으로 학습하는 것이 현재 주된 이유다.
+:::
+
+---
+
+## 코드 예시
+
+### R: 일표본 MANOVA
+
+```r
+# 어휘 성장 데이터 재현 (Bock 1975 예제)
+library(tidyverse)
+
+# 시뮬레이션: 64명, 4시점, 어휘 점수
+set.seed(42)
+N <- 64
+times <- c(1, 2, 3, 4)
+
+# 공분산 행렬 설정 (비구조적)
+Sigma <- matrix(c(
+  1.50, 0.80, 0.75, 0.70,
+  0.80, 1.80, 0.90, 0.85,
+  0.75, 0.90, 1.60, 0.95,
+  0.70, 0.85, 0.95, 1.70
+), nrow = 4)
+
+mu <- c(1.14, 2.54, 2.99, 3.47)
+
+# 다변량 정규 분포에서 데이터 생성
+library(MASS)
+Y <- mvrnorm(N, mu = mu, Sigma = Sigma)
+colnames(Y) <- paste0("y", 1:4)
+
+# Step 1: 순수 행렬 연산으로 MANOVA 수동 계산 (원리 이해)
+y_bar <- colMeans(Y)
+P_const <- rep(0.5, 4)  # 상수항 직교 다항식 계수 (정규화된)
+
+# 직교 다항식 행렬 P (4시점, 균등 간격)
+# 수동 계산 (교재 표에서)
+P <- rbind(
+  c(0.5,    0.5,    0.5,    0.5),    # p0: 상수
+  c(-0.6708, -0.2236, 0.2236, 0.6708), # p1: 선형
+  c(0.5,   -0.5,   -0.5,    0.5),   # p2: 2차
+  c(-0.2236, 0.6708, -0.6708, 0.2236)  # p3: 3차
+)
+
+# 직교 다항 변환된 평균
+theta_hat <- P %*% y_bar
+cat("직교 다항 추정값:\n")
+cat("상수:", round(theta_hat[1], 4), "\n")
+cat("선형:", round(theta_hat[2], 4), "\n")
+cat("2차:", round(theta_hat[3], 4), "\n")
+cat("3차:", round(theta_hat[4], 4), "\n")
+
+# SST* 행렬 (시간 SSCP)
+SST_star <- N * P %*% outer(y_bar, y_bar) %*% t(P)
+
+# SSR* 행렬 (잔차 SSCP)
+SSY_raw <- t(Y) %*% Y
+SSR_star <- P %*% (SSY_raw - N * outer(y_bar, y_bar)) %*% t(P)
+
+cat("\nSST* 대각원소 (시간 SS 분해):\n")
+cat("상수:", round(SST_star[1,1], 2), "\n")
+cat("선형:", round(SST_star[2,2], 2), "\n")
+cat("2차:", round(SST_star[3,3], 2), "\n")
+cat("3차:", round(SST_star[4,4], 2), "\n")
+
+cat("\nSSR* 대각원소 (잔차 SS 분해):\n")
+cat("피험자:", round(SSR_star[1,1], 2), "\n")
+cat("피험자×선형:", round(SSR_star[2,2], 2), "\n")
+cat("피험자×2차:", round(SSR_star[3,3], 2), "\n")
+cat("피험자×3차:", round(SSR_star[4,4], 2), "\n")
+
+# Step 2: 내장 함수로 다변량 검정 (실무 코드)
+# Wide format → manova()
+fit_manova <- manova(Y ~ 1)
+
+# 다변량 시간 효과: 직접 비교
+# (일표본에서는 Intercept의 다변량 검정을 사용)
+summary(fit_manova)
+```
+
+### R: 다표본 MANOVA (집단 × 시간 교호작용)
+
+```r
+# 두 집단 (약물 vs 위약), 4시점 설계
+set.seed(123)
+N_drug <- 30; N_placebo <- 30
+
+# 약물 집단: 더 빠른 선형 감소
+mu_drug    <- c(20, 15, 11, 9)
+mu_placebo <- c(20, 18, 17, 16)
+
+Sigma_common <- matrix(c(
+  16, 8, 7, 6,
+   8, 14, 8, 7,
+   7,  8, 12, 8,
+   6,  7,  8, 11
+), nrow = 4)
+
+Y_drug    <- mvrnorm(N_drug,    mu = mu_drug,    Sigma = Sigma_common)
+Y_placebo <- mvrnorm(N_placebo, mu = mu_placebo, Sigma = Sigma_common)
+
+colnames(Y_drug) <- colnames(Y_placebo) <- paste0("week", c(0, 2, 4, 8))
+
+# 집단 변수 결합
+Y_all <- rbind(Y_drug, Y_placebo)
+group <- factor(c(rep("drug", N_drug), rep("placebo", N_placebo)))
+
+# 다표본 MANOVA: 집단 효과 + 집단×시간 교호작용
+fit <- manova(Y_all ~ group)
+
+# Wilks' Lambda로 전체 검정
+summary(fit, test = "Wilks")
+# Pillai's trace (더 견고)
+summary(fit, test = "Pillai")
+# Roy의 최대근
+summary(fit, test = "Roy")
+# Hotelling-Lawley trace
+summary(fit, test = "Hotelling-Lawley")
+
+# 개별 시점(=변수)별 ANOVA 결과 추출
+summary.aov(fit)
+```
+
+### Python: MANOVA
+
+```python
+import numpy as np
+import pandas as pd
+from scipy import linalg
+
+# Step 1: 수동 구현으로 SSCP 행렬 계산 (원리 이해)
+np.random.seed(42)
+N = 64
+
+# 공분산 행렬
+Sigma = np.array([
+    [1.5, 0.8, 0.75, 0.70],
+    [0.8, 1.8, 0.90, 0.85],
+    [0.75, 0.90, 1.6, 0.95],
+    [0.70, 0.85, 0.95, 1.7]
+])
+mu = np.array([1.14, 2.54, 2.99, 3.47])
+
+# 데이터 생성
+rng = np.random.default_rng(42)
+L = np.linalg.cholesky(Sigma)
+Y = mu + rng.standard_normal((N, 4)) @ L.T
+
+# 직교 다항식 행렬 P (n=4)
+P = np.array([
+    [0.5,     0.5,     0.5,     0.5],
+    [-0.6708, -0.2236, 0.2236,  0.6708],
+    [0.5,    -0.5,    -0.5,     0.5],
+    [-0.2236, 0.6708, -0.6708,  0.2236]
+])
+
+y_bar = Y.mean(axis=0)                      # n×1 시점 평균
+theta_hat = P @ y_bar                        # 직교 다항 추정값
+
+print("직교 다항 추정값:")
+labels = ["상수", "선형", "2차", "3차"]
+for label, val in zip(labels, theta_hat):
+    print(f"  {label}: {val:.4f}")
+
+# SST*: 시간 SSCP
+SST_star = N * P @ np.outer(y_bar, y_bar) @ P.T
+
+# SSR*: 잔차 SSCP
+SSY_raw = Y.T @ Y
+SSR_star = P @ (SSY_raw - N * np.outer(y_bar, y_bar)) @ P.T
+
+# 다변량 시간 효과 검정 (일표본)
+# 하 (n-1)×(n-1) 부분행렬 추출
+SST_sub = SST_star[1:, 1:]   # 상수항 제외
+SSR_sub = SSR_star[1:, 1:]
+
+# Roy 최대근: SSR^{-1} SST 의 최대 고유값
+mat = np.linalg.solve(SSR_sub, SST_sub)   # SSR^{-1} SST
+eigenvalues = np.linalg.eigvals(mat)
+eigenvalues = np.real(eigenvalues[eigenvalues > 0])
+eigenvalues.sort()[::-1]
+
+lambda1 = eigenvalues.max()
+wilks_lambda = 1 / (1 + lambda1)
+print(f"\nRoy 최대근: {lambda1:.4f}")
+print(f"Wilks' Λ: {wilks_lambda:.4f}")
+
+# 개별 성분 F-검정 (MANOVA 방식)
+print("\n개별 추세 성분 F-검정 (MANOVA):")
+for k, (sst_k, ssr_k) in enumerate(zip(np.diag(SST_sub), np.diag(SSR_sub)), 1):
+    F_k = sst_k / (ssr_k / (N - 1))
+    trend = ["선형", "2차", "3차"][k-1]
+    print(f"  {trend}: F(1, {N-1}) = {F_k:.2f}")
+
+# Step 2: statsmodels로 다표본 MANOVA
+from statsmodels.multivariate.manova import MANOVA
+
+N_g = 30
+mu_drug    = np.array([20, 15, 11,  9], dtype=float)
+mu_placebo = np.array([20, 18, 17, 16], dtype=float)
+Sigma_c    = np.array([
+    [16, 8, 7, 6],
+    [ 8, 14, 8, 7],
+    [ 7,  8, 12, 8],
+    [ 6,  7,  8, 11]
+], dtype=float)
+
+L_c = np.linalg.cholesky(Sigma_c)
+Y_drug    = mu_drug    + rng.standard_normal((N_g, 4)) @ L_c.T
+Y_placebo = mu_placebo + rng.standard_normal((N_g, 4)) @ L_c.T
+Y_all     = np.vstack([Y_drug, Y_placebo])
+group     = ["drug"] * N_g + ["placebo"] * N_g
+
+# 데이터프레임 구성
+cols = ["week0", "week2", "week4", "week8"]
+df = pd.DataFrame(Y_all, columns=cols)
+df["group"] = group
+
+# MANOVA 수행
+formula = "week0 + week2 + week4 + week8 ~ group"
+maov = MANOVA.from_formula(formula, data=df)
+result = maov.mv_test()
+print(result.summary())
+```
+
+---
+
+## RM ANOVA vs MANOVA: 의사결정 흐름
+
+```
+반복측정 데이터 분석
+        │
+        ▼
+결측값이 있는 피험자가 있는가?
+   Yes ──► MANOVA 불가 → RM ANOVA(GG/HF 보정) 또는 LMM
+   No  ──► 계속
+        │
+        ▼
+Mauchly 구형성 검정
+  통과 ──► RM ANOVA (더 강력)
+  실패 ──► MANOVA (더 타당) 또는 RM ANOVA + GG/HF 보정
+        │
+        ▼
+시변 공변량이 필요한가?
+  Yes ──► LMM
+  No  ──► MANOVA or RM ANOVA
+```
+
+---
+
+## 요약
+
+| 항목 | 내용 |
+|------|------|
+| **핵심 아이디어** | 반복 측정값을 다변량 반응 벡터로 취급하여 비구조적 공분산 허용 |
+| **일표본 모형** | $\mathbf{y}_i = \boldsymbol{\mu} + \boldsymbol{\varepsilon}_i$, $\boldsymbol{\varepsilon}_i \sim N(\mathbf{0}, \boldsymbol{\Sigma})$ |
+| **다표본 모형** | $\mathbf{y}_{hi} = \boldsymbol{\mu} + \boldsymbol{\gamma}_h + \boldsymbol{\varepsilon}_{hi}$ |
+| **검정 통계량** | Wilks' $\Lambda$, Roy 최대근, Hotelling-Lawley, Pillai — 모두 고유값 기반 |
+| **RM ANOVA 내포** | 구형성 충족 시, SSCP 대각원소에서 RM ANOVA SS를 추출 가능 |
+| **검정력 비교** | 구형성 성립 → RM ANOVA 우위 / 구형성 위반 → MANOVA 우위 |
+| **치명적 한계** | 완전 데이터 필요, 시변 공변량 불가, 시점 수 증가 시 공분산 모수 급증 |
+| **현재 위치** | LMM·GEE 이해의 개념적 발판 |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [반복측정 ANOVA — 종단 데이터 적용 개요](./170-anova-longitudinal-overview.qmd)
+- [단일 표본 반복측정 ANOVA: 시간 효과 분해](./171-rm-anova-single-sample-decomposition.qmd)
+- [다중 표본 반복측정 ANOVA: 분할구획 설계](./172-rm-anova-multiple-sample-decomposition.qmd)
+
+**후속 주제**
+
+- [공분산 패턴 모형 (Covariance Pattern Models)](./174-covariance-pattern-models.qmd)
+- [혼합효과 회귀모형 — 연속형 반응](./175-lmm-continuous-outcomes.qmd)
+
+**관련 개념**
+
+- [MANOVA 기초](./144-manova.qmd) — 종단 데이터와 무관한 일반 MANOVA 설명
+- [종단 연구 개요](./169-longitudinal-studies-overview.qmd) — 반복 측정 데이터 구조와 공분산
