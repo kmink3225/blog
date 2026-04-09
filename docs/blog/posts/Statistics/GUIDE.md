@@ -11,12 +11,12 @@ parent: AGENT_GUIDE.md
 index: docs/blog/posts/Statistics/index.qmd
 book_sources:
   - docs/book/statistics/
-  - docs/book/generalized_linear_model/
-  - docs/book/mixed_model/
-  - docs/book/survival/
-  - docs/book/functional_data_analysis/
-  - docs/book/bayesian/
-  - docs/book/timeseries/
+  - docs/book/statistics/generalized_linear_model/
+  - docs/book/statistics/longidutindal_data_analysis/
+  - docs/book/statistics/survival/
+  - docs/book/statistics/functional_data_analysis/
+  - docs/book/statistics/bayesian/
+  - docs/book/statistics/timeseries/
 cross_references:
   - docs/blog/posts/Math/GUIDE.md
   - docs/blog/posts/Experimentation/GUIDE.md
@@ -35,7 +35,7 @@ cross_references:
 
 - **수학적 엄밀성이 핵심**: 정의 → 정리 → 증명 → 예시 흐름을 따른다
 - **이론과 실무의 연결**: 순수 수학이 아닌 응용 통계학 관점으로 작성한다
-- **교재 기반 작성**: `docs/book/statistics/` (Casella & Berger), `docs/book/mixed_model/` (Hedeker & Gibbons), `docs/book/functional_data_analysis/` (Ramsay) 등을 논리적 뼈대로 활용하되, agent의 최신 지식으로 보완한다
+- **교재 기반 작성**: `docs/book/statistics/` (Casella & Berger), `docs/book/statistics/longidutindal_data_analysis/` (Hedeker & Gibbons), `docs/book/statistics/functional_data_analysis/` (Ramsay) 등을 논리적 뼈대로 활용하되, agent의 최신 지식으로 보완한다
 - **한국어/영어 병기**: 핵심 용어는 `한국어(English)` 형태로 처음 등장 시 병기한다
 
 ---
@@ -237,7 +237,7 @@ print(result.summary())
 
 ### 함수형 데이터 분석 (FDA/)
 
-- 교재: `docs/book/functional_data_analysis/` (Ramsay & Silverman, Kokoszka & Reimherr)
+- 교재: `docs/book/statistics/functional_data_analysis/` (Ramsay & Silverman, Kokoszka & Reimherr)
 - 함수 공간, 기저함수, FPCA 등 고유 개념에 대해 유한차원 통계학과의 대비를 통해 설명한다
 - 실무 응용(RT-PCR, 센서 데이터 등)과의 연결을 포함한다
 
@@ -272,11 +272,11 @@ $$
 | 주제 영역 | 교재 소스 경로 | 주요 교재 |
 |---|---|---|
 | 수리통계 | `docs/book/statistics/` | Casella & Berger |
-| GLM/회귀 | `docs/book/generalized_linear_model/` | McCullagh & Nelder, Faraway |
-| 종단 데이터 | `docs/book/mixed_model/` | Hedeker & Gibbons |
-| 생존 분석 | `docs/book/survival/` | Kleinbaum, Hosmer |
-| FDA | `docs/book/functional_data_analysis/` | Ramsay & Silverman, Kokoszka |
-| 베이지안 | `docs/book/bayesian/` | Gelman, Downey |
+| GLM/회귀 | `docs/book/statistics/generalized_linear_model/` | McCullagh & Nelder, Faraway |
+| 종단 데이터 | `docs/book/statistics/longidutindal_data_analysis/` | Hedeker & Gibbons |
+| 생존 분석 | `docs/book/statistics/survival/` | Kleinbaum, Hosmer |
+| FDA | `docs/book/statistics/functional_data_analysis/` | Ramsay & Silverman, Kokoszka |
+| 베이지안 | `docs/book/statistics/bayesian/` | Gelman, Downey |
 
 ---
 
@@ -287,8 +287,8 @@ $$
 | 교재 | Summary 경로 | 활용 영역 |
 |---|---|---|
 | Casella & Berger — Statistical Inference (2002) | `docs/book/statistics/Casella-StatisticalInference-summary.md` | 확률론, 추정, 검정, 신뢰구간, 점근이론 |
-| Gelman et al. — Bayesian Data Analysis (2013) | `docs/book/bayesian/Gelman-BayesianDataAnalysis-summary.md` | 베이지안 추론, 사후분포, MCMC, 계층모형 |
-| Downey — Think Bayes (2021) | `docs/book/bayesian/Downey-ThinkBayes-summary.md` | 베이지안 기초, Python 구현 |
+| Gelman et al. — Bayesian Data Analysis (2013) | `docs/book/statistics/bayesian/Gelman-BayesianDataAnalysis-summary.md` | 베이지안 추론, 사후분포, MCMC, 계층모형 |
+| Downey — Think Bayes (2021) | `docs/book/statistics/bayesian/Downey-ThinkBayes-summary.md` | 베이지안 기초, Python 구현 |
 
 **활용 절차**: Summary 읽기 → 논리 구조 파악 → Full MD에서 수식/정의 확인 → 교재 내용 중 유효한 부분은 유지, outdated된 부분은 agent 지식으로 수정·보완 → 블로그 스타일로 재작성 + `(저자, 연도, Ch.N)` 인용
 
