@@ -67,6 +67,30 @@ sub-guides:
 
 ---
 
+## 사용자 확인 및 weakness 파일 라우팅
+
+세션 시작 시 사용자를 확인하고 해당 weakness 파일을 로드한다.
+
+```
+세션 시작
+    ↓
+"누구세요? (김광민 / 이준현 / 김태운 / 김민서)" 확인
+    ↓
+해당 writing-weakness-{이름}.md 로드
+```
+
+| 사용자 | 로드할 파일 |
+|--------|------------|
+| 김광민 | `guides/writing-weakness-김광민.md` |
+| 이준현 | `guides/writing-weakness-이준현.md` |
+| 김태운 | `guides/writing-weakness-김태운.md` |
+| 김민서 | `guides/writing-weakness-김민서.md` |
+
+- 기존 `writing-weakness.md`는 템플릿 전용 — 실제 추적에 사용하지 않는다
+- 목록에 없는 사용자: 세션 내 독립 채점만 수행, weakness 업데이트 생략
+
+---
+
 ## 레벨별 루브릭 라우팅
 
 레벨이 확인되는 즉시 아래 파일을 Read 도구로 로드한다. **채점은 반드시 레벨별 루브릭 기준으로 수행한다.**  
