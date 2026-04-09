@@ -1,10 +1,11 @@
 ---
 title: "종단 연구 개요 (Longitudinal Studies Overview)"
-subtitle: "반복 측정 데이터의 구조, 수식, 직관, 그리고 분석 전략"
+subtitle: "반복 측정 데이터의 구조, 수식 유도, 직관, 그리고 분석 전략"
 description: |
   종단 연구(Longitudinal Study)의 정의와 필요성을 횡단 연구와의 대비에서 시작해 설명한다.
-  반복 측정 데이터의 수학적 표현, 공분산 구조, 변동 분해(ICC), 시간 효과의 식별,
-  그리고 주요 분석 방법의 비교까지 수식과 직관을 함께 제시한다.
+  반복 측정 데이터의 수학적 표현, OLS 편의 수식 유도, ANOVA 기반 ICC 도출,
+  공분산 구조 전체 분류, LMM 주변 분포, GEE 스코어 방정식, 표본 크기 비교 공식,
+  그리고 within-between 분해까지 수식과 직관을 함께 제시한다.
 categories:
   - Statistics
   - Longitudinal Data Analysis
@@ -34,6 +35,17 @@ execute:
 **"시간이 흐름에 따라 한 개인의 혈압이 어떻게 변하는가"** 를 측정한다.
 :::
 
+**횡단 vs 종단 비교 요약**:
+
+| 구분 | 횡단 연구 (Cross-Sectional) | 종단 연구 (Longitudinal) |
+|------|---------------------------|-----------------------|
+| 측정 방식 | 각 대상자를 한 번만 측정 | 동일 대상자를 여러 시점에서 반복 측정 |
+| 답할 수 있는 질문 | "지금 이 순간 집단 간 차이는?" | "시간에 따라 개인이 어떻게 변하는가?" |
+| 코호트 효과 | 나이 효과와 혼재 | 동일인 추적으로 분리 가능 |
+| 인과적 함의 | 약함 | 강함 (시불변 혼란변수 자동 통제) |
+| 비용/시간 | 낮음 | 높음 (탈락, 비용) |
+| 결측 문제 | 드묾 | 흔함 (dropout, intermittent) |
+
 이것이 종단 연구의 핵심 질문이다:
 
 > 개인 내(within-person) 시간에 따른 변화를 개인 간(between-person) 차이와 분리하여 추정하라.
@@ -52,17 +64,38 @@ $$
 
 - $i = 1, \ldots, n$: 대상자(subject) 인덱스
 - $j = 1, \ldots, n_i$: 대상자 $i$의 측정 횟수 (균형 설계: $n_i = T$, 불균형도 허용)
-- $t_{ij}$: 대상자 $i$의 $j$번째 측정 시점
+- $t_{ij}$: 대상자 $i$의 $j$번째 측정 시점 (달력 시간 또는 상대 시간)
 
-**직관**: 일반 데이터는 $n \times p$ 행렬(행=관측치, 열=변수)이지만,
+**직관**: 일반 횡단 데이터는 $n \times p$ 행렬(행=독립 관측치, 열=변수)이다.
 종단 데이터는 **행 안에 시간 순서가 내포된** 3차원 구조다.
+같은 사람의 관측치끼리는 독립이 아니므로, 행 단위가 아닌 **대상자 단위**로 다뤄야 한다.
 
 ```
-대상자 1: (y_{11}, y_{12}, y_{13}, y_{14})  ← 4회 측정
+대상자 1: (y_{11}, y_{12}, y_{13}, y_{14})  ← 4회 측정, 서로 상관됨
 대상자 2: (y_{21}, y_{22}, y_{23})          ← 3회 측정 (결측 허용)
 대상자 3: (y_{31}, y_{32}, y_{33}, y_{34})
-...
+          ↑ 대상자 간은 독립, 대상자 내는 상관
 ```
+
+### 두 가지 데이터 포맷
+
+**Wide format**: 대상자 한 명이 한 행. 시점별 변수가 열로 분리.
+
+| subject | y_t1 | y_t2 | y_t3 | y_t4 |
+|---------|------|------|------|------|
+| 1 | 5.2 | 6.1 | 7.0 | 7.8 |
+| 2 | 3.8 | 4.5 | 5.3 | — |
+
+**Long format**: 측정값 하나가 한 행. 분석에 적합한 형식.
+
+| subject | time | y |
+|---------|------|---|
+| 1 | 1 | 5.2 |
+| 1 | 2 | 6.1 |
+| 1 | 3 | 7.0 |
+| 2 | 1 | 3.8 |
+
+LMM, GEE 등 대부분의 분석 패키지는 **long format**을 요구한다.
 
 ### 벡터 표현
 
@@ -72,108 +105,192 @@ $$
 \mathbf{y}_i = (y_{i1}, y_{i2}, \ldots, y_{in_i})^\top \in \mathbb{R}^{n_i}
 $$
 
-대응하는 공변량 행렬:
+대응하는 공변량 행렬 (각 행이 시점 $j$의 공변량 벡터):
 
 $$
 \mathbf{X}_i = \begin{pmatrix}
-x_{i11} & x_{i12} & \cdots & x_{i1p} \\
-x_{i21} & x_{i22} & \cdots & x_{i2p} \\
+1 & x_{i12} & \cdots & x_{i1p} \\
+1 & x_{i22} & \cdots & x_{i2p} \\
 \vdots  & \vdots  & \ddots & \vdots  \\
-x_{in_i 1} & x_{in_i 2} & \cdots & x_{in_i p}
+1 & x_{in_i 2} & \cdots & x_{in_i p}
 \end{pmatrix} \in \mathbb{R}^{n_i \times p}
 $$
 
-여기서 각 행은 시점 $j$에서의 공변량 벡터다.
+전체 데이터를 쌓으면:
+
+$$
+\mathbf{y} = \begin{pmatrix} \mathbf{y}_1 \\ \mathbf{y}_2 \\ \vdots \\ \mathbf{y}_n \end{pmatrix} \in \mathbb{R}^{N}, \quad
+\mathbf{X} = \begin{pmatrix} \mathbf{X}_1 \\ \mathbf{X}_2 \\ \vdots \\ \mathbf{X}_n \end{pmatrix} \in \mathbb{R}^{N \times p}
+$$
+
+여기서 $N = \sum_{i=1}^n n_i$는 총 관측치 수다.
 
 ---
 
-## 핵심 문제: 독립성 가정의 위반
+## 핵심 문제: 독립성 가정의 위반과 OLS의 실패
 
 ### 왜 일반 OLS가 틀리는가
 
 표준 선형 회귀모형은 다음을 가정한다:
 
 $$
-y_{ij} = \mathbf{x}_{ij}^\top \boldsymbol{\beta} + \epsilon_{ij}, \quad \epsilon_{ij} \overset{i.i.d.}{\sim} N(0, \sigma^2)
+\mathbf{y} = \mathbf{X}\boldsymbol{\beta} + \boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim N(\mathbf{0}, \sigma^2 \mathbf{I}_N)
 $$
 
-**i.i.d.** 가정, 즉 모든 오차항이 독립이라는 가정이 종단 데이터에서 위반된다.
+**i.i.d.** 가정, 즉 오차항이 서로 독립이라는 가정이 종단 데이터에서 위반된다.
+실제 오차의 공분산 구조는 다음과 같은 블록 대각 행렬이다:
+
+$$
+\text{Cov}(\boldsymbol{\epsilon}) = \boldsymbol{\Sigma} = \text{diag}(\boldsymbol{\Sigma}_1, \boldsymbol{\Sigma}_2, \ldots, \boldsymbol{\Sigma}_n)
+$$
+
+여기서 $\boldsymbol{\Sigma}_i \neq \sigma^2 \mathbf{I}_{n_i}$ (대상자 내 상관 존재).
+
+### OLS 추정량의 불편성은 유지, 분산은 편의
+
+OLS 추정량 $\hat{\boldsymbol{\beta}}_{OLS} = (\mathbf{X}^\top \mathbf{X})^{-1} \mathbf{X}^\top \mathbf{y}$는
+$E[\hat{\boldsymbol{\beta}}_{OLS}] = \boldsymbol{\beta}$ 로 **불편**이다.
+
+그러나 실제 분산과 OLS가 가정하는 분산이 다르다:
+
+$$
+\text{Var}(\hat{\boldsymbol{\beta}}_{OLS}) = (\mathbf{X}^\top \mathbf{X})^{-1} \mathbf{X}^\top \boldsymbol{\Sigma} \mathbf{X} (\mathbf{X}^\top \mathbf{X})^{-1}
+$$
+
+OLS는 이것 대신 $\hat{\sigma}^2 (\mathbf{X}^\top \mathbf{X})^{-1}$을 사용한다.
+두 행렬이 같으려면 $\boldsymbol{\Sigma} = \sigma^2 \mathbf{I}$이어야 한다.
 
 ::: {.callout-important}
-## 같은 사람의 관측치는 서로 닮아 있다
+## OLS 표준오차가 과소추정되는 이유
 
-대상자 $i$의 시점 1과 시점 2 측정값은 서로 양의 상관을 갖는다.
-이는 같은 사람이 동일한 유전적 소인, 생활습관, 환경을 공유하기 때문이다.
+$\boldsymbol{\Sigma}$에 양의 상관이 있으면 $\mathbf{X}^\top \boldsymbol{\Sigma} \mathbf{X} > \mathbf{X}^\top (\sigma^2 \mathbf{I}) \mathbf{X}$ (행렬 부등호 의미에서).
 
-$$
-\text{Cov}(y_{i1}, y_{i2}) > 0 \quad \text{(일반적으로)}
-$$
+따라서 OLS 표준오차 $\sqrt{\hat{\sigma}^2 [(\mathbf{X}^\top \mathbf{X})^{-1}]_{kk}}$ 는 실제 표준오차보다 작게 추정되고,
+$t$-통계량이 실제보다 크게 나와 **1종 오류(거짓 양성)가 팽창**한다.
 
-OLS는 이 상관을 무시하므로 표준오차가 잘못 추정된다.
+**직관**: 10명을 4회 측정했는데 같은 사람의 측정치가 모두 비슷하다면,
+실질적인 독립 정보는 40개가 아니라 10명 분량에 가깝다.
+OLS는 40개의 독립 관측치인 것처럼 취급하므로 표준오차를 과소 추정한다.
 :::
 
-### 잘못된 분석의 결과
+### 올바른 추정량: GLS
 
-독립성 가정을 위반할 때 발생하는 세 가지 문제:
+일반화 최소제곱(GLS) 추정량:
 
-| 문제 | 설명 | 결과 |
-|------|------|------|
-| **편의된 추론** | 오차 상관이 잔차에 흡수됨 | $\hat{\boldsymbol{\beta}}$ 는 불편이지만 표준오차가 과소추정 |
-| **비효율적 추정** | 개인 내 상관 정보를 버림 | 분산 추정이 크고 검정력이 낮아짐 |
-| **구조 누락** | 시간 의존성을 모형화하지 못함 | 시간 트렌드, 개인 궤적 파악 불가 |
+$$
+\hat{\boldsymbol{\beta}}_{GLS} = (\mathbf{X}^\top \boldsymbol{\Sigma}^{-1} \mathbf{X})^{-1} \mathbf{X}^\top \boldsymbol{\Sigma}^{-1} \mathbf{y}
+$$
+
+$$
+\text{Var}(\hat{\boldsymbol{\beta}}_{GLS}) = (\mathbf{X}^\top \boldsymbol{\Sigma}^{-1} \mathbf{X})^{-1}
+$$
+
+**가우스-마르코프 정리의 확장**: $\boldsymbol{\Sigma}$를 알면 GLS가 BLUE(Best Linear Unbiased Estimator)다.
+$\boldsymbol{\Sigma}$를 모르면 데이터로 추정해야 하며, 이것이 LMM·GEE의 핵심 작업이다.
+
+### 잘못된 분석의 세 가지 결과
+
+| 문제 | 수식/설명 | 실무적 결과 |
+|------|-----------|------------|
+| **편의된 SE** | $\widehat{\text{SE}}_{OLS} < \text{SE}_{true}$ | 너무 좁은 신뢰구간, 거짓 유의성 |
+| **비효율적 추정** | $\text{Var}(\hat{\boldsymbol{\beta}}_{OLS}) > \text{Var}(\hat{\boldsymbol{\beta}}_{GLS})$ | 불필요하게 큰 표본 요구 |
+| **구조 누락** | $\boldsymbol{\Sigma}_i$ 구조 미추정 | 개인 궤적, 시간 트렌드 파악 불가 |
 
 ---
 
-## 변동의 분해
+## 변동의 분해와 ICC
 
 ### 개인 간 vs 개인 내 변동
 
-종단 데이터의 총 변동은 두 가지 원천으로 분해된다:
+랜덤 절편 모형 $y_{ij} = \mu + b_i + \epsilon_{ij}$ 에서
+
+- $b_i \overset{i.i.d.}{\sim} N(0, \sigma_b^2)$: 개인 간 랜덤 효과
+- $\epsilon_{ij} \overset{i.i.d.}{\sim} N(0, \sigma_e^2)$: 개인 내 잔차
+- $b_i \perp \epsilon_{ij}$
+
+총 변동:
 
 $$
-\text{Var}(y_{ij}) = \underbrace{\sigma_b^2}_{\text{개인 간 변동}} + \underbrace{\sigma_e^2}_{\text{개인 내(잔차) 변동}}
+\text{Var}(y_{ij}) = \text{Var}(b_i + \epsilon_{ij}) = \sigma_b^2 + \sigma_e^2
 $$
 
-- $\sigma_b^2$ (between-subject variance): 개인들의 기저 수준(baseline)이 서로 다름
-- $\sigma_e^2$ (within-subject variance): 같은 개인이라도 시점마다 변동이 있음
-
-**직관 비유**: 사람들이 자신만의 평균 체온을 갖고 있다($\sigma_b^2$). 그런데 동일인도 아침저녁으로 체온이 달라진다($\sigma_e^2$). 종단 데이터는 두 원천을 구분한다.
-
-### 급내상관계수 (ICC, Intraclass Correlation Coefficient)
-
-ICC는 총 변동 중 개인 간 변동이 차지하는 비율이다:
+두 시점 간 공분산:
 
 $$
-\rho = \frac{\sigma_b^2}{\sigma_b^2 + \sigma_e^2}
+\text{Cov}(y_{ij}, y_{ij'}) = \text{Cov}(b_i + \epsilon_{ij},\; b_i + \epsilon_{ij'}) = \sigma_b^2 \quad (j \neq j')
+$$
+
+$b_i$가 공통 항이므로, 같은 사람의 두 측정값은 항상 $\sigma_b^2$만큼 양의 공분산을 갖는다.
+
+**직관 비유**: 사람마다 자신만의 기준 체온이 있다 ($b_i$, $\sigma_b^2$).
+그 위에 아침저녁 변동이 더해진다 ($\epsilon_{ij}$, $\sigma_e^2$).
+같은 사람의 두 번 측정은 기준 체온이라는 공통 요인을 공유하므로 상관된다.
+
+### ANOVA 분해를 통한 ICC 도출
+
+균형 설계 ($n_i = T$)에서 일원배치 ANOVA로 ICC를 추정한다.
+
+**제곱합 분해**:
+
+$$
+\underbrace{SS_{Total}}_{NT-1} = \underbrace{SS_{Between}}_{n-1} + \underbrace{SS_{Within}}_{n(T-1)}
+$$
+
+$$
+SS_{Between} = T \sum_{i=1}^n (\bar{y}_{i\cdot} - \bar{y}_{\cdot\cdot})^2
+$$
+
+$$
+SS_{Within} = \sum_{i=1}^n \sum_{j=1}^T (y_{ij} - \bar{y}_{i\cdot})^2
+$$
+
+**평균 제곱**:
+
+$$
+MS_{Between} = \frac{SS_{Between}}{n-1}, \quad MS_{Within} = \frac{SS_{Within}}{n(T-1)}
+$$
+
+**기댓값**:
+
+$$
+E[MS_{Between}] = \sigma_e^2 + T\sigma_b^2, \qquad E[MS_{Within}] = \sigma_e^2
+$$
+
+**모적률 추정(Method of Moments)**:
+
+$$
+\hat{\sigma}_e^2 = MS_{Within}, \qquad \hat{\sigma}_b^2 = \frac{MS_{Between} - MS_{Within}}{T}
+$$
+
+**ICC 추정량**:
+
+$$
+\hat{\rho} = \frac{\hat{\sigma}_b^2}{\hat{\sigma}_b^2 + \hat{\sigma}_e^2} = \frac{MS_{Between} - MS_{Within}}{MS_{Between} + (T-1) \cdot MS_{Within}}
 $$
 
 ::: {.callout-note}
-## ICC의 직관
+## ICC 해석 기준
 
-$$
-\rho \approx 0 \Rightarrow \text{개인 내 변동이 지배 — 반복 측정이 별 이득 없음}
-$$
-$$
-\rho \approx 1 \Rightarrow \text{개인 간 변동이 지배 — 반복 측정이 효율적}
-$$
-
-예: 임상시험에서 위약군의 혈압을 4회 측정. $\rho = 0.7$이면
-같은 개인의 측정치들은 서로 70%를 공유하고, 30%만 독립적인 정보다.
-:::
+| ICC 범위 | 해석 | 반복 측정의 효율성 |
+|----------|------|-----------------|
+| $\rho < 0.1$ | 개인 내 변동 지배 | 반복 측정 이득 거의 없음 |
+| $0.1 \leq \rho < 0.4$ | 중간 수준 | 어느 정도 효율적 |
+| $0.4 \leq \rho < 0.7$ | 높음 | 반복 측정 효율적 |
+| $\rho \geq 0.7$ | 매우 높음 | 횡단 연구 대비 큰 검정력 이득 |
 
 ICC는 또한 같은 대상자의 임의의 두 관측치 간 상관계수이기도 하다:
 
 $$
-\text{Corr}(y_{ij}, y_{ij'}) = \rho \quad (j \neq j')
+\text{Corr}(y_{ij}, y_{ij'}) = \frac{\text{Cov}(y_{ij}, y_{ij'})}{\sqrt{\text{Var}(y_{ij})\text{Var}(y_{ij'})}} = \frac{\sigma_b^2}{\sigma_b^2 + \sigma_e^2} = \rho
 $$
-
-이것이 **복합 대칭(Compound Symmetry, CS)** 공분산 구조에 해당한다.
+:::
 
 ---
 
 ## 공분산 구조의 종류
 
 공분산 구조는 "같은 사람의 시점 간 관측치가 얼마나, 어떤 방식으로 상관되어 있는가"를 수식으로 표현한다.
+올바른 구조를 선택하면 추정 효율이 올라가고, 잘못 선택하면 추정이 편의되거나 비효율적이 된다.
 
 ### 대상자 $i$의 공분산 행렬
 
@@ -183,26 +300,28 @@ $$
 
 각 원소: $[\boldsymbol{\Sigma}_i]_{jk} = \text{Cov}(y_{ij}, y_{ik})$
 
-### 주요 공분산 구조 비교
+### 등분산 구조
 
 **1. 독립 (Independence)**
 
 $$
-\boldsymbol{\Sigma} = \sigma^2 \mathbf{I} = \begin{pmatrix} \sigma^2 & 0 & 0 & 0 \\ 0 & \sigma^2 & 0 & 0 \\ 0 & 0 & \sigma^2 & 0 \\ 0 & 0 & 0 & \sigma^2 \end{pmatrix}
+\boldsymbol{\Sigma} = \sigma^2 \mathbf{I}_T = \sigma^2\begin{pmatrix} 1 & 0 & 0 & 0 \\ 0 & 1 & 0 & 0 \\ 0 & 0 & 1 & 0 \\ 0 & 0 & 0 & 1 \end{pmatrix}
 $$
 
-- OLS의 가정. 실제 종단 데이터에는 맞지 않는다.
-- 모수 수: 1
+- OLS의 가정. 모수 수: 1 ($\sigma^2$)
+- 실제 종단 데이터에는 맞지 않는다
 
-**2. 복합 대칭 (Compound Symmetry, CS)**
+**2. 복합 대칭 (Compound Symmetry, CS / Exchangeable)**
 
 $$
 \boldsymbol{\Sigma} = \begin{pmatrix} \sigma^2 & \rho\sigma^2 & \rho\sigma^2 & \rho\sigma^2 \\ \rho\sigma^2 & \sigma^2 & \rho\sigma^2 & \rho\sigma^2 \\ \rho\sigma^2 & \rho\sigma^2 & \sigma^2 & \rho\sigma^2 \\ \rho\sigma^2 & \rho\sigma^2 & \rho\sigma^2 & \sigma^2 \end{pmatrix}
+= \sigma^2[(1-\rho)\mathbf{I} + \rho \mathbf{1}\mathbf{1}^\top]
 $$
 
-- 시점 간격에 관계없이 상관이 동일하다는 가정
-- **직관**: "가까운 시점이든 먼 시점이든 같은 사람이면 똑같이 닮아 있다"
+- 시점 간격에 무관하게 상관이 동일 ($|\rho| < 1$)
 - 모수 수: 2 ($\sigma^2$, $\rho$)
+- **직관**: "가까운 시점이든 먼 시점이든 같은 사람이면 똑같이 닮아 있다"
+- 반복측정 ANOVA의 구형성(sphericity) 가정과 동치
 
 **3. 1차 자기회귀 (AR(1), First-Order Autoregressive)**
 
@@ -214,124 +333,338 @@ $$
 \boldsymbol{\Sigma} = \sigma^2\begin{pmatrix} 1 & \rho & \rho^2 & \rho^3 \\ \rho & 1 & \rho & \rho^2 \\ \rho^2 & \rho & 1 & \rho \\ \rho^3 & \rho^2 & \rho & 1 \end{pmatrix}
 $$
 
-- 시점 간격이 멀수록 상관이 지수적으로 감소
-- **직관**: "지난주 측정값이 오늘에 가장 영향을 미치고, 작년 측정값은 오늘에 영향이 거의 없다"
-- 모수 수: 2 ($\sigma^2$, $\rho$, $|\rho| < 1$)
+- 시점 간격이 멀수록 상관이 지수적으로 감소 ($|\rho| < 1$)
+- 모수 수: 2 ($\sigma^2$, $\rho$)
+- **직관**: "지난주 측정값이 오늘에 가장 영향을 미치고, 오래 전 측정값일수록 영향이 기하급수적으로 줄어든다"
 
-**4. 비구조화 (Unstructured)**
+**4. Toeplitz (등간격 상관, TOEP)**
+
+$$
+\boldsymbol{\Sigma} = \sigma^2\begin{pmatrix} 1 & \rho_1 & \rho_2 & \rho_3 \\ \rho_1 & 1 & \rho_1 & \rho_2 \\ \rho_2 & \rho_1 & 1 & \rho_1 \\ \rho_3 & \rho_2 & \rho_1 & 1 \end{pmatrix}
+$$
+
+- 간격이 같으면 상관이 같다. AR(1)은 $\rho_k = \rho^k$인 특수 경우
+- 모수 수: $T$ ($\sigma^2$, $\rho_1, \ldots, \rho_{T-1}$)
+- **직관**: "1주 차이 측정은 항상 $\rho_1$만큼 상관, 2주 차이는 $\rho_2$만큼—
+  단조 감소를 강제하지 않고 더 유연하다"
+
+**5. 비구조화 (Unstructured, UN)**
 
 $$
 \boldsymbol{\Sigma} = \begin{pmatrix} \sigma_{11} & \sigma_{12} & \sigma_{13} & \sigma_{14} \\ \sigma_{12} & \sigma_{22} & \sigma_{23} & \sigma_{24} \\ \sigma_{13} & \sigma_{23} & \sigma_{33} & \sigma_{34} \\ \sigma_{14} & \sigma_{24} & \sigma_{34} & \sigma_{44} \end{pmatrix}
 $$
 
-- 각 시점 쌍마다 서로 다른 공분산을 추정한다. 가장 유연하다.
+- 모든 분산·공분산을 자유롭게 추정
+- 모수 수: $T(T+1)/2$ (T=4이면 10개)
 - **직관**: "아무 구조도 가정하지 않는다. 데이터가 스스로 말하게 한다"
-- 모수 수: $T(T+1)/2$ (시점 수 $T=4$이면 10개)
+- 표본이 작으면 추정 불안정 — AIC/BIC로 더 간단한 구조와 비교 필수
+
+### 이분산 구조
+
+분산이 시점마다 다를 때 사용하는 구조다.
+
+**6. 이분산 복합 대칭 (Heterogeneous CS, HCS)**
+
+$$
+[\boldsymbol{\Sigma}]_{jk} = \begin{cases} \sigma_j^2 & j = k \\ \rho \sigma_j \sigma_k & j \neq k \end{cases}
+$$
+
+- 각 시점의 분산이 다르지만 상관은 동일
+- 모수 수: $T + 1$ ($\sigma_1^2, \ldots, \sigma_T^2$, $\rho$)
+- **직관**: "아침·점심·저녁 혈압의 측정 변동성이 다르고,
+  측정 간 상관만 공통으로 $\rho$다"
+
+**7. 이분산 AR(1) (Heterogeneous AR(1), HAR(1))**
+
+$$
+[\boldsymbol{\Sigma}]_{jk} = \rho^{|j-k|} \sigma_j \sigma_k
+$$
+
+- 시점별 분산이 다르고, 상관은 AR(1) 구조
+- 모수 수: $T + 1$ ($\sigma_1^2, \ldots, \sigma_T^2$, $\rho$)
 
 ### 공분산 구조 선택 기준
 
-| 구조 | 모수 수 | 적합 상황 |
-|------|---------|-----------|
-| 독립 | 1 | 일반 횡단 자료 (실제로는 맞지 않음) |
-| CS | 2 | 반복측정 ANOVA, 시점 간격 무관 가정 가능 |
-| AR(1) | 2 | 시계열적 측정, 가까운 시점이 더 상관 |
-| Toeplitz | $T$ | AR(1)보다 유연, 같은 간격은 같은 상관 |
-| 비구조화 | $T(T+1)/2$ | 표본이 클 때, 구조 가정 피하고 싶을 때 |
+| 구조 | 모수 수 | 적합 상황 | 주의사항 |
+|------|---------|-----------|---------|
+| 독립 | 1 | 횡단 자료 | 종단에 사용 금지 |
+| CS | 2 | 반복측정 ANOVA, 구형성 가정 적절 | 거리 무관 상관 가정 강함 |
+| AR(1) | 2 | 등간격 시계열적 측정 | 균등 간격 전제 |
+| Toeplitz | T | AR(1)보다 유연, 등간격 | 단조성 가정 없음 |
+| HCS | T+1 | 시점별 분산 이질적, 구형성 의심 | CS보다 모수 많음 |
+| HAR(1) | T+1 | 이분산 + 거리 감소 상관 | 균등 간격 전제 |
+| 비구조화 | T(T+1)/2 | n이 충분히 클 때 | 소표본에서 불안정 |
 
-AIC/BIC로 공분산 구조를 선택하거나, 이론적 근거에 따라 선택한다.
+**선택 절차**:
+1. 이론적 근거로 후보 2~3개 결정
+2. REML 기반 AIC/BIC로 비교
+3. 잔차 상관 패턴을 시각화로 검토
+
+---
+
+## LMM에서 $\mathbf{y}_i$의 주변 분포
+
+### 모형 정의
+
+랜덤 절편 모형:
+
+$$
+y_{ij} = \boldsymbol{x}_{ij}^\top \boldsymbol{\beta} + b_i + \epsilon_{ij}
+$$
+
+$$
+b_i \sim N(0, \sigma_b^2), \quad \epsilon_{ij} \sim N(0, \sigma_e^2), \quad b_i \perp \epsilon_{ij}
+$$
+
+### 주변 분포 유도
+
+$b_i$를 적분하여 주변화(marginalize)한다:
+
+$$
+\mathbf{y}_i = \mathbf{X}_i\boldsymbol{\beta} + \mathbf{1}_{n_i} b_i + \boldsymbol{\epsilon}_i
+$$
+
+$$
+E[\mathbf{y}_i] = \mathbf{X}_i\boldsymbol{\beta}
+$$
+
+$$
+\text{Cov}(\mathbf{y}_i) = \text{Cov}(\mathbf{1}_{n_i} b_i) + \text{Cov}(\boldsymbol{\epsilon}_i)
+= \sigma_b^2 \mathbf{1}_{n_i}\mathbf{1}_{n_i}^\top + \sigma_e^2 \mathbf{I}_{n_i}
+$$
+
+이 행렬이 바로 **복합 대칭 구조**다:
+
+$$
+\boldsymbol{\Sigma}_i = \sigma_b^2 \mathbf{J}_{n_i} + \sigma_e^2 \mathbf{I}_{n_i}
+$$
+
+여기서 $\mathbf{J}_{n_i} = \mathbf{1}_{n_i}\mathbf{1}_{n_i}^\top$은 모든 원소가 1인 행렬이다.
+
+$$
+\mathbf{y}_i \sim N(\mathbf{X}_i\boldsymbol{\beta},\; \sigma_b^2 \mathbf{J}_{n_i} + \sigma_e^2 \mathbf{I}_{n_i})
+$$
+
+::: {.callout-note}
+## 주변 분포의 핵심 통찰
+
+LMM의 랜덤 효과 구조가 **자동으로 공분산 구조를 생성**한다.
+
+- 랜덤 절편만 포함 → CS 구조
+- 랜덤 절편 + 랜덤 기울기 포함 → 시간에 따라 변하는 더 복잡한 구조
+- $\boldsymbol{\Sigma}_i$를 직접 모형화하는 GLS 방식과는 접근이 다르지만,
+  두 방법이 동일한 주변 분포를 가질 때 동등하다
+:::
+
+### 일반 LMM
+
+$$
+\mathbf{y}_i = \mathbf{X}_i\boldsymbol{\beta} + \mathbf{Z}_i\mathbf{b}_i + \boldsymbol{\epsilon}_i
+$$
+
+$$
+\mathbf{b}_i \sim N(\mathbf{0}, \mathbf{D}), \quad \boldsymbol{\epsilon}_i \sim N(\mathbf{0}, \sigma^2\mathbf{I}_{n_i})
+$$
+
+주변 분포:
+
+$$
+\mathbf{y}_i \sim N(\mathbf{X}_i\boldsymbol{\beta},\; \mathbf{Z}_i\mathbf{D}\mathbf{Z}_i^\top + \sigma^2\mathbf{I}_{n_i})
+$$
+
+$\mathbf{Z}_i$의 선택이 공분산 구조를 결정한다:
+
+| $\mathbf{Z}_i$ | $\mathbf{D}$ | 공분산 구조 |
+|----------------|---------|-------------|
+| $\mathbf{1}_{n_i}$ | $(\sigma_b^2)$ | CS (랜덤 절편) |
+| $(\mathbf{1}_{n_i}, \mathbf{t}_i)$ | $\begin{pmatrix}d_{11} & d_{12}\\ d_{12} & d_{22}\end{pmatrix}$ | 시간 의존적 구조 (랜덤 절편 + 기울기) |
 
 ---
 
 ## 시간 효과의 분리: 종단 연구만이 할 수 있는 것
 
-종단 연구가 횡단 연구보다 우월한 가장 핵심적인 이유는 세 가지 효과를 분리할 수 있다는 점이다:
-
 ### 나이-기간-코호트 (Age-Period-Cohort) 문제
 
+관측된 변화에는 세 효과가 혼재한다:
+
 $$
-\underbrace{\text{Age}}_{\text{개인 내 변화}} + \underbrace{\text{Period}}_{\text{특정 시점 효과}} + \underbrace{\text{Cohort}}_{\text{출생 집단 효과}} = \text{관측된 변화}
+\text{관측 변화} = \underbrace{f(\text{Age})}_{\text{개인 내 변화}} + \underbrace{g(\text{Period})}_{\text{달력 시점 효과}} + \underbrace{h(\text{Cohort})}_{\text{출생 세대 효과}}
 $$
 
-- **나이(Age) 효과**: 개인이 나이 들면서 생기는 변화
-- **기간(Period) 효과**: 특정 달력 시점(예: 코로나 팬데믹)이 모두에게 미치는 효과
-- **코호트(Cohort) 효과**: 특정 세대가 공유하는 역사적 경험의 효과
+단, $\text{Age} = \text{Period} - \text{Cohort}$이므로 세 효과는 완전 공선(perfect collinearity)이다.
+제약 없이 셋을 동시에 추정하는 것은 불가능하다.
 
-**직관**: "2020년 50세의 흡연율이 높다고 할 때,
-이것이 50세가 되면 더 피우게 되기 때문인가(나이),
-아니면 이 세대가 젊을 때 흡연이 흔했기 때문인가(코호트)?"
+- **나이(Age) 효과**: 개인이 나이 들면서 생기는 생물학적 변화
+- **기간(Period) 효과**: 특정 달력 연도(예: 코로나 팬데믹)가 모두에게 미치는 효과
+- **코호트(Cohort) 효과**: 특정 세대가 공유하는 역사적·사회적 경험
 
-횡단 연구는 이 세 효과를 구분할 수 없다. 종단 연구는 동일인을 추적하여
-나이 효과(within-person)와 코호트/기간 효과(between-person)를 분리한다.
+::: {.callout-note}
+## 구체적 예시: 2020년 50세의 흡연율이 높다
+
+| 가설 | 설명 | 설계 요건 |
+|------|------|-----------|
+| 나이 효과 | 50세가 되면 더 피우게 된다 | 동일인을 20세부터 추적해야 확인 가능 |
+| 코호트 효과 | 1970년생은 흡연이 흔한 문화에서 성장했다 | 서로 다른 출생 코호트 비교 |
+| 기간 효과 | 2020년에 스트레스가 증가했다 | 여러 코호트가 같은 연도에 공통 반응 보임 |
+
+횡단 연구(2020년 단면)는 세 효과를 구분할 수 없다.
+종단 연구(1970년생을 1990~2020년 추적)는 나이 효과(within-person)를 분리할 수 있다.
+:::
+
+### Within-Between 분해 (Mundlak 분해)
+
+종단 데이터의 공변량 $x_{ij}$는 두 가지 변동 원천을 동시에 가진다:
+
+$$
+x_{ij} = \underbrace{\bar{x}_{i\cdot}}_{\text{between: 개인 평균}} + \underbrace{(x_{ij} - \bar{x}_{i\cdot})}_{\text{within: 개인 내 편차}}
+$$
+
+이를 모형에 명시적으로 분리하면:
+
+$$
+y_{ij} = \alpha + \underbrace{\beta_W (x_{ij} - \bar{x}_{i\cdot})}_{\text{within-person 효과}} + \underbrace{\beta_B \bar{x}_{i\cdot}}_{\text{between-person 효과}} + b_i + \epsilon_{ij}
+$$
+
+- $\beta_W$: 동일 개인의 $x$가 평균보다 높을 때 $y$의 변화 (인과에 가까운 해석)
+- $\beta_B$: 평균적으로 $x$가 더 높은 사람의 $y$ 수준 차이 (집단 간 비교)
+
+::: {.callout-important}
+## $\beta_W \neq \beta_B$ 이면 내생성이 있다
+
+**예시**: 운동량($x$)과 혈압($y$) 관계에서
+
+- $\beta_B < 0$: 평소 운동을 많이 하는 사람일수록 혈압이 낮다 (건강한 생활 전반의 효과)
+- $\beta_W > 0$: 같은 사람이 평소보다 갑자기 많이 운동하면 일시적으로 혈압이 오른다
+
+$\beta_W$와 $\beta_B$의 차이는 관찰되지 않은 개인 특성(건강 의식 등)이 혼재함을 의미한다.
+LMM이 $\beta_W = \beta_B$로 강제하면 편의가 생긴다.
+Mundlak 분해는 이를 명시적으로 분리한다.
+:::
 
 ### 인과추론에서의 장점
 
+같은 사람의 전후 비교는 시불변 혼란변수(time-invariant confounders)를 자동 통제한다.
+$U_i$가 관찰되지 않은 시불변 개인 특성이라 하면:
+
 $$
-E[y_{ij}] - E[y_{i,j-1}] = \text{개인 내 변화} \quad \Rightarrow \quad \text{개인 특성 통제 자동}
+y_{ij} = \alpha_i + \mathbf{x}_{ij}^\top\boldsymbol{\beta} + \epsilon_{ij}, \quad \alpha_i = \mu + \gamma U_i + \text{(개인 고유 부분)}
 $$
 
-같은 사람의 전후 비교는 관찰되지 않은 시불변 혼란변수(time-invariant confounders)를
-자동으로 통제한다. 이것이 개인을 자신의 대조군(each subject serves as own control)으로 쓰는 것이다.
+1인차분(first-difference):
+
+$$
+y_{ij} - y_{i,j-1} = (\mathbf{x}_{ij} - \mathbf{x}_{i,j-1})^\top\boldsymbol{\beta} + (\epsilon_{ij} - \epsilon_{i,j-1})
+$$
+
+$\alpha_i$와 $U_i$가 사라진다. 시간 불변인 어떤 혼란변수도 사라지므로
+$\boldsymbol{\beta}$를 편의 없이 추정할 수 있다 — 단, $\epsilon_{ij}$가 $\mathbf{x}_{ij}$와 독립임을 전제.
 
 ---
 
-## 검정력 이점
+## 검정력 이점과 표본 크기
 
 ### 반복 측정의 검정력 증가
 
 두 시점 전후 비교에서 짝 $t$-검정의 검정 통계량:
 
 $$
-t = \frac{\bar{d}}{s_d / \sqrt{n}} = \frac{\bar{y}_{\cdot 2} - \bar{y}_{\cdot 1}}{s_d / \sqrt{n}}
+t = \frac{\bar{d}}{s_d / \sqrt{n}}, \quad d_i = y_{i2} - y_{i1}
 $$
 
-여기서 $d_i = y_{i2} - y_{i1}$, $s_d^2 = \text{Var}(d_i)$이다.
+$d_i$의 분산:
 
 $$
 \text{Var}(d_i) = \text{Var}(y_{i2}) + \text{Var}(y_{i1}) - 2\text{Cov}(y_{i1}, y_{i2}) = 2\sigma^2(1 - \rho)
 $$
 
-**직관**: 상관 $\rho$가 클수록 $\text{Var}(d_i)$가 작아진다. 즉 분모가 줄어 $t$-통계량이 커진다.
+**직관**: 상관 $\rho$가 클수록 차분의 분산이 작아진다. 두 측정값이 비슷하면
+그 차이의 변동성도 작아지기 때문이다.
 
-독립 두 표본과 비교:
+### 표본 크기 비교 공식
+
+양측검정, 유의수준 $\alpha$, 검정력 $1-\beta$에서:
+
+**독립 두 표본 설계**:
 
 $$
-\frac{\text{검정력 향상 배율}}{\cdot} = \frac{1}{1 - \rho}
+n_{indep} = \frac{2(z_{\alpha/2} + z_\beta)^2 \sigma^2}{\delta^2}
 $$
 
-$\rho = 0.7$이면 반복 측정은 독립 설계 대비 $\frac{1}{0.3} \approx 3.3$배 효율적이다.
-같은 검정력을 얻으려면 표본 크기를 3분의 1로 줄일 수 있다.
+**반복 측정 설계** (두 시점):
+
+$$
+n_{repeated} = \frac{(z_{\alpha/2} + z_\beta)^2 \cdot 2\sigma^2(1-\rho)}{\delta^2}
+$$
+
+**비율**:
+
+$$
+\frac{n_{repeated}}{n_{indep}} = 1 - \rho
+$$
+
+::: {.callout-note}
+## 표본 크기 절감 효과
+
+| ICC ($\rho$) | 독립 설계 대비 표본 비율 | 절감 비율 |
+|-------------|------------------------|---------|
+| 0.0 | 1.00 (동일) | 0% |
+| 0.3 | 0.70 | 30% |
+| 0.5 | 0.50 | 50% |
+| 0.7 | 0.30 | 70% |
+| 0.9 | 0.10 | 90% |
+
+$\rho = 0.7$인 종단 연구는 독립 설계 대비 표본을 **70% 줄일 수** 있다.
+혹은 동일 표본에서 검정력을 $\frac{1}{1-\rho} \approx 3.3$배 높인다.
+
+단, 이 계산은 탈락(dropout)을 무시한다. 실제 설계에서는 예상 탈락률을 보정한다:
+$$n_{adjusted} = \frac{n_{repeated}}{1 - \text{dropout rate}}$$
+:::
+
+### 다시점 설계에서의 표본 크기
+
+$T$개 시점에서 선형 시간 트렌드 $\beta_1$을 검정할 때:
+
+$$
+n = \frac{(z_{\alpha/2} + z_\beta)^2 \sigma_e^2}{\beta_1^2 \cdot \sum_{j=1}^T (t_j - \bar{t})^2 \cdot (1 - \rho_{XT})}
+$$
+
+여기서 $\rho_{XT}$는 시간 공변량 행렬과 랜덤 효과의 상관 구조에 의존하는 보정 항이다.
+실무에서는 시뮬레이션 기반 검정력 분석 (`simr` in R, `pwrss` in Python)을 활용한다.
 
 ---
 
 ## 주요 분석 방법 개요
 
-### 분석 방법의 분류 체계
+### 세 가지 핵심 질문
 
-종단 데이터 분석 방법은 크게 세 가지 질문을 중심으로 분류된다:
+종단 데이터 분석 방법은 "무엇에 대한 효과인가"를 기준으로 분류된다:
 
-| 질문 | 방법 | 해석 대상 |
+| 질문 | 방법 | 효과 해석 |
 |------|------|----------|
-| 모집단 평균 효과 | **GEE** | 주변 효과 (Marginal effect) |
-| 개인별 궤적 + 랜덤 효과 | **LMM/GLMM** | 조건부 효과 (Subject-specific) |
-| 시불변 혼란변수 통제 | **고정 효과 모형** | Within-person 효과 |
-| 정규성 가정 위반 | **GLMM** | 이진/카운트 결과 |
-| 비선형 시간 트렌드 | **GAM/GAMM** | 유연한 시간 함수 |
+| 이 처치가 **평균적인 사람에게** 어떤 효과인가? | **GEE** | Population-average (주변 효과) |
+| 이 처치가 **특정 개인에게** 어떤 효과인가? | **LMM/GLMM** | Subject-specific (조건부 효과) |
+| 이 공변량의 **개인 내 변화가** 결과에 미치는 효과는? | **고정 효과 모형** | Within-person 효과 |
 
 ### 방법별 핵심 수식
 
 **선형 혼합 모형 (LMM)**:
 
 $$
-\mathbf{y}_i = \mathbf{X}_i \boldsymbol{\beta} + \mathbf{Z}_i \mathbf{b}_i + \boldsymbol{\epsilon}_i
+\mathbf{y}_i = \mathbf{X}_i\boldsymbol{\beta} + \mathbf{Z}_i\mathbf{b}_i + \boldsymbol{\epsilon}_i, \quad \mathbf{b}_i \sim N(\mathbf{0}, \mathbf{D}), \quad \boldsymbol{\epsilon}_i \sim N(\mathbf{0}, \sigma^2\mathbf{I})
 $$
 
+- $\boldsymbol{\beta}$: 고정 효과 — 모집단 평균 효과
+- $\mathbf{b}_i$: 랜덤 효과 — 개인별 평균에서의 편차
+- **직관**: 각 사람이 모집단 평균 궤적($\mathbf{X}_i\boldsymbol{\beta}$)에서
+  자신만의 편차($\mathbf{Z}_i\mathbf{b}_i$)를 갖는다. 관심은 $\boldsymbol{\beta}$이지만 $\mathbf{b}_i$도 추정(예측) 가능
+
+로그가능도 (marginalized):
+
 $$
-\mathbf{b}_i \sim N(\mathbf{0}, \mathbf{D}), \quad \boldsymbol{\epsilon}_i \sim N(\mathbf{0}, \sigma^2 \mathbf{I})
+\ell(\boldsymbol{\beta}, \mathbf{D}, \sigma^2) = -\frac{1}{2}\sum_{i=1}^n \left[\log|\boldsymbol{\Omega}_i| + (\mathbf{y}_i - \mathbf{X}_i\boldsymbol{\beta})^\top \boldsymbol{\Omega}_i^{-1}(\mathbf{y}_i - \mathbf{X}_i\boldsymbol{\beta})\right]
 $$
 
-- $\boldsymbol{\beta}$: 고정 효과 (모집단 평균 효과)
-- $\mathbf{b}_i$: 랜덤 효과 (개인별 편차)
-- **직관**: 각 사람이 모집단 평균 궤적($\mathbf{X}_i\boldsymbol{\beta}$)에서 자신만의 편차($\mathbf{Z}_i \mathbf{b}_i$)를 갖는다
+여기서 $\boldsymbol{\Omega}_i = \mathbf{Z}_i\mathbf{D}\mathbf{Z}_i^\top + \sigma^2\mathbf{I}_{n_i}$
 
 **GEE (Generalized Estimating Equations)**:
 
@@ -339,55 +672,92 @@ $$
 \sum_{i=1}^n \mathbf{D}_i^\top \mathbf{V}_i^{-1}(\mathbf{y}_i - \boldsymbol{\mu}_i) = \mathbf{0}
 $$
 
-- $\mathbf{V}_i$: 작동 상관(working correlation) 구조를 반영한 분산 행렬
-- 주변 효과(population-average)를 추정한다
-- **직관**: "평균적인 사람에게" 처치가 어떤 효과인가를 묻는다
+여기서 $\mathbf{D}_i = \frac{\partial\boldsymbol{\mu}_i}{\partial\boldsymbol{\beta}}$, $\mathbf{V}_i = \phi\mathbf{A}_i^{1/2}\mathbf{R}(\alpha)\mathbf{A}_i^{1/2}$
+
+- $\mathbf{R}(\alpha)$: 작동 상관(working correlation) 행렬 — CS, AR(1), 독립 등 지정
+- $\boldsymbol{\mu}_i = g^{-1}(\mathbf{X}_i\boldsymbol{\beta})$: 연결함수의 역함수
+- **직관**: "작동 상관이 틀려도 $\boldsymbol{\beta}$ 추정은 일치성 유지(Liang & Zeger, 1986).
+  단, 표준오차는 Sandwich 추정량 필요"
+
+Sandwich(robust) 분산 추정량:
+
+$$
+\widehat{\text{Var}}(\hat{\boldsymbol{\beta}}_{GEE}) = \mathbf{M}_0^{-1} \left(\sum_{i=1}^n \mathbf{D}_i^\top\mathbf{V}_i^{-1}\hat{\boldsymbol{\epsilon}}_i\hat{\boldsymbol{\epsilon}}_i^\top\mathbf{V}_i^{-1}\mathbf{D}_i\right) \mathbf{M}_0^{-1}
+$$
+
+여기서 $\mathbf{M}_0 = \sum_i \mathbf{D}_i^\top\mathbf{V}_i^{-1}\mathbf{D}_i$
 
 **고정 효과 모형 (Fixed Effects Model)**:
 
 $$
-y_{ij} = \alpha_i + \mathbf{x}_{ij}^\top \boldsymbol{\beta} + \epsilon_{ij}
+y_{ij} = \alpha_i + \mathbf{x}_{ij}^\top\boldsymbol{\beta} + \epsilon_{ij}
 $$
 
-- $\alpha_i$: 대상자 $i$의 개별 고정 절편 (관찰되지 않은 개인 특성을 모두 흡수)
-- within-person 변화만을 사용하여 $\boldsymbol{\beta}$를 추정한다
+$\alpha_i$: 대상자 $i$의 개별 고정 절편 (n개의 더미변수 또는 within 변환)
+
+**Within 변환 (within-person demeaning)**:
+
+$$
+\tilde{y}_{ij} = y_{ij} - \bar{y}_{i\cdot}, \quad \tilde{\mathbf{x}}_{ij} = \mathbf{x}_{ij} - \bar{\mathbf{x}}_{i\cdot}
+$$
+
+$$
+\tilde{y}_{ij} = \tilde{\mathbf{x}}_{ij}^\top\boldsymbol{\beta} + \tilde{\epsilon}_{ij}
+$$
+
+$\alpha_i$가 소거되므로 OLS로 $\boldsymbol{\beta}$를 추정할 수 있다.
 - **직관**: "같은 사람 안에서의 변화"만으로 추정 → 시불변 혼란변수 자동 통제
+
+### 방법 선택: Hausman 검정
+
+LMM(랜덤 효과 모형)과 고정 효과 모형 중 어느 것이 맞는가를 Hausman 검정으로 판단한다:
+
+$$
+H_0: E[\mathbf{b}_i | \mathbf{X}_i] = \mathbf{0} \quad (\text{랜덤 효과와 공변량이 독립})
+$$
+
+$$
+H = (\hat{\boldsymbol{\beta}}_{FE} - \hat{\boldsymbol{\beta}}_{RE})^\top [\widehat{\text{Var}}(\hat{\boldsymbol{\beta}}_{FE}) - \widehat{\text{Var}}(\hat{\boldsymbol{\beta}}_{RE})]^{-1} (\hat{\boldsymbol{\beta}}_{FE} - \hat{\boldsymbol{\beta}}_{RE}) \overset{H_0}{\sim} \chi^2_{df}
+$$
+
+- $H$가 유의하면 → 내생성 있음 → 고정 효과 모형이 일치 추정량
+- $H$가 유의하지 않으면 → 랜덤 효과 모형이 효율적
 
 ### LMM vs GEE vs 고정 효과 모형
 
 | 기준 | LMM | GEE | 고정 효과 |
 |------|-----|-----|----------|
 | 효과 해석 | Subject-specific | Population-average | Within-person |
-| 랜덤 효과 분포 가정 | 필요 | 불필요 | 불필요 |
-| 결측치 처리 | MAR | MAR | 시불변 변수만 |
-| 개인 예측 | 가능 | 불가 | 불가 |
+| 랜덤 효과 정규성 가정 | 필요 | 불필요 | 불필요 |
+| 공분산 구조 명시 | 랜덤 효과로 간접 | 작동 상관으로 직접 | 불필요 |
+| 결측 처리 | MAR | MAR + Robust SE | 시불변 변수 불가 |
+| 개인 예측(BLUP) | 가능 | 불가 | 불가 |
 | 내생성 통제 | 불완전 | 불완전 | 강함 |
+| 비선형 확장 | GLMM | 자연스러움 | 어려움 |
 
 ---
 
 ## 코드 예시
 
-### Step 1: 데이터 구조 생성 (Pure Python)
+### Step 1: 데이터 생성과 변동 분해 (Pure Python)
 
 ```python
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
-# 종단 데이터 생성 — 10명 × 4시점
 np.random.seed(42)
-n_subjects = 10
-n_times = 4
+n_subjects = 30   # 대상자 수
+n_times = 4       # 측정 시점 수
 
-# 개인별 랜덤 효과 (개인 간 변동)
-sigma_b = 2.0   # between-subject SD
-sigma_e = 1.0   # within-subject SD (residual)
+sigma_b = 2.0     # 개인 간 SD
+sigma_e = 1.0     # 개인 내 SD (잔차)
+beta_0  = 5.0     # 모집단 절편
+beta_1  = 0.8     # 시간 효과 (1시점당 증가)
 
-b_i = np.random.normal(0, sigma_b, n_subjects)  # 개인별 랜덤 절편
-
-# 시점 (0, 1, 2, 3주)
-times = np.array([0, 1, 2, 3])
-beta_0 = 5.0   # 평균 기저값
-beta_1 = 1.5   # 시간 효과 (주당 증가)
+# 개인별 랜덤 절편 (개인 간 변동)
+b_i = np.random.normal(0, sigma_b, n_subjects)
+times = np.arange(n_times, dtype=float)
 
 records = []
 for i in range(n_subjects):
@@ -396,97 +766,186 @@ for i in range(n_subjects):
         records.append({'subject': i, 'time': t, 'y': y})
 
 df = pd.DataFrame(records)
-print(df.head(8))
 
-# 총 변동 분해 확인
-grand_mean = df['y'].mean()
-subject_means = df.groupby('subject')['y'].mean()
+# ── ANOVA 기반 ICC 추정 ──────────────────────────────
+grand_mean   = df['y'].mean()
+subj_means   = df.groupby('subject')['y'].mean()
 
-ss_between = n_times * ((subject_means - grand_mean) ** 2).sum()
-ss_within = ((df['y'] - df['subject'].map(subject_means)) ** 2).sum()
+ss_between = n_times * ((subj_means - grand_mean) ** 2).sum()
+ss_within  = df.groupby('subject')['y'].apply(
+    lambda g: ((g - g.mean()) ** 2).sum()
+).sum()
 
-var_between = ss_between / (n_subjects - 1)
-var_within = ss_within / (n_subjects * (n_times - 1))
+ms_between = ss_between / (n_subjects - 1)
+ms_within  = ss_within  / (n_subjects * (n_times - 1))
 
-icc_empirical = var_between / (var_between + var_within)
-print(f"\n추정 ICC = {icc_empirical:.3f}")
-print(f"참 ICC = {sigma_b**2 / (sigma_b**2 + sigma_e**2):.3f}")
+sigma2_e_hat = ms_within
+sigma2_b_hat = (ms_between - ms_within) / n_times
+
+icc_hat  = sigma2_b_hat / (sigma2_b_hat + sigma2_e_hat)
+icc_true = sigma_b**2   / (sigma_b**2   + sigma_e**2)
+
+print(f"MS_Between = {ms_between:.3f},  E = σ_e² + T·σ_b² = {sigma_e**2 + n_times*sigma_b**2:.3f}")
+print(f"MS_Within  = {ms_within:.3f},   E = σ_e²           = {sigma_e**2:.3f}")
+print(f"σ̂_b² = {sigma2_b_hat:.3f}  (참: {sigma_b**2:.3f})")
+print(f"σ̂_e² = {sigma2_e_hat:.3f}  (참: {sigma_e**2:.3f})")
+print(f"ICC 추정 = {icc_hat:.3f}  (참: {icc_true:.3f})")
 ```
 
-### Step 2: 공분산 구조 비교 (Python — statsmodels)
+### Step 2: Spaghetti Plot — 개인 궤적 시각화
+
+```python
+# Spaghetti plot: 개인별 궤적(회색) + 평균 궤적(검정)
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# 왼쪽: 개인 궤적
+ax = axes[0]
+for i in range(n_subjects):
+    subj_df = df[df['subject'] == i]
+    ax.plot(subj_df['time'], subj_df['y'],
+            color='gray', alpha=0.4, linewidth=0.8)
+
+mean_profile = df.groupby('time')['y'].mean()
+ax.plot(mean_profile.index, mean_profile.values,
+        color='black', linewidth=2.5, label='Population mean')
+ax.set_xlabel('Time')
+ax.set_ylabel('y')
+ax.set_title('Spaghetti Plot: Individual Trajectories')
+ax.legend()
+
+# 오른쪽: 잔차 공분산 패턴 (경험적 확인)
+ax2 = axes[1]
+wide = df.pivot(index='subject', columns='time', values='y')
+residuals = wide.subtract(wide.mean(axis=0), axis=1)  # 시점 평균 제거
+corr_mat = residuals.corr()
+im = ax2.imshow(corr_mat.values, vmin=-1, vmax=1, cmap='RdBu_r')
+ax2.set_title('Empirical Correlation Matrix')
+ax2.set_xticks(range(n_times)); ax2.set_yticks(range(n_times))
+fig.colorbar(im, ax=ax2)
+
+plt.tight_layout()
+plt.savefig('longitudinal_eda.png', dpi=150, bbox_inches='tight')
+```
+
+### Step 3: LMM 적합 (statsmodels)
 
 ```python
 import statsmodels.formula.api as smf
-from statsmodels.regression.linear_model import GLS
 
-# LMM 적합 (랜덤 절편 모형)
-model_lmm = smf.mixedlm("y ~ time", df, groups=df["subject"])
-result_lmm = model_lmm.fit()
-print(result_lmm.summary())
+# 랜덤 절편 모형
+model_ri = smf.mixedlm("y ~ time", df, groups=df["subject"])
+result_ri = model_ri.fit(method="lbfgs")
+print(result_ri.summary())
 
-# 핵심 출력 해석
-# - Fixed Effect: time의 계수 ≈ beta_1 (모집단 평균 시간 효과)
-# - Random Effect Variance: ≈ sigma_b^2 (개인 간 변동)
-# - Residual Variance: ≈ sigma_e^2 (개인 내 변동)
+# 핵심 출력 해석:
+# Fixed Effects:
+#   Intercept ≈ beta_0 (모집단 평균 기저값)
+#   time      ≈ beta_1 (모집단 평균 시간 효과)
+# Random Effects:
+#   Group Var ≈ sigma_b^2 (개인 간 변동)
+#   Residual  ≈ sigma_e^2 (개인 내 변동)
+
+# 랜덤 절편 + 랜덤 기울기 모형
+model_rs = smf.mixedlm(
+    "y ~ time", df, groups=df["subject"],
+    re_formula="~time"   # 기울기도 랜덤
+)
+result_rs = model_rs.fit(method="lbfgs")
+print(result_rs.summary())
+
+# LRT: 랜덤 기울기 필요성 검정
+from scipy.stats import chi2
+lr_stat = -2 * (result_ri.llf - result_rs.llf)
+# 랜덤 기울기 추가 = 2 자유도 증가 (분산 + 공분산)
+p_val = chi2.sf(lr_stat, df=2)
+print(f"LRT 통계량 = {lr_stat:.3f}, p = {p_val:.4f}")
 ```
 
-### Step 3: GEE 적합
+### Step 4: GEE 적합 (작동 상관 구조 비교)
 
 ```python
 from statsmodels.genmod.generalized_estimating_equations import GEE
 from statsmodels.genmod.families import Gaussian
-from statsmodels.genmod.cov_struct import Exchangeable, AR
+from statsmodels.genmod.cov_struct import Exchangeable, AR, Independence
 
-# Exchangeable = Compound Symmetry 구조
-model_gee_cs = GEE.from_formula(
-    "y ~ time", groups="subject",
-    data=df,
-    family=Gaussian(),
-    cov_struct=Exchangeable()
-)
-result_gee_cs = model_gee_cs.fit()
-print(result_gee_cs.summary())
+df_sorted = df.sort_values(['subject', 'time'])
 
-# AR(1) 구조
-model_gee_ar = GEE.from_formula(
-    "y ~ time", groups="subject",
-    data=df,
-    family=Gaussian(),
-    cov_struct=AR()
-)
-result_gee_ar = model_gee_ar.fit()
+structures = {
+    'Independence': Independence(),
+    'Exchangeable (CS)': Exchangeable(),
+    'AR(1)': AR(),
+}
+
+results = {}
+for name, cov_struct in structures.items():
+    model = GEE.from_formula(
+        "y ~ time", groups="subject",
+        data=df_sorted, family=Gaussian(),
+        cov_struct=cov_struct
+    )
+    res = model.fit()
+    results[name] = res
+    print(f"\n[{name}]")
+    print(f"  β_time = {res.params['time']:.3f}  SE = {res.bse['time']:.3f}")
+    print(f"  95% CI: ({res.conf_int().loc['time', 0]:.3f}, {res.conf_int().loc['time', 1]:.3f})")
+
+# 주목: 작동 상관이 달라도 β 추정은 비슷 (일치성)
+# 그러나 SE는 다를 수 있음 → Robust SE가 일관됨
 ```
 
-### R 코드 (lme4)
+### Step 5: R 코드 (lme4, nlme, geepack)
 
 ```r
 library(lme4)
 library(nlme)
+library(geepack)
 
-# 데이터 생성
+# ── 데이터 생성 ──
 set.seed(42)
-n <- 10; T <- 4
-df <- data.frame(
-  subject = rep(1:n, each = T),
-  time    = rep(0:(T-1), n),
-  y       = NA
-)
+n <- 30; T <- 4
+df <- expand.grid(subject = 1:n, time = 0:(T-1))
 b_i <- rnorm(n, 0, 2)
-df$y <- 5 + b_i[df$subject] + 1.5 * df$time + rnorm(n * T, 0, 1)
+df$y <- 5 + b_i[df$subject] + 0.8 * df$time + rnorm(n * T, 0, 1)
+df$subject <- factor(df$subject)
 
-# 랜덤 절편 LMM
-fit_lmm <- lmer(y ~ time + (1 | subject), data = df, REML = TRUE)
-summary(fit_lmm)
+# ── LMM: 랜덤 절편 (lme4) ──
+fit_ri <- lmer(y ~ time + (1 | subject), data = df, REML = TRUE)
+summary(fit_ri)
+# VarCorr(fit_ri) → σ_b², σ_e² 확인
 
-# 랜덤 절편 + 기울기 LMM
-fit_lmm2 <- lmer(y ~ time + (time | subject), data = df, REML = TRUE)
-summary(fit_lmm2)
+# ── LMM: 랜덤 절편 + 기울기 ──
+fit_rs <- lmer(y ~ time + (time | subject), data = df, REML = TRUE)
+anova(fit_ri, fit_rs)  # LRT — 랜덤 기울기 필요성 검정
 
-# 공분산 구조 비교 (nlme)
-library(nlme)
-fit_cs  <- gls(y ~ time, data = df, correlation = corCompSymm(form = ~1|subject))
-fit_ar1 <- gls(y ~ time, data = df, correlation = corAR1(form = ~1|subject))
-AIC(fit_cs, fit_ar1)
+# ── 공분산 구조 비교 (nlme) ──
+fit_cs  <- gls(y ~ time, data = df,
+               correlation = corCompSymm(form = ~1 | subject),
+               method = "REML")
+fit_ar1 <- gls(y ~ time, data = df,
+               correlation = corAR1(form = ~1 | subject),
+               method = "REML")
+fit_un  <- gls(y ~ time, data = df,
+               correlation = corSymm(form = ~1 | subject),
+               weights = varIdent(form = ~1 | time),
+               method = "REML")
+
+# AIC 비교
+AIC(fit_cs, fit_ar1, fit_un)
+
+# ── GEE (geepack) ──
+fit_gee_ex <- geeglm(y ~ time, data = df,
+                     id = subject, corstr = "exchangeable")
+fit_gee_ar <- geeglm(y ~ time, data = df,
+                     id = subject, corstr = "ar1")
+summary(fit_gee_ex)
+
+# Hausman 검정 (phtest in plm)
+library(plm)
+pdata <- pdata.frame(df, index = c("subject", "time"))
+fit_fe <- plm(y ~ time, data = pdata, model = "within")
+fit_re <- plm(y ~ time, data = pdata, model = "random")
+phtest(fit_fe, fit_re)
+# p < 0.05 → 고정 효과 모형 선택, p ≥ 0.05 → 랜덤 효과 모형 선택
 ```
 
 ---
@@ -495,29 +954,42 @@ AIC(fit_cs, fit_ar1)
 
 ### 균형 vs 불균형 설계
 
-- **균형 설계**: 모든 대상자가 동일한 시점에 측정. 분석이 단순하고 해석이 명확하다.
-- **불균형 설계**: 측정 시점이 대상자마다 다름. LMM은 불균형 설계를 자연스럽게 처리한다.
+- **균형 설계** ($n_i = T$ for all $i$): 모든 대상자가 동일 시점에 측정. 분석이 단순하고 해석이 명확하다.
+- **불균형 설계** ($n_i$가 다름): 측정 시점이 대상자마다 다름. LMM은 불균형 설계를 자연스럽게 처리한다.
 
-$$
-\text{균형}: \quad n_1 = n_2 = \cdots = n_n = T
-$$
-$$
-\text{불균형}: \quad n_i \text{가 대상자마다 다름}
-$$
+균형 설계에서 ICC 추정이 단순하다 (ANOVA 방법). 불균형에서는 ML/REML을 사용한다.
 
 ### 결측치의 종류와 처리
 
 결측치 메커니즘에 따라 분석 방법의 유효성이 달라진다:
 
-| 메커니즘 | 정의 | LMM 유효 | GEE 유효 |
-|----------|------|---------|---------|
-| **MCAR** (완전 임의 결측) | 결측이 어떤 변수와도 무관 | O | O |
-| **MAR** (임의 결측) | 관측된 변수로 결측 예측 가능 | O | O(Robust SE) |
-| **MNAR** (비임의 결측) | 미관측 변수에 의존 | X | X |
+| 메커니즘 | 정의 | LMM | GEE |
+|----------|------|-----|-----|
+| **MCAR** (Missing Completely at Random) | 결측이 관측·미관측 변수 모두와 무관 | 일치 | 일치 |
+| **MAR** (Missing at Random) | 결측이 관측 변수로 설명 가능 | 일치 | Robust SE로 일치 |
+| **MNAR** (Missing Not at Random) | 결측이 미관측 변수에 의존 | 편의 가능 | 편의 가능 |
 
-**직관**: 임상시험에서 부작용이 심해 탈락하는 환자는 MNAR에 해당한다.
-이 경우 MCAR/MAR을 가정하는 표준 LMM이나 GEE는 편의된 결과를 낳는다.
-Pattern-mixture model이나 selection model 같은 민감도 분석이 필요하다.
+::: {.callout-important}
+## MNAR 예시와 대응
+
+임상시험에서 부작용이 심해 탈락하는 환자는 **MNAR**에 해당한다.
+탈락 자체가 미관측 결과(더 나쁜 예후)와 관련되어 있기 때문이다.
+
+MNAR에 대응하는 방법:
+- **Pattern-mixture model**: 탈락 패턴별로 별도 모형 추정
+- **Selection model**: 탈락 메커니즘을 공동 모형화
+- **Multiple imputation**: 다중 대체 후 결합 (MAR 가정 하에 유효)
+- **Sensitivity analysis**: MNAR 정도를 $\delta$-조정으로 탐색
+:::
+
+### 시점 간격과 관측 설계
+
+| 고려사항 | 내용 |
+|----------|------|
+| **시점 수** $T$ | 검정력 vs 비용. AR(1) 가정 시 $T > 3$이면 구조 검증 가능 |
+| **시점 간격** | 등간격이면 AR(1), Toeplitz 적용 쉬움. 불규칙 간격은 연속 시간 모형 고려 |
+| **추적 기간** | 관심 변화가 발생하기 충분한 기간 확보 필요 |
+| **탈락률** | 예상 탈락률 $d$에서 $n_{adjusted} = n / (1-d)$ 로 목표 표본 조정 |
 
 ---
 
@@ -526,20 +998,35 @@ Pattern-mixture model이나 selection model 같은 민감도 분석이 필요하
 ```
 종단 데이터 수집
     ↓
-1. 데이터 구조 파악: n, T, 균형 여부, 결측 패턴
+1. 데이터 구조 파악
+   n (대상자), T (시점), N = Σnᵢ (총 관측), 균형 여부, 결측 패턴
     ↓
-2. 탐색적 분석 (EDA): spaghetti plot, mean profile, 개인별 궤적
+2. 탐색적 분석 (EDA)
+   - Spaghetti plot: 개인별 궤적
+   - Mean profile: 시점별 평균 ± SE
+   - 경험적 공분산/상관 행렬: 공분산 구조 후보 판단
+   - ICC 추정 (ANOVA 방법)
     ↓
-3. 공분산 구조 선택: CS / AR(1) / Unstructured (AIC/BIC)
+3. 공분산 구조 선택
+   CS / AR(1) / Toeplitz / UN → REML 기반 AIC/BIC 비교
     ↓
-4. 분석 목적 판단:
-   - 모집단 평균 효과 → GEE
-   - 개인별 예측 + 랜덤 효과 분리 → LMM/GLMM
-   - 내생성/혼란변수 통제 → 고정 효과 모형
+4. 분석 목적 판단
+   - Population-average 효과 → GEE (Robust SE 필수)
+   - Individual 예측 + 랜덤 효과 분리 → LMM/GLMM
+   - 내생성/시불변 혼란변수 통제 → 고정 효과 모형
     ↓
-5. 결과 해석: 고정 효과(β), 랜덤 효과(σ_b²), ICC
+5. 모형 추정 및 진단
+   - LMM: REML 추정, 잔차 진단, Q-Q plot
+   - GEE: Sandwich SE, QIC로 작동 상관 선택
     ↓
-6. 민감도 분석: 결측 메커니즘 가정 검토
+6. 결과 해석
+   - 고정 효과 β: 모집단 평균 시간 효과
+   - 랜덤 효과 σ_b², σ_e²: 변동 구조
+   - ICC: 반복 측정 효율성 요약
+    ↓
+7. 민감도 분석
+   - 결측 메커니즘 (MAR vs MNAR) 가정 검토
+   - 공분산 구조 변경 시 결과 변화 확인
 ```
 
 ---
@@ -557,6 +1044,7 @@ Pattern-mixture model이나 selection model 같은 민감도 분석이 필요하
 - [02 — 모델 구조 (Random Intercept, Slope, 공분산)](./LDA/02-mixed-model-structure.qmd)
 - [03 — 추정과 모델 선택 (ML/REML, LRT, AIC/BIC)](./LDA/03-mixed-model-estimation.qmd)
 - [08 — GEE (Marginal 효과, Working Correlation)](./LDA/08-mixed-model-gee-intro.qmd)
+- [11 — LMM/GLMM/GEE/GAMM 비교 및 선택 가이드](./LDA/11-mixed-model-comparison.qmd)
 
 **관련 개념**
 
