@@ -1,0 +1,456 @@
+---
+title: "유전체 전장 순열 p-값 (Genome-Wide Permuted p-Value)"
+subtitle: "GWAS에서 LD 구조를 보존하면서 genome-wide significance threshold를 순열로 추정하기"
+description: |
+  수십만~수백만 개의 SNP를 동시에 검정하는 GWAS에서 Bonferroni 보정이 왜 문제가 되는지,
+  그리고 표현형 레이블 순열이 연관불평형(LD) 구조를 보존하면서 genome-wide significance
+  threshold를 직접 추정하는 이유를 수식과 직관으로 설명한다. Min-P 절차, 적응형 순열,
+  일반 순열 p-값(Ch.13.5, ISLR)과의 차이를 다룬다.
+categories:
+  - Statistics
+author: Kwangmin Kim
+date: 04/09/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+[순열 p-값 (Permuted p-Value)](./164-permuted-p-value.qmd)은 이론적 귀무 분포가 없거나
+신뢰할 수 없을 때 데이터 자체로 귀무 분포를 근사한다. 유전체 전장 연관 연구
+(GWAS, Genome-Wide Association Study)는 순열 p-값이 가장 복잡하게 활용되는 영역 중 하나다.
+
+GWAS에서 다루는 문제는 단순히 "이론적 분포를 모른다"에 그치지 않는다. 핵심 난점은 두 가지다.
+
+1. **극단적인 다중 검정**: SNP(단일 뉴클레오타이드 다형성) 수천만 개를 동시에 검정한다.
+2. **SNP 간 상관 (LD)**: 검정들이 서로 독립적이지 않다. 인접 SNP끼리는 연관불평형
+   (Linkage Disequilibrium, LD)으로 강하게 상관된다.
+
+이 두 난점이 결합하여, 전통적 Bonferroni 보정은 지나치게 보수적이 되고,
+표준 FDR 보정 절차(Benjamini-Hochberg)도 독립성 가정이 성립하지 않아 주의가 필요하다.
+순열 기반 접근법은 LD 구조를 자동으로 반영하면서 귀무 분포를 직접 추정할 수 있다.
+
+---
+
+## GWAS와 다중 검정 문제
+
+### SNP와 관련 연구 설계
+
+SNP는 인구집단에서 두 가지 이상의 대립유전자(allele)가 공존하는 단일 염기 변이다.
+인간 게놈에는 약 $10^7$ 개의 SNP가 있으며, 상업적 칩 기반 GWAS는 보통 $m = 5 \times 10^5$
+~ $1 \times 10^7$ 개의 SNP를 동시에 측정한다.
+
+케이스-컨트롤 GWAS에서 각 SNP $j$ 에 대한 검정은 다음 귀무 가설을 다룬다:
+
+$$H_{0j}: \text{SNP}_j \text{ 와 질병 상태 사이에 연관이 없다}, \quad j = 1, \ldots, m$$
+
+각 SNP에 대해 $2 \times 3$ 분할표(케이스/컨트롤 × 유전자형 AA/AB/BB) 또는
+단순한 $2 \times 2$ 대립유전자 빈도표를 구성하고 카이제곱 검정을 수행한다:
+
+$$T_j = \frac{n(ad - bc)^2}{(a+b)(c+d)(a+c)(b+d)}$$
+
+여기서 $a, b, c, d$ 는 각 셀의 관측 빈도다. 양적 형질(quantitative trait)의 경우
+선형 회귀 t-통계량을 사용한다:
+
+$$T_j = \frac{\hat{\beta}_j}{\text{SE}(\hat{\beta}_j)}$$
+
+이때 $\hat{\beta}_j$ 는 SNP $j$ 의 유전자형(0, 1, 2 대립유전자 개수)이 표현형에 미치는 효과다.
+
+### Bonferroni 보정과 그 한계
+
+$m$ 개의 독립적 검정에 대해 FWER을 $\alpha$ 로 제어하는 Bonferroni 보정의 임계값은
+
+$$p_{\text{Bonferroni}} = \frac{\alpha}{m}$$
+
+이다. $m = 10^6$, $\alpha = 0.05$ 이면
+
+$$p_{\text{Bonferroni}} = \frac{0.05}{10^6} = 5 \times 10^{-8}$$
+
+이 $5 \times 10^{-8}$ 이 GWAS에서 관례적으로 사용하는 "genome-wide significance threshold"다
+(Visscher et al., 2012; McCarthy et al., 2008).
+
+그러나 이 보정은 **모든 검정이 독립적**이라는 가정 하에만 정확하다.
+SNP는 LD 때문에 인접 SNP와 강하게 상관되므로,
+실질적인 독립 검정 수 $m_{\text{eff}}$ 는 $m$ 보다 훨씬 작다.
+
+::: {.callout-important}
+## Bonferroni 과보수 문제
+
+LD로 인해 $m_{\text{eff}} \ll m$ 이면 Bonferroni는 실제보다 훨씬 높은 임계값을 요구한다:
+
+- 실제 검정 수: $m = 500{,}000$
+- 실질 독립 검정 수: $m_{\text{eff}} \approx 50{,}000$ (LD 블록 고려 시)
+- 이때 진짜 임계값: $0.05 / 50{,}000 = 10^{-6}$ (Bonferroni보다 20배 덜 보수적)
+
+Bonferroni는 실제 연관 신호를 놓칠 가능성이 높고,
+반대로 보정이 부족하면 위양성이 급증한다. 순열 기반 임계값은 LD 구조를 자동으로 반영한다.
+:::
+
+---
+
+## LD(연관불평형)와 순열의 관계
+
+### LD가 왜 문제인가
+
+유전체 상에서 물리적으로 가까운 두 SNP, $j$ 와 $k$, 는 재조합이 잘 일어나지 않아
+특정 대립유전자 조합이 우연보다 더 자주(또는 드물게) 공존한다. 이를 LD라 한다.
+
+LD를 수치로 표현하는 지표는 다음 두 가지다:
+
+$$r^2_{jk} = \frac{D_{jk}^2}{p_j(1-p_j) p_k(1-p_k)}, \quad D_{jk} = P(A_j A_k) - P(A_j)P(A_k)$$
+
+$r^2 \approx 1$ 이면 두 SNP는 거의 완전한 LD에 있어 검정 결과가 거의 동일하다.
+이런 SNP들의 검정 통계량 $T_j$, $T_k$ 는 강하게 상관되며,
+"독립적인 $m$ 번의 검정"이라는 Bonferroni 가정은 성립하지 않는다.
+
+### 표현형 레이블 순열이 LD를 보존하는 이유
+
+일반 순열 p-값에서 관측값의 레이블을 무작위로 재배정하는 것처럼,
+GWAS에서는 **표현형(phenotype) 레이블을 순열**한다 — 유전자형(genotype)이 아니라.
+
+핵심 관찰: 각 개체의 유전자형 벡터 $(G_{i1}, G_{i2}, \ldots, G_{im})$ 는 고정되어 있다.
+케이스/컨트롤 레이블 $Y_i$ 만 무작위로 재배정하면:
+
+- **SNP 간 LD 구조는 그대로 유지**된다 (유전자형을 섞지 않으므로)
+- **SNP-표현형 연관은 파괴**된다 ($H_0$ 하의 상황을 시뮬레이션)
+
+이로써 LD를 반영한 귀무 분포가 자동으로 생성된다.
+
+::: {.callout-note}
+## 표현형 순열의 수학적 근거
+
+$H_0$: 모든 SNP가 표현형과 독립이라면, 개체의 표현형 $Y_i$ 는 유전자형 행렬과
+독립이다. 따라서 $Y$ 의 어떤 순열도 $(G_{i1}, \ldots, G_{im})$ 의 결합 분포와
+같은 결합 분포를 가진다. 유전자형 간 LD 구조는 표현형 순열 후에도 동일하게 유지된다.
+:::
+
+---
+
+## Genome-Wide Permuted p-Value: Min-P 절차
+
+### Min-P 통계량의 아이디어
+
+GWAS의 목표는 "어떤 SNP라도 유의한 연관이 있는가"이다. 이는 자연스럽게
+$m$ 개 검정 통계량 중 최솟값 p-값을 귀무 분포 하에서 평가하는 문제로 이어진다.
+
+$$T_{\min} = \min_{j=1,\ldots,m} p_j$$
+
+이 $T_{\min}$ 의 귀무 분포를 순열로 구축한 후, 관측된 $T_{\min}^{\text{obs}}$ 에 대응하는
+순열 p-값을 계산하면 LD를 고려한 FWER 제어가 가능하다.
+
+### Min-P 순열 절차 (Algorithm)
+
+::: {.callout-note}
+## Min-P Permutation Procedure for GWAS
+
+**입력**: $n$ 명의 개체, $m$ 개의 SNP, 표현형 벡터 $\mathbf{Y}$, 반복 횟수 $B$
+
+1. 원본 데이터로 $m$ 개의 검정 통계량 $T_1, T_2, \ldots, T_m$ 을 계산한다.
+   대응하는 p-값을 $p_1, \ldots, p_m$ 이라 하자.
+2. 관측된 최소 p-값: $p_{\min}^{\text{obs}} = \min_j p_j$.
+3. $b = 1, \ldots, B$ 에 대해:
+   - (a) $\mathbf{Y}$ 를 무작위로 순열하여 $\mathbf{Y}^{*b}$ 를 생성한다
+         (케이스/컨트롤 레이블 재배정).
+   - (b) 각 SNP $j$ 에 대해 순열 데이터로 $T_j^{*b}$ 와 p-값 $p_j^{*b}$ 를 계산한다.
+   - (c) 이 순열의 최소 p-값을 기록한다: $p_{\min}^{*b} = \min_j p_j^{*b}$.
+4. Genome-wide 순열 p-값을 다음으로 계산한다:
+
+$$\tilde{p}_{\text{gw}} = \frac{\sum_{b=1}^{B} \mathbf{1}(p_{\min}^{*b} \leq p_{\min}^{\text{obs}})}{B}$$
+
+$\tilde{p}_{\text{gw}} \leq \alpha$ 이면 genome-wide 유의하다고 결론 내린다.
+:::
+
+### 수식의 해석
+
+$$\tilde{p}_{\text{gw}} = \frac{\#\{b : p_{\min}^{*b} \leq p_{\min}^{\text{obs}}\}}{B}$$
+
+이 식은 "$H_0$ 가 참일 때 우연히 이만큼 극단적인 최소 p-값이 나올 비율"이다.
+LD로 연결된 여러 SNP가 동시에 작은 p-값을 보이더라도 순열 귀무 분포도 같은 LD 구조를
+반영하므로, 이를 적절히 보정한다.
+
+**개인 SNP의 genome-wide 보정 p-값**: 개별 SNP $j$ 의 genome-wide 보정 p-값은
+
+$$\tilde{p}_j = \frac{\sum_{b=1}^{B} \mathbf{1}(p_{\min}^{*b} \leq p_j)}{B}$$
+
+이다. $p_j$ 자체가 아니라 "$H_0$ 하에서 어떤 SNP라도 $p_j$ 이하가 될 확률"을 추정한다.
+
+---
+
+## Bonferroni vs. Permutation 임계값 비교
+
+LD가 있는 시뮬레이션 데이터로 두 방법의 차이를 직관적으로 살펴본다.
+
+| 특성 | Bonferroni | Permutation 기반 |
+|------|-----------|----------------|
+| 임계값 계산 | $\alpha / m$ (해석적) | 순열 귀무 분포의 $\alpha$ 분위수 |
+| LD 반영 | 불가 (독립 가정) | 자동 반영 |
+| 보수성 | LD 클수록 과보수적 | 적절 |
+| 계산 비용 | $O(m)$ | $O(mB)$, $B=1{,}000$~$10{,}000$ |
+| 비정규 데이터 | 이론 분포 가정 필요 | 불필요 |
+| 소표본 | 불안정 | 더 신뢰 가능 |
+
+LD가 없으면 (모든 SNP 독립) 순열 임계값 $\approx$ Bonferroni 임계값이 된다.
+LD 블록이 커질수록 순열 임계값은 Bonferroni보다 덜 보수적이 된다.
+
+---
+
+## 적응형 순열 (Adaptive Permutation)
+
+전체 $m$ 개 SNP에 대해 $B = 10{,}000$ 번 순열하면 계산 비용이 매우 크다.
+**적응형 순열(adaptive permutation)** 은 각 SNP에 필요한 순열 횟수를 다르게 설정한다.
+
+### 아이디어
+
+- 이미 p-값이 크고 유의하지 않을 것이 명확한 SNP: 소수의 순열만 수행
+- 유의수준 근처의 SNP: 더 많은 순열로 정밀하게 추정
+
+### Early Stopping Rule
+
+SNP $j$ 에 대해 순열을 진행하면서, 지금까지의 순열 중 $T_j^{*b} \geq T_j^{\text{obs}}$ 인
+경우의 수를 $c_j$ 라 하자. 미리 정한 상한 $C_{\max}$ 에 도달하면 조기 중단한다:
+
+$$\text{Stop if } c_j \geq C_{\max}$$
+
+예를 들어 $C_{\max} = 100$ 으로 설정하면, p-값이 충분히 크다고 판단될 때 일찍 중단하여
+불필요한 계산을 피한다. 반대로 $c_j = 0$ 이 유지되는 유망한 SNP는 $B = 10{,}000$ 까지
+순열을 계속하여 정밀한 p-값을 추정한다.
+
+---
+
+## 풀링 순열 p-값 (Pooling across SNPs)
+
+[순열 p-값](./164-permuted-p-value.qmd)의 식 (13.14, ISLR)을 GWAS에 적용하면,
+개별 SNP별 순열 대신 **모든 SNP의 순열 통계량을 풀링**하여 귀무 분포를 구성한다.
+
+$$p_j^{\text{pool}} = \frac{\sum_{j'=1}^{m} \sum_{b=1}^{B} \mathbf{1}(|T_{j'}^{*b}| \geq |T_j|)}{Bm}$$
+
+이 방법은 각 SNP의 순열 분포가 동일하다고 가정한다 — MAF(minor allele frequency)나
+결측 패턴이 비슷한 SNP들에서 유효하다. 풀링하면 훨씬 안정적인 p-값 추정이 가능하다.
+
+---
+
+## 한계와 실무 고려사항
+
+### 계층화 문제 (Population Stratification)
+
+순열이 모든 개체를 동일한 모집단에서 왔다고 가정하지만, 실제 GWAS에서는
+인구 집단 구조(population stratification)가 있을 수 있다. 서로 다른 민족 배경의
+케이스와 컨트롤이 섞이면, 질병과 무관한 조상 관련 SNP가 위양성으로 검출된다.
+
+**해결책**: 주성분 분석(PCA)으로 구한 조상 성분(ancestry PC)을 공변량으로 포함하고,
+잔차 기반 표현형으로 순열을 수행하거나, structured permutation을 사용한다.
+
+### 수백만 번 순열의 계산 비용
+
+$m = 10^6$, $B = 10{,}000$ 이면 총 $10^{10}$ 개의 검정을 수행해야 한다.
+실무에서는:
+
+- 적응형 순열로 대부분의 SNP를 조기 중단한다
+- 충분한 B: $\tilde{p}$의 표준오차는 $\sqrt{\tilde{p}(1-\tilde{p})/B}$ 이므로,
+  $\tilde{p} = 5 \times 10^{-8}$ 수준에서는 $B \geq 10^9$ 가 이상적이지만 현실적으로 불가능하다
+- 대신 **중간 수준 순열** ($B = 1{,}000$ ~ $10{,}000$) + Bonferroni hybrid를 사용한다
+
+### 소표본 문제
+
+GWAS에서도 희귀 SNP(MAF < 1%)는 소표본 문제가 생긴다.
+순열 기반 p-값은 이런 경우에도 이론적 분포에 비해 더 신뢰할 수 있다
+(이론 분포는 점근 근사이므로).
+
+---
+
+## 코드 예시
+
+### Step 1: 순수 Python — Min-P 순열 절차 구현
+
+```python
+import numpy as np
+from scipy.stats import chi2_contingency
+
+def gwas_permutation_pvalue(
+    genotypes: np.ndarray,   # shape (n_samples, n_snps), 0/1/2
+    phenotype: np.ndarray,   # shape (n_samples,), 0=control, 1=case
+    B: int = 1000
+) -> np.ndarray:
+    """
+    GWAS Min-P 순열로 genome-wide 보정 p-값 계산.
+    genotypes: (n, m) 행렬, phenotype: (n,) 이진 벡터
+    반환: (m,) genome-wide 보정 p-값 배열
+    """
+    n, m = genotypes.shape
+    
+    # 1단계: 원본 p-값 계산
+    def snp_pvalue(geno_col, pheno):
+        """각 SNP에 대한 대립유전자 연관 카이제곱 p-값"""
+        a = np.sum((geno_col > 0) & (pheno == 1))   # 케이스 중 위험 대립유전자 보유
+        b = np.sum((geno_col == 0) & (pheno == 1))  # 케이스 중 기준 대립유전자
+        c = np.sum((geno_col > 0) & (pheno == 0))   # 컨트롤 중 위험 대립유전자 보유
+        d = np.sum((geno_col == 0) & (pheno == 0))  # 컨트롤 중 기준 대립유전자
+        table = np.array([[a, b], [c, d]])
+        if table.min() == 0:
+            return 1.0
+        _, p, _, _ = chi2_contingency(table)
+        return p
+    
+    obs_pvals = np.array([snp_pvalue(genotypes[:, j], phenotype) for j in range(m)])
+    obs_pmin = obs_pvals.min()
+    
+    # 2단계: 순열 귀무 분포 구성 (표현형 레이블 순열, 유전자형 고정)
+    pmin_null = np.zeros(B)
+    
+    rng = np.random.default_rng(42)
+    for b in range(B):
+        perm_pheno = rng.permutation(phenotype)  # 표현형만 순열 → LD 구조 유지
+        perm_pvals = np.array([snp_pvalue(genotypes[:, j], perm_pheno) for j in range(m)])
+        pmin_null[b] = perm_pvals.min()
+    
+    # 3단계: 개별 SNP genome-wide 보정 p-값
+    gw_pvals = np.array([
+        np.mean(pmin_null <= obs_pvals[j]) for j in range(m)
+    ])
+    
+    return gw_pvals, obs_pvals, pmin_null
+
+
+# 시뮬레이션 데이터 생성 (LD 있는 10개 SNP)
+rng = np.random.default_rng(0)
+n = 200  # 100 케이스 + 100 컨트롤
+m = 10   # 시연용 소규모
+
+# 기저 유전자형 (LD 블록 시뮬레이션: 인접 SNP끼리 상관)
+base = rng.binomial(2, 0.3, size=(n, m))
+ld_geno = base.copy()
+for j in range(1, m):
+    ld_geno[:, j] = (0.7 * base[:, j-1] + 0.3 * base[:, j]).astype(int).clip(0, 2)
+
+pheno = np.array([1]*100 + [0]*100)
+# SNP 0이 진짜 연관 SNP: 케이스에서 대립유전자 빈도 높임
+ld_geno[:100, 0] = rng.binomial(2, 0.6, size=100)
+
+gw_pvals, obs_pvals, pmin_null = gwas_permutation_pvalue(ld_geno, pheno, B=500)
+
+print("원본 p-값:", obs_pvals.round(4))
+print("GW 보정 p-값:", gw_pvals.round(4))
+print("Bonferroni 임계값:", 0.05 / m)
+print(f"순열 기반 임계값 (α=0.05): {np.percentile(pmin_null, 5):.4f}")
+```
+
+### Step 2: 적응형 순열 (Adaptive Permutation)
+
+```python
+def adaptive_permutation(
+    genotypes: np.ndarray,
+    phenotype: np.ndarray,
+    B_max: int = 10000,
+    C_max: int = 100   # 조기 중단 기준: 초과 횟수
+) -> np.ndarray:
+    """
+    적응형 순열: 유의하지 않은 SNP는 조기 중단하여 계산 비용 절감.
+    C_max: 순열 통계량이 관측값을 초과한 횟수가 C_max에 달하면 해당 SNP 중단.
+    """
+    n, m = genotypes.shape
+    
+    obs_pvals = np.array([snp_pvalue(genotypes[:, j], phenotype) for j in range(m)])
+    
+    exceedance_count = np.zeros(m, dtype=int)
+    permutation_count = np.zeros(m, dtype=int)
+    active = np.ones(m, dtype=bool)  # 아직 순열 중인 SNP 마스크
+    
+    rng = np.random.default_rng(42)
+    
+    for b in range(B_max):
+        if not active.any():
+            break
+        perm_pheno = rng.permutation(phenotype)
+        for j in np.where(active)[0]:
+            p_perm = snp_pvalue(genotypes[:, j], perm_pheno)
+            permutation_count[j] += 1
+            if p_perm <= obs_pvals[j]:
+                exceedance_count[j] += 1
+            if exceedance_count[j] >= C_max:
+                active[j] = False  # 조기 중단
+    
+    # 보정 p-값 계산
+    adapted_pvals = exceedance_count / permutation_count.clip(min=1)
+    
+    return adapted_pvals, permutation_count
+
+
+adapted_pvals, n_perms = adaptive_permutation(ld_geno, pheno, B_max=5000, C_max=50)
+
+print("\n적응형 순열 결과:")
+for j in range(m):
+    print(f"SNP {j}: 보정 p={adapted_pvals[j]:.4f}, 수행 순열 횟수={n_perms[j]}")
+```
+
+### Step 3: 결과 시각화
+
+```python
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+# Manhattan plot 느낌의 보정 p-값
+ax1 = axes[0]
+ax1.scatter(range(m), -np.log10(obs_pvals), label="원본 p-값", color="steelblue")
+ax1.scatter(range(m), -np.log10(gw_pvals), label="GW 보정 p-값",
+            color="darkorange", marker="^")
+bonferroni_line = -np.log10(0.05 / m)
+perm_threshold  = -np.log10(np.percentile(pmin_null, 5))
+ax1.axhline(bonferroni_line, color="red", linestyle="--", label=f"Bonferroni ({0.05/m:.2e})")
+ax1.axhline(perm_threshold,  color="green", linestyle=":", label="순열 임계값 (5%ile)")
+ax1.set_xlabel("SNP Index")
+ax1.set_ylabel(r"$-\log_{10}(p)$")
+ax1.set_title("원본 vs GW 보정 p-값")
+ax1.legend(fontsize=8)
+
+# 순열 귀무 분포 (Min-P distribution)
+ax2 = axes[1]
+ax2.hist(-np.log10(pmin_null), bins=30, density=True,
+         color="lightblue", edgecolor="navy", alpha=0.7)
+ax2.axvline(-np.log10(obs_pmin), color="red", linewidth=2, label=f"관측 min-P")
+ax2.axvline(perm_threshold, color="green", linestyle="--", label="5% 임계값")
+ax2.set_xlabel(r"$-\log_{10}(\min p)$ (순열 귀무 분포)")
+ax2.set_ylabel("밀도")
+ax2.set_title("Min-P 순열 귀무 분포")
+ax2.legend()
+
+plt.tight_layout()
+plt.savefig("gwas_permutation.png", dpi=120)
+plt.show()
+```
+
+---
+
+## 일반 순열 p-값과의 관계 정리
+
+| 항목 | 일반 순열 p-값 (164) | Genome-Wide 순열 p-값 (본 포스트) |
+|------|---------------------|----------------------------------|
+| 검정 수 | 1개 가설 | $m = 10^5$~$10^7$ 개 가설 동시 |
+| 관심 통계량 | 개별 $T$ | $\min_j p_j$ (Min-P) |
+| 순열 대상 | 레이블 (일반적) | 표현형 레이블 (유전자형 고정) |
+| LD/상관 고려 | 불필요 | 필수 — 표현형 순열이 자동 보정 |
+| 귀무 분포 | $T^{*b}$ 의 분포 | $p_{\min}^{*b}$ 의 분포 |
+| 목적 | 단일 검정 p-값 | FWER 제어 genome-wide 임계값 |
+| 계산 비용 | $O(nB)$ | $O(nmB)$ → 적응형 필요 |
+
+식 (ISLR 13.12)의 단일 검정 순열 p-값:
+
+$$\tilde{p} = \frac{\sum_{b=1}^{B} \mathbf{1}(|T^{*b}| \geq |T|)}{B}$$
+
+을 $m$ 개 SNP에 동시에 적용하되, Min-P 통계량을 통해 다중 검정 보정까지 내포하는 것이
+genome-wide 버전의 핵심이다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [순열 p-값 — 이론적 귀무 분포 없이 p-값 계산하기](./164-permuted-p-value.qmd)
+- [p-값의 이론과 실무](./162-p-values.qmd)
+- [다중 검정 (Multiple Testing)](./162-p-values.qmd)
+
+**후속 주제**
+
+- [FDR 보정과 Benjamini-Hochberg 절차](./162-p-values.qmd)
+- [q-value — Storey의 FDR 추정](./141-p-value.qmd)
