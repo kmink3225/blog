@@ -37,8 +37,11 @@ description: >
 | `28-manova-illustration.qmd` | MANOVA 수치 예시 (Bock) | Ch.3 | 완료 |
 | `29-anova-longitudinal-illustration.qmd` | ANOVA 수치 예시 (Bock) | Ch.2 | 완료 |
 | `30-mixed-effects-continuous-overview.qmd` | 혼합효과 연속 반응 개요 | Ch.4 | 완료 |
+| `31-simple-linear-regression-for-mrm.qmd` | 단순 선형회귀 — MRM 출발점 | Ch.4 §4.2 | 완료 |
+| `32-random-intercept-mrm.qmd` | 랜덤 절편 MRM | Ch.4 §4.3 | 완료 |
+| `33-random-intercept-trend-mrm.qmd` | 랜덤 절편·추세 MRM | Ch.4 §4.4-§4.5 | 완료 |
 
-**다음 작업**: Ch.4 이후 (혼합효과 모형 상세) → `31-` 번호부터 작성
+**다음 작업**: Ch.5 이후 (추정 심화, ML/REML 비교) → `34-` 번호부터 작성
 
 ---
 
@@ -146,7 +149,7 @@ Hedeker 시리즈가 해당 챕터를 완성하면 점진적으로 통합한다.
 
 ## 6. 미완료 항목
 
-- [ ] Hedeker Ch.5 이후 포스트 (`31-`~) 미작성
+- [ ] Hedeker Ch.5 이후 포스트 (`34-`~) 미작성
 - [ ] 01~19 → Hedeker 시리즈 통합 (Ch.4 완성 후 순차 진행)
 - [ ] `basic-03-wls.qmd`의 WLS/REML 내용 → `139-rmle.qmd`와 함께 추정 포스트에 통합
 - [ ] `survival_lda.qmd` → 생존 분석 × LDA 추가 섹션 포스트로 발전
