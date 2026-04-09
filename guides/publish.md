@@ -38,11 +38,15 @@ commit → push → Netlify 반영
 
 `render-changed.ps1`을 실행하면 마지막 커밋 이후 변경된 `.qmd`만 골라서 렌더링 후 자동 push한다.
 
-```powershell
-# 프로젝트 루트에서 실행
-cd C:\Users\Administrator\Desktop\projects\blog
-.\render-changed.ps1
+```bash
+# 프로젝트 루트에서 실행 (bash / Claude Code 터미널)
+bash render.sh
+
+# 렌더링 없이 push만
+bash render.sh --skip
 ```
+
+> PowerShell에서 직접 실행할 경우: `.\render-changed.ps1` (또는 `-SkipRender` 옵션)
 
 - git diff(수정) + staged(staged) + untracked(신규) 파일을 모두 감지한다
 - `conda blog` 환경으로 렌더링한다
