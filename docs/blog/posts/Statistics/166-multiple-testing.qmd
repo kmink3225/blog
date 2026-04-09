@@ -1,0 +1,467 @@
+---
+title: "다중 검정 (Multiple Testing)"
+subtitle: "FWER, Bonferroni, Holm, FDR, Benjamini-Hochberg — 여러 가설을 동시에 검정할 때 오류를 어떻게 제어하는가"
+description: |
+  하나의 가설 검정에서 α = 0.05는 5% 오류율을 보장한다. 그러나 가설이 m개로 늘어나면
+  1개 이상 틀릴 확률은 FWER = 1 - (1-α)^m 로 급증한다. 이 포스트는 m개의 귀무가설을
+  동시에 검정하는 문제의 핵심 오류 지표(FWER, FDR)와 이를 제어하는 Bonferroni,
+  Holm, Benjamini-Hochberg 절차를 수식과 직관, 코드로 완전히 설명한다.
+categories:
+  - Statistics
+author: Kwangmin Kim
+date: 04/09/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+단일 귀무가설 $H_0$ 을 유의수준 $\alpha = 0.05$ 로 검정하면 Type I 오류(위양성) 확률이
+5% 이하임을 보장한다. 검정을 $m = 100$ 번 반복하면 어떻게 될까?
+
+$$P(\text{적어도 1개 위양성}) = 1 - (1 - 0.05)^{100} \approx 0.994$$
+
+이 사실이 **다중 검정 문제(multiple testing problem)** 의 핵심이다. 동시에 검정하는
+가설 수가 많아질수록 우연에 의한 위양성이 폭증한다. 문제는 이를 인식하지 못하거나
+보정하지 않은 채 "유의한 결과"를 발표하는 경우다 (James et al., 2021, ISLR 2nd ed., Ch.13).
+
+이 포스트는 다중 검정 보정의 두 축인 **FWER(Family-Wise Error Rate)** 와
+**FDR(False Discovery Rate)** 를 다루며, 이를 제어하는 주요 절차를 수식과 직관으로 설명한다.
+
+후속 포스트:
+- [순열 p-값 — 이론적 귀무 분포 없이 p-값 계산하기](./164-permuted-p-value.qmd)
+- [유전체 전장 순열 p-값 — GWAS에서 LD 보존 표현형 순열](./165-genome-wide-permuted-p-value.qmd)
+
+---
+
+## 표기법: m×2 결과표
+
+$m$ 개의 귀무가설 $H_{01}, \ldots, H_{0m}$ 을 동시에 검정할 때 나올 수 있는 결과를
+표로 정리한다.
+
+|  | $H_0$ 참 | $H_0$ 거짓 | 합계 |
+|--|----------|-----------|------|
+| **기각** | $V$ (위양성, FP) | $S$ (참양성, TP) | $R$ |
+| **기각 안 함** | $U$ (참음성, TN) | $W$ (위음성, FN) | $m - R$ |
+| **합계** | $m_0$ | $m - m_0$ | $m$ |
+
+- $V$: False Positive (Type I Error) — 참인 $H_0$ 를 잘못 기각
+- $S$: True Positive — 거짓인 $H_0$ 를 올바르게 기각 (검정력)
+- $R = V + S$: 총 기각 수 (데이터에서 관찰 가능)
+- $m_0$: 참인 귀무가설 수 (미지수)
+
+실무에서는 $V$, $S$, $m_0$ 를 직접 알 수 없다. $R$ (기각 수)만 관찰된다.
+
+::: {.callout-note}
+## 다중 검정 문제의 핵심
+
+동전 1,024개를 10번씩 던지면, 우연히 10번 모두 앞면이 나오는 동전이 평균 1개 생긴다.
+그 동전 하나만 놓고 보면 p-값이 $2/1024 < 0.002$ 이다 — 하지만 이 동전이 "특별한 동전"일까?
+
+아니다. 수많은 시도 중 하나가 우연히 극단적으로 나왔을 뿐이다.
+다중 검정에서의 위양성은 바로 이 구조에서 발생한다.
+:::
+
+---
+
+## FWER: Family-Wise Error Rate
+
+### 정의
+
+FWER은 **$m$ 개의 검정 중 적어도 1개의 위양성이 발생할 확률**이다:
+
+$$\text{FWER} = P(V \geq 1) \tag{13.3}$$
+
+각 검정을 독립적으로 유의수준 $\alpha$ 로 수행할 때 (모든 $H_0$ 가 참이라면):
+
+$$\text{FWER}(\alpha) = 1 - \prod_{j=1}^{m}(1 - \alpha) = 1 - (1-\alpha)^m \tag{13.5}$$
+
+| $m$ | $\alpha = 0.05$ | $\alpha = 0.01$ | $\alpha = 0.001$ |
+|-----|-----------------|-----------------|-----------------|
+| 1 | 0.050 | 0.010 | 0.001 |
+| 5 | 0.226 | 0.049 | 0.005 |
+| 10 | 0.401 | 0.096 | 0.010 |
+| 50 | 0.923 | 0.395 | 0.049 |
+| 100 | 0.994 | 0.634 | 0.095 |
+| 500 | ≈1.000 | ≈0.993 | 0.394 |
+
+$m = 100$ 에서 $\alpha = 0.05$ 로 검정하면 적어도 1개 위양성이 발생할 확률이 99.4%다.
+이를 0.05 이하로 유지하려면 각 개별 검정의 임계값을 훨씬 더 낮춰야 한다.
+
+### Bonferroni 보정
+
+가장 간단하고 널리 알려진 FWER 제어 방법이다.
+
+**아이디어**: 사건의 합집합 확률은 각 사건 확률의 합보다 크지 않다 (Boole의 부등식):
+
+$$\text{FWER} = P\!\left(\bigcup_{j=1}^{m} A_j\right) \leq \sum_{j=1}^{m} P(A_j) \tag{13.6}$$
+
+여기서 $A_j$ 는 $j$ 번째 검정에서 위양성이 발생하는 사건이다.
+각 검정에서 $P(A_j) \leq \alpha/m$ 이 되도록 임계값을 설정하면:
+
+$$\text{FWER} \leq m \cdot \frac{\alpha}{m} = \alpha$$
+
+::: {.callout-note}
+## Bonferroni 보정 규칙
+
+$m$ 개의 귀무가설에 대해 FWER을 $\alpha$ 로 제어하려면:
+
+$$p_j \leq \frac{\alpha}{m} \text{ 인 } H_{0j} \text{ 를 기각한다}$$
+
+예: $m = 100$, $\alpha = 0.05$ → 임계값 $= 0.05/100 = 0.0005$
+:::
+
+**직관**: 100개의 검정을 하면 각 개별 검정에 5%가 아닌 0.05%의 기준을 적용해야
+전체 오류율이 5% 이하로 유지된다.
+
+**Bonferroni의 강점과 약점**:
+
+- 강점: 검정들이 독립적이지 않아도 성립한다 (Boole 부등식이 의존성에 무관)
+- 약점: 검정들이 양의 상관을 가지면 실제 FWER $\ll \alpha$ → 지나치게 보수적
+  (위양성을 너무 억제하여 위음성이 늘어남)
+
+### Holm's Step-Down Procedure
+
+Holm 방법은 Bonferroni보다 항상 더 많은 귀무가설을 기각하면서도 FWER을 제어한다.
+같은 $\alpha$ 에서 더 높은 검정력(power)을 보장한다.
+
+::: {.callout-note}
+## Algorithm 13.1: Holm's Step-Down Procedure
+
+**입력**: $m$ 개의 p-값 $p_1, \ldots, p_m$, 유의수준 $\alpha$
+
+1. p-값을 오름차순 정렬: $p_{(1)} \leq p_{(2)} \leq \cdots \leq p_{(m)}$
+2. 다음 인덱스 $L$ 을 찾는다:
+
+$$L = \min\left\{j : p_{(j)} > \frac{\alpha}{m + 1 - j}\right\} \tag{13.7}$$
+
+3. $p_j < p_{(L)}$ 인 모든 $H_{0j}$ 를 기각한다.
+:::
+
+**수식의 해석**: Bonferroni는 모든 검정에 동일하게 $\alpha/m$ 을 적용한다.
+Holm은 순위가 작은(p-값이 작은) 가설부터 **단계적으로 임계값을 완화**한다:
+
+- 가장 작은 p-값: $\alpha/m$ (Bonferroni와 동일)
+- 두 번째: $\alpha/(m-1)$
+- 세 번째: $\alpha/(m-2)$
+- $\vdots$
+- 마지막: $\alpha/1 = \alpha$
+
+어느 단계에서 처음으로 임계값을 초과하면 그 이후는 모두 기각하지 않는다
+("step-down": 가장 강한 증거부터 내려간다).
+
+**수치 예시** ($m = 5$, $\alpha = 0.05$):
+
+| 순위 | $p_{(j)}$ | Holm 임계값 $\alpha/(m+1-j)$ | 기각? |
+|------|----------|---------------------------|-------|
+| 1 | 0.006 | 0.05/5 = 0.010 | 기각 |
+| 2 | 0.012 | 0.05/4 = 0.0125 | 기각 |
+| 3 | 0.601 | 0.05/3 = 0.167 | **기각 안 함** (L=3, 중단) |
+| 4 | 0.756 | — | 기각 안 함 |
+| 5 | 0.918 | — | 기각 안 함 |
+
+Bonferroni ($\alpha/m = 0.01$)는 1번만 기각; Holm은 1번, 2번 모두 기각 → 더 높은 검정력.
+
+### FWER과 검정력의 트레이드오프
+
+FWER을 $\alpha$ 로 제어한다는 것은 "$m$ 개의 검정 중 위양성이 단 1개도 없을 확률이
+$1-\alpha$ 이상"이라는 강한 보증이다. $m$ 이 커질수록 이 보증을 유지하기 위해
+매우 낮은 임계값을 써야 하므로, 참인 신호도 놓치게 된다 — 검정력이 급락한다.
+
+$m = 500$, 10%가 거짓 귀무가설인 상황에서 FWER = 0.05로 제어하면 검정력이 20% 이하다.
+즉, 50개의 진짜 신호 중 40개 이상을 놓친다. $m$ 이 수만~수백만인 유전체 연구,
+뇌영상 분석에서 FWER 제어는 현실적으로 불가능한 기준이다.
+
+---
+
+## FDR: False Discovery Rate
+
+### 직관: FWER의 한계 극복
+
+FWER이 "$V \geq 1$ 일 확률"을 제어한다면, 더 현실적인 목표는
+"기각한 것 중 위양성 비율"을 낮추는 것이다.
+
+**False Discovery Proportion (FDP)**:
+
+$$\text{FDP} = \frac{V}{R} = \frac{\text{위양성 수}}{\text{총 기각 수}} \quad (R > 0 \text{ 일 때})$$
+
+하지만 어떤 데이터셋에서든 FDP를 직접 제어할 수는 없다 — $V$ 를 모르기 때문이다.
+대신 FDP의 **기댓값**을 제어한다.
+
+### FDR 정의
+
+$$\text{FDR} = E\!\left(\frac{V}{R}\right) \tag{13.9}$$
+
+$(R = 0$ 이면 $V/R = 0$ 으로 정의)
+
+FDR을 $q = 0.20$ 으로 제어한다는 것은: **실험을 무수히 반복하면 기각된 귀무가설 중
+평균 20% 이하만 위양성**이라는 의미다. 특정 데이터에서 FDP는 20%보다 크거나 작을 수 있다.
+
+**FWER vs FDR 비교**:
+
+| 기준 | FWER | FDR |
+|------|------|-----|
+| 제어 대상 | $P(V \geq 1)$ | $E(V/R)$ |
+| 목표 | 위양성 0개 보장 (확률적) | 위양성 비율을 낮추기 |
+| $m$ 이 클 때 | 지나치게 보수적 | 현실적이고 유연 |
+| 응용 | 소규모 임상시험, 확증 연구 | 탐색적 분석, GWAS, fMRI |
+| 대표 방법 | Bonferroni, Holm | Benjamini-Hochberg |
+
+### Benjamini-Hochberg (BH) Procedure
+
+::: {.callout-note}
+## Algorithm 13.2: Benjamini-Hochberg Procedure
+
+**입력**: $m$ 개의 p-값 $p_1, \ldots, p_m$, FDR 목표 수준 $q$
+
+1. p-값을 오름차순 정렬: $p_{(1)} \leq p_{(2)} \leq \cdots \leq p_{(m)}$
+2. 다음을 만족하는 최대 인덱스 $L$ 을 찾는다:
+
+$$L = \max\!\left\{j : p_{(j)} < q \cdot \frac{j}{m}\right\} \tag{13.10}$$
+
+3. $p_i \leq p_{(L)}$ 인 모든 $H_{0i}$ 를 기각한다.
+:::
+
+**수식의 기하학적 해석**: p-값들을 순서대로 점으로 찍고, 기울기 $q/m$ 인 직선을 그린다.
+그 직선 아래에 있는 마지막 p-값 $p_{(L)}$ 까지 모두 기각한다.
+
+**수치 예시** ($m = 5$, $q = 0.05$):
+
+| 순위 $j$ | $p_{(j)}$ | $q \cdot j/m = 0.05 \cdot j/5$ | $p_{(j)} < \text{임계값}$? |
+|---------|----------|--------------------------------|--------------------------|
+| 1 | 0.006 | 0.010 | 참 (기각 후보) |
+| 2 | 0.012 | 0.020 | 참 (기각 후보) |
+| 3 | 0.601 | 0.030 | 거짓 |
+| 4 | 0.756 | 0.040 | 거짓 |
+| 5 | 0.918 | 0.050 | 거짓 |
+
+$L = 2$ (마지막으로 임계값보다 작은 순위), $p_{(L)} = 0.012$.
+→ $p_i \leq 0.012$ 인 $H_0$ 들을 기각: 1번째, 2번째 기각.
+
+**BH 보증**: p-값들이 독립적이거나 약하게 의존적이면:
+
+$$\text{FDR} \leq q$$
+
+이는 참인 귀무가설 수 $m_0$ 와 무관하게 성립하며, 거짓 귀무가설의 p-값 분포에도 무관하다.
+
+**BH vs Bonferroni 직관 비교**:
+
+Bonferroni는 "모든 p-값에 동일한 임계값 $\alpha/m$"을 적용하며 데이터에 의존하지 않는다.
+BH는 "정렬된 p-값들을 기울기 $q/m$ 직선과 비교"하며 데이터 전체에 의존한다.
+따라서 BH는 Bonferroni보다 더 많은 가설을 기각하면서 FDR을 제어한다.
+
+---
+
+## 비교: 세 방법의 선택 기준
+
+| 상황 | 권장 방법 | 이유 |
+|------|---------|------|
+| $m$ 이 작고 ($< 20$) 검정들이 독립적 | Bonferroni | 단순, 강건 |
+| $m$ 이 작고 순서화 가능 | Holm | Bonferroni보다 검정력 높음 |
+| 모든 쌍대 비교 ($\binom{G}{2}$ 개) | Tukey | 의존성 구조 활용 |
+| 데이터 기반 임시 비교 | Scheffé | 무한한 비교에도 FWER 제어 |
+| $m$ 이 크고 탐색적 분석 | Benjamini-Hochberg | FDR 제어, 높은 검정력 |
+| $m$ 이 크고 검정 비독립적 (GWAS 등) | 순열 기반 FDR | LD 구조 반영 |
+
+---
+
+## Tukey's Method와 Scheffé's Method
+
+### Tukey's Method (쌍대 비교)
+
+$G$ 개의 평균 $\mu_1, \ldots, \mu_G$ 에 대해 모든 쌍대 비교
+$H_{0jk}: \mu_j = \mu_k$ ($m = \binom{G}{2}$ 개)를 수행할 때, 각 검정이
+독립적이지 않다는 점을 이용하여 Bonferroni보다 덜 보수적인 임계값을 사용한다.
+
+FWER을 $\alpha$ 로 제어하면서 Bonferroni $\alpha/m$ 보다 큰 임계값 $\alpha_T > \alpha/m$
+을 사용할 수 있어 더 많은 쌍대 차이를 검출한다. R의 `TukeyHSD()` 함수가 이를 구현한다.
+
+### Scheffé's Method (임의 선형 대비)
+
+데이터를 보고 나서 선택한 임의의 선형 대비(linear contrast)에 대해 FWER을 제어한다:
+
+$$H_0: \sum_{j=1}^{G} c_j \mu_j = 0, \quad \sum_j c_j = 0$$
+
+Scheffé의 임계값 $\alpha_S$ 는 가능한 모든 선형 대비의 집합 전체에서 FWER을 제어하므로,
+"데이터를 보고 나서 고른 비교"에도 적용할 수 있다. 단, Tukey보다 보수적이다.
+
+---
+
+## 실무 지침
+
+### 언제 어떤 오류 지표를 사용하는가
+
+**FWER을 써야 할 때**:
+- 확증적 임상시험 (1차 평가변수 분석)
+- 규제 기관에 제출하는 통계 분석 (FDA, EMA)
+- 단 하나의 위양성도 허용하기 어려운 상황
+- $m$ 이 작은 경우 (보통 10개 미만)
+
+**FDR을 써야 할 때**:
+- 탐색적 분석 (가설 생성 목적)
+- 유전체, 전사체, 뇌영상 (SNP, 유전자, 복셀 수가 수천~수백만)
+- 후속 검증 실험이 예정된 경우
+- 일부 위양성을 허용할 수 있는 상황
+
+### 공통 실수
+
+1. **보정 없이 다중 비교 수행**: "서브그룹 분석에서 $p < 0.05$" → 보정 없는 위양성
+2. **사후 비교에 Bonferroni 과적용**: 데이터를 보고 고른 비교에 $\alpha/m$ 적용 시
+   $m$ 을 어디까지 셀지 불명확 → Scheffé 사용
+3. **FDR과 q-value 혼동**: Storey의 q-value는 BH FDR과 유사하지만 $m_0$ 를 추정하여
+   더 효율적이다 (Storey, 2002)
+4. **독립성 가정 위반 무시**: BH는 양의 의존성(PRDS 조건)에서도 성립하지만,
+   강한 음의 의존성 하에서는 FDR이 $q$ 를 초과할 수 있다
+
+---
+
+## 코드 예시
+
+### Step 1: 순수 Python — 세 절차 직접 구현
+
+```python
+import numpy as np
+
+def bonferroni(pvalues: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+    """Bonferroni 보정: 임계값 alpha/m으로 기각 여부 반환"""
+    m = len(pvalues)
+    return pvalues <= alpha / m
+
+def holm_stepdown(pvalues: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+    """Holm Step-Down Procedure: 정렬 후 단계적 임계값 적용"""
+    m = len(pvalues)
+    order = np.argsort(pvalues)
+    sorted_p = pvalues[order]
+    
+    reject = np.zeros(m, dtype=bool)
+    for j, p in enumerate(sorted_p):
+        threshold = alpha / (m - j)   # 단계별 임계값 완화
+        if p <= threshold:
+            reject[order[j]] = True
+        else:
+            break  # 처음 초과하면 이후는 모두 기각 안 함
+    return reject
+
+def benjamini_hochberg(pvalues: np.ndarray, q: float = 0.05) -> np.ndarray:
+    """Benjamini-Hochberg Procedure: FDR을 q로 제어"""
+    m = len(pvalues)
+    order = np.argsort(pvalues)
+    sorted_p = pvalues[order]
+    
+    # L = 임계 직선 아래에 있는 마지막 순위
+    below = sorted_p < q * np.arange(1, m + 1) / m  # p_{(j)} < q*j/m
+    if not below.any():
+        return np.zeros(m, dtype=bool)
+    
+    L = np.where(below)[0][-1]  # 마지막으로 통과한 순위
+    threshold = sorted_p[L]
+    return pvalues <= threshold
+
+
+# ── 시뮬레이션 예시 ──────────────────────────────────────────
+rng = np.random.default_rng(42)
+m = 100
+m0 = 90    # 참 귀무가설 수
+m1 = m - m0  # 거짓 귀무가설 수
+
+# 참 귀무가설: p-값이 균등분포
+p_null = rng.uniform(0, 1, size=m0)
+# 거짓 귀무가설: 작은 p-값 (신호 있음)
+p_alt = rng.beta(0.5, 5, size=m1)
+pvalues = np.concatenate([p_null, p_alt])
+true_null = np.array([True]*m0 + [False]*m1)
+
+# 세 방법 적용
+reject_bon = bonferroni(pvalues, alpha=0.05)
+reject_holm = holm_stepdown(pvalues, alpha=0.05)
+reject_bh = benjamini_hochberg(pvalues, q=0.05)
+
+def summary(reject, true_null, name):
+    V = np.sum(reject & true_null)   # 위양성
+    S = np.sum(reject & ~true_null)  # 참양성
+    R = np.sum(reject)
+    FDR_realized = V / R if R > 0 else 0
+    power = S / np.sum(~true_null)
+    print(f"{name:20s} | R={R:3d} | V={V:2d} | S={S:2d} | 실현 FDP={FDR_realized:.2f} | Power={power:.2f}")
+
+print(f"{'방법':20s} | {'기각수':5s} | {'FP':3s} | {'TP':3s} | {'실현 FDP':9s} | {'Power':6s}")
+print("-" * 65)
+summary(reject_bon,  true_null, "Bonferroni")
+summary(reject_holm, true_null, "Holm")
+summary(reject_bh,   true_null, "Benjamini-Hochberg")
+```
+
+### Step 2: statsmodels를 이용한 실무 코드
+
+```python
+from statsmodels.stats.multitest import multipletests
+import numpy as np
+
+rng = np.random.default_rng(42)
+m = 100
+pvalues = np.concatenate([rng.uniform(0, 1, 90), rng.beta(0.5, 5, 10)])
+
+methods = [
+    ("bonferroni", "Bonferroni"),
+    ("holm",       "Holm"),
+    ("fdr_bh",     "Benjamini-Hochberg (FDR)"),
+    ("fdr_by",     "Benjamini-Yekutieli (FDR, 의존적 검정용)"),
+]
+
+for method_code, method_name in methods:
+    reject, pvals_corrected, _, _ = multipletests(pvalues, alpha=0.05, method=method_code)
+    print(f"{method_name:35s}: 기각 수 = {reject.sum():3d}")
+```
+
+### Step 3: BH 절차 기하학적 시각화
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+rng = np.random.default_rng(0)
+m = 50
+pvalues = np.sort(np.concatenate([rng.uniform(0, 1, 45), rng.beta(0.3, 5, 5)]))
+q = 0.05
+
+bh_line = q * np.arange(1, m + 1) / m  # 기울기 q/m 직선
+
+# L 찾기
+below = pvalues < bh_line
+L = np.where(below)[0][-1] if below.any() else -1
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ranks = np.arange(1, m + 1)
+
+# 기각된 p-값 (파란색), 기각 안 된 p-값 (회색)
+colors = ["steelblue" if i <= L else "lightgray" for i in range(m)]
+ax.scatter(ranks, pvalues, c=colors, zorder=3, s=30)
+ax.plot(ranks, bh_line, color="darkorange", linewidth=2, label=f"BH 직선 (기울기 q/m = {q}/{m})")
+ax.axhline(pvalues[L] if L >= 0 else 0, color="steelblue", linestyle="--",
+           label=f"기각 임계값 p_{{({L+1})}} = {pvalues[L]:.4f}" if L >= 0 else "기각 없음")
+
+ax.set_xlabel("p-값 순위 j")
+ax.set_ylabel("p-값")
+ax.set_title(f"Benjamini-Hochberg Procedure (m={m}, q={q})\n"
+             f"파란 점 = 기각 ({L+1}개), 회색 점 = 기각 안 함")
+ax.legend()
+ax.set_ylim(-0.02, 0.5)
+plt.tight_layout()
+plt.savefig("bh_procedure.png", dpi=120)
+plt.show()
+```
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [p-값의 이론적 기초 — Thm 8.3.27, 조건부 p-값, Fisher 정확 검정](./162-p-values.qmd)
+- [검정 평가 — 오류 확률과 검정력 함수, UMP, Neyman-Pearson](./159-power-function.qmd)
+- [동시 추론과 대비 — Scheffé, Tukey, Bonferroni 비교](./130-simultaneous-contrasts.qmd)
+
+**후속 주제**
+
+- [순열 p-값 — 이론적 귀무 분포 없이 p-값 계산하기](./164-permuted-p-value.qmd)
+- [유전체 전장 순열 p-값 — GWAS에서 LD 보존 표현형 순열](./165-genome-wide-permuted-p-value.qmd)
