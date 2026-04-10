@@ -1,0 +1,628 @@
+---
+title: "MRM 추정론 — ML, REML, EM 알고리즘, Fisher Scoring"
+subtitle: "Mixed-Effects Regression Model Estimation: 주변 우도 도출, EM 반복 공식, REML 편향 보정, 알고리즘 수렴"
+description: |
+  MRM의 고정 효과(β), 분산 모수(Σ_v, σ²), 랜덤 효과(v_i)를 동시에 추정하는
+  완전한 추정 이론을 다룬다. 주변 로그 우도 도출, EM 알고리즘 반복 공식,
+  Newton-Raphson/Fisher Scoring, REML의 원리와 한계, ML vs REML 선택 기준까지 포함한다.
+categories:
+  - Statistics
+  - Longitudinal Data Analysis
+author: Kwangmin Kim
+date: 04/10/2026
+format:
+  html:
+    toc: true
+    toc-depth: 4
+execute:
+  eval: false
+draft: false
+---
+
+## 무엇을 추정하는가
+
+MRM에는 세 종류의 미지수가 있다.
+
+| 종류 | 기호 | 설명 | 수 |
+|------|------|------|----|
+| 고정 효과 | $\beta$ | 모집단 평균 회귀계수 | $p$개 |
+| 분산 모수 | $\Sigma_v, \sigma^2$ | 랜덤 효과 공분산, 잔차 분산 | $r(r+1)/2 + 1$개 |
+| 랜덤 효과 | $v_i$ | 피험자별 개인 편차 | $N \times r$개 |
+
+이 세 집합의 미지수를 모두 추정해야 완전한 분석이 가능하다.
+
+핵심 전략은 **역할 분리**다:
+
+- $v_i$ → **경험 베이즈(EB)** 추정
+- $\beta, \Sigma_v, \sigma^2$ → **ML 또는 REML** 추정
+
+두 방법이 교대로 수렴할 때까지 반복한다 — 이것이 EM 알고리즘의 골격이다.
+
+---
+
+## 랜덤 효과를 주변화: 주변 우도 도출
+
+추정의 출발점은 $v_i$를 적분으로 소거하는 것이다.
+
+모형 $y_i = X_i\beta + Z_i v_i + \varepsilon_i$에서 $v_i \sim N(0, \Sigma_v)$, $\varepsilon_i \sim N(0, \sigma^2 I)$이므로,
+$v_i$를 조건으로 하면 $y_i \mid v_i \sim N(X_i\beta + Z_i v_i, \sigma^2 I_{n_i})$다.
+
+$v_i$를 주변화(marginalize)하면:
+
+$$
+y_i \sim N(X_i \beta,\; V_i), \quad V_i = Z_i \Sigma_v Z_i' + \sigma^2 I_{n_i}
+$$
+
+**왜 이 단계가 중요한가?** $v_i$는 잠재변수(latent variable)다. 관측할 수 없는 잠재변수를 포함한 채 우도를 쓰면 다루기 어렵다. $v_i$를 적분으로 소거하면 관측 가능한 $y_i$만의 우도 — **주변 우도(marginal likelihood)** — 가 된다. 이 우도만으로 $\beta$, $\Sigma_v$, $\sigma^2$를 추정할 수 있다.
+
+### 주변 로그 우도
+
+::: {.callout-note}
+## 주변 로그 우도
+
+$$
+\ell(\beta, \Sigma_v, \sigma^2) = \sum_{i=1}^{N} \log p(y_i \mid \beta, \Sigma_v, \sigma^2)
+$$
+
+$$
+= -\frac{1}{2} \sum_{i=1}^{N} \left[ n_i \log(2\pi) + \log|V_i| + (y_i - X_i\beta)' V_i^{-1} (y_i - X_i\beta) \right]
+$$
+:::
+
+세 항의 의미:
+
+| 항 | 역할 |
+|----|------|
+| $n_i \log(2\pi)$ | 정규화 상수 (추정에 영향 없음) |
+| $\log\|V_i\|$ | 공분산 구조의 복잡도 패널티 — $\Sigma_v, \sigma^2$에 의존 |
+| $(y_i - X_i\beta)' V_i^{-1} (y_i - X_i\beta)$ | 가중 잔차 제곱합 — 모든 모수에 의존 |
+
+$V_i^{-1}$이 가중 행렬 역할을 한다. 공분산 구조를 알면 더 정보가 많은 측정에 더 큰 가중치를 줄 수 있다.
+
+$V_i$는 $\Sigma_v$와 $\sigma^2$ 모두에 의존하므로, 이 우도를 $\beta$, $\Sigma_v$, $\sigma^2$에 대해 동시에 최대화해야 한다.
+
+### OLS와의 차이
+
+$\Sigma_v = 0$ (랜덤 효과 없음)이면 $V_i = \sigma^2 I_{n_i}$가 되어:
+
+$$
+\ell = -\frac{1}{2\sigma^2} \sum_{i=1}^{N} (y_i - X_i\beta)' (y_i - X_i\beta) + \text{const}
+$$
+
+이것은 OLS와 동일한 목적함수다. MRM의 주변 우도는 OLS를 공분산 구조가 있는 경우로 일반화한 것이다.
+
+---
+
+## GLS 해: β의 명시적 공식
+
+$\Sigma_v$와 $\sigma^2$가 알려져 있다고 가정하면, $\ell$을 $\beta$에 대해 최대화하는 해가 존재한다.
+
+$$
+\hat{\beta}_{\text{GLS}} = \left( \sum_{i=1}^{N} X_i' V_i^{-1} X_i \right)^{-1} \left( \sum_{i=1}^{N} X_i' V_i^{-1} y_i \right)
+$$
+
+이것이 **일반화 최소제곱(GLS, Generalized Least Squares)** 추정량이다.
+
+OLS와 비교하면 $V_i^{-1}$이 가중 행렬로 들어가 있다. 상관이 높은 시점의 정보를 적절히 할인하여 효율적인 추정이 이루어진다.
+
+실제로 $V_i$는 미지 모수 $\Sigma_v, \sigma^2$를 포함하므로, 이를 추정값 $\hat{V}_i$로 대체한 **FGLS(Feasible GLS)** 를 반복적으로 사용한다.
+
+---
+
+## EM 알고리즘
+
+### 핵심 아이디어
+
+**EM 알고리즘**(Dempster et al., 1977)은 잠재변수 $v_i$를 포함한 불완전 데이터 문제를 두 단계로 해결한다.
+
+- **E-step**: 현재 모수 추정값을 이용해 $v_i$의 기댓값(= EB 추정값)과 사후 분산을 계산한다.
+- **M-step**: E-step에서 계산한 기댓값을 $v_i$ 자리에 대입해 $\beta$, $\sigma^2_v$, $\sigma^2$를 업데이트한다.
+
+이 두 단계를 수렴할 때까지 반복한다.
+
+### E-step: 경험 베이즈 계산
+
+랜덤 절편 모형에서 $v_i$의 EB 추정값과 사후 분산은 (Hedeker & Gibbons, 2006, §4.6):
+
+$$
+\tilde{v}_i = \rho_{n_i n_i} \cdot \frac{1}{n_i} \mathbf{1}_i'(y_i - X_i\beta) = \rho_{n_i n_i} \cdot \bar{e}_i \tag{4.20}
+$$
+
+$$
+\sigma^2_{v|y_i} = \sigma^2_v (1 - \rho_{n_i n_i}) \tag{4.21}
+$$
+
+여기서 $\rho_{n_i n_i}$는 **Spearman-Brown 신뢰도 공식**:
+
+$$
+\rho_{n_i n_i} = \frac{n_i \cdot \text{ICC}}{1 + (n_i - 1) \cdot \text{ICC}}, \quad \text{ICC} = \frac{\sigma^2_v}{\sigma^2_v + \sigma^2}
+$$
+
+**직관**: $\rho_{n_i n_i}$는 0에서 1 사이의 가중치다.
+
+- $\rho = 1$에 가까울 때: $\tilde{v}_i \approx \bar{e}_i$ (개인 잔차 평균 = OLS 추정)
+- $\rho = 0$에 가까울 때: $\tilde{v}_i \approx 0$ (모집단 평균으로 수축)
+
+측정이 많을수록($n_i$ 증가), ICC가 높을수록($\sigma^2_v$가 $\sigma^2$에 비해 클수록) $\rho$가 1에 가까워져 개인 데이터를 신뢰하게 된다.
+
+사후 분산 $\sigma^2_{v|y_i}$도 비슷한 해석:
+- $\rho \to 1$: $\sigma^2_{v|y_i} \to 0$ (데이터가 많아 불확실성 消失)
+- $\rho \to 0$: $\sigma^2_{v|y_i} \to \sigma^2_v$ (데이터가 없어 사전 분산과 같음)
+
+### M-step: 모수 업데이트
+
+E-step에서 얻은 $\tilde{v}_i$와 $\sigma^2_{v|y_i}$를 이용해 세 모수를 업데이트한다.
+
+**고정 효과 $\beta$ 업데이트** (4.22):
+
+$$
+\hat{\beta} = \left[ \sum_{i=1}^{N} X_i' X_i \right]^{-1} \left[ \sum_{i=1}^{N} X_i' (y_i - \mathbf{1}_i \tilde{v}_i) \right]
+$$
+
+$y_i - \mathbf{1}_i \tilde{v}_i$는 랜덤 효과를 제거한 조정 반응 벡터다. OLS에서 $y_i$를 쓰는 자리에 조정된 값을 넣은 것이다.
+
+**랜덤 효과 분산 $\sigma^2_v$ 업데이트** (4.23):
+
+$$
+\hat{\sigma}^2_v = \frac{1}{N} \sum_{i=1}^{N} \left[ \tilde{v}_i^2 + \sigma^2_{v|y_i} \right]
+$$
+
+$$
+= \underbrace{\frac{1}{N} \sum_{i=1}^{N} \tilde{v}_i^2}_{\text{EB 추정값의 표본분산}} + \underbrace{\frac{1}{N} \sum_{i=1}^{N} \sigma^2_{v|y_i}}_{\text{평균 사후 분산}}
+$$
+
+이 공식이 중요한 이유: **$\hat{\sigma}^2_v$는 항상 EB 추정값의 표본분산보다 크다.**
+EB 추정값이 수축(shrinkage)되어 있어 그 분산이 실제 모집단 분산보다 작기 때문이다. 사후 분산 항을 더해 이 수축을 보정한다.
+
+직관적으로: "수축된 추정값의 분산"이 아니라 "수축되기 전 실제 분포의 분산"을 추정해야 한다.
+
+**잔차 분산 $\sigma^2$ 업데이트** (4.24):
+
+$$
+\hat{\sigma}^2 = \frac{1}{N} \sum_{i=1}^{N} \left[ (y_i - X_i\hat{\beta} - \mathbf{1}_i \tilde{v}_i)' (y_i - X_i\hat{\beta} - \mathbf{1}_i \tilde{v}_i) + n_i \sigma^2_{v|y_i} \right]
+$$
+
+잔차 제곱합에 $n_i \sigma^2_{v|y_i}$를 더해 $\tilde{v}_i$ 추정의 불확실성을 보정한다.
+
+### EM 반복 구조
+
+```
+초기값 설정: β⁽⁰⁾, σ²_v⁽⁰⁾, σ²⁽⁰⁾
+t = 0
+repeat:
+    t = t + 1
+    E-step: ICC⁽ᵗ⁾, ρ⁽ᵗ⁾ → ṽᵢ⁽ᵗ⁾, σ²_{v|yᵢ}⁽ᵗ⁾    (4.20, 4.21)
+    M-step: β⁽ᵗ⁾, σ²_v⁽ᵗ⁾, σ²⁽ᵗ⁾ 업데이트      (4.22, 4.23, 4.24)
+until |θ⁽ᵗ⁾ - θ⁽ᵗ⁻¹⁾| < ε (수렴 기준)
+```
+
+EM은 보장된 수렴성(각 반복에서 우도 비감소)을 가지지만 느릴 수 있다.
+
+---
+
+## OLS와의 연결: 랜덤 효과가 사라질 때
+
+$v_i \to 0$이면 ($\sigma^2_v \to 0$, ICC $\to 0$, $\rho \to 0$):
+
+- $\tilde{v}_i \to 0$: 랜덤 효과 추정값이 0으로 수축
+- $\sigma^2_{v|y_i} \to 0$: 사후 분산도 0
+
+M-step 공식들이 OLS 공식으로 퇴화:
+
+$$
+\hat{\beta} \to \left( \sum X_i' X_i \right)^{-1} \sum X_i' y_i \quad \text{(OLS)}
+$$
+
+$$
+\hat{\sigma}^2 \to \frac{1}{N} \sum_{i=1}^{N} (y_i - X_i\hat{\beta})' (y_i - X_i\hat{\beta}) \quad \text{(ML 잔차 분산)}
+$$
+
+**MRM은 OLS의 일반화다.** 피험자 내 의존성이 없으면 OLS와 동일한 답을 준다.
+
+---
+
+## Fisher Scoring (Newton-Raphson 계열)
+
+EM이 안정적이지만 느린 반면, **Fisher Scoring**은 더 빠른 수렴을 제공한다 (Longford, 1987).
+
+### 기본 원리
+
+Newton-Raphson은 현재 추정값 $\theta^{(t)}$에서 목적함수를 이차 근사한 후 최솟값으로 한 번에 이동한다:
+
+$$
+\theta^{(t+1)} = \theta^{(t)} - H^{-1}(\theta^{(t)}) \cdot g(\theta^{(t)})
+$$
+
+- $g(\theta)$: 로그 우도의 1차 도함수 벡터 (Score vector)
+- $H(\theta)$: 로그 우도의 2차 도함수 행렬 (Hessian)
+
+### Fisher Scoring의 차이
+
+Hessian의 기댓값 (Fisher 정보 행렬)을 사용한다:
+
+$$
+\theta^{(t+1)} = \theta^{(t)} + \mathcal{I}^{-1}(\theta^{(t)}) \cdot g(\theta^{(t)})
+$$
+
+$$
+\mathcal{I}(\theta) = -E\left[ \frac{\partial^2 \ell}{\partial \theta \partial \theta'} \right]
+$$
+
+Fisher 정보 행렬을 쓰면 Hessian보다 계산이 안정적이고, 항상 양정치(positive definite) 성질이 보장된다.
+
+**수렴 속도 비교**:
+
+| 알고리즘 | 수렴 속도 | 안정성 | 계산 비용 |
+|----------|-----------|--------|-----------|
+| EM | 선형 | 매우 안정 | 낮음 |
+| Fisher Scoring | 이차 (near quadratic) | 안정 | 중간 |
+| Newton-Raphson | 이차 | 초기값 민감 | 높음 |
+
+실제 소프트웨어(lme4, nlme, SAS PROC MIXED)는 Fisher Scoring 또는 이와 동등한 알고리즘을 사용하며, EM은 초기값 설정에 활용된다.
+
+---
+
+## ML 편향과 REML
+
+### ML의 문제: 분산 모수 과소 추정
+
+ML은 $\beta$의 추정 불확실성을 무시하고 분산을 추정하기 때문에 편향이 생긴다.
+
+일반 선형 회귀에서 이 현상은 잘 알려져 있다:
+
+$$
+\hat{\sigma}^2_{\text{ML}} = \frac{SSE}{N} \quad \text{(편향)} \tag{4.26}
+$$
+
+$$
+\hat{\sigma}^2_{\text{OLS}} = \frac{SSE}{N - p - 1} \quad \text{(비편향)} \tag{4.27}
+$$
+
+$N - p - 1$이 아닌 $N$으로 나누는 이유: ML은 $\beta$가 **알려진 값**인 것처럼 가정하고 분산을 추정한다.
+하지만 실제로는 $\hat{\beta}$를 추정하는 과정에서 자유도 $p+1$개가 소모된다. 이를 무시하면 분산이 과소 추정된다.
+
+MRM에서도 같은 현상이 일어난다. $N - p$가 충분히 크면 차이는 작지만, 표본이 적거나 고정 효과가 많으면 편향이 눈에 띈다.
+
+### REML: 제한적 최대 우도
+
+**REML(Restricted Maximum Likelihood)**은 고정 효과 추정 불확실성을 보정한 우도를 최대화한다 (Patterson & Thompson, 1971).
+
+핵심 아이디어: $\beta$에 관한 정보를 포함하지 않는 **잔차의 공간**에서 우도를 계산한다.
+
+구체적으로, REML은 다음 변환을 적용한다:
+
+$$
+\ell_{\text{REML}} = \ell_{\text{ML}} - \frac{1}{2} \log \left| \sum_{i=1}^{N} X_i' V_i^{-1} X_i \right|
+$$
+
+마지막 항 $\frac{1}{2}\log|\sum X_i' V_i^{-1} X_i|$는 고정 효과 추정에 따른 정보 손실을 보정한다.
+
+**분산 모수 편향 보정**: REML로 추정된 $\hat{\sigma}^2_v$와 $\hat{\sigma}^2$는 ML보다 크게 나온다. 일반 회귀에서 $N$으로 나누는 대신 $N-p-1$로 나누는 것과 유사하다.
+
+### ML vs REML: 언제 무엇을 쓰는가
+
+::: {.callout-important}
+## 핵심 규칙
+
+| 비교 상황 | 사용할 방법 | 이유 |
+|-----------|------------|------|
+| 고정 효과가 다른 두 모형 비교 | **ML** | REML은 서로 다른 고정 효과를 가진 모형 사이에서 비교 불가 |
+| 분산 구조가 다른 두 모형 비교 (같은 고정 효과) | **REML** | 분산 모수 추정이 더 정확 |
+| 최종 분산 모수 보고 | **REML** | 편향 보정 |
+| 고정 효과 Wald 검정 | ML 또는 REML 무관 | 고정 효과 추정값 자체는 크게 다르지 않음 |
+:::
+
+**구체적인 실수 예시**: 다음 두 모형을 REML LRT로 비교하면 잘못된 결과가 나온다.
+
+```
+모형 A (REML): hdrs ~ week + (1 + week | id)
+모형 B (REML): hdrs ~ week + diag + (1 + week | id)
+```
+
+고정 효과(week vs week+diag)가 다르기 때문에 REML 우도가 서로 다른 공간에서 정의된다. 반드시 ML로 적합 후 LRT를 수행해야 한다.
+
+반면 다음은 REML으로 비교할 수 있다:
+
+```
+모형 A (REML): hdrs ~ week + diag + (1 | id)          # 랜덤 절편만
+모형 B (REML): hdrs ~ week + diag + (1 + week | id)   # 랜덤 절편+기울기
+```
+
+고정 효과가 동일하므로 REML LRT 가능.
+
+### REML LRT와 경계 문제
+
+분산 모수에 대한 LRT는 귀무가설이 모수 공간의 경계에 있다:
+
+$$
+H_0: \sigma^2_{v1} = 0 \quad \text{(분산은 0 이상이어야 함)}
+$$
+
+이 경우 검정 통계량이 $\chi^2(1)$이 아닌 50:50 혼합 분포를 따른다. 실무 관행:
+
+$$
+p_{\text{adjusted}} = \frac{1}{2} p_{\chi^2(1)} + \frac{1}{2} p_{\chi^2(0)} \approx \frac{1}{2} p_{\text{naive}}
+$$
+
+즉 소프트웨어가 출력한 p값을 2로 나누거나, $\chi^2$ 검정값이 충분히 크면 보정 여부와 무관하게 결론을 내릴 수 있다.
+
+---
+
+## 수렴 문제와 진단
+
+### 수렴 실패의 원인
+
+| 원인 | 진단 | 해결 |
+|------|------|------|
+| 모형 과복잡 | 분산 추정값이 0 또는 음수 | 랜덤 기울기 제거 또는 공분산 0으로 고정 |
+| 척도 불일치 | 공변수 값 범위 차이가 큼 | 공변수 표준화 |
+| 극단적 초기값 | 반복이 발산 | 초기값 변경, EM으로 예열 |
+| 표본 부족 | 분산 추정 불안정 | 모형 단순화 |
+| 수치 정밀도 | Hessian 특이(singular) | 공분산 구조 재설정 |
+
+### 수렴 판정
+
+```
+수렴 기준 (일반적):
+  max|θ⁽ᵗ⁾ - θ⁽ᵗ⁻¹⁾| < 1e-6   (절대 변화)
+또는
+  max|θ⁽ᵗ⁾ - θ⁽ᵗ⁻¹⁾| / (|θ⁽ᵗ⁻¹⁾| + 1e-8) < 1e-6  (상대 변화)
+```
+
+lme4의 기본 수렴 체크는 gradient 기반이다:
+```
+경고: Model failed to converge with max|grad| = X
+```
+
+---
+
+## 구현 코드
+
+### Python — EM 알고리즘 직접 구현 (랜덤 절편 모형)
+
+```python
+import numpy as np
+
+def em_random_intercept(X, y, group, max_iter=200, tol=1e-6, verbose=True):
+    """
+    랜덤 절편 MRM EM 알고리즘 (ML 추정)
+    X: (N_obs, p) 고정 효과 설계 행렬
+    y: (N_obs,) 반응 벡터
+    group: (N_obs,) 피험자 ID 배열
+    """
+    groups = np.unique(group)
+    N = len(groups)          # 피험자 수
+    N_obs = len(y)           # 전체 관측 수
+
+    # 초기값: OLS
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]
+    sigma2_v = np.var(y) * 0.3
+    sigma2   = np.var(y) * 0.7
+
+    log_lik_prev = -np.inf
+
+    for iteration in range(max_iter):
+        # ===== E-step: EB 추정 =====
+        v_tilde = np.zeros(N)
+        post_var = np.zeros(N)
+
+        for k, gid in enumerate(groups):
+            mask = (group == gid)
+            y_i  = y[mask]
+            X_i  = X[mask]
+            n_i  = mask.sum()
+
+            # ICC와 신뢰도
+            icc = sigma2_v / (sigma2_v + sigma2)
+            rho = n_i * icc / (1 + (n_i - 1) * icc)
+
+            # 개인 잔차 평균
+            residual = y_i - X_i @ beta
+            e_bar = residual.mean()
+
+            v_tilde[k] = rho * e_bar              # (4.20)
+            post_var[k] = sigma2_v * (1 - rho)     # (4.21)
+
+        # ===== M-step: 모수 업데이트 =====
+        # β 업데이트 (4.22)
+        XtX = np.zeros((X.shape[1], X.shape[1]))
+        Xty_adj = np.zeros(X.shape[1])
+        for k, gid in enumerate(groups):
+            mask = (group == gid)
+            X_i = X[mask]
+            y_adj = y[mask] - v_tilde[k]  # 랜덤 효과 제거
+            XtX += X_i.T @ X_i
+            Xty_adj += X_i.T @ y_adj
+        beta = np.linalg.solve(XtX, Xty_adj)
+
+        # σ²_v 업데이트 (4.23)
+        sigma2_v = (np.sum(v_tilde**2) + np.sum(post_var)) / N
+
+        # σ² 업데이트 (4.24)
+        sse = 0.0
+        for k, gid in enumerate(groups):
+            mask = (group == gid)
+            y_i = y[mask]
+            X_i = X[mask]
+            n_i = mask.sum()
+            resid = y_i - X_i @ beta - v_tilde[k]
+            sse += resid @ resid + n_i * post_var[k]
+        sigma2 = sse / N_obs
+
+        # 수렴 판정 (주변 로그 우도)
+        log_lik = 0.0
+        for k, gid in enumerate(groups):
+            mask = (group == gid)
+            y_i = y[mask]
+            X_i = X[mask]
+            n_i = mask.sum()
+            mu_i = X_i @ beta
+            V_i  = sigma2_v * np.ones((n_i, n_i)) + sigma2 * np.eye(n_i)
+            sign, logdet = np.linalg.slogdet(V_i)
+            diff = y_i - mu_i
+            log_lik -= 0.5 * (n_i * np.log(2*np.pi) + logdet
+                               + diff @ np.linalg.solve(V_i, diff))
+
+        if verbose and iteration % 20 == 0:
+            print(f"Iter {iteration:3d}: logL={log_lik:.4f}, "
+                  f"β={np.round(beta,3)}, σ²_v={sigma2_v:.4f}, σ²={sigma2:.4f}")
+
+        if abs(log_lik - log_lik_prev) < tol:
+            print(f"수렴: {iteration+1}회 반복, logL={log_lik:.4f}")
+            break
+        log_lik_prev = log_lik
+
+    return beta, sigma2_v, sigma2, v_tilde, post_var
+
+
+# Reisby 데이터 적용
+import pandas as pd
+
+reisby = pd.read_csv("reisby.csv")
+
+# 고정 효과 설계 행렬: [절편, week]
+X_design = np.column_stack([np.ones(len(reisby)), reisby["week"].values])
+y_obs    = reisby["hdrs"].values
+group_id = reisby["id"].values
+
+beta_hat, sv2_hat, s2_hat, v_hat, pv_hat = em_random_intercept(
+    X_design, y_obs, group_id, verbose=True
+)
+
+print(f"\n최종 추정:")
+print(f"β₀ = {beta_hat[0]:.3f}")
+print(f"β₁ = {beta_hat[1]:.3f}")
+print(f"σ²_v = {sv2_hat:.3f}")
+print(f"σ²   = {s2_hat:.3f}")
+print(f"ICC  = {sv2_hat / (sv2_hat + s2_hat):.3f}")
+```
+
+### Python — statsmodels mixedlm (ML vs REML 비교)
+
+```python
+import statsmodels.formula.api as smf
+
+reisby = pd.read_csv("reisby.csv")
+
+# ML 추정
+fit_ml = smf.mixedlm("hdrs ~ week", reisby, groups=reisby["id"]).fit(
+    method="lbfgs", reml=False
+)
+
+# REML 추정
+fit_reml = smf.mixedlm("hdrs ~ week", reisby, groups=reisby["id"]).fit(
+    method="lbfgs", reml=True
+)
+
+print("=== ML 추정 ===")
+print(f"β₀={fit_ml.fe_params['Intercept']:.3f}, β₁={fit_ml.fe_params['week']:.3f}")
+print(f"σ²_v={fit_ml.cov_re.iloc[0,0]:.3f}, σ²={fit_ml.scale:.3f}")
+print(f"-2logL={-2*fit_ml.llf:.3f}")
+
+print("\n=== REML 추정 ===")
+print(f"β₀={fit_reml.fe_params['Intercept']:.3f}, β₁={fit_reml.fe_params['week']:.3f}")
+print(f"σ²_v={fit_reml.cov_re.iloc[0,0]:.3f}, σ²={fit_reml.scale:.3f}")
+
+# 고정 효과 비교 LRT (반드시 ML 사용)
+fit_ml_null = smf.mixedlm("hdrs ~ 1", reisby, groups=reisby["id"]).fit(
+    method="lbfgs", reml=False
+)
+lrt_stat = -2 * (fit_ml_null.llf - fit_ml.llf)
+from scipy.stats import chi2
+p_val = 1 - chi2.cdf(lrt_stat, df=1)
+print(f"\nLRT (week 효과): χ²={lrt_stat:.3f}, p={p_val:.4f}")
+```
+
+### R — lme4 ML/REML 비교
+
+```r
+library(lme4)
+library(lmerTest)
+
+reisby <- read.csv("reisby.csv")
+
+# ML 추정
+fit_ml <- lmer(hdrs ~ week + (1 | id), data = reisby, REML = FALSE)
+
+# REML 추정
+fit_reml <- lmer(hdrs ~ week + (1 | id), data = reisby, REML = TRUE)
+
+cat("=== ML vs REML 분산 모수 비교 ===\n")
+cat("ML σ²_v: ", as.data.frame(VarCorr(fit_ml))$vcov[1], "\n")
+cat("ML σ²:   ", sigma(fit_ml)^2, "\n")
+cat("REML σ²_v:", as.data.frame(VarCorr(fit_reml))$vcov[1], "\n")
+cat("REML σ²:  ", sigma(fit_reml)^2, "\n")
+
+# 고정 효과 LRT (반드시 ML로)
+fit_ml_null <- lmer(hdrs ~ 1 + (1 | id), data = reisby, REML = FALSE)
+anova(fit_ml_null, fit_ml)  # LRT: week 효과
+
+# 분산 구조 LRT (REML 가능 — 고정 효과 동일)
+fit_ri   <- lmer(hdrs ~ week + (1 | id),          data = reisby, REML = FALSE)
+fit_rits <- lmer(hdrs ~ week + (1 + week | id),   data = reisby, REML = FALSE)
+anova(fit_ri, fit_rits)  # LRT: 랜덤 기울기 필요성 (ML로 수행 후 p/2 보정 고려)
+
+# REML 버전 — 분산 구조만 비교 시
+fit_ri_reml   <- lmer(hdrs ~ week + (1 | id),        data = reisby, REML = TRUE)
+fit_rits_reml <- lmer(hdrs ~ week + (1 + week | id), data = reisby, REML = TRUE)
+anova(fit_ri_reml, fit_rits_reml)  # 가능하지만 일반적으로 ML 권장
+
+# 경계 보정 LRT (분산 모수)
+lrt_df2 <- anova(fit_ri, fit_rits)
+p_naive <- lrt_df2["fit_rits", "Pr(>Chisq)"]
+cat(sprintf("\nLRT p (naive): %.4f\n", p_naive))
+cat(sprintf("LRT p (경계 보정 /2): %.4f\n", p_naive / 2))
+
+# 최종 REML 보고
+fit_final <- lmer(hdrs ~ week + (1 + week | id), data = reisby, REML = TRUE)
+summary(fit_final)
+
+# 수렴 경고 확인
+if (!is.null(fit_final@optinfo$conv$lme4)) {
+  cat("수렴 경고:", fit_final@optinfo$conv$lme4$messages, "\n")
+} else {
+  cat("수렴 정상\n")
+}
+```
+
+---
+
+## ML과 REML: Reisby 수치 비교
+
+랜덤 절편 모형에서 실제 차이를 살펴보면:
+
+| 모수 | ML | REML |
+|------|-----|------|
+| $\hat{\beta}_0$ | 23.55 | 23.55 |
+| $\hat{\beta}_1$ | -2.38 | -2.38 |
+| $\hat{\sigma}^2_v$ | 약 15.8 | 16.15 |
+| $\hat{\sigma}^2$ | 약 18.6 | 19.04 |
+
+고정 효과($\hat{\beta}$)는 거의 동일하지만, 분산 모수는 REML이 약간 크다. 표본 크기($N=66$)가 충분히 크므로 차이가 작다. 표본이 적을수록 차이가 커진다.
+
+---
+
+## 정리
+
+| 항목 | 내용 |
+|------|------|
+| 추정 대상 | $\beta$ (고정 효과), $\Sigma_v, \sigma^2$ (분산), $v_i$ (개인 랜덤 효과) |
+| 핵심 기법 | 분리 전략: $v_i$는 EB, 나머지는 ML/REML |
+| 주변 우도 | $v_i$ 적분 소거 → $y_i \sim N(X_i\beta, V_i)$ |
+| EM 알고리즘 | E-step(EB) + M-step(모수 업데이트) 반복, 보장된 수렴 |
+| Fisher Scoring | 이차 수렴, 빠르지만 초기값 민감 |
+| ML 편향 | 분산 모수 과소 추정 (자유도 미보정) |
+| REML | 분산 편향 보정, 단 고정 효과 다른 모형 LRT 불가 |
+| 실무 규칙 | 모형 선택 LRT → ML; 최종 분산 보고 → REML |
+
+## 관련 주제
+
+**선행 지식**
+
+- [랜덤 절편 MRM — 모형 구조, 복합대칭, ICC](./32-random-intercept-mrm.qmd)
+- [MRM 행렬 공식화 — 결합 분포, EB 공식](./34-matrix-formulation-mrm.qmd)
+
+**후속 주제**
+
+- [공분산 구조 선택 — AR(1), 비구조적, 정보기준](./36-covariance-structure-selection.qmd)
+- [다항식 추세 MRM — 이차·직교 다항식 종단 모형](./36-polynomial-trend-mrm.qmd)
