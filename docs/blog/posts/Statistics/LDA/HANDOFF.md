@@ -40,8 +40,9 @@ description: >
 | `31-simple-linear-regression-for-mrm.qmd` | 단순 선형회귀 — MRM 출발점 | Ch.4 §4.2 | 완료 |
 | `32-random-intercept-mrm.qmd` | 랜덤 절편 MRM | Ch.4 §4.3 | 완료 |
 | `33-random-intercept-trend-mrm.qmd` | 랜덤 절편·추세 MRM | Ch.4 §4.4-§4.5 | 완료 |
+| `34-matrix-formulation-mrm.qmd` | MRM 행렬 공식화 | Ch.4 §4.5 전체 | 완료 |
 
-**다음 작업**: Ch.5 이후 (추정 심화, ML/REML 비교) → `34-` 번호부터 작성
+**다음 작업**: Ch.5 (ML/REML 추정) → `35-` 번호부터 작성
 
 ---
 
