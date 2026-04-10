@@ -1,0 +1,257 @@
+---
+title: "VS Code Jupyter 커널 연결은 됐는데 셀이 실행 안 되는 문제"
+subtitle: "Python 확장 인터프리터 디스커버리 실패와 Python Environment Extension 충돌"
+description: |
+  VS Code에서 Jupyter 커널이 "Started" 상태임에도 셀이 실행되지 않는 현상을 진단한다.
+  환경·커널·kernelspec이 전부 정상인데도 셀 번호가 [ ]에서 멈추는 경우, Python 확장의
+  인터프리터 디스커버리 실패가 원인이다. VS Code를 우회한 직접 진단 기법과 결정적 해결 절차를 정리한다.
+categories:
+  - Engineering
+  - DevOps
+  - Python
+author: Kwangmin Kim
+date: 04/10/2026
+---
+
+## 개요
+
+VS Code에서 Jupyter 커널 선택은 정상이고 출력 패널에 `Kernel successfully started`까지 찍히는데,
+셀을 실행하면 왼쪽 셀 번호가 `[ ]`에서 변하지 않는다. Restart Kernel을 해도 동일하고,
+작업관리자에는 `python.exe` 프로세스가 좀비처럼 누적된다.
+
+이 포스트는 환경 자체는 멀쩡하지만 **VS Code와 커널 사이의 메시지 채널이 끊긴 상태**를 진단하고 해결한다.
+ZMQ 소켓 충돌([ZMQ 소켓 충돌 포스트](./02.vscode-jupyter-kernel-zmq.qmd))이나
+settings.json 설정 충돌([settings.json 충돌 포스트](../Poetry/03.vscode-jupyter-kernel-conflict.qmd))과 증상이 비슷해 보이지만 원인과 해결책이 다르다.
+
+---
+
+## 증상
+
+- VS Code에서 노트북을 열고 셀을 실행해도 왼쪽 셀 번호가 `[ ]`에서 변하지 않음
+- 커널 선택은 정상적으로 되고, 출력 패널에 `Kernel successfully started`까지 찍힘
+- Restart Kernel을 해도 동일 — 메시지 채널이 끊긴 듯한 상태
+- 작업관리자에 `python.exe` 프로세스가 8~9개씩 누적됨 (좀비 커널들)
+- 강제 종료 → 다시 열기 → 또 같은 증상의 무한 반복
+
+---
+
+## 진단: 문제가 아닌 것부터 배제한다
+
+### 1단계 — 커널 자체는 정상인가
+
+가장 먼저 의심하는 것은 venv의 ipykernel이나 의존성이 깨졌을 가능성이다.
+venv Python으로 직접 import 테스트를 한다.
+
+```bash
+"$VENV/python.exe" -c "
+import ipykernel; print('ipykernel:', ipykernel.__version__)
+import jupyter_client; print('jupyter_client:', jupyter_client.__version__)
+import zmq; print('pyzmq:', zmq.__version__)
+"
+```
+
+모두 정상적으로 import되면 의존성 문제가 아니다.
+
+### 2단계 — VS Code를 우회해 커널에 직접 메시지를 보낸다
+
+커널이 VS Code 없이도 동작하는지 확인하는 가장 빠른 진단 방법이다.
+`jupyter_client`로 직접 커널 프로세스를 시작하고 코드를 실행해본다.
+
+```python
+from jupyter_client.manager import start_new_kernel
+
+km, kc = start_new_kernel(kernel_name='data-standardization')
+kc.execute("print(1+1)")
+
+while True:
+    msg = kc.get_iopub_msg(timeout=10)
+    if msg['msg_type'] == 'stream':
+        print('output:', msg['content']['text'])
+    elif msg['content'].get('execution_state') == 'idle':
+        break
+```
+
+이 테스트에서 `output: 2` 가 출력되면 **커널은 100% 정상**이다.
+시작도 되고, 코드도 실행되고, 결과도 돌아온다는 뜻이다.
+즉 문제는 커널이 아니라 **VS Code와 커널 사이의 통신**에 있다.
+
+::: {.callout-tip}
+## 진단 원칙
+
+커널이 정상임이 확인된 이상, 그 다음은 무조건 **VS Code 확장 측 문제**로 좁혀진다.
+환경 점검을 계속하는 것은 시간 낭비다.
+:::
+
+### 3단계 — kernelspec도 정상인가
+
+VS Code가 어떤 인터프리터를 호출하는지 확인하기 위해 등록된 모든 kernelspec을 점검한다.
+
+```python
+from pathlib import Path
+import json
+
+base = Path('~/AppData/Roaming/jupyter/kernels').expanduser()
+for kdir in sorted(base.iterdir()):
+    spec = json.load(open(kdir / 'kernel.json'))
+    py = spec['argv'][0]
+    print(f'{kdir.name}: {"OK" if Path(py).exists() else "MISSING"}')
+```
+
+모든 kernelspec의 인터프리터 경로가 실제로 존재하면 stale kernelspec 문제가 아니다.
+
+### 4단계 — connection file 누적 확인
+
+`~/AppData/Roaming/jupyter/runtime/` 폴더를 확인한다.
+`kernel-*.json` 연결 파일이 수십~수백 개 누적되어 있으면 정상 종료되지 못한 커널들의 흔적이다.
+직접적인 원인은 아니지만 누적되면 충돌 가능성이 있어 일괄 정리한다.
+
+```bash
+rm -f ~/AppData/Roaming/jupyter/runtime/kernel-*.json
+```
+
+이것만으로는 증상이 해결되지 않는다.
+
+---
+
+## 진짜 원인: Python 확장의 인터프리터 디스커버리 실패
+
+VS Code Jupyter 출력 패널을 자세히 보면 결정적인 단서가 있다.
+
+```
+[warn] No interpreter with path ~\Desktop\projects\data_standardization\.venv\Scripts\python.exe
+       found in Python API, will convert Uri path to string as Id ...
+[warn] No interpreter with path ~\AppData\Local\miniconda3\envs\gov\python.exe
+       found in Python API ...
+```
+
+**Jupyter 확장이 Python 확장의 API에 인터프리터 정보를 요청했지만,
+Python 확장의 등록부에 해당 경로가 없어서 fallback 모드로 전환된 것이다.**
+
+Python 확장이 venv를 자기 등록부에 추가하지 못한 상태에서 셀 실행 메시지의 라우팅이
+불완전하게 처리되어 셀이 `[ ]`에서 멈춰버린다.
+
+### 보조 요인: Python Environment Extension의 충돌
+
+비교적 새로 등장한 별도 확장 `Python Environment Extension (1.26.0)`이 설치되어 있으면
+워크스페이스 `.vscode/settings.json`에 다음 설정을 자동 주입한다.
+
+```json
+"python-envs.defaultEnvManager": "ms-python.python:poetry",
+"python-envs.defaultPackageManager": "ms-python.python:poetry"
+```
+
+이 프로젝트가 Poetry 기반이라는 라벨링 자체는 틀리지 않지만, 새 확장이
+기존 Python 확장의 인터프리터 관리와 충돌하면서 venv 등록이 깨지는 시너지 효과가 있다.
+
+### 원인 구조
+
+```
+Python 확장(2026.4.0) 인터프리터 디스커버리 실패
+  ↓
+Python Environment Extension이 settings.json에 자동 주입한 설정이 충돌
+  ↓
+Jupyter 확장이 Python API에 인터프리터를 요청 → 등록부에 없음 → fallback 모드
+  ↓
+셀 실행 메시지 라우팅 불완전 → 셀이 [ ]에서 멈춤
+```
+
+---
+
+## 해결 절차
+
+### 1단계: Python Environment Extension 비활성화
+
+`Ctrl+Shift+X` → "Python Environments" 검색 → **Disable (Workspace)**.
+
+자동 주입된 설정도 제거한다.
+
+```json
+// .vscode/settings.json — 아래 두 줄 제거
+"python-envs.defaultEnvManager": "ms-python.python:poetry",
+"python-envs.defaultPackageManager": "ms-python.python:poetry"
+```
+
+### 2단계: stale connection file 정리
+
+```bash
+rm -f ~/AppData/Roaming/jupyter/runtime/kernel-*.json
+```
+
+### 3단계: 인터프리터 명시 선택
+
+`Ctrl+Shift+P` → **"Python: Select Interpreter"** → 프로젝트 venv 선택.
+
+이것만으로는 다음 reload 후 다시 풀려버리는 경우가 있다.
+
+### 4단계: Python 확장 캐시 클리어 (결정타)
+
+```
+Ctrl+Shift+P → "Python: Clear Cache and Reload Window"
+```
+
+이 단계가 핵심이다. Python 확장이 인터프리터 등록부를 처음부터 다시 빌드하면서
+venv가 정상 인식되고, 이후 셀 실행이 정상화된다.
+
+---
+
+## 남은 노이즈: warning 로그는 계속 출력될 수 있다
+
+캐시 클리어 후 셀 실행은 풀리지만, **출력 패널의 warning 로그는 여전히 남아 있다**.
+
+```
+[warn] No interpreter with path ~\Desktop\projects\...\.venv\Scripts\python.exe
+       found in Python API
+```
+
+아래를 시도해도 warning은 사라지지 않는다.
+
+```json
+"python.venvFolders": [".venv"]
+```
+
+이는 Python 확장(2026.4.0)이 venv를 자기 환경 API의 known list에 등록하지 못하는
+내부 버그로 보인다. Jupyter 확장이 fallback 모드(path를 string ID로 변환)로 작동하기 때문에
+**실제 작동에는 영향이 없다.** warning은 무시 가능한 cosmetic noise다.
+
+근본 해결을 원한다면 Python 확장을 안정 버전(2025.x)으로 다운그레이드하는 방법이 있으나,
+다른 기능과의 호환성 리스크가 있어 신중히 결정해야 한다.
+
+---
+
+## 재발 시 체크리스트
+
+| 순서 | 조치 | 효과 |
+|------|------|------|
+| 1 | `Python: Clear Cache and Reload Window` | 인터프리터 등록부 재빌드 (가장 효과 큼) |
+| 2 | `Python: Select Interpreter` → venv 선택 → Reload Window | 인터프리터 명시 캐싱 |
+| 3 | `runtime/kernel-*.json` 일괄 삭제 | 수십~수백 개 누적 시 |
+| 4 | Python Environment Extension 워크스페이스 비활성화 | 자동 주입 설정 충돌 방지 |
+| 5 | 작업관리자에서 좀비 `python.exe` 프로세스 종료 | 누적 프로세스 정리 |
+| 6 | Python 확장 안정 버전으로 다운그레이드 | 최후 수단 |
+
+---
+
+## 교훈
+
+- **"커널 연결 실패"라는 증상은 여러 다른 문제의 공통 표현이다.** 커널 자체가 죽었는지,
+  kernelspec이 잘못됐는지, VS Code 확장의 메시지 라우팅이 깨졌는지를 분리해서 확인해야 한다.
+- **VS Code를 우회한 직접 테스트**(jupyter_client로 메시지 송수신)가 가장 빠른 1차 진단 방법이다.
+  커널이 정상임이 확인되면 그 다음은 무조건 확장 측 문제로 좁혀진다.
+- 출력 패널의 warning 로그는 가벼워 보여도 종종 결정적인 단서를 담고 있다.
+  `Successfully started` 같은 info 로그만 보지 말고 warn 위치를 추적하면 root cause가 드러난다.
+- **VS Code 확장 업데이트는 양날의 검이다.** 최신 버전이 새로운 버그를 가져올 수 있으며,
+  특히 Python 확장처럼 환경 디스커버리가 복잡한 경우 더 그렇다.
+
+---
+
+## 관련 주제
+
+**같은 증상, 다른 원인**
+
+- [VS Code Jupyter 커널 무응답 — ZMQ 소켓 충돌](./02.vscode-jupyter-kernel-zmq.qmd) — 두 Python 프로세스가 같은 ZMQ 포트를 선점하는 경우
+- [VS Code Jupyter 커널 연결 실패 — settings.json 충돌](../Poetry/03.vscode-jupyter-kernel-conflict.qmd) — kernelCreationMode + preferredKernelSpec + defaultInterpreterPath 3중 충돌
+
+**선행 지식**
+
+- [VS Code Introduction & Installation](./01.vscode_install.qmd) — VS Code 기본 설치
+- [Poetry - 가상환경 관리](../Poetry/04.poetry-virtualenv.qmd) — pyenv + poetry venv 구성
