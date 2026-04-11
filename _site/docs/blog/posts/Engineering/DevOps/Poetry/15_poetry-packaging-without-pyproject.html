@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.5.56">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="Python 패키지 설치 도구(pip, Poetry)는 pyproject.toml 또는 setup.py가 없는 repo를 패키지로 인식하지 못한다. 이 글에서는 패키지화 조건의 일반 원칙을 먼저 정리하고, 수정 권한이 없거나 PR을 통해서만 반영 가능한 외부 repo에 pyproject.toml을 추가하고 Poetry로 설치하는 전체 흐름을 다룬다. 비표준 디렉토리 매핑, archive 상태 우회, local path 임시 설치, git URL 전환까지 포함한다.">
+
+<title>pyproject.toml 없는 외부 repo 패키지화 전략 – Kwangmin Kim</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../../">
+<script src="../../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+
+<link rel="stylesheet" href="../../../../../../styles.css">
+<meta property="og:title" content="pyproject.toml 없는 외부 repo 패키지화 전략 – Kwangmin Kim">
+<meta property="og:description" content="Python 패키지 설치 도구(pip, Poetry)는 pyproject.toml 또는 setup.py가 없는 repo를 패키지로 인식하지 못한다. 이 글에서는 패키지화 조건의 일반 원칙을 먼저 정리하고, 수정 권한이 없거나 PR을 통해서만 반영 가능한 외부 repo에 pyproject.toml을 추가하고 Poetry로 설치하는 전체 흐름을 다룬다. 비표준 디렉토리 매핑, archive 상태 우회, local path 임시 설치, git URL 전환까지 포함한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">pyproject.toml 없는 외부 repo 패키지화 전략</h1>
+            <p class="subtitle lead">setuptools 설정 작성, 비표준 디렉토리 매핑, PR 반영 흐름</p>
+                  <div>
+        <div class="description">
+          <p>Python 패키지 설치 도구(pip, Poetry)는 pyproject.toml 또는 setup.py가 없는 repo를 패키지로 인식하지 못한다. 이 글에서는 패키지화 조건의 일반 원칙을 먼저 정리하고, 수정 권한이 없거나 PR을 통해서만 반영 가능한 외부 repo에 pyproject.toml을 추가하고 Poetry로 설치하는 전체 흐름을 다룬다. 비표준 디렉토리 매핑, archive 상태 우회, local path 임시 설치, git URL 전환까지 포함한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Engineering</div>
+                <div class="quarto-category">DevOps</div>
+                <div class="quarto-category">Python</div>
+                <div class="quarto-category">Poetry</div>
+                <div class="quarto-category">Security</div>
+                <div class="quarto-category">SSH</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2025년 03월 09일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#개요" id="toc-개요" class="nav-link active" data-scroll-target="#개요"><span class="header-section-number">1</span> 개요</a>
+  <ul class="collapse">
+  <li><a href="#이-글이-다루는-상황" id="toc-이-글이-다루는-상황" class="nav-link" data-scroll-target="#이-글이-다루는-상황"><span class="header-section-number">1.1</span> 이 글이 다루는 상황</a></li>
+  </ul></li>
+  <li><a href="#python-패키지화의-일반-원칙" id="toc-python-패키지화의-일반-원칙" class="nav-link" data-scroll-target="#python-패키지화의-일반-원칙"><span class="header-section-number">2</span> Python 패키지화의 일반 원칙</a>
+  <ul class="collapse">
+  <li><a href="#패키지로-인식되기-위한-조건" id="toc-패키지로-인식되기-위한-조건" class="nav-link" data-scroll-target="#패키지로-인식되기-위한-조건"><span class="header-section-number">2.1</span> 패키지로 인식되기 위한 조건</a></li>
+  <li><a href="#표준-python-패키지-디렉토리-구조" id="toc-표준-python-패키지-디렉토리-구조" class="nav-link" data-scroll-target="#표준-python-패키지-디렉토리-구조"><span class="header-section-number">2.2</span> 표준 Python 패키지 디렉토리 구조</a></li>
+  <li><a href="#비표준-디렉토리명-처리" id="toc-비표준-디렉토리명-처리" class="nav-link" data-scroll-target="#비표준-디렉토리명-처리"><span class="header-section-number">2.3</span> 비표준 디렉토리명 처리</a></li>
+  <li><a href="#배포-이름-vs-import-이름" id="toc-배포-이름-vs-import-이름" class="nav-link" data-scroll-target="#배포-이름-vs-import-이름"><span class="header-section-number">2.4</span> 배포 이름 vs import 이름</a></li>
+  </ul></li>
+  <li><a href="#실전-사례-data_standardization-repo-패키지화" id="toc-실전-사례-data_standardization-repo-패키지화" class="nav-link" data-scroll-target="#실전-사례-data_standardization-repo-패키지화"><span class="header-section-number">3</span> 실전 사례: <code>data_standardization</code> repo 패키지화</a>
+  <ul class="collapse">
+  <li><a href="#대상-repo-구조-파악" id="toc-대상-repo-구조-파악" class="nav-link" data-scroll-target="#대상-repo-구조-파악"><span class="header-section-number">3.1</span> 대상 repo 구조 파악</a></li>
+  <li><a href="#init__.py-내용-확인" id="toc-init__.py-내용-확인" class="nav-link" data-scroll-target="#init__.py-내용-확인"><span class="header-section-number">3.2</span> <code>__init__.py</code> 내용 확인</a></li>
+  </ul></li>
+  <li><a href="#pyproject.toml-설계" id="toc-pyproject.toml-설계" class="nav-link" data-scroll-target="#pyproject.toml-설계"><span class="header-section-number">4</span> <code>pyproject.toml</code> 설계</a>
+  <ul class="collapse">
+  <li><a href="#결정해야-할-항목" id="toc-결정해야-할-항목" class="nav-link" data-scroll-target="#결정해야-할-항목"><span class="header-section-number">4.1</span> 결정해야 할 항목</a></li>
+  <li><a href="#최종-pyproject.toml-작성" id="toc-최종-pyproject.toml-작성" class="nav-link" data-scroll-target="#최종-pyproject.toml-작성"><span class="header-section-number">4.2</span> 최종 <code>pyproject.toml</code> 작성</a></li>
+  <li><a href="#tool.setuptools.package-dir-동작-방식" id="toc-tool.setuptools.package-dir-동작-방식" class="nav-link" data-scroll-target="#tool.setuptools.package-dir-동작-방식"><span class="header-section-number">4.3</span> <code>[tool.setuptools.package-dir]</code> 동작 방식</a></li>
+  </ul></li>
+  <li><a href="#pr을-통한-pyproject.toml-반영-흐름" id="toc-pr을-통한-pyproject.toml-반영-흐름" class="nav-link" data-scroll-target="#pr을-통한-pyproject.toml-반영-흐름"><span class="header-section-number">5</span> PR을 통한 pyproject.toml 반영 흐름</a>
+  <ul class="collapse">
+  <li><a href="#archive-상태-repo의-경우" id="toc-archive-상태-repo의-경우" class="nav-link" data-scroll-target="#archive-상태-repo의-경우"><span class="header-section-number">5.1</span> archive 상태 repo의 경우</a></li>
+  <li><a href="#전체-pr-흐름" id="toc-전체-pr-흐름" class="nav-link" data-scroll-target="#전체-pr-흐름"><span class="header-section-number">5.2</span> 전체 PR 흐름</a></li>
+  </ul></li>
+  <li><a href="#pr-승인-전-임시-local-path-설치" id="toc-pr-승인-전-임시-local-path-설치" class="nav-link" data-scroll-target="#pr-승인-전-임시-local-path-설치"><span class="header-section-number">6</span> PR 승인 전 임시 local path 설치</a></li>
+  <li><a href="#pr-승인-후-git-url로-전환" id="toc-pr-승인-후-git-url로-전환" class="nav-link" data-scroll-target="#pr-승인-후-git-url로-전환"><span class="header-section-number">7</span> PR 승인 후 git URL로 전환</a></li>
+  <li><a href="#git-pull-시-충돌-주의" id="toc-git-pull-시-충돌-주의" class="nav-link" data-scroll-target="#git-pull-시-충돌-주의"><span class="header-section-number">8</span> git pull 시 충돌 주의</a></li>
+  <li><a href="#요약" id="toc-요약" class="nav-link" data-scroll-target="#요약"><span class="header-section-number">9</span> 요약</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="개요" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="개요"><span class="header-section-number">1</span> 개요</h2>
+<blockquote class="blockquote">
+<p>Python 패키지 설치 도구가 외부 repo를 인식하려면 반드시 <code>pyproject.toml</code> 또는 <code>setup.py</code>가 있어야 한다. 이 파일이 없으면 pip와 Poetry 모두 설치를 거부한다. 수정 권한이 없는 외부 repo라면 PR을 통해 파일을 추가하고, 승인 대기 중에는 local path로 임시 설치하는 전략이 실용적이다.</p>
+</blockquote>
+<section id="이-글이-다루는-상황" class="level3" data-number="1.1">
+<h3 data-number="1.1" class="anchored" data-anchor-id="이-글이-다루는-상황"><span class="header-section-number">1.1</span> 이 글이 다루는 상황</h3>
+<pre><code>외부 repo (pyproject.toml 없음)
+        ↓  poetry add git+ssh://...
+ERROR: Source does not appear to be a Python project
+        ↓  해결 방법?
+pyproject.toml 설계 → PR 반영 → git URL 설치</code></pre>
+<p>실무에서 이 상황은 다음과 같은 경우에 자주 발생한다:</p>
+<ul>
+<li>데이터 분석/연구 목적으로 만들어진 repo (패키징 고려 없이 작성)</li>
+<li>오래된 legacy repo (setup.py도 없는 경우)</li>
+<li>archive 상태 repo (직접 push 불가)</li>
+<li>내가 관리하지 않는 조직 repo (PR을 통해서만 기여 가능)</li>
+</ul>
+</section>
+</section>
+<section id="python-패키지화의-일반-원칙" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="python-패키지화의-일반-원칙"><span class="header-section-number">2</span> Python 패키지화의 일반 원칙</h2>
+<section id="패키지로-인식되기-위한-조건" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="패키지로-인식되기-위한-조건"><span class="header-section-number">2.1</span> 패키지로 인식되기 위한 조건</h3>
+<p>pip, Poetry 등 Python 패키지 설치 도구는 아래 파일 중 하나가 있어야 패키지로 인식한다.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>파일</th>
+<th>방식</th>
+<th>비고</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>pyproject.toml</code></td>
+<td>현대적 표준 (PEP 517/518)</td>
+<td>Poetry, setuptools, Hatch 등 지원</td>
+</tr>
+<tr class="even">
+<td><code>setup.py</code></td>
+<td>구식 방식</td>
+<td>여전히 동작하지만 deprecated 추세</td>
+</tr>
+<tr class="odd">
+<td><code>setup.cfg</code></td>
+<td><code>setup.py</code>의 선언형 버전</td>
+<td>단독으로는 불충분, <code>setup.py</code> 필요</td>
+</tr>
+</tbody>
+</table>
+<p>이 파일들이 없으면:</p>
+<pre><code>Source does not appear to be a Python project:
+no pyproject.toml or setup.py</code></pre>
+</section>
+<section id="표준-python-패키지-디렉토리-구조" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="표준-python-패키지-디렉토리-구조"><span class="header-section-number">2.2</span> 표준 Python 패키지 디렉토리 구조</h3>
+<p>패키지 설치 도구가 기대하는 구조는 아래와 같다:</p>
+<pre><code>repo/
+├── pyproject.toml       ← 필수
+├── README.md
+├── src/
+│   └── my_package/      ← src layout (권장)
+│       ├── __init__.py
+│       └── module.py
+└── tests/</code></pre>
+<p>또는 flat layout:</p>
+<pre><code>repo/
+├── pyproject.toml
+├── my_package/          ← flat layout
+│   ├── __init__.py
+│   └── module.py
+└── tests/</code></pre>
+</section>
+<section id="비표준-디렉토리명-처리" class="level3" data-number="2.3">
+<h3 data-number="2.3" class="anchored" data-anchor-id="비표준-디렉토리명-처리"><span class="header-section-number">2.3</span> 비표준 디렉토리명 처리</h3>
+<p>디렉토리명이 <code>source/</code>, <code>lib/</code>, <code>code/</code> 등 비표준인 경우 <code>[tool.setuptools.package-dir]</code>로 매핑한다:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode numberSource toml number-lines code-with-copy"><code class="sourceCode toml"><span id="cb5-1"><a href="#cb5-1"></a><span class="kw">[tool.setuptools.package-dir]</span></span>
+<span id="cb5-2"><a href="#cb5-2"></a><span class="dt">"import_name"</span> <span class="op">=</span> <span class="st">"실제_디렉토리명"</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>이 설정이 없으면 setuptools는 해당 디렉토리를 패키지로 인식하지 못한다.</p>
+</section>
+<section id="배포-이름-vs-import-이름" class="level3" data-number="2.4">
+<h3 data-number="2.4" class="anchored" data-anchor-id="배포-이름-vs-import-이름"><span class="header-section-number">2.4</span> 배포 이름 vs import 이름</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>구분</th>
+<th>예시</th>
+<th>사용처</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>배포 이름 (distribution name)</td>
+<td><code>sg-data-standardization</code></td>
+<td><code>pip install</code>, <code>pyproject.toml</code>의 <code>name</code></td>
+</tr>
+<tr class="even">
+<td>import 이름 (package name)</td>
+<td><code>data_standardization</code></td>
+<td><code>import data_standardization</code></td>
+</tr>
+</tbody>
+</table>
+<p>두 이름이 달라도 되지만, <code>pyproject.toml</code>에서 명확히 매핑해야 한다.</p>
+</section>
+</section>
+<section id="실전-사례-data_standardization-repo-패키지화" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="실전-사례-data_standardization-repo-패키지화"><span class="header-section-number">3</span> 실전 사례: <code>data_standardization</code> repo 패키지화</h2>
+<blockquote class="blockquote">
+<p>조직 내부 repo에 <code>pyproject.toml</code>이 없어 Poetry로 설치가 불가한 상황. repo가 archive 상태라 직접 push도 불가하다. PR을 통해 파일을 추가하면서, 승인 대기 중에는 local path로 임시 설치한다.</p>
+</blockquote>
+<section id="대상-repo-구조-파악" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="대상-repo-구조-파악"><span class="header-section-number">3.1</span> 대상 repo 구조 파악</h3>
+<p>먼저 repo를 clone해서 실제 구조를 확인한다.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode numberSource bash number-lines code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1"></a><span class="fu">git</span> clone git@seegene_org:SeegeneDevelopmentPlatform/data_standardization.git /tmp/ds-check</span>
+<span id="cb6-2"><a href="#cb6-2"></a><span class="fu">ls</span> /tmp/ds-check/</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>README.md  current_analysis  data_hierarchy     output  standardization_rules
+css        data              domain_dictionary  source  term_dictionary</code></pre>
+<p><code>source/</code> 디렉토리에 실제 Python 코드가 있다.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode numberSource bash number-lines code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1"></a><span class="fu">ls</span> /tmp/ds-check/source/</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>__init__.py               readme.md            troubleshooter.py
+abbreviation_manager.py   report_generator.py  update_physical_names.py
+completeness_analyzer.py  rule_analyzer.py     vocabulary_analyzer.py
+data_loader.py            token_analysis.py
+output                    token_processor.py</code></pre>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+노트
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>일반적인 Python 패키지 구조라면 <code>src/패키지명/</code> 또는 <code>패키지명/</code>이 루트에 있어야 한다. 이 repo는 <code>source/</code>라는 비표준 디렉토리명을 사용하고 있어 <code>[tool.setuptools.package-dir]</code>로 매핑이 필요하다.</p>
+</div>
+</div>
+</section>
+<section id="init__.py-내용-확인" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="init__.py-내용-확인"><span class="header-section-number">3.2</span> <code>__init__.py</code> 내용 확인</h3>
+<p>패키지 이름과 공개 API를 파악하기 위해 <code>__init__.py</code>를 확인한다.</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1"></a><span class="co"># source/__init__.py</span></span>
+<span id="cb10-2"><a href="#cb10-2"></a><span class="im">from</span> .abbreviation_manager <span class="im">import</span> AbbreviationManager</span>
+<span id="cb10-3"><a href="#cb10-3"></a><span class="im">from</span> .token_processor <span class="im">import</span> TokenProcessor</span>
+<span id="cb10-4"><a href="#cb10-4"></a><span class="im">from</span> .rule_analyzer <span class="im">import</span> RuleAnalyzer</span>
+<span id="cb10-5"><a href="#cb10-5"></a><span class="im">from</span> .data_loader <span class="im">import</span> DataLoader</span>
+<span id="cb10-6"><a href="#cb10-6"></a><span class="co"># ...</span></span>
+<span id="cb10-7"><a href="#cb10-7"></a></span>
+<span id="cb10-8"><a href="#cb10-8"></a>__all__ <span class="op">=</span> [<span class="st">"AbbreviationManager"</span>, <span class="st">"TokenProcessor"</span>, ...]</span>
+<span id="cb10-9"><a href="#cb10-9"></a>__version__ <span class="op">=</span> <span class="st">"1.0.0"</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><code>import data_standardization</code> 시 이 클래스들이 노출된다.</p>
+</section>
+</section>
+<section id="pyproject.toml-설계" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="pyproject.toml-설계"><span class="header-section-number">4</span> <code>pyproject.toml</code> 설계</h2>
+<section id="결정해야-할-항목" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="결정해야-할-항목"><span class="header-section-number">4.1</span> 결정해야 할 항목</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>항목</th>
+<th>결정</th>
+<th>이유</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>빌드 백엔드</td>
+<td><code>setuptools</code></td>
+<td>기존 코드 변경 최소화, 범용성</td>
+</tr>
+<tr class="even">
+<td>배포 이름</td>
+<td><code>sg-data-standardization</code></td>
+<td>조직 prefix로 충돌 방지</td>
+</tr>
+<tr class="odd">
+<td>import 이름</td>
+<td><code>data_standardization</code></td>
+<td>간결하고 직관적</td>
+</tr>
+<tr class="even">
+<td>패키지 경로</td>
+<td><code>source/</code> → <code>data_standardization</code> 매핑</td>
+<td>기존 디렉토리명 유지</td>
+</tr>
+<tr class="odd">
+<td>Python 버전</td>
+<td><code>&gt;=3.11</code></td>
+<td>프로젝트 최소 버전</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="최종-pyproject.toml-작성" class="level3" data-number="4.2">
+<h3 data-number="4.2" class="anchored" data-anchor-id="최종-pyproject.toml-작성"><span class="header-section-number">4.2</span> 최종 <code>pyproject.toml</code> 작성</h3>
+<div class="sourceCode" id="cb11"><pre class="sourceCode numberSource toml number-lines code-with-copy"><code class="sourceCode toml"><span id="cb11-1"><a href="#cb11-1"></a><span class="kw">[build-system]</span></span>
+<span id="cb11-2"><a href="#cb11-2"></a><span class="dt">requires</span> <span class="op">=</span> <span class="op">[</span><span class="st">"setuptools&gt;=68"</span><span class="op">,</span> <span class="st">"wheel"</span><span class="op">]</span></span>
+<span id="cb11-3"><a href="#cb11-3"></a><span class="dt">build-backend</span> <span class="op">=</span> <span class="st">"setuptools.build_meta"</span></span>
+<span id="cb11-4"><a href="#cb11-4"></a></span>
+<span id="cb11-5"><a href="#cb11-5"></a><span class="kw">[project]</span></span>
+<span id="cb11-6"><a href="#cb11-6"></a><span class="dt">name</span> <span class="op">=</span> <span class="st">"sg-data-standardization"</span></span>
+<span id="cb11-7"><a href="#cb11-7"></a><span class="dt">version</span> <span class="op">=</span> <span class="st">"1.0.0"</span></span>
+<span id="cb11-8"><a href="#cb11-8"></a><span class="dt">description</span> <span class="op">=</span> <span class="st">"데이터베이스 테이블/컬럼 명명 규칙 검증 및 물리명 자동 생성 패키지"</span></span>
+<span id="cb11-9"><a href="#cb11-9"></a><span class="dt">readme</span> <span class="op">=</span> <span class="st">"source/readme.md"</span></span>
+<span id="cb11-10"><a href="#cb11-10"></a><span class="dt">requires-python</span> <span class="op">=</span> <span class="st">"&gt;=3.11"</span></span>
+<span id="cb11-11"><a href="#cb11-11"></a><span class="dt">license</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">text</span><span class="op"> =</span> <span class="st">"Proprietary"</span><span class="op"> }</span></span>
+<span id="cb11-12"><a href="#cb11-12"></a><span class="dt">authors</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb11-13"><a href="#cb11-13"></a>    <span class="op">{ </span><span class="dt">name</span><span class="op"> =</span> <span class="st">"김광민"</span><span class="op"> },</span></span>
+<span id="cb11-14"><a href="#cb11-14"></a><span class="op">]</span></span>
+<span id="cb11-15"><a href="#cb11-15"></a></span>
+<span id="cb11-16"><a href="#cb11-16"></a><span class="dt">dependencies</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb11-17"><a href="#cb11-17"></a>    <span class="st">"pandas&gt;=1.5.0"</span><span class="op">,</span></span>
+<span id="cb11-18"><a href="#cb11-18"></a>    <span class="st">"openpyxl&gt;=3.0.0"</span><span class="op">,</span></span>
+<span id="cb11-19"><a href="#cb11-19"></a>    <span class="st">"tqdm&gt;=4.64.0"</span><span class="op">,</span></span>
+<span id="cb11-20"><a href="#cb11-20"></a><span class="op">]</span></span>
+<span id="cb11-21"><a href="#cb11-21"></a></span>
+<span id="cb11-22"><a href="#cb11-22"></a><span class="kw">[project.optional-dependencies]</span></span>
+<span id="cb11-23"><a href="#cb11-23"></a><span class="dt">analysis</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb11-24"><a href="#cb11-24"></a>    <span class="st">"numpy&gt;=1.20.0"</span><span class="op">,</span></span>
+<span id="cb11-25"><a href="#cb11-25"></a>    <span class="st">"matplotlib&gt;=3.5.0"</span><span class="op">,</span></span>
+<span id="cb11-26"><a href="#cb11-26"></a>    <span class="st">"seaborn&gt;=0.11.0"</span><span class="op">,</span></span>
+<span id="cb11-27"><a href="#cb11-27"></a><span class="op">]</span></span>
+<span id="cb11-28"><a href="#cb11-28"></a></span>
+<span id="cb11-29"><a href="#cb11-29"></a><span class="co"># 핵심: source/ 디렉토리를 data_standardization 이름으로 노출</span></span>
+<span id="cb11-30"><a href="#cb11-30"></a><span class="kw">[tool.setuptools]</span></span>
+<span id="cb11-31"><a href="#cb11-31"></a><span class="dt">packages</span> <span class="op">=</span> <span class="op">[</span><span class="st">"data_standardization"</span><span class="op">]</span></span>
+<span id="cb11-32"><a href="#cb11-32"></a></span>
+<span id="cb11-33"><a href="#cb11-33"></a><span class="kw">[tool.setuptools.package-dir]</span></span>
+<span id="cb11-34"><a href="#cb11-34"></a><span class="dt">"data_standardization"</span> <span class="op">=</span> <span class="st">"source"</span></span>
+<span id="cb11-35"><a href="#cb11-35"></a></span>
+<span id="cb11-36"><a href="#cb11-36"></a><span class="kw">[tool.setuptools.package-data]</span></span>
+<span id="cb11-37"><a href="#cb11-37"></a><span class="dt">"data_standardization"</span> <span class="op">=</span> <span class="op">[</span><span class="st">"*.md"</span><span class="op">,</span> <span class="st">"*.txt"</span><span class="op">]</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="tool.setuptools.package-dir-동작-방식" class="level3" data-number="4.3">
+<h3 data-number="4.3" class="anchored" data-anchor-id="tool.setuptools.package-dir-동작-방식"><span class="header-section-number">4.3</span> <code>[tool.setuptools.package-dir]</code> 동작 방식</h3>
+<pre><code>repo 실제 구조:          Python에서 보이는 구조:
+source/              →   data_standardization/
+  __init__.py              __init__.py
+  abbreviation_manager.py  abbreviation_manager.py
+  ...                      ...</code></pre>
+<div class="sourceCode" id="cb13"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1"></a><span class="co"># 이렇게 import 가능</span></span>
+<span id="cb13-2"><a href="#cb13-2"></a><span class="im">import</span> data_standardization</span>
+<span id="cb13-3"><a href="#cb13-3"></a><span class="im">from</span> data_standardization <span class="im">import</span> AbbreviationManager</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="pr을-통한-pyproject.toml-반영-흐름" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="pr을-통한-pyproject.toml-반영-흐름"><span class="header-section-number">5</span> PR을 통한 pyproject.toml 반영 흐름</h2>
+<section id="archive-상태-repo의-경우" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="archive-상태-repo의-경우"><span class="header-section-number">5.1</span> archive 상태 repo의 경우</h3>
+<p>repo가 archive 상태이면 직접 push가 불가하다.</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode numberSource bash number-lines code-with-copy"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1"></a><span class="ex">$</span> git push</span>
+<span id="cb14-2"><a href="#cb14-2"></a><span class="ex">ERROR:</span> Repository is archived.</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>archive는 GitHub에서 repo를 읽기 전용으로 만드는 기능이다. 관리자에게 unarchive를 요청한 후 PR 흐름을 진행한다.</p>
+</section>
+<section id="전체-pr-흐름" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="전체-pr-흐름"><span class="header-section-number">5.2</span> 전체 PR 흐름</h3>
+<pre><code>1. repo 관리자에게 unarchive 요청
+        ↓
+2. feature 브랜치 생성
+   git checkout -b docs/packaging
+        ↓
+3. pyproject.toml 추가 및 commit
+   git add pyproject.toml
+   git commit -m "feat: add pyproject.toml for pip/poetry packaging"
+        ↓
+4. remote에 push
+   git push origin docs/packaging
+        ↓
+5. PR 생성 → 코드 리뷰 → main 브랜치에 merge
+        ↓
+6. 소비자 프로젝트에서 poetry install로 git URL 설치 완료</code></pre>
+</section>
+</section>
+<section id="pr-승인-전-임시-local-path-설치" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="pr-승인-전-임시-local-path-설치"><span class="header-section-number">6</span> PR 승인 전 임시 local path 설치</h2>
+<p>PR 승인을 기다리는 동안 개발을 멈출 필요 없다. local clone에 <code>pyproject.toml</code>을 직접 추가하고 <strong>local path 의존성</strong>으로 임시 설치한다.</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode numberSource bash number-lines code-with-copy"><code class="sourceCode bash"><span id="cb16-1"><a href="#cb16-1"></a><span class="co"># local clone에 pyproject.toml 추가 (untracked 파일로 존재)</span></span>
+<span id="cb16-2"><a href="#cb16-2"></a><span class="fu">cp</span> pyproject.toml /home/azureuser/projects/data_standardization/</span>
+<span id="cb16-3"><a href="#cb16-3"></a></span>
+<span id="cb16-4"><a href="#cb16-4"></a><span class="co"># agent 프로젝트에서 local path로 설치</span></span>
+<span id="cb16-5"><a href="#cb16-5"></a><span class="bu">cd</span> /home/azureuser/projects/kmkim/agent</span>
+<span id="cb16-6"><a href="#cb16-6"></a><span class="ex">poetry</span> add /home/azureuser/projects/data_standardization</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><code>pyproject.toml</code>의 의존성 항목:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode numberSource toml number-lines code-with-copy"><code class="sourceCode toml"><span id="cb17-1"><a href="#cb17-1"></a><span class="co"># PR 승인 전 (local path)</span></span>
+<span id="cb17-2"><a href="#cb17-2"></a><span class="dt">"sg-data-standardization @ file:///home/azureuser/projects/data_standardization"</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>설치 확인:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode numberSource bash number-lines code-with-copy"><code class="sourceCode bash"><span id="cb18-1"><a href="#cb18-1"></a><span class="ex">python</span> <span class="at">-c</span> <span class="st">"import data_standardization; print(dir(data_standardization))"</span></span>
+<span id="cb18-2"><a href="#cb18-2"></a><span class="co"># ['AbbreviationManager', 'DataLoader', 'RuleAnalyzer', 'TokenProcessor', ...]</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="pr-승인-후-git-url로-전환" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="pr-승인-후-git-url로-전환"><span class="header-section-number">7</span> PR 승인 후 git URL로 전환</h2>
+<p>PR이 merge되어 remote에 <code>pyproject.toml</code>이 반영되면 <code>file://</code> 경로를 git URL로 교체한다.</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode numberSource toml number-lines code-with-copy"><code class="sourceCode toml"><span id="cb19-1"><a href="#cb19-1"></a><span class="co"># PR 승인 후 (git URL)</span></span>
+<span id="cb19-2"><a href="#cb19-2"></a><span class="dt">"sg-data-standardization @ git+ssh://git@seegene_org/SeegeneDevelopmentPlatform/data_standardization.git@main"</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode" id="cb20"><pre class="sourceCode numberSource bash number-lines code-with-copy"><code class="sourceCode bash"><span id="cb20-1"><a href="#cb20-1"></a><span class="ex">poetry</span> lock <span class="kw">&amp;&amp;</span> <span class="ex">poetry</span> install</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>출력:</p>
+<pre><code>  - Updating sg-data-standardization
+    (1.0.0 /home/.../data_standardization -&gt; 1.0.0 f3354b9)</code></pre>
+<p>local path에서 remote commit(<code>f3354b9</code>)으로 전환 완료다.</p>
+</section>
+<section id="git-pull-시-충돌-주의" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="git-pull-시-충돌-주의"><span class="header-section-number">8</span> git pull 시 충돌 주의</h2>
+<p>local clone에 untracked 파일(<code>pyproject.toml</code>)이 있는 상태에서 remote에 같은 파일이 추가되면 <code>git pull</code>이 실패한다.</p>
+<pre><code>error: The following untracked working tree files would be overwritten by merge:
+        pyproject.toml
+Please move or remove them before you merge.
+Aborting</code></pre>
+<p>해결:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode numberSource bash number-lines code-with-copy"><code class="sourceCode bash"><span id="cb23-1"><a href="#cb23-1"></a><span class="co"># local에 만든 pyproject.toml 제거 후 pull</span></span>
+<span id="cb23-2"><a href="#cb23-2"></a><span class="fu">rm</span> pyproject.toml</span>
+<span id="cb23-3"><a href="#cb23-3"></a><span class="fu">git</span> pull</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>이후 remote의 <code>pyproject.toml</code>이 자동으로 내려온다.</p>
+</section>
+<section id="요약" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="요약"><span class="header-section-number">9</span> 요약</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>항목</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>패키지화 조건</td>
+<td><code>pyproject.toml</code> 또는 <code>setup.py</code> 필요</td>
+</tr>
+<tr class="even">
+<td>비표준 디렉토리 매핑</td>
+<td><code>[tool.setuptools.package-dir]</code>로 해결</td>
+</tr>
+<tr class="odd">
+<td>배포 이름 vs import 이름</td>
+<td><code>name</code> 필드와 <code>package-dir</code> 키로 분리 관리</td>
+</tr>
+<tr class="even">
+<td>archive repo 우회</td>
+<td>unarchive 요청 → PR → merge 흐름</td>
+</tr>
+<tr class="odd">
+<td>개발 연속성</td>
+<td>PR 승인 전 local path로 임시 설치</td>
+</tr>
+<tr class="even">
+<td>전환 방법</td>
+<td><code>file://</code> → <code>git+ssh://</code> 교체 후 <code>poetry lock</code></td>
+</tr>
+<tr class="odd">
+<td>git pull 충돌</td>
+<td>untracked 파일 제거 후 pull</td>
+</tr>
+</tbody>
+</table>
+<p>다음 블로그에서는 <strong>local path에서 git URL로 전환하는 전체 흐름</strong>과 <code>poetry.lock</code>에서 올바르게 설치됐는지 검증하는 방법을 다룬다.</p>
+
+
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const onCopySuccess = function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  }
+  const getTextToCopy = function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+    text: getTextToCopy
+  });
+  clipboard.on('success', onCopySuccess);
+  if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+    // For code content inside modals, clipBoardJS needs to be initialized with a container option
+    // TODO: Check when it could be a function (https://github.com/zenorocha/clipboard.js/issues/860)
+    const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+      text: getTextToCopy,
+      container: window.document.getElementById('quarto-embedded-source-code-modal')
+    });
+    clipboardModal.on('success', onCopySuccess);
+  }
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("kk3225\.netlify\.app");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

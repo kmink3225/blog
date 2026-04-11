@@ -1,8 +1,8 @@
 # render-changed.ps1
-# 변경되거나 새로 추가된 .qmd 파일만 렌더링 후 Netlify에 직접 배포 + git push
+# 변경되거나 새로 추가된 .qmd 파일만 렌더링 후 git push (Netlify가 _site/ 서빙)
 # 사용법:
-#   .\render-changed.ps1               # 변경된 .qmd 감지 → 렌더링 → Netlify 배포 → git push
-#   .\render-changed.ps1 -SkipRender   # 렌더링 이미 완료된 경우 → Netlify 배포 → git push만
+#   .\render-changed.ps1               # 변경된 .qmd 감지 → 렌더링 → git push
+#   .\render-changed.ps1 -SkipRender   # 렌더링 이미 완료된 경우 → git push만
 
 param(
     [switch]$SkipRender   # 렌더링을 건너뛰고 git add -A → commit → push만 실행
@@ -48,15 +48,7 @@ if (-not $SkipRender) {
     $targets = @()
 }
 
-# 4. Netlify에 직접 배포 (서버 빌드 없이 로컬 _site/ 업로드)
-Write-Host "`n=== Netlify 배포 ===" -ForegroundColor Cyan
-quarto publish netlify --no-render --no-browser
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Netlify 배포 실패" -ForegroundColor Red
-    exit 1
-}
-
-# 5. git add -A, commit, push (소스 .qmd만)
+# 4. git add -A (소스 + _site/ 포함), commit, push → Netlify 자동 서빙
 Write-Host "`n=== Git Push ===" -ForegroundColor Cyan
 git add -A
 $msg = if ($targets.Count -gt 0) { "Update blog: $($targets -join ', ')" } else { "Update blog" }

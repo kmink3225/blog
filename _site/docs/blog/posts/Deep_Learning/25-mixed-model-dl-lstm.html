@@ -1,0 +1,1599 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.5.56">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="종단 데이터의 가변 길이 시퀀스를 처리하는 LSTM/GRU를 상세히 다룬다. Vanilla RNN의 기울기 소실 문제부터 LSTM의 게이트 메커니즘, GRU의 단순화, 양방향 LSTM, 그리고 실무 구현까지 설명한다.">
+
+<title>LSTM/GRU for Longitudinal Data – Kwangmin Kim</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../">
+<script src="../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../styles.css">
+<meta property="og:title" content="LSTM/GRU for Longitudinal Data – Kwangmin Kim">
+<meta property="og:description" content="종단 데이터의 가변 길이 시퀀스를 처리하는 LSTM/GRU를 상세히 다룬다. Vanilla RNN의 기울기 소실 문제부터 LSTM의 게이트 메커니즘, GRU의 단순화, 양방향 LSTM, 그리고 실무 구현까지 설명한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">LSTM/GRU for Longitudinal Data</h1>
+            <p class="subtitle lead">게이트 기반 순환 신경망으로 시퀀스 패턴 학습</p>
+                  <div>
+        <div class="description">
+          <p>종단 데이터의 가변 길이 시퀀스를 처리하는 LSTM/GRU를 상세히 다룬다. Vanilla RNN의 기울기 소실 문제부터 LSTM의 게이트 메커니즘, GRU의 단순화, 양방향 LSTM, 그리고 실무 구현까지 설명한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Statistics</div>
+                <div class="quarto-category">Deep Learning</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2026년 03월 08일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#lstmgru-for-longitudinal-data" id="toc-lstmgru-for-longitudinal-data" class="nav-link active" data-scroll-target="#lstmgru-for-longitudinal-data"><span class="header-section-number">1</span> LSTM/GRU for Longitudinal Data</a>
+  <ul class="collapse">
+  <li><a href="#왜-rnnlstm인가" id="toc-왜-rnnlstm인가" class="nav-link" data-scroll-target="#왜-rnnlstm인가"><span class="header-section-number">1.1</span> 왜 RNN/LSTM인가</a></li>
+  <li><a href="#vanilla-rnn의-한계-기울기-소실폭발" id="toc-vanilla-rnn의-한계-기울기-소실폭발" class="nav-link" data-scroll-target="#vanilla-rnn의-한계-기울기-소실폭발"><span class="header-section-number">1.2</span> Vanilla RNN의 한계: 기울기 소실/폭발</a>
+  <ul class="collapse">
+  <li><a href="#rnn-기본-구조" id="toc-rnn-기본-구조" class="nav-link" data-scroll-target="#rnn-기본-구조"><span class="header-section-number">1.2.1</span> RNN 기본 구조</a></li>
+  <li><a href="#기울기-소실-문제" id="toc-기울기-소실-문제" class="nav-link" data-scroll-target="#기울기-소실-문제"><span class="header-section-number">1.2.2</span> 기울기 소실 문제</a></li>
+  </ul></li>
+  <li><a href="#lstm-아키텍처-상세" id="toc-lstm-아키텍처-상세" class="nav-link" data-scroll-target="#lstm-아키텍처-상세"><span class="header-section-number">1.3</span> LSTM 아키텍처 상세</a>
+  <ul class="collapse">
+  <li><a href="#두-가지-상태" id="toc-두-가지-상태" class="nav-link" data-scroll-target="#두-가지-상태"><span class="header-section-number">1.3.1</span> 두 가지 상태</a></li>
+  <li><a href="#forget-gate-잊기-게이트" id="toc-forget-gate-잊기-게이트" class="nav-link" data-scroll-target="#forget-gate-잊기-게이트"><span class="header-section-number">1.3.2</span> Forget Gate (잊기 게이트)</a></li>
+  <li><a href="#input-gate-입력-게이트" id="toc-input-gate-입력-게이트" class="nav-link" data-scroll-target="#input-gate-입력-게이트"><span class="header-section-number">1.3.3</span> Input Gate (입력 게이트)</a></li>
+  <li><a href="#cell-state-업데이트" id="toc-cell-state-업데이트" class="nav-link" data-scroll-target="#cell-state-업데이트"><span class="header-section-number">1.3.4</span> Cell State 업데이트</a></li>
+  <li><a href="#output-gate-출력-게이트" id="toc-output-gate-출력-게이트" class="nav-link" data-scroll-target="#output-gate-출력-게이트"><span class="header-section-number">1.3.5</span> Output Gate (출력 게이트)</a></li>
+  <li><a href="#전체-흐름-요약" id="toc-전체-흐름-요약" class="nav-link" data-scroll-target="#전체-흐름-요약"><span class="header-section-number">1.3.6</span> 전체 흐름 요약</a></li>
+  </ul></li>
+  <li><a href="#gru-lstm-대비-단순화" id="toc-gru-lstm-대비-단순화" class="nav-link" data-scroll-target="#gru-lstm-대비-단순화"><span class="header-section-number">1.4</span> GRU: LSTM 대비 단순화</a>
+  <ul class="collapse">
+  <li><a href="#gru-게이트" id="toc-gru-게이트" class="nav-link" data-scroll-target="#gru-게이트"><span class="header-section-number">1.4.1</span> GRU 게이트</a></li>
+  <li><a href="#gru-상태-업데이트" id="toc-gru-상태-업데이트" class="nav-link" data-scroll-target="#gru-상태-업데이트"><span class="header-section-number">1.4.2</span> GRU 상태 업데이트</a></li>
+  <li><a href="#파라미터-수-비교" id="toc-파라미터-수-비교" class="nav-link" data-scroll-target="#파라미터-수-비교"><span class="header-section-number">1.4.3</span> 파라미터 수 비교</a></li>
+  </ul></li>
+  <li><a href="#종단-데이터-적용-가변-길이-처리" id="toc-종단-데이터-적용-가변-길이-처리" class="nav-link" data-scroll-target="#종단-데이터-적용-가변-길이-처리"><span class="header-section-number">1.5</span> 종단 데이터 적용: 가변 길이 처리</a>
+  <ul class="collapse">
+  <li><a href="#패딩과-마스킹" id="toc-패딩과-마스킹" class="nav-link" data-scroll-target="#패딩과-마스킹"><span class="header-section-number">1.5.1</span> 패딩과 마스킹</a></li>
+  <li><a href="#pack_padded_sequence" id="toc-pack_padded_sequence" class="nav-link" data-scroll-target="#pack_padded_sequence"><span class="header-section-number">1.5.2</span> pack_padded_sequence</a></li>
+  </ul></li>
+  <li><a href="#pytorch-구현-완전한-학습-파이프라인" id="toc-pytorch-구현-완전한-학습-파이프라인" class="nav-link" data-scroll-target="#pytorch-구현-완전한-학습-파이프라인"><span class="header-section-number">1.6</span> PyTorch 구현: 완전한 학습 파이프라인</a>
+  <ul class="collapse">
+  <li><a href="#데이터셋" id="toc-데이터셋" class="nav-link" data-scroll-target="#데이터셋"><span class="header-section-number">1.6.1</span> 데이터셋</a></li>
+  <li><a href="#lstm-이탈-예측-모델" id="toc-lstm-이탈-예측-모델" class="nav-link" data-scroll-target="#lstm-이탈-예측-모델"><span class="header-section-number">1.6.2</span> LSTM 이탈 예측 모델</a></li>
+  <li><a href="#학습-루프-조기-종료-auc-평가" id="toc-학습-루프-조기-종료-auc-평가" class="nav-link" data-scroll-target="#학습-루프-조기-종료-auc-평가"><span class="header-section-number">1.6.3</span> 학습 루프 (조기 종료 + AUC 평가)</a></li>
+  </ul></li>
+  <li><a href="#bidirectional-lstm" id="toc-bidirectional-lstm" class="nav-link" data-scroll-target="#bidirectional-lstm"><span class="header-section-number">1.7</span> Bidirectional LSTM</a>
+  <ul class="collapse">
+  <li><a href="#언제-사용하는가" id="toc-언제-사용하는가" class="nav-link" data-scroll-target="#언제-사용하는가"><span class="header-section-number">1.7.1</span> 언제 사용하는가</a></li>
+  </ul></li>
+  <li><a href="#실무-예시-ai-agent-만족도-시퀀스-이탈-예측" id="toc-실무-예시-ai-agent-만족도-시퀀스-이탈-예측" class="nav-link" data-scroll-target="#실무-예시-ai-agent-만족도-시퀀스-이탈-예측"><span class="header-section-number">1.8</span> 실무 예시: AI Agent 만족도 시퀀스 → 이탈 예측</a>
+  <ul class="collapse">
+  <li><a href="#데이터-구조" id="toc-데이터-구조" class="nav-link" data-scroll-target="#데이터-구조"><span class="header-section-number">1.8.1</span> 데이터 구조</a></li>
+  <li><a href="#학습-평가-해석" id="toc-학습-평가-해석" class="nav-link" data-scroll-target="#학습-평가-해석"><span class="header-section-number">1.8.2</span> 학습 → 평가 → 해석</a></li>
+  </ul></li>
+  <li><a href="#lstm의-한계" id="toc-lstm의-한계" class="nav-link" data-scroll-target="#lstm의-한계"><span class="header-section-number">1.9</span> LSTM의 한계</a></li>
+  <li><a href="#요약" id="toc-요약" class="nav-link" data-scroll-target="#요약"><span class="header-section-number">1.10</span> 요약</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="lstmgru-for-longitudinal-data" class="level1" data-number="1">
+<h1 data-number="1"><span class="header-section-number">1</span> LSTM/GRU for Longitudinal Data</h1>
+<section id="왜-rnnlstm인가" class="level2" data-number="1.1">
+<h2 data-number="1.1" class="anchored" data-anchor-id="왜-rnnlstm인가"><span class="header-section-number">1.1</span> 왜 RNN/LSTM인가</h2>
+<p>종단 데이터는 <strong>가변 길이 시퀀스</strong>다.</p>
+<ul>
+<li>사용자 A: 8주 관측 (Week 1~8)</li>
+<li>사용자 B: 3주 관측 (Week 1~3, 이후 이탈)</li>
+<li>사용자 C: 12주 관측 (Week 1~12)</li>
+</ul>
+<p>XGBoost나 로지스틱 회귀는 <strong>고정 길이 피처 벡터</strong>를 입력받는다. 가변 길이 시퀀스를 다루려면 수동으로 lag 피처를 만들거나, 시퀀스를 잘라야 한다. 이 과정에서 <strong>시간적 의존성(temporal dependency)</strong>이 손실된다.</p>
+<p>순환 신경망(RNN)은 시퀀스 길이에 관계없이 <strong>한 시점씩 처리</strong>하면서 내부 상태(hidden state)를 업데이트한다. 이전 시점의 정보가 hidden state에 축적되므로, 과거가 현재에 미치는 영향을 자연스럽게 모델링한다.</p>
+<pre><code>시퀀스: x₁, x₂, x₃, ..., x_T
+         ↓    ↓    ↓          ↓
+상태:   h₁ → h₂ → h₃ → ... → h_T → 예측 ŷ</code></pre>
+<hr>
+</section>
+<section id="vanilla-rnn의-한계-기울기-소실폭발" class="level2" data-number="1.2">
+<h2 data-number="1.2" class="anchored" data-anchor-id="vanilla-rnn의-한계-기울기-소실폭발"><span class="header-section-number">1.2</span> Vanilla RNN의 한계: 기울기 소실/폭발</h2>
+<section id="rnn-기본-구조" class="level3" data-number="1.2.1">
+<h3 data-number="1.2.1" class="anchored" data-anchor-id="rnn-기본-구조"><span class="header-section-number">1.2.1</span> RNN 기본 구조</h3>
+<p>시점 <span class="math inline">\(t\)</span>에서의 hidden state 업데이트:</p>
+<p><span class="math display">\[h_t = \tanh(W_{hh} h_{t-1} + W_{xh} x_t + b_h)\]</span></p>
+<p>출력:</p>
+<p><span class="math display">\[\hat{y}_t = W_{hy} h_t + b_y\]</span></p>
+</section>
+<section id="기울기-소실-문제" class="level3" data-number="1.2.2">
+<h3 data-number="1.2.2" class="anchored" data-anchor-id="기울기-소실-문제"><span class="header-section-number">1.2.2</span> 기울기 소실 문제</h3>
+<p>역전파 시 <span class="math inline">\(\frac{\partial L}{\partial h_1}\)</span>을 계산하려면 체인 룰을 적용한다:</p>
+<p><span class="math display">\[\frac{\partial L}{\partial h_1} = \frac{\partial L}{\partial h_T} \prod_{t=2}^{T} \frac{\partial h_t}{\partial h_{t-1}}\]</span></p>
+<p>각 항은:</p>
+<p><span class="math display">\[\frac{\partial h_t}{\partial h_{t-1}} = \text{diag}(\tanh'(z_t)) \cdot W_{hh}\]</span></p>
+<p>여기서 <span class="math inline">\(\tanh'(z) \in (0, 1]\)</span>이므로, 이 곱이 <span class="math inline">\(T\)</span>번 반복되면:</p>
+<ul>
+<li><span class="math inline">\(\|W_{hh}\| &lt; 1\)</span>일 때: 기울기가 <strong>지수적으로 감소</strong> (기울기 소실)</li>
+<li><span class="math inline">\(\|W_{hh}\| &gt; 1\)</span>일 때: 기울기가 <strong>지수적으로 증가</strong> (기울기 폭발)</li>
+</ul>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th style="text-align: center;">시퀀스 길이 T</th>
+<th style="text-align: center;">기울기 크기 (<span class="math inline">\(\|W_{hh}\|=0.9\)</span>)</th>
+<th style="text-align: left;">실질적 의미</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">10</td>
+<td style="text-align: center;"><span class="math inline">\(0.9^{10} = 0.35\)</span></td>
+<td style="text-align: left;">35% 전달</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">50</td>
+<td style="text-align: center;"><span class="math inline">\(0.9^{50} = 0.005\)</span></td>
+<td style="text-align: left;">0.5% 전달</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">100</td>
+<td style="text-align: center;"><span class="math inline">\(0.9^{100} \approx 0\)</span></td>
+<td style="text-align: left;">사실상 전달 불가</td>
+</tr>
+</tbody>
+</table>
+<p>결론: Vanilla RNN은 <strong>20~30 시점 이상의 장기 의존성을 학습하지 못한다.</strong></p>
+<hr>
+</section>
+</section>
+<section id="lstm-아키텍처-상세" class="level2" data-number="1.3">
+<h2 data-number="1.3" class="anchored" data-anchor-id="lstm-아키텍처-상세"><span class="header-section-number">1.3</span> LSTM 아키텍처 상세</h2>
+<p>LSTM(Long Short-Term Memory)은 <strong>게이트(gate) 메커니즘</strong>으로 기울기 소실 문제를 해결한다.</p>
+<section id="두-가지-상태" class="level3" data-number="1.3.1">
+<h3 data-number="1.3.1" class="anchored" data-anchor-id="두-가지-상태"><span class="header-section-number">1.3.1</span> 두 가지 상태</h3>
+<ul>
+<li><strong>Cell state</strong> <span class="math inline">\(C_t\)</span>: 장기 기억. 컨베이어 벨트처럼 정보를 거의 변형 없이 전달</li>
+<li><strong>Hidden state</strong> <span class="math inline">\(h_t\)</span>: 단기 기억. 현재 시점의 출력에 사용</li>
+</ul>
+</section>
+<section id="forget-gate-잊기-게이트" class="level3" data-number="1.3.2">
+<h3 data-number="1.3.2" class="anchored" data-anchor-id="forget-gate-잊기-게이트"><span class="header-section-number">1.3.2</span> Forget Gate (잊기 게이트)</h3>
+<p>이전 Cell state에서 <strong>무엇을 잊을지</strong> 결정:</p>
+<p><span class="math display">\[f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)\]</span></p>
+<ul>
+<li><span class="math inline">\(\sigma\)</span>: 시그모이드 함수 (출력 0~1)</li>
+<li><span class="math inline">\(f_t \approx 0\)</span>: 해당 정보를 완전히 잊음</li>
+<li><span class="math inline">\(f_t \approx 1\)</span>: 해당 정보를 완전히 유지</li>
+</ul>
+</section>
+<section id="input-gate-입력-게이트" class="level3" data-number="1.3.3">
+<h3 data-number="1.3.3" class="anchored" data-anchor-id="input-gate-입력-게이트"><span class="header-section-number">1.3.3</span> Input Gate (입력 게이트)</h3>
+<p>새 정보 중 <strong>무엇을 기억할지</strong> 결정:</p>
+<p><span class="math display">\[i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)\]</span></p>
+<p>후보 Cell state:</p>
+<p><span class="math display">\[\tilde{C}_t = \tanh(W_C \cdot [h_{t-1}, x_t] + b_C)\]</span></p>
+</section>
+<section id="cell-state-업데이트" class="level3" data-number="1.3.4">
+<h3 data-number="1.3.4" class="anchored" data-anchor-id="cell-state-업데이트"><span class="header-section-number">1.3.4</span> Cell State 업데이트</h3>
+<p><span class="math display">\[C_t = f_t \odot C_{t-1} + i_t \odot \tilde{C}_t\]</span></p>
+<ul>
+<li><span class="math inline">\(\odot\)</span>: 원소별 곱(Hadamard product)</li>
+<li>첫째 항: 이전 기억 중 유지할 부분</li>
+<li>둘째 항: 새로 추가할 정보</li>
+</ul>
+<p>이 구조가 기울기 소실을 해결하는 이유: <span class="math inline">\(C_t\)</span>의 역전파 경로에서 <span class="math inline">\(f_t\)</span>가 곱해지는데, <span class="math inline">\(f_t \approx 1\)</span>이면 기울기가 거의 감쇄 없이 전달된다. Vanilla RNN의 <span class="math inline">\(W_{hh}\)</span> 반복 곱과 달리 <strong>게이트가 적응적으로 기울기 흐름을 제어</strong>한다.</p>
+</section>
+<section id="output-gate-출력-게이트" class="level3" data-number="1.3.5">
+<h3 data-number="1.3.5" class="anchored" data-anchor-id="output-gate-출력-게이트"><span class="header-section-number">1.3.5</span> Output Gate (출력 게이트)</h3>
+<p>현재 Hidden state로 <strong>무엇을 내보낼지</strong> 결정:</p>
+<p><span class="math display">\[o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)\]</span></p>
+<p><span class="math display">\[h_t = o_t \odot \tanh(C_t)\]</span></p>
+</section>
+<section id="전체-흐름-요약" class="level3" data-number="1.3.6">
+<h3 data-number="1.3.6" class="anchored" data-anchor-id="전체-흐름-요약"><span class="header-section-number">1.3.6</span> 전체 흐름 요약</h3>
+<pre><code>입력: x_t, h_{t-1}, C_{t-1}
+         ↓
+    ┌─────────────────────────────────┐
+    │  f_t = σ(W_f · [h_{t-1}, x_t]) │  Forget Gate
+    │  i_t = σ(W_i · [h_{t-1}, x_t]) │  Input Gate
+    │  C̃_t = tanh(W_C · [h,x])       │  Candidate
+    │  C_t = f_t⊙C_{t-1} + i_t⊙C̃_t  │  Cell Update
+    │  o_t = σ(W_o · [h_{t-1}, x_t]) │  Output Gate
+    │  h_t = o_t ⊙ tanh(C_t)         │  Hidden State
+    └─────────────────────────────────┘
+출력: h_t, C_t</code></pre>
+<hr>
+</section>
+</section>
+<section id="gru-lstm-대비-단순화" class="level2" data-number="1.4">
+<h2 data-number="1.4" class="anchored" data-anchor-id="gru-lstm-대비-단순화"><span class="header-section-number">1.4</span> GRU: LSTM 대비 단순화</h2>
+<p>GRU(Gated Recurrent Unit)는 LSTM을 2개 게이트로 단순화한다.</p>
+<section id="gru-게이트" class="level3" data-number="1.4.1">
+<h3 data-number="1.4.1" class="anchored" data-anchor-id="gru-게이트"><span class="header-section-number">1.4.1</span> GRU 게이트</h3>
+<p><strong>Reset gate</strong> (리셋 게이트):</p>
+<p><span class="math display">\[r_t = \sigma(W_r \cdot [h_{t-1}, x_t] + b_r)\]</span></p>
+<p><strong>Update gate</strong> (업데이트 게이트):</p>
+<p><span class="math display">\[z_t = \sigma(W_z \cdot [h_{t-1}, x_t] + b_z)\]</span></p>
+</section>
+<section id="gru-상태-업데이트" class="level3" data-number="1.4.2">
+<h3 data-number="1.4.2" class="anchored" data-anchor-id="gru-상태-업데이트"><span class="header-section-number">1.4.2</span> GRU 상태 업데이트</h3>
+<p>후보 hidden state:</p>
+<p><span class="math display">\[\tilde{h}_t = \tanh(W_h \cdot [r_t \odot h_{t-1}, x_t] + b_h)\]</span></p>
+<p>최종 hidden state:</p>
+<p><span class="math display">\[h_t = (1 - z_t) \odot h_{t-1} + z_t \odot \tilde{h}_t\]</span></p>
+<ul>
+<li><span class="math inline">\(z_t\)</span>가 Forget gate와 Input gate의 역할을 동시에 수행</li>
+<li>Cell state가 없고 Hidden state만 존재</li>
+</ul>
+</section>
+<section id="파라미터-수-비교" class="level3" data-number="1.4.3">
+<h3 data-number="1.4.3" class="anchored" data-anchor-id="파라미터-수-비교"><span class="header-section-number">1.4.3</span> 파라미터 수 비교</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: center;">모델</th>
+<th style="text-align: center;">게이트 수</th>
+<th style="text-align: center;">상태 수</th>
+<th style="text-align: center;">hidden_size=64 기준 파라미터</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">LSTM</td>
+<td style="text-align: center;">3 (forget, input, output) + candidate</td>
+<td style="text-align: center;">2 (C, h)</td>
+<td style="text-align: center;"><span class="math inline">\(4 \times (64 \times (64 + d) + 64)\)</span></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">GRU</td>
+<td style="text-align: center;">2 (reset, update)</td>
+<td style="text-align: center;">1 (h)</td>
+<td style="text-align: center;"><span class="math inline">\(3 \times (64 \times (64 + d) + 64)\)</span></td>
+</tr>
+</tbody>
+</table>
+<p>GRU는 LSTM 대비 약 <strong>75%</strong> 파라미터로 비슷한 성능을 낸다. 소규모 데이터에서는 GRU가 오히려 유리할 수 있다.</p>
+<hr>
+</section>
+</section>
+<section id="종단-데이터-적용-가변-길이-처리" class="level2" data-number="1.5">
+<h2 data-number="1.5" class="anchored" data-anchor-id="종단-데이터-적용-가변-길이-처리"><span class="header-section-number">1.5</span> 종단 데이터 적용: 가변 길이 처리</h2>
+<section id="패딩과-마스킹" class="level3" data-number="1.5.1">
+<h3 data-number="1.5.1" class="anchored" data-anchor-id="패딩과-마스킹"><span class="header-section-number">1.5.1</span> 패딩과 마스킹</h3>
+<p>가변 길이 시퀀스를 미니배치로 묶으려면 <strong>패딩</strong>이 필요하다.</p>
+<pre><code>사용자 A: [x₁, x₂, x₃, x₄, x₅]      (길이 5)
+사용자 B: [x₁, x₂, x₃]               (길이 3)
+사용자 C: [x₁, x₂, x₃, x₄, x₅, x₆]  (길이 6)
+
+패딩 후 (max_len=6):
+사용자 A: [x₁, x₂, x₃, x₄, x₅, 0 ]  mask: [1,1,1,1,1,0]
+사용자 B: [x₁, x₂, x₃, 0,  0,  0 ]  mask: [1,1,1,0,0,0]
+사용자 C: [x₁, x₂, x₃, x₄, x₅, x₆]  mask: [1,1,1,1,1,1]</code></pre>
+</section>
+<section id="pack_padded_sequence" class="level3" data-number="1.5.2">
+<h3 data-number="1.5.2" class="anchored" data-anchor-id="pack_padded_sequence"><span class="header-section-number">1.5.2</span> pack_padded_sequence</h3>
+<p>PyTorch의 <code>pack_padded_sequence</code>는 패딩된 시퀀스를 <strong>압축</strong>하여 LSTM이 패딩을 무시하도록 한다. 마스킹보다 연산 효율이 높다.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1"></a><span class="im">from</span> torch.nn.utils.rnn <span class="im">import</span> pack_padded_sequence, pad_packed_sequence</span>
+<span id="cb4-2"><a href="#cb4-2"></a></span>
+<span id="cb4-3"><a href="#cb4-3"></a><span class="co"># 시퀀스 길이 기준 내림차순 정렬 (pack 요구 조건)</span></span>
+<span id="cb4-4"><a href="#cb4-4"></a>lengths <span class="op">=</span> mask.<span class="bu">sum</span>(dim<span class="op">=</span><span class="dv">1</span>).<span class="bu">long</span>()</span>
+<span id="cb4-5"><a href="#cb4-5"></a>sorted_lengths, sorted_idx <span class="op">=</span> lengths.sort(descending<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb4-6"><a href="#cb4-6"></a>sorted_x <span class="op">=</span> x[sorted_idx]</span>
+<span id="cb4-7"><a href="#cb4-7"></a></span>
+<span id="cb4-8"><a href="#cb4-8"></a><span class="co"># 패킹</span></span>
+<span id="cb4-9"><a href="#cb4-9"></a>packed <span class="op">=</span> pack_padded_sequence(sorted_x, sorted_lengths.cpu(), batch_first<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb4-10"><a href="#cb4-10"></a></span>
+<span id="cb4-11"><a href="#cb4-11"></a><span class="co"># LSTM 통과</span></span>
+<span id="cb4-12"><a href="#cb4-12"></a>packed_out, (h_n, c_n) <span class="op">=</span> lstm(packed)</span>
+<span id="cb4-13"><a href="#cb4-13"></a></span>
+<span id="cb4-14"><a href="#cb4-14"></a><span class="co"># 언패킹</span></span>
+<span id="cb4-15"><a href="#cb4-15"></a>output, _ <span class="op">=</span> pad_packed_sequence(packed_out, batch_first<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb4-16"><a href="#cb4-16"></a></span>
+<span id="cb4-17"><a href="#cb4-17"></a><span class="co"># 원래 순서 복원</span></span>
+<span id="cb4-18"><a href="#cb4-18"></a>_, unsorted_idx <span class="op">=</span> sorted_idx.sort()</span>
+<span id="cb4-19"><a href="#cb4-19"></a>output <span class="op">=</span> output[unsorted_idx]</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+</section>
+<section id="pytorch-구현-완전한-학습-파이프라인" class="level2" data-number="1.6">
+<h2 data-number="1.6" class="anchored" data-anchor-id="pytorch-구현-완전한-학습-파이프라인"><span class="header-section-number">1.6</span> PyTorch 구현: 완전한 학습 파이프라인</h2>
+<section id="데이터셋" class="level3" data-number="1.6.1">
+<h3 data-number="1.6.1" class="anchored" data-anchor-id="데이터셋"><span class="header-section-number">1.6.1</span> 데이터셋</h3>
+<div class="sourceCode" id="cb5"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1"></a><span class="im">import</span> torch</span>
+<span id="cb5-2"><a href="#cb5-2"></a><span class="im">import</span> torch.nn <span class="im">as</span> nn</span>
+<span id="cb5-3"><a href="#cb5-3"></a><span class="im">from</span> torch.utils.data <span class="im">import</span> Dataset, DataLoader</span>
+<span id="cb5-4"><a href="#cb5-4"></a><span class="im">from</span> torch.nn.utils.rnn <span class="im">import</span> pack_padded_sequence, pad_packed_sequence</span>
+<span id="cb5-5"><a href="#cb5-5"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb5-6"><a href="#cb5-6"></a><span class="im">from</span> sklearn.metrics <span class="im">import</span> roc_auc_score</span>
+<span id="cb5-7"><a href="#cb5-7"></a></span>
+<span id="cb5-8"><a href="#cb5-8"></a></span>
+<span id="cb5-9"><a href="#cb5-9"></a><span class="kw">class</span> LongitudinalDataset(Dataset):</span>
+<span id="cb5-10"><a href="#cb5-10"></a>    <span class="co">"""사용자별 가변 길이 시계열 데이터셋"""</span></span>
+<span id="cb5-11"><a href="#cb5-11"></a></span>
+<span id="cb5-12"><a href="#cb5-12"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, df, features, target, max_len<span class="op">=</span><span class="dv">12</span>):</span>
+<span id="cb5-13"><a href="#cb5-13"></a>        <span class="va">self</span>.sequences <span class="op">=</span> []</span>
+<span id="cb5-14"><a href="#cb5-14"></a>        <span class="va">self</span>.targets <span class="op">=</span> []</span>
+<span id="cb5-15"><a href="#cb5-15"></a>        <span class="va">self</span>.lengths <span class="op">=</span> []</span>
+<span id="cb5-16"><a href="#cb5-16"></a></span>
+<span id="cb5-17"><a href="#cb5-17"></a>        <span class="cf">for</span> uid <span class="kw">in</span> df[<span class="st">"user_id"</span>].unique():</span>
+<span id="cb5-18"><a href="#cb5-18"></a>            user_df <span class="op">=</span> df[df[<span class="st">"user_id"</span>] <span class="op">==</span> uid].sort_values(<span class="st">"week"</span>)</span>
+<span id="cb5-19"><a href="#cb5-19"></a>            seq <span class="op">=</span> user_df[features].values</span>
+<span id="cb5-20"><a href="#cb5-20"></a>            tgt <span class="op">=</span> user_df[target].values[<span class="op">-</span><span class="dv">1</span>]</span>
+<span id="cb5-21"><a href="#cb5-21"></a></span>
+<span id="cb5-22"><a href="#cb5-22"></a>            T <span class="op">=</span> <span class="bu">min</span>(<span class="bu">len</span>(seq), max_len)</span>
+<span id="cb5-23"><a href="#cb5-23"></a>            seq <span class="op">=</span> seq[:T]</span>
+<span id="cb5-24"><a href="#cb5-24"></a>            <span class="va">self</span>.sequences.append(seq)</span>
+<span id="cb5-25"><a href="#cb5-25"></a>            <span class="va">self</span>.targets.append(tgt)</span>
+<span id="cb5-26"><a href="#cb5-26"></a>            <span class="va">self</span>.lengths.append(T)</span>
+<span id="cb5-27"><a href="#cb5-27"></a></span>
+<span id="cb5-28"><a href="#cb5-28"></a>        <span class="va">self</span>.max_len <span class="op">=</span> max_len</span>
+<span id="cb5-29"><a href="#cb5-29"></a>        <span class="va">self</span>.n_features <span class="op">=</span> <span class="bu">len</span>(features)</span>
+<span id="cb5-30"><a href="#cb5-30"></a></span>
+<span id="cb5-31"><a href="#cb5-31"></a>    <span class="kw">def</span> <span class="fu">__len__</span>(<span class="va">self</span>):</span>
+<span id="cb5-32"><a href="#cb5-32"></a>        <span class="cf">return</span> <span class="bu">len</span>(<span class="va">self</span>.sequences)</span>
+<span id="cb5-33"><a href="#cb5-33"></a></span>
+<span id="cb5-34"><a href="#cb5-34"></a>    <span class="kw">def</span> <span class="fu">__getitem__</span>(<span class="va">self</span>, idx):</span>
+<span id="cb5-35"><a href="#cb5-35"></a>        seq <span class="op">=</span> <span class="va">self</span>.sequences[idx]</span>
+<span id="cb5-36"><a href="#cb5-36"></a>        T <span class="op">=</span> <span class="va">self</span>.lengths[idx]</span>
+<span id="cb5-37"><a href="#cb5-37"></a>        pad_len <span class="op">=</span> <span class="va">self</span>.max_len <span class="op">-</span> T</span>
+<span id="cb5-38"><a href="#cb5-38"></a></span>
+<span id="cb5-39"><a href="#cb5-39"></a>        <span class="co"># 패딩</span></span>
+<span id="cb5-40"><a href="#cb5-40"></a>        <span class="cf">if</span> pad_len <span class="op">&gt;</span> <span class="dv">0</span>:</span>
+<span id="cb5-41"><a href="#cb5-41"></a>            seq <span class="op">=</span> np.vstack([seq, np.zeros((pad_len, <span class="va">self</span>.n_features))])</span>
+<span id="cb5-42"><a href="#cb5-42"></a></span>
+<span id="cb5-43"><a href="#cb5-43"></a>        mask <span class="op">=</span> np.array([<span class="dv">1</span>] <span class="op">*</span> T <span class="op">+</span> [<span class="dv">0</span>] <span class="op">*</span> pad_len, dtype<span class="op">=</span>np.float32)</span>
+<span id="cb5-44"><a href="#cb5-44"></a></span>
+<span id="cb5-45"><a href="#cb5-45"></a>        <span class="cf">return</span> (</span>
+<span id="cb5-46"><a href="#cb5-46"></a>            torch.FloatTensor(seq),</span>
+<span id="cb5-47"><a href="#cb5-47"></a>            torch.FloatTensor(mask),</span>
+<span id="cb5-48"><a href="#cb5-48"></a>            torch.FloatTensor([<span class="va">self</span>.targets[idx]]),</span>
+<span id="cb5-49"><a href="#cb5-49"></a>            torch.LongTensor([T])</span>
+<span id="cb5-50"><a href="#cb5-50"></a>        )</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="lstm-이탈-예측-모델" class="level3" data-number="1.6.2">
+<h3 data-number="1.6.2" class="anchored" data-anchor-id="lstm-이탈-예측-모델"><span class="header-section-number">1.6.2</span> LSTM 이탈 예측 모델</h3>
+<div class="sourceCode" id="cb6"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1"></a><span class="kw">class</span> LSTMChurnPredictor(nn.Module):</span>
+<span id="cb6-2"><a href="#cb6-2"></a>    <span class="co">"""LSTM 기반 이탈 예측 — 확장 버전"""</span></span>
+<span id="cb6-3"><a href="#cb6-3"></a></span>
+<span id="cb6-4"><a href="#cb6-4"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, input_size, hidden_size<span class="op">=</span><span class="dv">64</span>, n_layers<span class="op">=</span><span class="dv">2</span>,</span>
+<span id="cb6-5"><a href="#cb6-5"></a>                 dropout<span class="op">=</span><span class="fl">0.3</span>, bidirectional<span class="op">=</span><span class="va">False</span>):</span>
+<span id="cb6-6"><a href="#cb6-6"></a>        <span class="bu">super</span>().<span class="fu">__init__</span>()</span>
+<span id="cb6-7"><a href="#cb6-7"></a>        <span class="va">self</span>.hidden_size <span class="op">=</span> hidden_size</span>
+<span id="cb6-8"><a href="#cb6-8"></a>        <span class="va">self</span>.n_layers <span class="op">=</span> n_layers</span>
+<span id="cb6-9"><a href="#cb6-9"></a>        <span class="va">self</span>.bidirectional <span class="op">=</span> bidirectional</span>
+<span id="cb6-10"><a href="#cb6-10"></a>        <span class="va">self</span>.n_directions <span class="op">=</span> <span class="dv">2</span> <span class="cf">if</span> bidirectional <span class="cf">else</span> <span class="dv">1</span></span>
+<span id="cb6-11"><a href="#cb6-11"></a></span>
+<span id="cb6-12"><a href="#cb6-12"></a>        <span class="co"># 입력 정규화</span></span>
+<span id="cb6-13"><a href="#cb6-13"></a>        <span class="va">self</span>.layer_norm <span class="op">=</span> nn.LayerNorm(input_size)</span>
+<span id="cb6-14"><a href="#cb6-14"></a></span>
+<span id="cb6-15"><a href="#cb6-15"></a>        <span class="co"># LSTM</span></span>
+<span id="cb6-16"><a href="#cb6-16"></a>        <span class="va">self</span>.lstm <span class="op">=</span> nn.LSTM(</span>
+<span id="cb6-17"><a href="#cb6-17"></a>            input_size<span class="op">=</span>input_size,</span>
+<span id="cb6-18"><a href="#cb6-18"></a>            hidden_size<span class="op">=</span>hidden_size,</span>
+<span id="cb6-19"><a href="#cb6-19"></a>            num_layers<span class="op">=</span>n_layers,</span>
+<span id="cb6-20"><a href="#cb6-20"></a>            batch_first<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb6-21"><a href="#cb6-21"></a>            dropout<span class="op">=</span>dropout <span class="cf">if</span> n_layers <span class="op">&gt;</span> <span class="dv">1</span> <span class="cf">else</span> <span class="dv">0</span>,</span>
+<span id="cb6-22"><a href="#cb6-22"></a>            bidirectional<span class="op">=</span>bidirectional</span>
+<span id="cb6-23"><a href="#cb6-23"></a>        )</span>
+<span id="cb6-24"><a href="#cb6-24"></a></span>
+<span id="cb6-25"><a href="#cb6-25"></a>        <span class="co"># 분류 헤드</span></span>
+<span id="cb6-26"><a href="#cb6-26"></a>        classifier_input <span class="op">=</span> hidden_size <span class="op">*</span> <span class="va">self</span>.n_directions</span>
+<span id="cb6-27"><a href="#cb6-27"></a>        <span class="va">self</span>.classifier <span class="op">=</span> nn.Sequential(</span>
+<span id="cb6-28"><a href="#cb6-28"></a>            nn.Linear(classifier_input, <span class="dv">64</span>),</span>
+<span id="cb6-29"><a href="#cb6-29"></a>            nn.ReLU(),</span>
+<span id="cb6-30"><a href="#cb6-30"></a>            nn.Dropout(dropout),</span>
+<span id="cb6-31"><a href="#cb6-31"></a>            nn.Linear(<span class="dv">64</span>, <span class="dv">32</span>),</span>
+<span id="cb6-32"><a href="#cb6-32"></a>            nn.ReLU(),</span>
+<span id="cb6-33"><a href="#cb6-33"></a>            nn.Dropout(dropout),</span>
+<span id="cb6-34"><a href="#cb6-34"></a>            nn.Linear(<span class="dv">32</span>, <span class="dv">1</span>),</span>
+<span id="cb6-35"><a href="#cb6-35"></a>            nn.Sigmoid()</span>
+<span id="cb6-36"><a href="#cb6-36"></a>        )</span>
+<span id="cb6-37"><a href="#cb6-37"></a></span>
+<span id="cb6-38"><a href="#cb6-38"></a>    <span class="kw">def</span> forward(<span class="va">self</span>, x, mask, lengths):</span>
+<span id="cb6-39"><a href="#cb6-39"></a>        batch_size <span class="op">=</span> x.size(<span class="dv">0</span>)</span>
+<span id="cb6-40"><a href="#cb6-40"></a></span>
+<span id="cb6-41"><a href="#cb6-41"></a>        <span class="co"># 입력 정규화</span></span>
+<span id="cb6-42"><a href="#cb6-42"></a>        x <span class="op">=</span> <span class="va">self</span>.layer_norm(x)</span>
+<span id="cb6-43"><a href="#cb6-43"></a></span>
+<span id="cb6-44"><a href="#cb6-44"></a>        <span class="co"># pack_padded_sequence</span></span>
+<span id="cb6-45"><a href="#cb6-45"></a>        lengths_cpu <span class="op">=</span> lengths.squeeze(<span class="op">-</span><span class="dv">1</span>).cpu()</span>
+<span id="cb6-46"><a href="#cb6-46"></a>        sorted_lengths, sorted_idx <span class="op">=</span> lengths_cpu.sort(descending<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb6-47"><a href="#cb6-47"></a>        sorted_x <span class="op">=</span> x[sorted_idx]</span>
+<span id="cb6-48"><a href="#cb6-48"></a></span>
+<span id="cb6-49"><a href="#cb6-49"></a>        packed <span class="op">=</span> pack_padded_sequence(</span>
+<span id="cb6-50"><a href="#cb6-50"></a>            sorted_x, sorted_lengths.clamp(<span class="bu">min</span><span class="op">=</span><span class="dv">1</span>), batch_first<span class="op">=</span><span class="va">True</span></span>
+<span id="cb6-51"><a href="#cb6-51"></a>        )</span>
+<span id="cb6-52"><a href="#cb6-52"></a>        packed_out, (h_n, c_n) <span class="op">=</span> <span class="va">self</span>.lstm(packed)</span>
+<span id="cb6-53"><a href="#cb6-53"></a>        output, _ <span class="op">=</span> pad_packed_sequence(packed_out, batch_first<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb6-54"><a href="#cb6-54"></a></span>
+<span id="cb6-55"><a href="#cb6-55"></a>        <span class="co"># 원래 순서 복원</span></span>
+<span id="cb6-56"><a href="#cb6-56"></a>        _, unsorted_idx <span class="op">=</span> sorted_idx.sort()</span>
+<span id="cb6-57"><a href="#cb6-57"></a>        output <span class="op">=</span> output[unsorted_idx]</span>
+<span id="cb6-58"><a href="#cb6-58"></a>        lengths_restored <span class="op">=</span> lengths_cpu[unsorted_idx]</span>
+<span id="cb6-59"><a href="#cb6-59"></a></span>
+<span id="cb6-60"><a href="#cb6-60"></a>        <span class="co"># 마지막 유효 시점의 hidden state</span></span>
+<span id="cb6-61"><a href="#cb6-61"></a>        last_hidden <span class="op">=</span> output[</span>
+<span id="cb6-62"><a href="#cb6-62"></a>            torch.arange(batch_size),</span>
+<span id="cb6-63"><a href="#cb6-63"></a>            (lengths_restored <span class="op">-</span> <span class="dv">1</span>).clamp(<span class="bu">min</span><span class="op">=</span><span class="dv">0</span>),</span>
+<span id="cb6-64"><a href="#cb6-64"></a>            :</span>
+<span id="cb6-65"><a href="#cb6-65"></a>        ]</span>
+<span id="cb6-66"><a href="#cb6-66"></a></span>
+<span id="cb6-67"><a href="#cb6-67"></a>        <span class="cf">return</span> <span class="va">self</span>.classifier(last_hidden)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="학습-루프-조기-종료-auc-평가" class="level3" data-number="1.6.3">
+<h3 data-number="1.6.3" class="anchored" data-anchor-id="학습-루프-조기-종료-auc-평가"><span class="header-section-number">1.6.3</span> 학습 루프 (조기 종료 + AUC 평가)</h3>
+<div class="sourceCode" id="cb7"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1"></a><span class="kw">def</span> train_model(model, train_loader, val_loader, epochs<span class="op">=</span><span class="dv">100</span>, patience<span class="op">=</span><span class="dv">10</span>, lr<span class="op">=</span><span class="fl">1e-3</span>):</span>
+<span id="cb7-2"><a href="#cb7-2"></a>    optimizer <span class="op">=</span> torch.optim.Adam(model.parameters(), lr<span class="op">=</span>lr, weight_decay<span class="op">=</span><span class="fl">1e-4</span>)</span>
+<span id="cb7-3"><a href="#cb7-3"></a>    scheduler <span class="op">=</span> torch.optim.lr_scheduler.ReduceLROnPlateau(</span>
+<span id="cb7-4"><a href="#cb7-4"></a>        optimizer, mode<span class="op">=</span><span class="st">"min"</span>, patience<span class="op">=</span><span class="dv">5</span>, factor<span class="op">=</span><span class="fl">0.5</span></span>
+<span id="cb7-5"><a href="#cb7-5"></a>    )</span>
+<span id="cb7-6"><a href="#cb7-6"></a>    criterion <span class="op">=</span> nn.BCELoss()</span>
+<span id="cb7-7"><a href="#cb7-7"></a></span>
+<span id="cb7-8"><a href="#cb7-8"></a>    best_val_loss <span class="op">=</span> <span class="bu">float</span>(<span class="st">"inf"</span>)</span>
+<span id="cb7-9"><a href="#cb7-9"></a>    best_val_auc <span class="op">=</span> <span class="fl">0.0</span></span>
+<span id="cb7-10"><a href="#cb7-10"></a>    no_improve <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb7-11"><a href="#cb7-11"></a></span>
+<span id="cb7-12"><a href="#cb7-12"></a>    <span class="cf">for</span> epoch <span class="kw">in</span> <span class="bu">range</span>(epochs):</span>
+<span id="cb7-13"><a href="#cb7-13"></a>        <span class="co"># --- Train ---</span></span>
+<span id="cb7-14"><a href="#cb7-14"></a>        model.train()</span>
+<span id="cb7-15"><a href="#cb7-15"></a>        train_loss <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb7-16"><a href="#cb7-16"></a>        <span class="cf">for</span> seq, mask, target, lengths <span class="kw">in</span> train_loader:</span>
+<span id="cb7-17"><a href="#cb7-17"></a>            pred <span class="op">=</span> model(seq, mask, lengths)</span>
+<span id="cb7-18"><a href="#cb7-18"></a>            loss <span class="op">=</span> criterion(pred, target)</span>
+<span id="cb7-19"><a href="#cb7-19"></a>            optimizer.zero_grad()</span>
+<span id="cb7-20"><a href="#cb7-20"></a>            loss.backward()</span>
+<span id="cb7-21"><a href="#cb7-21"></a>            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm<span class="op">=</span><span class="fl">1.0</span>)</span>
+<span id="cb7-22"><a href="#cb7-22"></a>            optimizer.step()</span>
+<span id="cb7-23"><a href="#cb7-23"></a>            train_loss <span class="op">+=</span> loss.item()</span>
+<span id="cb7-24"><a href="#cb7-24"></a></span>
+<span id="cb7-25"><a href="#cb7-25"></a>        train_loss <span class="op">/=</span> <span class="bu">len</span>(train_loader)</span>
+<span id="cb7-26"><a href="#cb7-26"></a></span>
+<span id="cb7-27"><a href="#cb7-27"></a>        <span class="co"># --- Validation ---</span></span>
+<span id="cb7-28"><a href="#cb7-28"></a>        model.<span class="bu">eval</span>()</span>
+<span id="cb7-29"><a href="#cb7-29"></a>        val_loss <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb7-30"><a href="#cb7-30"></a>        all_preds, all_targets <span class="op">=</span> [], []</span>
+<span id="cb7-31"><a href="#cb7-31"></a>        <span class="cf">with</span> torch.no_grad():</span>
+<span id="cb7-32"><a href="#cb7-32"></a>            <span class="cf">for</span> seq, mask, target, lengths <span class="kw">in</span> val_loader:</span>
+<span id="cb7-33"><a href="#cb7-33"></a>                pred <span class="op">=</span> model(seq, mask, lengths)</span>
+<span id="cb7-34"><a href="#cb7-34"></a>                loss <span class="op">=</span> criterion(pred, target)</span>
+<span id="cb7-35"><a href="#cb7-35"></a>                val_loss <span class="op">+=</span> loss.item()</span>
+<span id="cb7-36"><a href="#cb7-36"></a>                all_preds.extend(pred.numpy().flatten())</span>
+<span id="cb7-37"><a href="#cb7-37"></a>                all_targets.extend(target.numpy().flatten())</span>
+<span id="cb7-38"><a href="#cb7-38"></a></span>
+<span id="cb7-39"><a href="#cb7-39"></a>        val_loss <span class="op">/=</span> <span class="bu">len</span>(val_loader)</span>
+<span id="cb7-40"><a href="#cb7-40"></a>        val_auc <span class="op">=</span> roc_auc_score(all_targets, all_preds)</span>
+<span id="cb7-41"><a href="#cb7-41"></a>        scheduler.step(val_loss)</span>
+<span id="cb7-42"><a href="#cb7-42"></a></span>
+<span id="cb7-43"><a href="#cb7-43"></a>        <span class="cf">if</span> (epoch <span class="op">+</span> <span class="dv">1</span>) <span class="op">%</span> <span class="dv">5</span> <span class="op">==</span> <span class="dv">0</span>:</span>
+<span id="cb7-44"><a href="#cb7-44"></a>            <span class="bu">print</span>(<span class="ss">f"Epoch </span><span class="sc">{</span>epoch<span class="op">+</span><span class="dv">1</span><span class="sc">}</span><span class="ss">: train_loss=</span><span class="sc">{</span>train_loss<span class="sc">:.4f}</span><span class="ss">, "</span></span>
+<span id="cb7-45"><a href="#cb7-45"></a>                  <span class="ss">f"val_loss=</span><span class="sc">{</span>val_loss<span class="sc">:.4f}</span><span class="ss">, val_AUC=</span><span class="sc">{</span>val_auc<span class="sc">:.4f}</span><span class="ss">"</span>)</span>
+<span id="cb7-46"><a href="#cb7-46"></a></span>
+<span id="cb7-47"><a href="#cb7-47"></a>        <span class="co"># 조기 종료</span></span>
+<span id="cb7-48"><a href="#cb7-48"></a>        <span class="cf">if</span> val_loss <span class="op">&lt;</span> best_val_loss:</span>
+<span id="cb7-49"><a href="#cb7-49"></a>            best_val_loss <span class="op">=</span> val_loss</span>
+<span id="cb7-50"><a href="#cb7-50"></a>            best_val_auc <span class="op">=</span> val_auc</span>
+<span id="cb7-51"><a href="#cb7-51"></a>            torch.save(model.state_dict(), <span class="st">"best_lstm_model.pt"</span>)</span>
+<span id="cb7-52"><a href="#cb7-52"></a>            no_improve <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb7-53"><a href="#cb7-53"></a>        <span class="cf">else</span>:</span>
+<span id="cb7-54"><a href="#cb7-54"></a>            no_improve <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb7-55"><a href="#cb7-55"></a>            <span class="cf">if</span> no_improve <span class="op">&gt;=</span> patience:</span>
+<span id="cb7-56"><a href="#cb7-56"></a>                <span class="bu">print</span>(<span class="ss">f"Early stopping at epoch </span><span class="sc">{</span>epoch<span class="op">+</span><span class="dv">1</span><span class="sc">}</span><span class="ss">. Best AUC: </span><span class="sc">{</span>best_val_auc<span class="sc">:.4f}</span><span class="ss">"</span>)</span>
+<span id="cb7-57"><a href="#cb7-57"></a>                <span class="cf">break</span></span>
+<span id="cb7-58"><a href="#cb7-58"></a></span>
+<span id="cb7-59"><a href="#cb7-59"></a>    <span class="cf">return</span> best_val_auc</span>
+<span id="cb7-60"><a href="#cb7-60"></a></span>
+<span id="cb7-61"><a href="#cb7-61"></a></span>
+<span id="cb7-62"><a href="#cb7-62"></a><span class="co"># 사용 예</span></span>
+<span id="cb7-63"><a href="#cb7-63"></a>features <span class="op">=</span> [<span class="st">"satisfaction"</span>, <span class="st">"turn_count"</span>, <span class="st">"emotion_score"</span>, <span class="st">"personalized"</span>]</span>
+<span id="cb7-64"><a href="#cb7-64"></a>train_dataset <span class="op">=</span> LongitudinalDataset(train_df, features, <span class="st">"will_churn_next_week"</span>)</span>
+<span id="cb7-65"><a href="#cb7-65"></a>val_dataset <span class="op">=</span> LongitudinalDataset(val_df, features, <span class="st">"will_churn_next_week"</span>)</span>
+<span id="cb7-66"><a href="#cb7-66"></a></span>
+<span id="cb7-67"><a href="#cb7-67"></a>train_loader <span class="op">=</span> DataLoader(train_dataset, batch_size<span class="op">=</span><span class="dv">32</span>, shuffle<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb7-68"><a href="#cb7-68"></a>val_loader <span class="op">=</span> DataLoader(val_dataset, batch_size<span class="op">=</span><span class="dv">64</span>, shuffle<span class="op">=</span><span class="va">False</span>)</span>
+<span id="cb7-69"><a href="#cb7-69"></a></span>
+<span id="cb7-70"><a href="#cb7-70"></a>model <span class="op">=</span> LSTMChurnPredictor(input_size<span class="op">=</span><span class="bu">len</span>(features), bidirectional<span class="op">=</span><span class="va">False</span>)</span>
+<span id="cb7-71"><a href="#cb7-71"></a>best_auc <span class="op">=</span> train_model(model, train_loader, val_loader)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+</section>
+<section id="bidirectional-lstm" class="level2" data-number="1.7">
+<h2 data-number="1.7" class="anchored" data-anchor-id="bidirectional-lstm"><span class="header-section-number">1.7</span> Bidirectional LSTM</h2>
+<p>양방향 LSTM은 시퀀스를 <strong>앞→뒤</strong>와 <strong>뒤→앞</strong> 두 방향으로 동시에 처리한다.</p>
+<pre><code>순방향: h₁→ → h₂→ → h₃→ → h₄→
+역방향: h₁← ← h₂← ← h₃← ← h₄←
+
+결합: h_t = [h_t→ ; h_t←]  (concatenation)</code></pre>
+<section id="언제-사용하는가" class="level3" data-number="1.7.1">
+<h3 data-number="1.7.1" class="anchored" data-anchor-id="언제-사용하는가"><span class="header-section-number">1.7.1</span> 언제 사용하는가</h3>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th style="text-align: left;">상황</th>
+<th style="text-align: center;">단방향</th>
+<th style="text-align: center;">양방향</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">실시간 예측 (미래 모름)</td>
+<td style="text-align: center;">O</td>
+<td style="text-align: center;">X</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">전체 시퀀스 사후 분류</td>
+<td style="text-align: center;">O</td>
+<td style="text-align: center;">O (더 좋음)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">시퀀스 임베딩 추출</td>
+<td style="text-align: center;">O</td>
+<td style="text-align: center;">O (더 좋음)</td>
+</tr>
+</tbody>
+</table>
+<p>종단 데이터에서:</p>
+<ul>
+<li><strong>이탈 예측 (실시간)</strong>: 단방향 — 현재까지의 데이터만 사용</li>
+<li><strong>사후 패턴 분류</strong>: 양방향 — 전체 시퀀스를 보고 판단</li>
+</ul>
+<div class="sourceCode" id="cb9"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1"></a><span class="co"># 양방향 LSTM 사용</span></span>
+<span id="cb9-2"><a href="#cb9-2"></a>model_bi <span class="op">=</span> LSTMChurnPredictor(</span>
+<span id="cb9-3"><a href="#cb9-3"></a>    input_size<span class="op">=</span><span class="bu">len</span>(features),</span>
+<span id="cb9-4"><a href="#cb9-4"></a>    hidden_size<span class="op">=</span><span class="dv">64</span>,</span>
+<span id="cb9-5"><a href="#cb9-5"></a>    bidirectional<span class="op">=</span><span class="va">True</span>  <span class="co"># hidden 출력이 128차원이 됨</span></span>
+<span id="cb9-6"><a href="#cb9-6"></a>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+</section>
+<section id="실무-예시-ai-agent-만족도-시퀀스-이탈-예측" class="level2" data-number="1.8">
+<h2 data-number="1.8" class="anchored" data-anchor-id="실무-예시-ai-agent-만족도-시퀀스-이탈-예측"><span class="header-section-number">1.8</span> 실무 예시: AI Agent 만족도 시퀀스 → 이탈 예측</h2>
+<section id="데이터-구조" class="level3" data-number="1.8.1">
+<h3 data-number="1.8.1" class="anchored" data-anchor-id="데이터-구조"><span class="header-section-number">1.8.1</span> 데이터 구조</h3>
+<div class="sourceCode" id="cb10"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
+<span id="cb10-2"><a href="#cb10-2"></a></span>
+<span id="cb10-3"><a href="#cb10-3"></a><span class="co"># AI Agent 개인화 실험 데이터</span></span>
+<span id="cb10-4"><a href="#cb10-4"></a><span class="co"># 200명 사용자 × 가변 주 (3~12주) × 4개 피처</span></span>
+<span id="cb10-5"><a href="#cb10-5"></a>data <span class="op">=</span> {</span>
+<span id="cb10-6"><a href="#cb10-6"></a>    <span class="st">"user_id"</span>: [],</span>
+<span id="cb10-7"><a href="#cb10-7"></a>    <span class="st">"week"</span>: [],</span>
+<span id="cb10-8"><a href="#cb10-8"></a>    <span class="st">"satisfaction"</span>: [],     <span class="co"># 1~10 만족도</span></span>
+<span id="cb10-9"><a href="#cb10-9"></a>    <span class="st">"turn_count"</span>: [],       <span class="co"># 주당 대화 횟수</span></span>
+<span id="cb10-10"><a href="#cb10-10"></a>    <span class="st">"emotion_score"</span>: [],    <span class="co"># 감정 분석 점수 (-1~1)</span></span>
+<span id="cb10-11"><a href="#cb10-11"></a>    <span class="st">"personalized"</span>: [],     <span class="co"># 개인화 적용 여부 (0/1)</span></span>
+<span id="cb10-12"><a href="#cb10-12"></a>    <span class="st">"will_churn_next_week"</span>: []  <span class="co"># 다음 주 이탈 여부</span></span>
+<span id="cb10-13"><a href="#cb10-13"></a>}</span>
+<span id="cb10-14"><a href="#cb10-14"></a></span>
+<span id="cb10-15"><a href="#cb10-15"></a><span class="co"># 이탈자 패턴: 만족도 하락 → 대화 감소 → 이탈</span></span>
+<span id="cb10-16"><a href="#cb10-16"></a><span class="co"># 유지자 패턴: 만족도 안정/상승 → 대화 유지</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="학습-평가-해석" class="level3" data-number="1.8.2">
+<h3 data-number="1.8.2" class="anchored" data-anchor-id="학습-평가-해석"><span class="header-section-number">1.8.2</span> 학습 → 평가 → 해석</h3>
+<div class="sourceCode" id="cb11"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1"></a><span class="co"># 1. 데이터 분할</span></span>
+<span id="cb11-2"><a href="#cb11-2"></a><span class="im">from</span> sklearn.model_selection <span class="im">import</span> train_test_split</span>
+<span id="cb11-3"><a href="#cb11-3"></a></span>
+<span id="cb11-4"><a href="#cb11-4"></a>user_ids <span class="op">=</span> df[<span class="st">"user_id"</span>].unique()</span>
+<span id="cb11-5"><a href="#cb11-5"></a>train_ids, test_ids <span class="op">=</span> train_test_split(user_ids, test_size<span class="op">=</span><span class="fl">0.2</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
+<span id="cb11-6"><a href="#cb11-6"></a>train_ids, val_ids <span class="op">=</span> train_test_split(train_ids, test_size<span class="op">=</span><span class="fl">0.2</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
+<span id="cb11-7"><a href="#cb11-7"></a></span>
+<span id="cb11-8"><a href="#cb11-8"></a>train_df <span class="op">=</span> df[df[<span class="st">"user_id"</span>].isin(train_ids)]</span>
+<span id="cb11-9"><a href="#cb11-9"></a>val_df <span class="op">=</span> df[df[<span class="st">"user_id"</span>].isin(val_ids)]</span>
+<span id="cb11-10"><a href="#cb11-10"></a>test_df <span class="op">=</span> df[df[<span class="st">"user_id"</span>].isin(test_ids)]</span>
+<span id="cb11-11"><a href="#cb11-11"></a></span>
+<span id="cb11-12"><a href="#cb11-12"></a><span class="co"># 2. 학습</span></span>
+<span id="cb11-13"><a href="#cb11-13"></a>model <span class="op">=</span> LSTMChurnPredictor(input_size<span class="op">=</span><span class="dv">4</span>, hidden_size<span class="op">=</span><span class="dv">64</span>, n_layers<span class="op">=</span><span class="dv">2</span>)</span>
+<span id="cb11-14"><a href="#cb11-14"></a>best_auc <span class="op">=</span> train_model(model, train_loader, val_loader)</span>
+<span id="cb11-15"><a href="#cb11-15"></a></span>
+<span id="cb11-16"><a href="#cb11-16"></a><span class="co"># 3. 테스트 평가</span></span>
+<span id="cb11-17"><a href="#cb11-17"></a>model.load_state_dict(torch.load(<span class="st">"best_lstm_model.pt"</span>))</span>
+<span id="cb11-18"><a href="#cb11-18"></a>model.<span class="bu">eval</span>()</span>
+<span id="cb11-19"><a href="#cb11-19"></a></span>
+<span id="cb11-20"><a href="#cb11-20"></a>test_preds, test_labels <span class="op">=</span> [], []</span>
+<span id="cb11-21"><a href="#cb11-21"></a><span class="cf">with</span> torch.no_grad():</span>
+<span id="cb11-22"><a href="#cb11-22"></a>    <span class="cf">for</span> seq, mask, target, lengths <span class="kw">in</span> test_loader:</span>
+<span id="cb11-23"><a href="#cb11-23"></a>        pred <span class="op">=</span> model(seq, mask, lengths)</span>
+<span id="cb11-24"><a href="#cb11-24"></a>        test_preds.extend(pred.numpy().flatten())</span>
+<span id="cb11-25"><a href="#cb11-25"></a>        test_labels.extend(target.numpy().flatten())</span>
+<span id="cb11-26"><a href="#cb11-26"></a></span>
+<span id="cb11-27"><a href="#cb11-27"></a>test_auc <span class="op">=</span> roc_auc_score(test_labels, test_preds)</span>
+<span id="cb11-28"><a href="#cb11-28"></a><span class="bu">print</span>(<span class="ss">f"Test AUC: </span><span class="sc">{</span>test_auc<span class="sc">:.4f}</span><span class="ss">"</span>)</span>
+<span id="cb11-29"><a href="#cb11-29"></a><span class="co"># 예상 출력: Test AUC: 0.8234</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+</section>
+<section id="lstm의-한계" class="level2" data-number="1.9">
+<h2 data-number="1.9" class="anchored" data-anchor-id="lstm의-한계"><span class="header-section-number">1.9</span> LSTM의 한계</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">한계</th>
+<th style="text-align: left;">설명</th>
+<th style="text-align: left;">대안</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">순차 처리</td>
+<td style="text-align: left;"><span class="math inline">\(h_t\)</span>가 <span class="math inline">\(h_{t-1}\)</span>에 의존 → 병렬화 불가</td>
+<td style="text-align: left;">TCN, Transformer</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">긴 시퀀스 비효율</td>
+<td style="text-align: left;">T &gt; 100이면 학습 느림</td>
+<td style="text-align: left;">TCN (병렬 convolution)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">장기 의존성 한계</td>
+<td style="text-align: left;">기울기 소실이 완화되었지만 완전히 해결되지 않음</td>
+<td style="text-align: left;">Transformer (직접 참조)</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">불규칙 시점</td>
+<td style="text-align: left;">이산 시점 가정</td>
+<td style="text-align: left;">Neural ODE</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">해석 가능성</td>
+<td style="text-align: left;">hidden state가 블랙박스</td>
+<td style="text-align: left;">Transformer (Attention)</td>
+</tr>
+</tbody>
+</table>
+<hr>
+</section>
+<section id="요약" class="level2" data-number="1.10">
+<h2 data-number="1.10" class="anchored" data-anchor-id="요약"><span class="header-section-number">1.10</span> 요약</h2>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th style="text-align: left;">항목</th>
+<th style="text-align: left;">내용</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Vanilla RNN</td>
+<td style="text-align: left;">기울기 소실로 장기 의존성 학습 불가</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">LSTM</td>
+<td style="text-align: left;">3개 게이트 + Cell state로 장기 기억 유지</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">GRU</td>
+<td style="text-align: left;">2개 게이트, 파라미터 75% 수준, 비슷한 성능</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">가변 길이 처리</td>
+<td style="text-align: left;">패딩 + 마스킹 또는 pack_padded_sequence</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">양방향 LSTM</td>
+<td style="text-align: left;">사후 분류에 유리, 실시간 예측에는 단방향</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">핵심 한계</td>
+<td style="text-align: left;">순차 처리, 긴 시퀀스 비효율</td>
+</tr>
+</tbody>
+</table>
+<p><strong>다음</strong>: <a href="../../../../docs/blog/posts/Deep_Learning/26-mixed-model-dl-tcn.html">26 — TCN: Dilated Causal Convolution으로 시퀀스 병렬 처리</a></p>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const onCopySuccess = function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  }
+  const getTextToCopy = function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+    text: getTextToCopy
+  });
+  clipboard.on('success', onCopySuccess);
+  if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+    // For code content inside modals, clipBoardJS needs to be initialized with a container option
+    // TODO: Check when it could be a function (https://github.com/zenorocha/clipboard.js/issues/860)
+    const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+      text: getTextToCopy,
+      container: window.document.getElementById('quarto-embedded-source-code-modal')
+    });
+    clipboardModal.on('success', onCopySuccess);
+  }
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("kk3225\.netlify\.app");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

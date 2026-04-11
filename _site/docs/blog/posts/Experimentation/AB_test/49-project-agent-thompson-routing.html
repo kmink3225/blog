@@ -1,0 +1,1424 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.5.56">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="고정 50:50 배분은 열등한 변형에 절반의 트래픽을 낭비한다. Thompson Sampling은 Beta 분포를 활용하여 성능이 좋은 변형에 자동으로 더 많은 트래픽을 보내면서도 탐색을 유지한다. Agent/프롬프트/파라미터 조합의 실시간 동적 최적화를 다룬다.">
+
+<title>Thompson Sampling 동적 라우팅 – Kwangmin Kim</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Thompson Sampling 동적 라우팅 – Kwangmin Kim">
+<meta property="og:description" content="고정 50:50 배분은 열등한 변형에 절반의 트래픽을 낭비한다. Thompson Sampling은 Beta 분포를 활용하여 성능이 좋은 변형에 자동으로 더 많은 트래픽을 보내면서도 탐색을 유지한다. Agent/프롬프트/파라미터 조합의 실시간 동적 최적화를 다룬다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">Thompson Sampling 동적 라우팅</h1>
+            <p class="subtitle lead">Beta 분포 기반 실시간 트래픽 최적 배분 — 탐색과 활용의 균형</p>
+                  <div>
+        <div class="description">
+          <p>고정 50:50 배분은 열등한 변형에 절반의 트래픽을 낭비한다. Thompson Sampling은 Beta 분포를 활용하여 성능이 좋은 변형에 자동으로 더 많은 트래픽을 보내면서도 탐색을 유지한다. Agent/프롬프트/파라미터 조합의 실시간 동적 최적화를 다룬다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Experimentation</div>
+                <div class="quarto-category">Agent</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2026년 03월 21일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#정의" id="toc-정의" class="nav-link active" data-scroll-target="#정의"><span class="header-section-number">1</span> 정의</a></li>
+  <li><a href="#왜-thompson-sampling인가" id="toc-왜-thompson-sampling인가" class="nav-link" data-scroll-target="#왜-thompson-sampling인가"><span class="header-section-number">2</span> 왜 Thompson Sampling인가</a>
+  <ul class="collapse">
+  <li><a href="#고정-배분의-한계" id="toc-고정-배분의-한계" class="nav-link" data-scroll-target="#고정-배분의-한계"><span class="header-section-number">2.1</span> 고정 배분의 한계</a></li>
+  <li><a href="#thompson-sampling의-이점" id="toc-thompson-sampling의-이점" class="nav-link" data-scroll-target="#thompson-sampling의-이점"><span class="header-section-number">2.2</span> Thompson Sampling의 이점</a></li>
+  <li><a href="#minerva-맥락" id="toc-minerva-맥락" class="nav-link" data-scroll-target="#minerva-맥락"><span class="header-section-number">2.3</span> MINERVA 맥락</a></li>
+  </ul></li>
+  <li><a href="#beta-bernoulli-thompson-sampling" id="toc-beta-bernoulli-thompson-sampling" class="nav-link" data-scroll-target="#beta-bernoulli-thompson-sampling"><span class="header-section-number">3</span> Beta-Bernoulli Thompson Sampling</a>
+  <ul class="collapse">
+  <li><a href="#이진-결과-성공실패" id="toc-이진-결과-성공실패" class="nav-link" data-scroll-target="#이진-결과-성공실패"><span class="header-section-number">3.1</span> 이진 결과 (성공/실패)</a></li>
+  <li><a href="#연속형-결과로-확장" id="toc-연속형-결과로-확장" class="nav-link" data-scroll-target="#연속형-결과로-확장"><span class="header-section-number">3.2</span> 연속형 결과로 확장</a></li>
+  </ul></li>
+  <li><a href="#regret-분석" id="toc-regret-분석" class="nav-link" data-scroll-target="#regret-분석"><span class="header-section-number">4</span> Regret 분석</a>
+  <ul class="collapse">
+  <li><a href="#regret이란" id="toc-regret이란" class="nav-link" data-scroll-target="#regret이란"><span class="header-section-number">4.1</span> Regret이란</a></li>
+  <li><a href="#regret-시각화" id="toc-regret-시각화" class="nav-link" data-scroll-target="#regret-시각화"><span class="header-section-number">4.2</span> Regret 시각화</a></li>
+  </ul></li>
+  <li><a href="#minerva-동적-라우팅-적용" id="toc-minerva-동적-라우팅-적용" class="nav-link" data-scroll-target="#minerva-동적-라우팅-적용"><span class="header-section-number">5</span> MINERVA 동적 라우팅 적용</a>
+  <ul class="collapse">
+  <li><a href="#시나리오-프롬프트-최적화" id="toc-시나리오-프롬프트-최적화" class="nav-link" data-scroll-target="#시나리오-프롬프트-최적화"><span class="header-section-number">5.1</span> 시나리오: 프롬프트 최적화</a></li>
+  <li><a href="#시나리오-다변수-조합-최적화" id="toc-시나리오-다변수-조합-최적화" class="nav-link" data-scroll-target="#시나리오-다변수-조합-최적화"><span class="header-section-number">5.2</span> 시나리오: 다변수 조합 최적화</a></li>
+  </ul></li>
+  <li><a href="#thompson-sampling의-주의사항" id="toc-thompson-sampling의-주의사항" class="nav-link" data-scroll-target="#thompson-sampling의-주의사항"><span class="header-section-number">6</span> Thompson Sampling의 주의사항</a>
+  <ul class="collapse">
+  <li><a href="#통계적-추론의-어려움" id="toc-통계적-추론의-어려움" class="nav-link" data-scroll-target="#통계적-추론의-어려움"><span class="header-section-number">6.1</span> 통계적 추론의 어려움</a></li>
+  <li><a href="#delayed-feedback" id="toc-delayed-feedback" class="nav-link" data-scroll-target="#delayed-feedback"><span class="header-section-number">6.2</span> Delayed Feedback</a></li>
+  <li><a href="#종료-기준" id="toc-종료-기준" class="nav-link" data-scroll-target="#종료-기준"><span class="header-section-number">6.3</span> 종료 기준</a></li>
+  </ul></li>
+  <li><a href="#관련-주제" id="toc-관련-주제" class="nav-link" data-scroll-target="#관련-주제"><span class="header-section-number">7</span> 관련 주제</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="정의" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="정의"><span class="header-section-number">1</span> 정의</h2>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+정의: Thompson Sampling
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Thompson Sampling(1933)은 <strong>Bayesian 방식의 Multi-Armed Bandit 알고리즘</strong>이다. 각 변형(arm)의 성공 확률에 대한 사후 분포(posterior)에서 샘플을 추출하고, <strong>샘플 값이 가장 높은 변형에 트래픽을 배정</strong>한다.</p>
+<ul>
+<li><p>핵심 아이디어: 불확실한 변형일수록 탐색(explore) 확률이 자연스럽게 높아진다</p></li>
+<li><p>수학적 기반: Beta-Bernoulli 모델 (이진 결과) 또는 Normal-Normal 모델 (연속 결과)</p></li>
+<li><p>A/B 테스트와의 차이: 고정 배분 → <strong>적응적 배분(adaptive allocation)</strong></p></li>
+<li><p>역학: Adaptive randomization, Response-adaptive design (윤리적 고려로 임상시험에서 발전)</p></li>
+<li><p>IT: Multi-Armed Bandit, Dynamic traffic allocation</p></li>
+</ul>
+</div>
+</div>
+<hr>
+</section>
+<section id="왜-thompson-sampling인가" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="왜-thompson-sampling인가"><span class="header-section-number">2</span> 왜 Thompson Sampling인가</h2>
+<section id="고정-배분의-한계" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="고정-배분의-한계"><span class="header-section-number">2.1</span> 고정 배분의 한계</h3>
+<p>전통적 A/B 테스트에서 50:50 배분은 <strong>통계적으로는 최적</strong>이지만, <strong>비즈니스적으로는 비용</strong>이다:</p>
+<pre><code>1000건 질의, 50:50 배분
+
+Treatment이 실제로 더 좋다면:
+- Control에 배정된 500건 = 열등한 경험 제공 = 기회 비용
+- 이 비용은 실험 기간 내내 지속된다</code></pre>
+<p>이 기회 비용을 수치화하면: Treatment의 Task Completion Rate이 실제로 75%(Control 60%)라면, 500건 중 75건의 추가 성공을 포기한 것이다. MINERVA QnA Chatbot에서 이는 75명의 사용자가 추가 질문 없이 업무를 완료할 수 있었는데 그러지 못한 것을 의미한다. Thompson Sampling은 이 차이를 감지하는 즉시 Treatment 비율을 높여 기회 비용을 줄인다.</p>
+</section>
+<section id="thompson-sampling의-이점" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="thompson-sampling의-이점"><span class="header-section-number">2.2</span> Thompson Sampling의 이점</h3>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>차원</th>
+<th>고정 A/B</th>
+<th>Thompson Sampling</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>배분 비율</td>
+<td>50:50 고정</td>
+<td>성능에 따라 동적 조정</td>
+</tr>
+<tr class="even">
+<td>기회 비용</td>
+<td>높음 (열등한 arm에 50%)</td>
+<td>낮음 (자동 축소)</td>
+</tr>
+<tr class="odd">
+<td>탐색-활용</td>
+<td>순수 탐색</td>
+<td>자동 균형</td>
+</tr>
+<tr class="even">
+<td>수렴 속도</td>
+<td>고정</td>
+<td>좋은 arm이 빠르게 수렴</td>
+</tr>
+<tr class="odd">
+<td>통계적 추론</td>
+<td>명확 (frequentist)</td>
+<td>Bayesian credible interval</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="minerva-맥락" class="level3" data-number="2.3">
+<h3 data-number="2.3" class="anchored" data-anchor-id="minerva-맥락"><span class="header-section-number">2.3</span> MINERVA 맥락</h3>
+<p>MINERVA Agent는 실험 변수 조합이 많다 (모델 × 프롬프트 × top-k × …). 모든 조합을 50:50으로 실험하면 수개월이 걸린다. Thompson Sampling은 <strong>열등한 조합을 빠르게 탈락</strong>시키고 유망한 조합에 집중한다.</p>
+<hr>
+</section>
+</section>
+<section id="beta-bernoulli-thompson-sampling" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="beta-bernoulli-thompson-sampling"><span class="header-section-number">3</span> Beta-Bernoulli Thompson Sampling</h2>
+<section id="이진-결과-성공실패" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="이진-결과-성공실패"><span class="header-section-number">3.1</span> 이진 결과 (성공/실패)</h3>
+<p>가장 기본적인 형태이다. 각 변형의 성공 확률 <span class="math inline">\(\theta_k\)</span>에 대해 Beta 사전 분포를 설정한다.</p>
+<p><span class="math display">\[
+\theta_k \sim \text{Beta}(\alpha_k, \beta_k)
+\]</span></p>
+<ul>
+<li><span class="math inline">\(\alpha_k\)</span>: 성공 횟수 + 사전 성공 (초기값 1)</li>
+<li><span class="math inline">\(\beta_k\)</span>: 실패 횟수 + 사전 실패 (초기값 1)</li>
+</ul>
+<p>직관적으로, Thompson Sampling은 <strong>“자신 없는 식당에 더 자주 가보는”</strong> 전략이다. 세 식당이 있고, A는 10번 가서 8번 맛있었고(확신 높음), B는 2번 가서 1번 맛있었다(확신 낮음). 다음에 어디 갈지 정할 때, A가 좋을 확률은 높지만 거의 확정이고, B는 좋을 수도 나쁠 수도 있다. Beta 분포에서 샘플링하면, B의 샘플이 가끔 A보다 높게 나온다 — 이때 B를 시도(탐색)한다. B에 갈수록 확신이 쌓이고, 정말 나쁘면 자연스럽게 안 가게 된다. 이 과정이 탐색(explore)과 활용(exploit)의 자동 균형이다.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb2-2"><a href="#cb2-2"></a></span>
+<span id="cb2-3"><a href="#cb2-3"></a><span class="kw">class</span> BetaBernoulliThompson:</span>
+<span id="cb2-4"><a href="#cb2-4"></a>    <span class="co">"""Beta-Bernoulli Thompson Sampling</span></span>
+<span id="cb2-5"><a href="#cb2-5"></a></span>
+<span id="cb2-6"><a href="#cb2-6"></a><span class="co">    이진 결과 (예: Hit Rate, Task Completion) 기반 동적 배분</span></span>
+<span id="cb2-7"><a href="#cb2-7"></a><span class="co">    """</span></span>
+<span id="cb2-8"><a href="#cb2-8"></a></span>
+<span id="cb2-9"><a href="#cb2-9"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, arm_names: <span class="bu">list</span>[<span class="bu">str</span>], prior_alpha<span class="op">=</span><span class="dv">1</span>, prior_beta<span class="op">=</span><span class="dv">1</span>):</span>
+<span id="cb2-10"><a href="#cb2-10"></a>        <span class="co">"""</span></span>
+<span id="cb2-11"><a href="#cb2-11"></a><span class="co">        Args:</span></span>
+<span id="cb2-12"><a href="#cb2-12"></a><span class="co">            arm_names: 변형 이름 리스트</span></span>
+<span id="cb2-13"><a href="#cb2-13"></a><span class="co">            prior_alpha, prior_beta: Beta 사전분포 파라미터</span></span>
+<span id="cb2-14"><a href="#cb2-14"></a><span class="co">                (1,1) = 균등 사전분포 (무정보)</span></span>
+<span id="cb2-15"><a href="#cb2-15"></a><span class="co">                (2,2) = 약한 정보 (중앙 집중)</span></span>
+<span id="cb2-16"><a href="#cb2-16"></a><span class="co">        """</span></span>
+<span id="cb2-17"><a href="#cb2-17"></a>        <span class="va">self</span>.arms <span class="op">=</span> arm_names</span>
+<span id="cb2-18"><a href="#cb2-18"></a>        <span class="va">self</span>.alpha <span class="op">=</span> {arm: prior_alpha <span class="cf">for</span> arm <span class="kw">in</span> arm_names}</span>
+<span id="cb2-19"><a href="#cb2-19"></a>        <span class="va">self</span>.beta <span class="op">=</span> {arm: prior_beta <span class="cf">for</span> arm <span class="kw">in</span> arm_names}</span>
+<span id="cb2-20"><a href="#cb2-20"></a>        <span class="va">self</span>.history <span class="op">=</span> []</span>
+<span id="cb2-21"><a href="#cb2-21"></a></span>
+<span id="cb2-22"><a href="#cb2-22"></a>    <span class="kw">def</span> select_arm(<span class="va">self</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb2-23"><a href="#cb2-23"></a>        <span class="co">"""각 arm의 사후분포에서 샘플링하여 최고값 arm을 선택한다"""</span></span>
+<span id="cb2-24"><a href="#cb2-24"></a>        samples <span class="op">=</span> {}</span>
+<span id="cb2-25"><a href="#cb2-25"></a>        <span class="cf">for</span> arm <span class="kw">in</span> <span class="va">self</span>.arms:</span>
+<span id="cb2-26"><a href="#cb2-26"></a>            samples[arm] <span class="op">=</span> np.random.beta(<span class="va">self</span>.alpha[arm], <span class="va">self</span>.beta[arm])</span>
+<span id="cb2-27"><a href="#cb2-27"></a>        selected <span class="op">=</span> <span class="bu">max</span>(samples, key<span class="op">=</span>samples.get)</span>
+<span id="cb2-28"><a href="#cb2-28"></a>        <span class="cf">return</span> selected</span>
+<span id="cb2-29"><a href="#cb2-29"></a></span>
+<span id="cb2-30"><a href="#cb2-30"></a>    <span class="kw">def</span> update(<span class="va">self</span>, arm: <span class="bu">str</span>, reward: <span class="bu">int</span>):</span>
+<span id="cb2-31"><a href="#cb2-31"></a>        <span class="co">"""관측 결과로 사후분포를 업데이트한다</span></span>
+<span id="cb2-32"><a href="#cb2-32"></a></span>
+<span id="cb2-33"><a href="#cb2-33"></a><span class="co">        Args:</span></span>
+<span id="cb2-34"><a href="#cb2-34"></a><span class="co">            arm: 선택된 변형</span></span>
+<span id="cb2-35"><a href="#cb2-35"></a><span class="co">            reward: 1 (성공) 또는 0 (실패)</span></span>
+<span id="cb2-36"><a href="#cb2-36"></a><span class="co">        """</span></span>
+<span id="cb2-37"><a href="#cb2-37"></a>        <span class="cf">if</span> reward <span class="op">==</span> <span class="dv">1</span>:</span>
+<span id="cb2-38"><a href="#cb2-38"></a>            <span class="va">self</span>.alpha[arm] <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb2-39"><a href="#cb2-39"></a>        <span class="cf">else</span>:</span>
+<span id="cb2-40"><a href="#cb2-40"></a>            <span class="va">self</span>.beta[arm] <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb2-41"><a href="#cb2-41"></a>        <span class="va">self</span>.history.append({<span class="st">"arm"</span>: arm, <span class="st">"reward"</span>: reward})</span>
+<span id="cb2-42"><a href="#cb2-42"></a></span>
+<span id="cb2-43"><a href="#cb2-43"></a>    <span class="kw">def</span> get_stats(<span class="va">self</span>) <span class="op">-&gt;</span> <span class="bu">dict</span>:</span>
+<span id="cb2-44"><a href="#cb2-44"></a>        <span class="co">"""각 arm의 현재 통계"""</span></span>
+<span id="cb2-45"><a href="#cb2-45"></a>        stats <span class="op">=</span> {}</span>
+<span id="cb2-46"><a href="#cb2-46"></a>        <span class="cf">for</span> arm <span class="kw">in</span> <span class="va">self</span>.arms:</span>
+<span id="cb2-47"><a href="#cb2-47"></a>            a, b <span class="op">=</span> <span class="va">self</span>.alpha[arm], <span class="va">self</span>.beta[arm]</span>
+<span id="cb2-48"><a href="#cb2-48"></a>            n <span class="op">=</span> a <span class="op">+</span> b <span class="op">-</span> <span class="dv">2</span>  <span class="co"># 사전분포 제외한 관측 수</span></span>
+<span id="cb2-49"><a href="#cb2-49"></a>            stats[arm] <span class="op">=</span> {</span>
+<span id="cb2-50"><a href="#cb2-50"></a>                <span class="st">"n_observations"</span>: n,</span>
+<span id="cb2-51"><a href="#cb2-51"></a>                <span class="st">"successes"</span>: a <span class="op">-</span> <span class="dv">1</span>,</span>
+<span id="cb2-52"><a href="#cb2-52"></a>                <span class="st">"posterior_mean"</span>: <span class="bu">round</span>(a <span class="op">/</span> (a <span class="op">+</span> b), <span class="dv">4</span>),</span>
+<span id="cb2-53"><a href="#cb2-53"></a>                <span class="st">"posterior_std"</span>: <span class="bu">round</span>(np.sqrt(a <span class="op">*</span> b <span class="op">/</span> ((a<span class="op">+</span>b)<span class="op">**</span><span class="dv">2</span> <span class="op">*</span> (a<span class="op">+</span>b<span class="op">+</span><span class="dv">1</span>))), <span class="dv">4</span>),</span>
+<span id="cb2-54"><a href="#cb2-54"></a>                <span class="st">"ci_95"</span>: (</span>
+<span id="cb2-55"><a href="#cb2-55"></a>                    <span class="bu">round</span>(np.percentile(np.random.beta(a, b, <span class="dv">10000</span>), <span class="fl">2.5</span>), <span class="dv">4</span>),</span>
+<span id="cb2-56"><a href="#cb2-56"></a>                    <span class="bu">round</span>(np.percentile(np.random.beta(a, b, <span class="dv">10000</span>), <span class="fl">97.5</span>), <span class="dv">4</span>),</span>
+<span id="cb2-57"><a href="#cb2-57"></a>                ),</span>
+<span id="cb2-58"><a href="#cb2-58"></a>            }</span>
+<span id="cb2-59"><a href="#cb2-59"></a>        <span class="cf">return</span> stats</span>
+<span id="cb2-60"><a href="#cb2-60"></a></span>
+<span id="cb2-61"><a href="#cb2-61"></a></span>
+<span id="cb2-62"><a href="#cb2-62"></a><span class="co"># 사용 예시: MINERVA 프롬프트 3개 버전 비교</span></span>
+<span id="cb2-63"><a href="#cb2-63"></a>ts <span class="op">=</span> BetaBernoulliThompson([<span class="st">"prompt_v1"</span>, <span class="st">"prompt_v2"</span>, <span class="st">"prompt_v3"</span>])</span>
+<span id="cb2-64"><a href="#cb2-64"></a></span>
+<span id="cb2-65"><a href="#cb2-65"></a><span class="co"># 시뮬레이션: 진짜 성공 확률</span></span>
+<span id="cb2-66"><a href="#cb2-66"></a>true_probs <span class="op">=</span> {<span class="st">"prompt_v1"</span>: <span class="fl">0.60</span>, <span class="st">"prompt_v2"</span>: <span class="fl">0.75</span>, <span class="st">"prompt_v3"</span>: <span class="fl">0.65</span>}</span>
+<span id="cb2-67"><a href="#cb2-67"></a></span>
+<span id="cb2-68"><a href="#cb2-68"></a><span class="cf">for</span> i <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">300</span>):</span>
+<span id="cb2-69"><a href="#cb2-69"></a>    arm <span class="op">=</span> ts.select_arm()</span>
+<span id="cb2-70"><a href="#cb2-70"></a>    reward <span class="op">=</span> <span class="bu">int</span>(np.random.random() <span class="op">&lt;</span> true_probs[arm])</span>
+<span id="cb2-71"><a href="#cb2-71"></a>    ts.update(arm, reward)</span>
+<span id="cb2-72"><a href="#cb2-72"></a></span>
+<span id="cb2-73"><a href="#cb2-73"></a><span class="co"># 결과 확인</span></span>
+<span id="cb2-74"><a href="#cb2-74"></a>stats <span class="op">=</span> ts.get_stats()</span>
+<span id="cb2-75"><a href="#cb2-75"></a><span class="cf">for</span> arm, s <span class="kw">in</span> stats.items():</span>
+<span id="cb2-76"><a href="#cb2-76"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>arm<span class="sc">}</span><span class="ss">: n=</span><span class="sc">{</span>s[<span class="st">'n_observations'</span>]<span class="sc">}</span><span class="ss">, "</span></span>
+<span id="cb2-77"><a href="#cb2-77"></a>          <span class="ss">f"posterior_mean=</span><span class="sc">{</span>s[<span class="st">'posterior_mean'</span>]<span class="sc">}</span><span class="ss">, "</span></span>
+<span id="cb2-78"><a href="#cb2-78"></a>          <span class="ss">f"95% CI=</span><span class="sc">{</span>s[<span class="st">'ci_95'</span>]<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="연속형-결과로-확장" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="연속형-결과로-확장"><span class="header-section-number">3.2</span> 연속형 결과로 확장</h3>
+<p>Relevance Score(1-5) 같은 연속형 메트릭에는 Normal-Normal 모델을 사용한다.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1"></a><span class="kw">class</span> NormalThompson:</span>
+<span id="cb3-2"><a href="#cb3-2"></a>    <span class="co">"""Normal-Normal Thompson Sampling</span></span>
+<span id="cb3-3"><a href="#cb3-3"></a></span>
+<span id="cb3-4"><a href="#cb3-4"></a><span class="co">    연속형 메트릭 (Relevance Score 등) 기반 동적 배분</span></span>
+<span id="cb3-5"><a href="#cb3-5"></a><span class="co">    """</span></span>
+<span id="cb3-6"><a href="#cb3-6"></a></span>
+<span id="cb3-7"><a href="#cb3-7"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, arm_names: <span class="bu">list</span>[<span class="bu">str</span>], prior_mean<span class="op">=</span><span class="dv">0</span>, prior_var<span class="op">=</span><span class="dv">10</span>, known_var<span class="op">=</span><span class="fl">1.0</span>):</span>
+<span id="cb3-8"><a href="#cb3-8"></a>        <span class="co">"""</span></span>
+<span id="cb3-9"><a href="#cb3-9"></a><span class="co">        Args:</span></span>
+<span id="cb3-10"><a href="#cb3-10"></a><span class="co">            prior_mean: 사전 평균</span></span>
+<span id="cb3-11"><a href="#cb3-11"></a><span class="co">            prior_var: 사전 분산 (크게 설정 = 무정보)</span></span>
+<span id="cb3-12"><a href="#cb3-12"></a><span class="co">            known_var: 알려진 관측 분산 (σ²)</span></span>
+<span id="cb3-13"><a href="#cb3-13"></a><span class="co">        """</span></span>
+<span id="cb3-14"><a href="#cb3-14"></a>        <span class="va">self</span>.arms <span class="op">=</span> arm_names</span>
+<span id="cb3-15"><a href="#cb3-15"></a>        <span class="va">self</span>.known_var <span class="op">=</span> known_var</span>
+<span id="cb3-16"><a href="#cb3-16"></a>        <span class="va">self</span>.mu <span class="op">=</span> {arm: prior_mean <span class="cf">for</span> arm <span class="kw">in</span> arm_names}</span>
+<span id="cb3-17"><a href="#cb3-17"></a>        <span class="va">self</span>.tau <span class="op">=</span> {arm: <span class="dv">1</span><span class="op">/</span>prior_var <span class="cf">for</span> arm <span class="kw">in</span> arm_names}  <span class="co"># precision</span></span>
+<span id="cb3-18"><a href="#cb3-18"></a>        <span class="va">self</span>.n <span class="op">=</span> {arm: <span class="dv">0</span> <span class="cf">for</span> arm <span class="kw">in</span> arm_names}</span>
+<span id="cb3-19"><a href="#cb3-19"></a>        <span class="va">self</span>.sum_rewards <span class="op">=</span> {arm: <span class="fl">0.0</span> <span class="cf">for</span> arm <span class="kw">in</span> arm_names}</span>
+<span id="cb3-20"><a href="#cb3-20"></a></span>
+<span id="cb3-21"><a href="#cb3-21"></a>    <span class="kw">def</span> select_arm(<span class="va">self</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb3-22"><a href="#cb3-22"></a>        samples <span class="op">=</span> {}</span>
+<span id="cb3-23"><a href="#cb3-23"></a>        <span class="cf">for</span> arm <span class="kw">in</span> <span class="va">self</span>.arms:</span>
+<span id="cb3-24"><a href="#cb3-24"></a>            posterior_mean <span class="op">=</span> <span class="va">self</span>.mu[arm]</span>
+<span id="cb3-25"><a href="#cb3-25"></a>            posterior_var <span class="op">=</span> <span class="dv">1</span> <span class="op">/</span> <span class="va">self</span>.tau[arm]</span>
+<span id="cb3-26"><a href="#cb3-26"></a>            samples[arm] <span class="op">=</span> np.random.normal(posterior_mean, np.sqrt(posterior_var))</span>
+<span id="cb3-27"><a href="#cb3-27"></a>        <span class="cf">return</span> <span class="bu">max</span>(samples, key<span class="op">=</span>samples.get)</span>
+<span id="cb3-28"><a href="#cb3-28"></a></span>
+<span id="cb3-29"><a href="#cb3-29"></a>    <span class="kw">def</span> update(<span class="va">self</span>, arm: <span class="bu">str</span>, reward: <span class="bu">float</span>):</span>
+<span id="cb3-30"><a href="#cb3-30"></a>        <span class="va">self</span>.n[arm] <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb3-31"><a href="#cb3-31"></a>        <span class="va">self</span>.sum_rewards[arm] <span class="op">+=</span> reward</span>
+<span id="cb3-32"><a href="#cb3-32"></a></span>
+<span id="cb3-33"><a href="#cb3-33"></a>        <span class="co"># 사후분포 업데이트 (conjugate)</span></span>
+<span id="cb3-34"><a href="#cb3-34"></a>        prior_tau <span class="op">=</span> <span class="va">self</span>.tau[arm]</span>
+<span id="cb3-35"><a href="#cb3-35"></a>        obs_tau <span class="op">=</span> <span class="dv">1</span> <span class="op">/</span> <span class="va">self</span>.known_var</span>
+<span id="cb3-36"><a href="#cb3-36"></a>        <span class="va">self</span>.tau[arm] <span class="op">=</span> prior_tau <span class="op">+</span> obs_tau</span>
+<span id="cb3-37"><a href="#cb3-37"></a>        <span class="va">self</span>.mu[arm] <span class="op">=</span> (prior_tau <span class="op">*</span> <span class="va">self</span>.mu[arm] <span class="op">+</span> obs_tau <span class="op">*</span> reward) <span class="op">/</span> <span class="va">self</span>.tau[arm]</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+</section>
+<section id="regret-분석" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="regret-분석"><span class="header-section-number">4</span> Regret 분석</h2>
+<section id="regret이란" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="regret이란"><span class="header-section-number">4.1</span> Regret이란</h3>
+<p>최적 arm만 선택했을 때의 누적 보상과 실제 누적 보상의 차이이다.</p>
+<p><span class="math display">\[
+R(T) = \sum_{t=1}^{T} (\mu^* - \mu_{a_t})
+\]</span></p>
+<ul>
+<li><span class="math inline">\(\mu^*\)</span>: 최적 arm의 기대 보상</li>
+<li><span class="math inline">\(\mu_{a_t}\)</span>: 시점 <span class="math inline">\(t\)</span>에서 선택한 arm의 기대 보상</li>
+</ul>
+<div class="sourceCode" id="cb4"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1"></a><span class="kw">def</span> simulate_and_compute_regret(algorithm, true_probs, n_rounds<span class="op">=</span><span class="dv">1000</span>, n_simulations<span class="op">=</span><span class="dv">100</span>):</span>
+<span id="cb4-2"><a href="#cb4-2"></a>    <span class="co">"""Thompson Sampling vs 고정 배분의 Regret 비교"""</span></span>
+<span id="cb4-3"><a href="#cb4-3"></a>    optimal_reward <span class="op">=</span> <span class="bu">max</span>(true_probs.values())</span>
+<span id="cb4-4"><a href="#cb4-4"></a>    arms <span class="op">=</span> <span class="bu">list</span>(true_probs.keys())</span>
+<span id="cb4-5"><a href="#cb4-5"></a></span>
+<span id="cb4-6"><a href="#cb4-6"></a>    ts_regrets <span class="op">=</span> np.zeros((n_simulations, n_rounds))</span>
+<span id="cb4-7"><a href="#cb4-7"></a>    uniform_regrets <span class="op">=</span> np.zeros((n_simulations, n_rounds))</span>
+<span id="cb4-8"><a href="#cb4-8"></a></span>
+<span id="cb4-9"><a href="#cb4-9"></a>    <span class="cf">for</span> sim <span class="kw">in</span> <span class="bu">range</span>(n_simulations):</span>
+<span id="cb4-10"><a href="#cb4-10"></a>        <span class="co"># Thompson Sampling</span></span>
+<span id="cb4-11"><a href="#cb4-11"></a>        ts <span class="op">=</span> BetaBernoulliThompson(arms)</span>
+<span id="cb4-12"><a href="#cb4-12"></a>        cumulative_regret <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb4-13"><a href="#cb4-13"></a>        <span class="cf">for</span> t <span class="kw">in</span> <span class="bu">range</span>(n_rounds):</span>
+<span id="cb4-14"><a href="#cb4-14"></a>            arm <span class="op">=</span> ts.select_arm()</span>
+<span id="cb4-15"><a href="#cb4-15"></a>            reward <span class="op">=</span> <span class="bu">int</span>(np.random.random() <span class="op">&lt;</span> true_probs[arm])</span>
+<span id="cb4-16"><a href="#cb4-16"></a>            ts.update(arm, reward)</span>
+<span id="cb4-17"><a href="#cb4-17"></a>            cumulative_regret <span class="op">+=</span> optimal_reward <span class="op">-</span> true_probs[arm]</span>
+<span id="cb4-18"><a href="#cb4-18"></a>            ts_regrets[sim, t] <span class="op">=</span> cumulative_regret</span>
+<span id="cb4-19"><a href="#cb4-19"></a></span>
+<span id="cb4-20"><a href="#cb4-20"></a>        <span class="co"># Uniform (고정 50:50:50)</span></span>
+<span id="cb4-21"><a href="#cb4-21"></a>        cumulative_regret <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb4-22"><a href="#cb4-22"></a>        <span class="cf">for</span> t <span class="kw">in</span> <span class="bu">range</span>(n_rounds):</span>
+<span id="cb4-23"><a href="#cb4-23"></a>            arm <span class="op">=</span> arms[t <span class="op">%</span> <span class="bu">len</span>(arms)]</span>
+<span id="cb4-24"><a href="#cb4-24"></a>            cumulative_regret <span class="op">+=</span> optimal_reward <span class="op">-</span> true_probs[arm]</span>
+<span id="cb4-25"><a href="#cb4-25"></a>            uniform_regrets[sim, t] <span class="op">=</span> cumulative_regret</span>
+<span id="cb4-26"><a href="#cb4-26"></a></span>
+<span id="cb4-27"><a href="#cb4-27"></a>    <span class="cf">return</span> {</span>
+<span id="cb4-28"><a href="#cb4-28"></a>        <span class="st">"thompson_mean_regret"</span>: ts_regrets.mean(axis<span class="op">=</span><span class="dv">0</span>),</span>
+<span id="cb4-29"><a href="#cb4-29"></a>        <span class="st">"uniform_mean_regret"</span>: uniform_regrets.mean(axis<span class="op">=</span><span class="dv">0</span>),</span>
+<span id="cb4-30"><a href="#cb4-30"></a>        <span class="st">"thompson_final"</span>: ts_regrets[:, <span class="op">-</span><span class="dv">1</span>].mean(),</span>
+<span id="cb4-31"><a href="#cb4-31"></a>        <span class="st">"uniform_final"</span>: uniform_regrets[:, <span class="op">-</span><span class="dv">1</span>].mean(),</span>
+<span id="cb4-32"><a href="#cb4-32"></a>    }</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="regret-시각화" class="level3" data-number="4.2">
+<h3 data-number="4.2" class="anchored" data-anchor-id="regret-시각화"><span class="header-section-number">4.2</span> Regret 시각화</h3>
+<div class="sourceCode" id="cb5"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb5-2"><a href="#cb5-2"></a></span>
+<span id="cb5-3"><a href="#cb5-3"></a>true_probs <span class="op">=</span> {<span class="st">"prompt_v1"</span>: <span class="fl">0.60</span>, <span class="st">"prompt_v2"</span>: <span class="fl">0.75</span>, <span class="st">"prompt_v3"</span>: <span class="fl">0.65</span>}</span>
+<span id="cb5-4"><a href="#cb5-4"></a>results <span class="op">=</span> simulate_and_compute_regret(<span class="va">None</span>, true_probs, n_rounds<span class="op">=</span><span class="dv">500</span>, n_simulations<span class="op">=</span><span class="dv">200</span>)</span>
+<span id="cb5-5"><a href="#cb5-5"></a></span>
+<span id="cb5-6"><a href="#cb5-6"></a>fig, ax <span class="op">=</span> plt.subplots(figsize<span class="op">=</span>(<span class="dv">10</span>, <span class="dv">5</span>))</span>
+<span id="cb5-7"><a href="#cb5-7"></a>ax.plot(results[<span class="st">"thompson_mean_regret"</span>], label<span class="op">=</span><span class="st">"Thompson Sampling"</span>, color<span class="op">=</span><span class="st">"blue"</span>)</span>
+<span id="cb5-8"><a href="#cb5-8"></a>ax.plot(results[<span class="st">"uniform_mean_regret"</span>], label<span class="op">=</span><span class="st">"Uniform (고정 배분)"</span>, color<span class="op">=</span><span class="st">"red"</span>, linestyle<span class="op">=</span><span class="st">"--"</span>)</span>
+<span id="cb5-9"><a href="#cb5-9"></a>ax.set_xlabel(<span class="st">"라운드 (질의 수)"</span>)</span>
+<span id="cb5-10"><a href="#cb5-10"></a>ax.set_ylabel(<span class="st">"누적 Regret"</span>)</span>
+<span id="cb5-11"><a href="#cb5-11"></a>ax.set_title(<span class="st">"Thompson Sampling vs 고정 배분의 Regret 비교"</span>)</span>
+<span id="cb5-12"><a href="#cb5-12"></a>ax.legend()</span>
+<span id="cb5-13"><a href="#cb5-13"></a>ax.grid(<span class="va">True</span>, alpha<span class="op">=</span><span class="fl">0.3</span>)</span>
+<span id="cb5-14"><a href="#cb5-14"></a>plt.tight_layout()</span>
+<span id="cb5-15"><a href="#cb5-15"></a>plt.show()</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+</section>
+<section id="minerva-동적-라우팅-적용" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="minerva-동적-라우팅-적용"><span class="header-section-number">5</span> MINERVA 동적 라우팅 적용</h2>
+<section id="시나리오-프롬프트-최적화" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="시나리오-프롬프트-최적화"><span class="header-section-number">5.1</span> 시나리오: 프롬프트 최적화</h3>
+<div class="sourceCode" id="cb6"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1"></a><span class="co"># MINERVA QnA Chatbot: 3개 프롬프트 버전을 동적 배분</span></span>
+<span id="cb6-2"><a href="#cb6-2"></a><span class="co"># 이진 메트릭: Task Completion (질의 후 추가 질문 없음 = 성공)</span></span>
+<span id="cb6-3"><a href="#cb6-3"></a></span>
+<span id="cb6-4"><a href="#cb6-4"></a>router <span class="op">=</span> BetaBernoulliThompson(</span>
+<span id="cb6-5"><a href="#cb6-5"></a>    arm_names<span class="op">=</span>[<span class="st">"system_prompt_v1"</span>, <span class="st">"system_prompt_v2"</span>, <span class="st">"system_prompt_v3"</span>],</span>
+<span id="cb6-6"><a href="#cb6-6"></a>    prior_alpha<span class="op">=</span><span class="dv">1</span>,  <span class="co"># 균등 사전분포</span></span>
+<span id="cb6-7"><a href="#cb6-7"></a>    prior_beta<span class="op">=</span><span class="dv">1</span></span>
+<span id="cb6-8"><a href="#cb6-8"></a>)</span>
+<span id="cb6-9"><a href="#cb6-9"></a></span>
+<span id="cb6-10"><a href="#cb6-10"></a><span class="kw">def</span> handle_query(query: <span class="bu">str</span>, session_id: <span class="bu">str</span>):</span>
+<span id="cb6-11"><a href="#cb6-11"></a>    <span class="co">"""실시간 질의 처리 + 동적 라우팅"""</span></span>
+<span id="cb6-12"><a href="#cb6-12"></a>    <span class="co"># Thompson Sampling으로 프롬프트 선택</span></span>
+<span id="cb6-13"><a href="#cb6-13"></a>    selected_prompt <span class="op">=</span> router.select_arm()</span>
+<span id="cb6-14"><a href="#cb6-14"></a></span>
+<span id="cb6-15"><a href="#cb6-15"></a>    <span class="co"># Agent 실행</span></span>
+<span id="cb6-16"><a href="#cb6-16"></a>    response <span class="op">=</span> run_agent(</span>
+<span id="cb6-17"><a href="#cb6-17"></a>        config<span class="op">=</span>{<span class="st">"system_prompt"</span>: selected_prompt, <span class="st">"top_k"</span>: <span class="dv">6</span>},</span>
+<span id="cb6-18"><a href="#cb6-18"></a>        query<span class="op">=</span>query</span>
+<span id="cb6-19"><a href="#cb6-19"></a>    )</span>
+<span id="cb6-20"><a href="#cb6-20"></a></span>
+<span id="cb6-21"><a href="#cb6-21"></a>    <span class="co"># 응답 반환</span></span>
+<span id="cb6-22"><a href="#cb6-22"></a>    <span class="cf">return</span> response, selected_prompt</span>
+<span id="cb6-23"><a href="#cb6-23"></a></span>
+<span id="cb6-24"><a href="#cb6-24"></a><span class="kw">def</span> process_feedback(selected_prompt: <span class="bu">str</span>, task_completed: <span class="bu">bool</span>):</span>
+<span id="cb6-25"><a href="#cb6-25"></a>    <span class="co">"""사용자 피드백(또는 자동 판정)으로 보상 업데이트"""</span></span>
+<span id="cb6-26"><a href="#cb6-26"></a>    router.update(selected_prompt, <span class="bu">int</span>(task_completed))</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="시나리오-다변수-조합-최적화" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="시나리오-다변수-조합-최적화"><span class="header-section-number">5.2</span> 시나리오: 다변수 조합 최적화</h3>
+<p>프롬프트 × top-k를 조합으로 실험할 때, 각 조합을 하나의 arm으로 취급한다.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1"></a><span class="im">import</span> itertools</span>
+<span id="cb7-2"><a href="#cb7-2"></a></span>
+<span id="cb7-3"><a href="#cb7-3"></a><span class="co"># 조합 생성</span></span>
+<span id="cb7-4"><a href="#cb7-4"></a>prompts <span class="op">=</span> [<span class="st">"v1"</span>, <span class="st">"v2"</span>, <span class="st">"v3"</span>]</span>
+<span id="cb7-5"><a href="#cb7-5"></a>top_ks <span class="op">=</span> [<span class="dv">5</span>, <span class="dv">10</span>]</span>
+<span id="cb7-6"><a href="#cb7-6"></a>combinations <span class="op">=</span> [<span class="ss">f"prompt_</span><span class="sc">{</span>p<span class="sc">}</span><span class="ss">_topk_</span><span class="sc">{</span>k<span class="sc">}</span><span class="ss">"</span> <span class="cf">for</span> p, k <span class="kw">in</span> itertools.product(prompts, top_ks)]</span>
+<span id="cb7-7"><a href="#cb7-7"></a><span class="co"># → ["prompt_v1_topk_5", "prompt_v1_topk_10", ..., "prompt_v3_topk_10"]</span></span>
+<span id="cb7-8"><a href="#cb7-8"></a></span>
+<span id="cb7-9"><a href="#cb7-9"></a>router <span class="op">=</span> BetaBernoulliThompson(combinations)</span>
+<span id="cb7-10"><a href="#cb7-10"></a><span class="co"># 6개 arm → Thompson Sampling이 자동으로 유망한 조합에 집중</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+</section>
+<section id="thompson-sampling의-주의사항" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="thompson-sampling의-주의사항"><span class="header-section-number">6</span> Thompson Sampling의 주의사항</h2>
+<section id="통계적-추론의-어려움" class="level3" data-number="6.1">
+<h3 data-number="6.1" class="anchored" data-anchor-id="통계적-추론의-어려움"><span class="header-section-number">6.1</span> 통계적 추론의 어려움</h3>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+A/B 테스트와의 트레이드오프
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Thompson Sampling은 기회 비용을 줄이지만, <strong>전통적 의미의 p-value와 신뢰구간을 제공하지 않는다</strong>. 적응적 배분 때문에 표본이 독립동일분포(i.i.d.)가 아니게 되어 frequentist 추론이 어렵다.</p>
+<p>대안: - Bayesian credible interval로 불확실성을 표현한다 - “Best arm의 사후 확률”로 의사결정한다 - 엄밀한 효과 크기 추정이 필요하면 고정 A/B를 사용한다</p>
+</div>
+</div>
+<p>왜 이것이 문제인가: 전통 A/B는 동전을 100번 던져서 앞면 비율을 계산하는 것과 같다. 동전이 공정하다면(50:50 배분), 표본 비율의 분포를 정확히 알 수 있다. 반면 Thompson Sampling은 <strong>앞면이 나올수록 그 동전을 더 자주 던지는</strong> 구조이다. 선택 자체가 결과에 의존하므로, “공정한 동전이라면 이 비율이 나올 확률”을 기존 공식으로 계산할 수 없다. 이것이 frequentist p-value가 무효화되는 근본 이유이다.</p>
+</section>
+<section id="delayed-feedback" class="level3" data-number="6.2">
+<h3 data-number="6.2" class="anchored" data-anchor-id="delayed-feedback"><span class="header-section-number">6.2</span> Delayed Feedback</h3>
+<p>Agent 실험에서 “성공/실패” 판정이 즉시 이루어지지 않을 수 있다. Task Completion은 세션 종료 후에야 판정 가능하다.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1"></a><span class="kw">class</span> DelayedThompson(BetaBernoulliThompson):</span>
+<span id="cb8-2"><a href="#cb8-2"></a>    <span class="co">"""지연 피드백을 처리하는 Thompson Sampling"""</span></span>
+<span id="cb8-3"><a href="#cb8-3"></a></span>
+<span id="cb8-4"><a href="#cb8-4"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, <span class="op">*</span>args, <span class="op">**</span>kwargs):</span>
+<span id="cb8-5"><a href="#cb8-5"></a>        <span class="bu">super</span>().<span class="fu">__init__</span>(<span class="op">*</span>args, <span class="op">**</span>kwargs)</span>
+<span id="cb8-6"><a href="#cb8-6"></a>        <span class="va">self</span>.pending <span class="op">=</span> []  <span class="co"># 피드백 대기 중인 배정</span></span>
+<span id="cb8-7"><a href="#cb8-7"></a></span>
+<span id="cb8-8"><a href="#cb8-8"></a>    <span class="kw">def</span> select_arm_with_pending(<span class="va">self</span>):</span>
+<span id="cb8-9"><a href="#cb8-9"></a>        <span class="co">"""피드백 대기 건을 고려하여 선택"""</span></span>
+<span id="cb8-10"><a href="#cb8-10"></a>        <span class="co"># 대기 중인 건은 사전분포에 반영하지 않되,</span></span>
+<span id="cb8-11"><a href="#cb8-11"></a>        <span class="co"># 과도한 배정 집중을 방지한다</span></span>
+<span id="cb8-12"><a href="#cb8-12"></a>        arm <span class="op">=</span> <span class="va">self</span>.select_arm()</span>
+<span id="cb8-13"><a href="#cb8-13"></a>        <span class="va">self</span>.pending.append(arm)</span>
+<span id="cb8-14"><a href="#cb8-14"></a>        <span class="cf">return</span> arm</span>
+<span id="cb8-15"><a href="#cb8-15"></a></span>
+<span id="cb8-16"><a href="#cb8-16"></a>    <span class="kw">def</span> resolve_pending(<span class="va">self</span>, arm: <span class="bu">str</span>, reward: <span class="bu">int</span>):</span>
+<span id="cb8-17"><a href="#cb8-17"></a>        <span class="co">"""지연 피드백 도착 시 업데이트"""</span></span>
+<span id="cb8-18"><a href="#cb8-18"></a>        <span class="va">self</span>.update(arm, reward)</span>
+<span id="cb8-19"><a href="#cb8-19"></a>        <span class="cf">if</span> arm <span class="kw">in</span> <span class="va">self</span>.pending:</span>
+<span id="cb8-20"><a href="#cb8-20"></a>            <span class="va">self</span>.pending.remove(arm)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="종료-기준" class="level3" data-number="6.3">
+<h3 data-number="6.3" class="anchored" data-anchor-id="종료-기준"><span class="header-section-number">6.3</span> 종료 기준</h3>
+<p>Thompson Sampling에는 고정된 종료 시점이 없다. 실무적 종료 기준:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>기준</th>
+<th>값</th>
+<th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Best arm 사후 확률</td>
+<td>&gt; 0.95</td>
+<td>“이 arm이 최고일 확률이 95% 이상”</td>
+</tr>
+<tr class="even">
+<td>최소 관측 수</td>
+<td>각 arm ≥ 30</td>
+<td>충분한 탐색 보장</td>
+</tr>
+<tr class="odd">
+<td>최대 라운드</td>
+<td>500</td>
+<td>무한 실행 방지</td>
+</tr>
+<tr class="even">
+<td>Regret 수렴</td>
+<td>기울기 &lt; ε</td>
+<td>추가 탐색의 한계 효용</td>
+</tr>
+</tbody>
+</table>
+<p>왜 이 값들인가: 사후 확률 0.95는 “100번 중 95번은 이 arm이 최고”라는 의미로, 임상시험의 α=0.05와 대칭적인 확신 수준이다. 최소 관측 수 30은 Beta 분포의 사후 분산이 충분히 줄어들어 사후 평균이 안정화되는 경험적 하한이다. 30건 미만이면 사전분포(Beta(1,1))의 영향이 지나치게 커서, 실제 성능이 아니라 사전 믿음으로 판단하게 된다.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1"></a><span class="kw">def</span> should_stop(ts: BetaBernoulliThompson, threshold<span class="op">=</span><span class="fl">0.95</span>, min_per_arm<span class="op">=</span><span class="dv">30</span>):</span>
+<span id="cb9-2"><a href="#cb9-2"></a>    <span class="co">"""종료 조건 판정"""</span></span>
+<span id="cb9-3"><a href="#cb9-3"></a>    stats <span class="op">=</span> ts.get_stats()</span>
+<span id="cb9-4"><a href="#cb9-4"></a></span>
+<span id="cb9-5"><a href="#cb9-5"></a>    <span class="co"># 최소 관측 수 확인</span></span>
+<span id="cb9-6"><a href="#cb9-6"></a>    <span class="cf">for</span> arm, s <span class="kw">in</span> stats.items():</span>
+<span id="cb9-7"><a href="#cb9-7"></a>        <span class="cf">if</span> s[<span class="st">"n_observations"</span>] <span class="op">&lt;</span> min_per_arm:</span>
+<span id="cb9-8"><a href="#cb9-8"></a>            <span class="cf">return</span> <span class="va">False</span>, <span class="st">"최소 관측 수 미달"</span></span>
+<span id="cb9-9"><a href="#cb9-9"></a></span>
+<span id="cb9-10"><a href="#cb9-10"></a>    <span class="co"># Best arm 사후 확률 계산 (Monte Carlo)</span></span>
+<span id="cb9-11"><a href="#cb9-11"></a>    n_samples <span class="op">=</span> <span class="dv">10000</span></span>
+<span id="cb9-12"><a href="#cb9-12"></a>    samples <span class="op">=</span> {</span>
+<span id="cb9-13"><a href="#cb9-13"></a>        arm: np.random.beta(ts.alpha[arm], ts.beta[arm], n_samples)</span>
+<span id="cb9-14"><a href="#cb9-14"></a>        <span class="cf">for</span> arm <span class="kw">in</span> ts.arms</span>
+<span id="cb9-15"><a href="#cb9-15"></a>    }</span>
+<span id="cb9-16"><a href="#cb9-16"></a>    best_counts <span class="op">=</span> {arm: <span class="dv">0</span> <span class="cf">for</span> arm <span class="kw">in</span> ts.arms}</span>
+<span id="cb9-17"><a href="#cb9-17"></a>    <span class="cf">for</span> i <span class="kw">in</span> <span class="bu">range</span>(n_samples):</span>
+<span id="cb9-18"><a href="#cb9-18"></a>        best <span class="op">=</span> <span class="bu">max</span>(ts.arms, key<span class="op">=</span><span class="kw">lambda</span> a: samples[a][i])</span>
+<span id="cb9-19"><a href="#cb9-19"></a>        best_counts[best] <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb9-20"><a href="#cb9-20"></a></span>
+<span id="cb9-21"><a href="#cb9-21"></a>    best_arm <span class="op">=</span> <span class="bu">max</span>(best_counts, key<span class="op">=</span>best_counts.get)</span>
+<span id="cb9-22"><a href="#cb9-22"></a>    best_prob <span class="op">=</span> best_counts[best_arm] <span class="op">/</span> n_samples</span>
+<span id="cb9-23"><a href="#cb9-23"></a></span>
+<span id="cb9-24"><a href="#cb9-24"></a>    <span class="cf">if</span> best_prob <span class="op">&gt;=</span> threshold:</span>
+<span id="cb9-25"><a href="#cb9-25"></a>        <span class="cf">return</span> <span class="va">True</span>, <span class="ss">f"Best arm: </span><span class="sc">{</span>best_arm<span class="sc">}</span><span class="ss"> (P=</span><span class="sc">{</span>best_prob<span class="sc">:.3f}</span><span class="ss">)"</span></span>
+<span id="cb9-26"><a href="#cb9-26"></a>    <span class="cf">return</span> <span class="va">False</span>, <span class="ss">f"최고 확률 </span><span class="sc">{</span>best_prob<span class="sc">:.3f}</span><span class="ss"> &lt; </span><span class="sc">{</span>threshold<span class="sc">}</span><span class="ss">"</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+</section>
+<section id="관련-주제" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">7</span> 관련 주제</h2>
+<p><strong>선행 지식</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Experimentation/AB_test/48-project-agent-analysis-decision.html">실험 결과 분석과 의사결정</a> — 고정 A/B의 분석 방법</li>
+<li><a href="../../../../../docs/blog/posts/Experimentation/AB_test/01-ab-test-overview.html">A/B 테스트 개요</a> — 실험의 통계적 프레임워크</li>
+</ul>
+<p><strong>시리즈 다음 포스트</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Experimentation/AB_test/50-project-agent-production-platform.html">프로덕션 A/B 플랫폼 설계</a> — Thompson Sampling을 포함한 플랫폼 아키텍처</li>
+</ul>
+<p><strong>다른 카테고리 연결</strong></p>
+<ul>
+<li><a href="../MAB/index.qmd">MAB 개요</a> — Multi-Armed Bandit의 이론적 기반, Regret 분석</li>
+<li><a href="../../Statistics/06-probability.qmd">베이즈 정리</a> — Beta 분포, 사전-사후 분포 업데이트</li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const onCopySuccess = function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  }
+  const getTextToCopy = function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+    text: getTextToCopy
+  });
+  clipboard.on('success', onCopySuccess);
+  if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+    // For code content inside modals, clipBoardJS needs to be initialized with a container option
+    // TODO: Check when it could be a function (https://github.com/zenorocha/clipboard.js/issues/860)
+    const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+      text: getTextToCopy,
+      container: window.document.getElementById('quarto-embedded-source-code-modal')
+    });
+    clipboardModal.on('success', onCopySuccess);
+  }
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("kk3225\.netlify\.app");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

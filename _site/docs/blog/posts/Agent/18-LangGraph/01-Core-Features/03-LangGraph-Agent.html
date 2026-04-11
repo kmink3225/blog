@@ -1,0 +1,1275 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.5.56">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="LangGraph를 사용해 에이전트를 구성하는 방법을 설명한다. LLM에 도구를 바인딩하고 도구 호출을 처리하는 Tool Node 구현, add_conditional_edges를 통한 라우팅 패턴, 실제 웹 검색 도구(Tavily) 연동 예시와 보안·검증·관찰성 고려사항을 포함한다.">
+
+<title>LangGraph Agent – Kwangmin Kim</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../../">
+<script src="../../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+
+<link rel="stylesheet" href="../../../../../../styles.css">
+<meta property="og:title" content="LangGraph Agent – Kwangmin Kim">
+<meta property="og:description" content="LangGraph를 사용해 에이전트를 구성하는 방법을 설명한다. LLM에 도구를 바인딩하고 도구 호출을 처리하는 Tool Node 구현, add_conditional_edges를 통한 라우팅 패턴, 실제 웹 검색 도구(Tavily) 연동 예시와 보안·검증·관찰성 고려사항을 포함한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">LangGraph Agent</h1>
+            <p class="subtitle lead">도구 바인딩과 조건부 엣지로 구현하는 실무용 에이전트</p>
+                  <div>
+        <div class="description">
+          <p>LangGraph를 사용해 에이전트를 구성하는 방법을 설명한다. LLM에 도구를 바인딩하고 도구 호출을 처리하는 Tool Node 구현, <code>add_conditional_edges</code>를 통한 라우팅 패턴, 실제 웹 검색 도구(Tavily) 연동 예시와 보안·검증·관찰성 고려사항을 포함한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Agent</div>
+                <div class="quarto-category">LangGraph</div>
+                <div class="quarto-category">Tools</div>
+                <div class="quarto-category">AI</div>
+                <div class="quarto-category">Python</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2025년 07월 15일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#langgraph를-활용한-agent-구축" id="toc-langgraph를-활용한-agent-구축" class="nav-link active" data-scroll-target="#langgraph를-활용한-agent-구축"><span class="header-section-number">1</span> LangGraph를 활용한 Agent 구축</a>
+  <ul class="collapse">
+  <li><a href="#도구tool-사용하기" id="toc-도구tool-사용하기" class="nav-link" data-scroll-target="#도구tool-사용하기"><span class="header-section-number">1.1</span> 도구(Tool) 사용하기</a>
+  <ul class="collapse">
+  <li><a href="#검색-api-도구" id="toc-검색-api-도구" class="nav-link" data-scroll-target="#검색-api-도구"><span class="header-section-number">1.1.1</span> 검색 API 도구</a></li>
+  <li><a href="#tavilysearchresults" id="toc-tavilysearchresults" class="nav-link" data-scroll-target="#tavilysearchresults"><span class="header-section-number">1.1.2</span> TavilySearchResults</a></li>
+  </ul></li>
+  <li><a href="#도구-노드tool-node" id="toc-도구-노드tool-node" class="nav-link" data-scroll-target="#도구-노드tool-node"><span class="header-section-number">1.2</span> 도구 노드(Tool Node)</a></li>
+  <li><a href="#조건부-엣지conditional-edge---매우-중요" id="toc-조건부-엣지conditional-edge---매우-중요" class="nav-link" data-scroll-target="#조건부-엣지conditional-edge---매우-중요"><span class="header-section-number">1.3</span> 조건부 엣지(Conditional Edge) - 매우 중요</a>
+  <ul class="collapse">
+  <li><a href="#add_conditional_edges" id="toc-add_conditional_edges" class="nav-link" data-scroll-target="#add_conditional_edges"><span class="header-section-number">1.3.1</span> <code>add_conditional_edges</code></a></li>
+  </ul></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="langgraph를-활용한-agent-구축" class="level1" data-number="1">
+<h1 data-number="1"><span class="header-section-number">1</span> LangGraph를 활용한 Agent 구축</h1>
+<ul>
+<li>LangGraph는 agent와 함께 사용할 때 특히 강력한 기능을 발휘한다.<br>
+</li>
+<li>웹 검색 도구를 통해 챗봇에 웹 검색 기능수행하는 Agent 을 추가한다.<br>
+</li>
+<li>LLM 에 도구를 바인딩하여 LLM 에 입력된 요청에 따라 필요시 웹 검색 도구(Tool)를 호출하는 Agent 을 구축한다.</li>
+<li>뿐만아니라, 조건부 엣지를 통해 도구 호출 여부에 따라 다른 노드로 라우팅하는 방법도 함께 알아본다.</li>
+<li>Agent는 자율적인 의사결정을 수행할 수 있지만, 다음과 같은 controllability에 대한 이슈도 같이 발생할 수 있다.
+<ul>
+<li>LLM이 도구를 호출할 때마다 도구 노드로 라우팅하는 것이 아니라, 도구 호출이 있을 때만 도구 노드로 라우팅하도록 조건부 엣지를 추가한다.</li>
+<li>질문에 맞는 적절한 도구를 찾지못한다.</li>
+<li>도구가 호출된 후 챗봇이 도구의 결과를 활용하여 답변을 생성하지 못한다.</li>
+<li>LLM이 개발자가 의도하지 않는 action을 하는 경우 (예: 도구를 호출하지 말아야 할 때 호출하는 경우)</li>
+</ul></li>
+<li>LangGraph는 controllability에 대한 이슈를 효과적으로 관리할 수 있다.
+<ul>
+<li>Agent가 도구호출을 할 때 각 노드들이 적합성을 판단을 할 수 있는 구조로 설계할 수 있다.</li>
+<li>도구 호출이 필요한 경우에만 도구 노드로 라우팅하도록 조건부 엣지를 추가할 수 있다.</li>
+<li>도구 노드(Tool Node)를 통해 도구가 호출된 후 챗봇이 도구의 결과를 활용하여 답변을 생성하도록 할 수 있다.</li>
+<li>그래프의 구조와 흐름을 명확하게 정의하여 LLM이 개발자가 의도한 대로 행동하도록 유도할 수 있다.</li>
+</ul></li>
+<li>이번 블로그에서는 Agent를 구축한다기 보다는 Function Calling LLM과 도구를 활용하여 챗봇이 도구를 호출하는 간단한 예시를 통해 LangGraph의 Agent 기능을 구현한다.</li>
+</ul>
+<div class="sourceCode" id="cb1"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1"></a><span class="co"># API 키를 환경변수로 관리하기 위한 설정 파일</span></span>
+<span id="cb1-2"><a href="#cb1-2"></a><span class="im">from</span> dotenv <span class="im">import</span> load_dotenv</span>
+<span id="cb1-3"><a href="#cb1-3"></a></span>
+<span id="cb1-4"><a href="#cb1-4"></a><span class="co"># API 키 정보 로드</span></span>
+<span id="cb1-5"><a href="#cb1-5"></a>load_dotenv()</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode" id="cb2"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1"></a><span class="co"># LangSmith 추적을 설정합니다. https://smith.langchain.com</span></span>
+<span id="cb2-2"><a href="#cb2-2"></a><span class="co"># !pip install -qU langchain-teddynote</span></span>
+<span id="cb2-3"><a href="#cb2-3"></a><span class="im">from</span> langchain_teddynote <span class="im">import</span> logging</span>
+<span id="cb2-4"><a href="#cb2-4"></a></span>
+<span id="cb2-5"><a href="#cb2-5"></a><span class="co"># 프로젝트 이름을 입력합니다.</span></span>
+<span id="cb2-6"><a href="#cb2-6"></a>logging.langsmith(<span class="st">"CH17-LangGraph-Modules"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<section id="도구tool-사용하기" class="level2" data-number="1.1">
+<h2 data-number="1.1" class="anchored" data-anchor-id="도구tool-사용하기"><span class="header-section-number">1.1</span> 도구(Tool) 사용하기</h2>
+<p><strong>참고</strong></p>
+<ul>
+<li><a href="https://wikidocs.net/262582">도구(Tools)</a><br>
+</li>
+<li>챗봇이 “기억”에서 답변할 수 없는 질문을 처리하기 위해 웹 검색 도구를 통합할 것<br>
+</li>
+<li>이 도구를 사용하여 관련 정보를 찾아 더 나은 응답을 제공할 수 있다.</li>
+</ul>
+<section id="검색-api-도구" class="level3" data-number="1.1.1">
+<h3 data-number="1.1.1" class="anchored" data-anchor-id="검색-api-도구"><span class="header-section-number">1.1.1</span> 검색 API 도구</h3>
+<ul>
+<li>Tavily 검색 API를 활용하여 웹 검색 기능을 구현하는 도구.</li>
+<li>이 도구는 두 가지 주요 클래스를 제공: <code>TavilySearchResults</code>와 <code>TavilyAnswer</code>.
+<ul>
+<li><code>TavilySearchResults</code>: LangChain에서 제공하는 Tool로 검색 API를 쿼리하고 JSON 형식의 결과를 반환하는 도구이다. 포괄적이고 정확하며 신뢰할 수 있는 결과에 최적화된 검색 엔진이다. 현재 이벤트에 대한 질문에 답변할 때 유용.<br>
+</li>
+<li>테디노트의 <code>TavilySearch</code>: <code>TavilySearchResults</code>에 유용한 기능들을 추가하여 세부적인 Control과 함께 사용성을 높인 Tool이다. (<code>langchain_teddynote.tools.tavily</code> 모듈에서 제공)<br>
+</li>
+</ul></li>
+<li><strong>API 키 발급 주소</strong>: https://app.tavily.com/
+<ul>
+<li>발급한 API 키를 환경변수에 설정<br>
+</li>
+<li><code>.env</code> 파일 설정: <code>TAVILY_API_KEY=tvly-abcdefghijklmnopqrstuvwxyz</code></li>
+</ul></li>
+</ul>
+</section>
+<section id="tavilysearchresults" class="level3" data-number="1.1.2">
+<h3 data-number="1.1.2" class="anchored" data-anchor-id="tavilysearchresults"><span class="header-section-number">1.1.2</span> TavilySearchResults</h3>
+<div class="sourceCode" id="cb3"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1"></a><span class="co"># 라이브러리 설치</span></span>
+<span id="cb3-2"><a href="#cb3-2"></a><span class="co"># !pip install -U langchain-teddynote</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode" id="cb4"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1"></a><span class="im">from</span> langchain_teddynote.tools.tavily <span class="im">import</span> TavilySearch</span>
+<span id="cb4-2"><a href="#cb4-2"></a></span>
+<span id="cb4-3"><a href="#cb4-3"></a><span class="co"># 검색 도구 생성</span></span>
+<span id="cb4-4"><a href="#cb4-4"></a>tool <span class="op">=</span> TavilySearch(max_results<span class="op">=</span><span class="dv">3</span>)</span>
+<span id="cb4-5"><a href="#cb4-5"></a></span>
+<span id="cb4-6"><a href="#cb4-6"></a><span class="co"># 도구 목록에 추가</span></span>
+<span id="cb4-7"><a href="#cb4-7"></a>tools <span class="op">=</span> [tool]</span>
+<span id="cb4-8"><a href="#cb4-8"></a></span>
+<span id="cb4-9"><a href="#cb4-9"></a><span class="co"># 도구 실행</span></span>
+<span id="cb4-10"><a href="#cb4-10"></a><span class="bu">print</span>(tool.invoke(<span class="st">"테디노트 랭체인 튜토리얼"</span>))</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>'[{"url": "https://teddylee777.github.io/langchain/langchain-tutorial-04/", "content": "{\\"title\\": \\"랭체인(langchain) + 정형데이터(CSV, Excel) - ChatGPT 기반 데이터분석 (4) - 테디노트\\", \\"content\\": \\"🔥알림🔥 ① 테디노트 유튜브 - 구경하러 가기! ② LangChain 한국어 튜토리얼 바로가기 👀 ③ 랭체인 노트 무료 전자책(wikidocs) 바로가기 🙌 ④ RAG 비법노트 LangChain 강의오픈 바로가기 🙌 ⑤ 서울대 PyTorch 딥러닝 강의 바로가기 🙌. 랭체인(langchain) + 정형데이터(CSV, Excel) - ChatGPT 기반 데이터분석 (4)\\", \\"raw\\": \\"🔥알림🔥\\\\n① 테디노트 유튜브 -\\\\n구경하러 가기!\\\\n② LangChain 한국어 튜토리얼\\\\n바로가기 👀\\\\n③ 랭체인 노트 무료 전자책(wikidocs)\\\\n바로가기 🙌\\\\n④ RAG 비법노트 LangChain 강의오픈\\\\n바로가기 🙌\\\\n\\\\\\"추천\\\\\\" 한 번씩만 부탁 드리겠습니다🙏🙏. 랭체인 한국어 튜토리얼 강의 패스트캠퍼스 - RAG 비법노트. 랭체인\\", \\"raw\\": null}"}]'</code></pre>
+<ul>
+<li>위의 결과와 같이 XML이나 HTML 태그가 제거된 깔끔한 텍스트 형태로 검색 결과가 반환된다.</li>
+<li>이런 형태는 LLM이 환각을 줄이는 데 도움이 된다.</li>
+<li>결과는 챗봇이 질문에 답할 수 있도록 사용할 수 있는 페이지 요약</li>
+<li>이번에는 LLM에 <code>bind_tools</code>를 추가하여 <strong>LLM + 도구</strong> 를 구성한다.</li>
+</ul>
+<div class="sourceCode" id="cb6"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1"></a><span class="im">from</span> typing <span class="im">import</span> Annotated</span>
+<span id="cb6-2"><a href="#cb6-2"></a><span class="im">from</span> typing_extensions <span class="im">import</span> TypedDict</span>
+<span id="cb6-3"><a href="#cb6-3"></a><span class="im">from</span> langgraph.graph.message <span class="im">import</span> add_messages</span>
+<span id="cb6-4"><a href="#cb6-4"></a></span>
+<span id="cb6-5"><a href="#cb6-5"></a></span>
+<span id="cb6-6"><a href="#cb6-6"></a><span class="co"># State 정의</span></span>
+<span id="cb6-7"><a href="#cb6-7"></a><span class="kw">class</span> State(TypedDict):</span>
+<span id="cb6-8"><a href="#cb6-8"></a>    <span class="co"># list 타입에 add_messages 적용(list 에 message 추가)</span></span>
+<span id="cb6-9"><a href="#cb6-9"></a>    messages: Annotated[<span class="bu">list</span>, add_messages]</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<ul>
+<li>LLM 을 정의하고 도구를 바인딩한다.</li>
+</ul>
+<div class="sourceCode" id="cb7"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1"></a><span class="im">from</span> langchain_openai <span class="im">import</span> ChatOpenAI</span>
+<span id="cb7-2"><a href="#cb7-2"></a></span>
+<span id="cb7-3"><a href="#cb7-3"></a><span class="co"># LLM 초기화</span></span>
+<span id="cb7-4"><a href="#cb7-4"></a>llm <span class="op">=</span> ChatOpenAI(model<span class="op">=</span><span class="st">"gpt-4o-mini"</span>)</span>
+<span id="cb7-5"><a href="#cb7-5"></a></span>
+<span id="cb7-6"><a href="#cb7-6"></a><span class="co"># LLM 에 도구 바인딩</span></span>
+<span id="cb7-7"><a href="#cb7-7"></a>llm_with_tools <span class="op">=</span> llm.bind_tools(tools)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<ul>
+<li>노드를 정의한다.</li>
+</ul>
+<div class="sourceCode" id="cb8"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1"></a><span class="co"># 노드 함수 정의</span></span>
+<span id="cb8-2"><a href="#cb8-2"></a><span class="kw">def</span> chatbot(state: State):</span>
+<span id="cb8-3"><a href="#cb8-3"></a>    <span class="co"># LLM이 Tool Calling이 필요하다고 판단되면 자동으로 도구가 호출되고, 그 결과가 LLM의 응답에 반영된다. </span></span>
+<span id="cb8-4"><a href="#cb8-4"></a>    answer <span class="op">=</span> llm_with_tools.invoke(state[<span class="st">"messages"</span>])</span>
+<span id="cb8-5"><a href="#cb8-5"></a>    <span class="co"># 메시지 목록 반환</span></span>
+<span id="cb8-6"><a href="#cb8-6"></a>    <span class="cf">return</span> {<span class="st">"messages"</span>: [answer]}  <span class="co"># 자동으로 질문과 Tool Calling 필요 메세지가 add_messages에 의해 누적되어 저장된다.</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<ul>
+<li>그래프 생성 및 노드를 추가한다.</li>
+</ul>
+<div class="sourceCode" id="cb9"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1"></a><span class="im">from</span> langgraph.graph <span class="im">import</span> StateGraph</span>
+<span id="cb9-2"><a href="#cb9-2"></a></span>
+<span id="cb9-3"><a href="#cb9-3"></a><span class="co"># 상태 그래프 초기화</span></span>
+<span id="cb9-4"><a href="#cb9-4"></a>graph_builder <span class="op">=</span> StateGraph(State)</span>
+<span id="cb9-5"><a href="#cb9-5"></a></span>
+<span id="cb9-6"><a href="#cb9-6"></a><span class="co"># 노드 추가</span></span>
+<span id="cb9-7"><a href="#cb9-7"></a>graph_builder.add_node(<span class="st">"chatbot"</span>, chatbot)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="도구-노드tool-node" class="level2" data-number="1.2">
+<h2 data-number="1.2" class="anchored" data-anchor-id="도구-노드tool-node"><span class="header-section-number">1.2</span> 도구 노드(Tool Node)</h2>
+<ul>
+<li>도구가 호출될 경우 실제로 실행할 수 있는 함수를 만들어야 한다.</li>
+<li>이를 위해 새로운 노드에 도구를 추가한다.</li>
+<li>가장 최근의 메시지를 확인하고 메시지에 <code>tool_calls</code>가 포함되어 있으면 도구를 호출하는 <code>BasicToolNode</code>를 구현한다.<br>
+</li>
+<li>지금은 직접 구현하지만, 나중에는 LangGraph의 pre-built 되어있는 <a href="https://langchain-ai.github.io/langgraph/reference/prebuilt/#langgraph.prebuilt.tool_node.ToolNode">ToolNode</a> 로 대체할 수 있다.</li>
+<li>실무에서도 십중팔구는 pre-built ToolNode를 사용한다.</li>
+<li>직접 구현하는 건 원리 파악 목적이고, 실무에서는 직접 구현해야 하는 경우는 ToolNode가 지원 안 하는 특수한 커스텀 로직이 필요할 때. 예를 들면 도구 실행 전후에 로깅, 권한 체크, 결과 후처리 같은 게 필요할 때. 근데 그것도 ToolNode를 상속받아서 확장하는 방식이 더 깔끔하다.</li>
+</ul>
+<div class="sourceCode" id="cb10"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1"></a><span class="im">import</span> json</span>
+<span id="cb10-2"><a href="#cb10-2"></a><span class="im">from</span> langchain_core.messages <span class="im">import</span> ToolMessage</span>
+<span id="cb10-3"><a href="#cb10-3"></a></span>
+<span id="cb10-4"><a href="#cb10-4"></a></span>
+<span id="cb10-5"><a href="#cb10-5"></a><span class="kw">class</span> BasicToolNode:</span>
+<span id="cb10-6"><a href="#cb10-6"></a>    <span class="co">"""Run tools requested in the last AIMessage node"""</span></span>
+<span id="cb10-7"><a href="#cb10-7"></a></span>
+<span id="cb10-8"><a href="#cb10-8"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, tools: <span class="bu">list</span>) <span class="op">-&gt;</span> <span class="va">None</span>:</span>
+<span id="cb10-9"><a href="#cb10-9"></a>        <span class="co"># 도구 리스트</span></span>
+<span id="cb10-10"><a href="#cb10-10"></a>        <span class="va">self</span>.tools_list <span class="op">=</span> {tool.name: tool <span class="cf">for</span> tool <span class="kw">in</span> tools}</span>
+<span id="cb10-11"><a href="#cb10-11"></a></span>
+<span id="cb10-12"><a href="#cb10-12"></a>    <span class="kw">def</span> <span class="fu">__call__</span>(<span class="va">self</span>, inputs: <span class="bu">dict</span>): <span class="co"># overide해서 도구 노드의 실행 로직을 정의한다.</span></span>
+<span id="cb10-13"><a href="#cb10-13"></a>        <span class="co"># 메시지가 존재할 경우 가장 최근 메시지 1개 추출</span></span>
+<span id="cb10-14"><a href="#cb10-14"></a>        <span class="cf">if</span> messages <span class="op">:=</span> inputs.get(<span class="st">"messages"</span>, []):</span>
+<span id="cb10-15"><a href="#cb10-15"></a>            message <span class="op">=</span> messages[<span class="op">-</span><span class="dv">1</span>]</span>
+<span id="cb10-16"><a href="#cb10-16"></a>        <span class="cf">else</span>:</span>
+<span id="cb10-17"><a href="#cb10-17"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"No message found in input"</span>)</span>
+<span id="cb10-18"><a href="#cb10-18"></a></span>
+<span id="cb10-19"><a href="#cb10-19"></a>        <span class="co"># 도구 호출 결과 (중요) </span></span>
+<span id="cb10-20"><a href="#cb10-20"></a>        <span class="co"># - 도구 호출이 필요한 경우, 메시지에 필요한 tool_calls가 포함되어 있다.</span></span>
+<span id="cb10-21"><a href="#cb10-21"></a>        <span class="co"># - 콜을 받은 tool의 결과를 다시 Chatbot 노드(LLM)에 반영하기 위해서, 도구 호출 결과를 메시지로 저장한다.</span></span>
+<span id="cb10-22"><a href="#cb10-22"></a></span>
+<span id="cb10-23"><a href="#cb10-23"></a>        outputs <span class="op">=</span> []</span>
+<span id="cb10-24"><a href="#cb10-24"></a>        <span class="cf">for</span> tool_call <span class="kw">in</span> message.tool_calls:</span>
+<span id="cb10-25"><a href="#cb10-25"></a>            <span class="co"># 도구 호출 후 결과 저장</span></span>
+<span id="cb10-26"><a href="#cb10-26"></a>            tool_result <span class="op">=</span> <span class="va">self</span>.tools_list[tool_call[<span class="st">"name"</span>]].invoke(tool_call[<span class="st">"args"</span>]) <span class="co">#tool_call["name"]: 도구 이름, tool_call["args"]: 도구에 전달할 인자. 예를 들면, 도구가 웹 검색도구라면, tool_call["args"]는 검색 쿼리가 될 수 있다.</span></span>
+<span id="cb10-27"><a href="#cb10-27"></a>            outputs.append(</span>
+<span id="cb10-28"><a href="#cb10-28"></a>                <span class="co"># 도구 호출 결과를 메시지로 저장</span></span>
+<span id="cb10-29"><a href="#cb10-29"></a>                ToolMessage(</span>
+<span id="cb10-30"><a href="#cb10-30"></a>                    content<span class="op">=</span>json.dumps(</span>
+<span id="cb10-31"><a href="#cb10-31"></a>                        tool_result, ensure_ascii<span class="op">=</span><span class="va">False</span> <span class="co"># 만약 tool이 웹검색이라면 검색결과를 tool_result로 받아서 JSON 문자열로 변환하여 content에 저장한다.</span></span>
+<span id="cb10-32"><a href="#cb10-32"></a>                    ),  <span class="co"># 도구 호출 결과를 문자열로 변환</span></span>
+<span id="cb10-33"><a href="#cb10-33"></a>                    name<span class="op">=</span>tool_call[<span class="st">"name"</span>],</span>
+<span id="cb10-34"><a href="#cb10-34"></a>                    tool_call_id<span class="op">=</span>tool_call[<span class="st">"id"</span>],</span>
+<span id="cb10-35"><a href="#cb10-35"></a>                )</span>
+<span id="cb10-36"><a href="#cb10-36"></a>            )</span>
+<span id="cb10-37"><a href="#cb10-37"></a></span>
+<span id="cb10-38"><a href="#cb10-38"></a>        <span class="cf">return</span> {<span class="st">"messages"</span>: outputs}</span>
+<span id="cb10-39"><a href="#cb10-39"></a></span>
+<span id="cb10-40"><a href="#cb10-40"></a></span>
+<span id="cb10-41"><a href="#cb10-41"></a><span class="co"># 도구 노드 생성</span></span>
+<span id="cb10-42"><a href="#cb10-42"></a>tool_node <span class="op">=</span> BasicToolNode(tools<span class="op">=</span>[tool])</span>
+<span id="cb10-43"><a href="#cb10-43"></a></span>
+<span id="cb10-44"><a href="#cb10-44"></a><span class="co"># 그래프에 도구 노드 추가</span></span>
+<span id="cb10-45"><a href="#cb10-45"></a>graph_builder.add_node(<span class="st">"tools"</span>, tool_node)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="조건부-엣지conditional-edge---매우-중요" class="level2" data-number="1.3">
+<h2 data-number="1.3" class="anchored" data-anchor-id="조건부-엣지conditional-edge---매우-중요"><span class="header-section-number">1.3</span> 조건부 엣지(Conditional Edge) - 매우 중요</h2>
+<ul>
+<li>도구 노드가 추가되면 <code>conditional_edges</code>를 정의할 수 있다.<br>
+</li>
+<li><strong>Edges</strong>는 한 노드에서 다음 노드로 제어 흐름을 라우팅한다.<br>
+</li>
+<li><strong>Conditional edges</strong>는 일반적으로 “if” 문을 포함하여 현재 그래프 상태에 따라 다른 노드로 라우팅한다.<br>
+</li>
+<li><strong>Conditional edges</strong> 함수는 현재 그래프 <code>state</code>를 받아 다음에 호출할 Node 를 나타내는 <strong>문자열 또는 문자열 목록</strong> 을 반환한다.</li>
+<li>아래에서는 <code>route_tools</code>라는 라우터 함수를 정의하여 챗봇의 출력에서 <code>tool_calls</code>를 확인한다.<br>
+</li>
+<li>이 함수를 <code>add_conditional_edges</code>를 호출하여 그래프에 제공하면, <code>chatbot</code> 노드가 완료될 때마다 이 함수를 확인하여 다음으로 어디로 갈지 결정한다.</li>
+<li>조건은 도구 호출이 있으면 <code>tools</code>로, 없으면 <code>END</code>로 라우팅된다.</li>
+</ul>
+<p><strong>참고</strong></p>
+<ul>
+<li>langgraph 에 pre-built 되어 있는 <a href="https://langchain-ai.github.io/langgraph/reference/prebuilt/#tools_condition">tools_condition</a> 으로 대체할 수 있다.</li>
+</ul>
+<section id="add_conditional_edges" class="level3" data-number="1.3.1">
+<h3 data-number="1.3.1" class="anchored" data-anchor-id="add_conditional_edges"><span class="header-section-number">1.3.1</span> <code>add_conditional_edges</code></h3>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="./image/langgraph-02.png" class="img-fluid figure-img"></p>
+<figcaption>add_conditional_edges</figcaption>
+</figure>
+</div>
+<p><code>add_conditional_edges</code> 메서드는 시작 노드에서 여러 대상 노드로의 조건부 엣지를 추가</p>
+<p><strong>매개변수</strong><br>
+- <code>source</code> (str): <strong>시작 노드</strong>. 이 노드가 끝난 후 조건부 엣지가 실행된다.<br>
+- <code>path</code> (Union[Callable, Runnable]): 다음 노드를 결정하는 함수. source 노드의 state를 입력받아 다음 목적지를 반환한다. <code>END</code>를 반환하면 그래프 실행이 중지된다. - <code>path_map</code> 없는 경우: path 함수가 <strong>실제 노드 이름</strong>을 직접 반환해야 한다. - <code>path_map</code> 있는 경우: path 함수가 <strong>임의의 키</strong>를 반환하고, path_map이 그 키를 실제 노드 이름으로 매핑한다. (노드 이름 변경 시 path_map만 수정하면 되므로 유지보수에 유리) - <code>path_map</code> (Optional[Union[dict[Hashable, str], list[str]]]): path 함수의 반환값과 실제 노드 이름 간의 매핑. 생략하면 path 함수가 노드 이름을 직접 반환해야 한다. - <code>then</code> (Optional[str]): path로 선택된 노드 실행 후 공통으로 실행할 노드 이름.</p>
+<ul>
+<li>논리적 실행 흐름
+<ul>
+<li>물리적인 순서는 chatbot의 결과를 add_conditional_edges가 먼저 받아 그 결과값을 route에 전달</li>
+<li><code>path_map</code>이 있는 경우, route의 반환값이 <code>path_map</code>의 키 중 하나와 일치하는지 확인</li>
+<li>일치하면 해당 키에 매핑된 노드로 라우팅, 일치하지 않으면 <code>END</code>로 라우팅</li>
+<li><code>then</code>이 지정된 경우, 라우팅된 노드가 실행된 후 <code>then</code>에 지정된 노드로 라우팅</li>
+</ul></li>
+</ul>
+<pre><code>chatbot 노드 실행
+    ↓
+route 함수 호출 (state 받아서 "use_tool" or "done" 반환)
+    ↓
+path_map이 매핑
+    "use_tool" → tools 노드로 이동
+    "done"     → END (그래프 종료)</code></pre>
+<div class="sourceCode" id="cb12"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1"></a><span class="co"># path_map 없는 경우 — path 함수가 직접 노드 이름을 반환</span></span>
+<span id="cb12-2"><a href="#cb12-2"></a><span class="co"># 실행 흐름</span></span>
+<span id="cb12-3"><a href="#cb12-3"></a><span class="co"># tool_calls 있을 때: chatbot → tools</span></span>
+<span id="cb12-4"><a href="#cb12-4"></a><span class="co"># tool_calls 없을 때: chatbot → </span><span class="re">END</span></span>
+<span id="cb12-5"><a href="#cb12-5"></a><span class="kw">def</span> route(state) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb12-6"><a href="#cb12-6"></a>    <span class="cf">if</span> state[<span class="st">"messages"</span>][<span class="op">-</span><span class="dv">1</span>].tool_calls:</span>
+<span id="cb12-7"><a href="#cb12-7"></a>        <span class="cf">return</span> <span class="st">"tools"</span>      <span class="co"># 노드 이름 직접 반환</span></span>
+<span id="cb12-8"><a href="#cb12-8"></a>    <span class="cf">return</span> <span class="st">"END"</span></span>
+<span id="cb12-9"><a href="#cb12-9"></a></span>
+<span id="cb12-10"><a href="#cb12-10"></a>graph.add_conditional_edges(<span class="st">"chatbot"</span>, route)</span>
+<span id="cb12-11"><a href="#cb12-11"></a></span>
+<span id="cb12-12"><a href="#cb12-12"></a><span class="co"># path_map 있는 경우 — path 함수가 임의의 값을 반환하고, path_map이 그걸 노드 이름으로 매핑</span></span>
+<span id="cb12-13"><a href="#cb12-13"></a><span class="co"># 실행 흐름</span></span>
+<span id="cb12-14"><a href="#cb12-14"></a><span class="co"># "use_tool" 반환 시: chatbot → tools  (path_map이 매핑)</span></span>
+<span id="cb12-15"><a href="#cb12-15"></a><span class="co"># "done" 반환 시:    chatbot → </span><span class="re">END</span><span class="co">     (path_map이 매핑)</span></span>
+<span id="cb12-16"><a href="#cb12-16"></a></span>
+<span id="cb12-17"><a href="#cb12-17"></a><span class="kw">def</span> route(state) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb12-18"><a href="#cb12-18"></a>    <span class="cf">if</span> state[<span class="st">"messages"</span>][<span class="op">-</span><span class="dv">1</span>].tool_calls:</span>
+<span id="cb12-19"><a href="#cb12-19"></a>        <span class="cf">return</span> <span class="st">"use_tool"</span>   <span class="co"># 노드 이름이 아닌 임의의 키 반환</span></span>
+<span id="cb12-20"><a href="#cb12-20"></a>    <span class="cf">return</span> <span class="st">"done"</span></span>
+<span id="cb12-21"><a href="#cb12-21"></a></span>
+<span id="cb12-22"><a href="#cb12-22"></a>graph.add_conditional_edges(</span>
+<span id="cb12-23"><a href="#cb12-23"></a>    <span class="st">"chatbot"</span>, </span>
+<span id="cb12-24"><a href="#cb12-24"></a>    route, </span>
+<span id="cb12-25"><a href="#cb12-25"></a>    path_map<span class="op">=</span>{<span class="st">"use_tool"</span>: <span class="st">"tools"</span>, <span class="st">"done"</span>: END}  <span class="co"># 키 → 실제 노드 이름 매핑</span></span>
+<span id="cb12-26"><a href="#cb12-26"></a>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>반환값</strong> - Self: 메서드 체이닝을 위해 자기 자신을 반환합니다.</p>
+<p><strong>주요 기능</strong> 1. 조건부 엣지를 그래프에 추가합니다. 2. <code>path_map</code>을 딕셔너리로 변환합니다. 3. <code>path</code> 함수의 반환 타입을 분석하여 자동으로 <code>path_map</code>을 생성할 수 있습니다. 4. 조건부 분기를 그래프에 저장합니다.</p>
+<p><strong>참고</strong> - 이미 컴파일된 그래프에 엣지를 추가하면 경고 메시지가 출력됩니다. - <code>path</code> 함수의 반환 값에 대한 타입 힌트가 없거나 <code>path_map</code>이 제공되지 않으면, 그래프 시각화 시 해당 엣지가 그래프의 모든 노드로 전환될 수 있다고 가정합니다. - 동일한 이름의 분기가 이미 존재하는 경우 <code>ValueError</code>가 발생합니다.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1"></a><span class="im">from</span> langgraph.graph <span class="im">import</span> START, END</span>
+<span id="cb13-2"><a href="#cb13-2"></a></span>
+<span id="cb13-3"><a href="#cb13-3"></a></span>
+<span id="cb13-4"><a href="#cb13-4"></a><span class="kw">def</span> route_tools(</span>
+<span id="cb13-5"><a href="#cb13-5"></a>    state: State,</span>
+<span id="cb13-6"><a href="#cb13-6"></a>):</span>
+<span id="cb13-7"><a href="#cb13-7"></a>    <span class="cf">if</span> messages <span class="op">:=</span> state.get(<span class="st">"messages"</span>, []):</span>
+<span id="cb13-8"><a href="#cb13-8"></a>        <span class="co"># 가장 최근 AI 메시지 추출</span></span>
+<span id="cb13-9"><a href="#cb13-9"></a>        ai_message <span class="op">=</span> messages[<span class="op">-</span><span class="dv">1</span>]</span>
+<span id="cb13-10"><a href="#cb13-10"></a>    <span class="cf">else</span>:</span>
+<span id="cb13-11"><a href="#cb13-11"></a>        <span class="co"># 입력 상태에 메시지가 없는 경우 예외 발생</span></span>
+<span id="cb13-12"><a href="#cb13-12"></a>        <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="ss">f"No messages found in input state to tool_edge: </span><span class="sc">{</span>state<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb13-13"><a href="#cb13-13"></a></span>
+<span id="cb13-14"><a href="#cb13-14"></a>    <span class="co"># AI 메시지에 도구 호출이 있는 경우 "tools" 반환</span></span>
+<span id="cb13-15"><a href="#cb13-15"></a>    <span class="cf">if</span> <span class="bu">hasattr</span>(ai_message, <span class="st">"tool_calls"</span>) <span class="kw">and</span> <span class="bu">len</span>(ai_message.tool_calls) <span class="op">&gt;</span> <span class="dv">0</span>:</span>
+<span id="cb13-16"><a href="#cb13-16"></a>        <span class="co"># 도구 호출이 있는 경우 "tools" 반환</span></span>
+<span id="cb13-17"><a href="#cb13-17"></a>        <span class="cf">return</span> <span class="st">"use_tools"</span></span>
+<span id="cb13-18"><a href="#cb13-18"></a>    <span class="co"># 도구 호출이 없는 경우 "</span><span class="re">END</span><span class="co">" 반환</span></span>
+<span id="cb13-19"><a href="#cb13-19"></a>    <span class="cf">return</span> <span class="st">"The END"</span></span>
+<span id="cb13-20"><a href="#cb13-20"></a></span>
+<span id="cb13-21"><a href="#cb13-21"></a></span>
+<span id="cb13-22"><a href="#cb13-22"></a><span class="co"># `tools_condition` 함수는 챗봇이 도구 사용을 요청하면 "tools"를 반환하고, 직접 응답이 가능한 경우 "</span><span class="re">END</span><span class="co">"를 반환</span></span>
+<span id="cb13-23"><a href="#cb13-23"></a>graph_builder.add_conditional_edges(</span>
+<span id="cb13-24"><a href="#cb13-24"></a>    source<span class="op">=</span><span class="st">"chatbot"</span>,</span>
+<span id="cb13-25"><a href="#cb13-25"></a>    path<span class="op">=</span>route_tools,</span>
+<span id="cb13-26"><a href="#cb13-26"></a>    <span class="co"># route_tools 의 반환값이 "use_tools" 인 경우 "tools" 노드로, 그렇지 않으면 </span><span class="re">END</span><span class="co"> 노드로 라우팅</span></span>
+<span id="cb13-27"><a href="#cb13-27"></a>    path_map<span class="op">=</span>{<span class="st">"use_tools"</span>: <span class="st">"tools"</span>, <span class="st">"The END"</span>: END},</span>
+<span id="cb13-28"><a href="#cb13-28"></a>)</span>
+<span id="cb13-29"><a href="#cb13-29"></a></span>
+<span id="cb13-30"><a href="#cb13-30"></a><span class="co"># tools &gt; chatbot</span></span>
+<span id="cb13-31"><a href="#cb13-31"></a>graph_builder.add_edge(<span class="st">"tools"</span>, <span class="st">"chatbot"</span>)</span>
+<span id="cb13-32"><a href="#cb13-32"></a></span>
+<span id="cb13-33"><a href="#cb13-33"></a><span class="co"># START &gt; chatbot</span></span>
+<span id="cb13-34"><a href="#cb13-34"></a>graph_builder.add_edge(START, <span class="st">"chatbot"</span>)</span>
+<span id="cb13-35"><a href="#cb13-35"></a></span>
+<span id="cb13-36"><a href="#cb13-36"></a><span class="co"># 그래프 컴파일</span></span>
+<span id="cb13-37"><a href="#cb13-37"></a>graph <span class="op">=</span> graph_builder.<span class="bu">compile</span>()</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<ul>
+<li><strong>조건부 엣지</strong>가 단일 노드에서 시작해야 한다.</li>
+<li>이는 그래프에 <code>chatbot</code> 노드가 실행될 때마다 도구를 호출하면 ’tools’로 이동하고, 직접 응답하면 루프를 종료하라는 의미</li>
+<li>사전 구축된 <code>tools_condition</code>처럼, 함수는 도구 호출이 없을 경우 <code>END</code> 문자열을 반환(그래프 종료).</li>
+<li>그래프가 <code>END</code>로 전환되면 더 이상 완료할 작업이 없으며 실행을 중지</li>
+</ul>
+<div class="sourceCode" id="cb14"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1"></a><span class="im">from</span> langchain_teddynote.graphs <span class="im">import</span> visualize_graph</span>
+<span id="cb14-2"><a href="#cb14-2"></a></span>
+<span id="cb14-3"><a href="#cb14-3"></a><span class="co"># 그래프 시각화</span></span>
+<span id="cb14-4"><a href="#cb14-4"></a>visualize_graph(graph)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<ul>
+<li>이제 봇에게 훈련 데이터 외의 질문을 할 수 있다.</li>
+</ul>
+<div class="sourceCode" id="cb15"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1"></a>inputs <span class="op">=</span> {<span class="st">"messages"</span>: <span class="st">"테디노트 YouTube 채널에 대해서 검색해 줘"</span>}</span>
+<span id="cb15-2"><a href="#cb15-2"></a></span>
+<span id="cb15-3"><a href="#cb15-3"></a><span class="cf">for</span> event <span class="kw">in</span> graph.stream(inputs, stream_mode<span class="op">=</span><span class="st">"values"</span>):</span>
+<span id="cb15-4"><a href="#cb15-4"></a>    <span class="cf">for</span> key, value <span class="kw">in</span> event.items():</span>
+<span id="cb15-5"><a href="#cb15-5"></a>        <span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">==============</span><span class="ch">\n</span><span class="ss">STEP: </span><span class="sc">{</span>key<span class="sc">}</span><span class="ch">\n</span><span class="ss">==============</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb15-6"><a href="#cb15-6"></a>        <span class="co"># display_message_tree(value["messages"][-1])</span></span>
+<span id="cb15-7"><a href="#cb15-7"></a>        <span class="bu">print</span>(value[<span class="op">-</span><span class="dv">1</span>])</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>==============
+STEP: chatbot
+==============
+
+content='' additional_kwargs={'tool_calls': [{'id': 'call_yFcDDsMxrcuqBkvkOM01i9Eg', 'function': {'arguments': '{"query":"테디노트 YouTube"}', 'name': 'tavily_web_search'}, 'type': 'function'}], 'refusal': None} response_metadata={'token_usage': {'completion_tokens': 22, 'prompt_tokens': 84, 'total_tokens': 106, 'completion_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': None, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_482c22a7bc', 'finish_reason': 'tool_calls', 'logprobs': None} id='run-6d5911f7-452b-4f65-8535-f08c198521fd-0' tool_calls=[{'name': 'tavily_web_search', 'args': {'query': '테디노트 YouTube'}, 'id': 'call_yFcDDsMxrcuqBkvkOM01i9Eg', 'type': 'tool_call'}] usage_metadata={'input_tokens': 84, 'output_tokens': 22, 'total_tokens': 106, 'input_token_details': {'cache_read': 0}, 'output_token_details': {'reasoning': 0}}
+
+==============
+STEP: tools
+==============
+
+content='"[{\\"url\\": \\"https://teddynote.com/\\", \\"content\\": \\"{\\\\\\"title\\\\\\": \\\\\\"TeddyNote\\\\\\", \\\\\\"content\\\\\\": \\\\\\"테디노트.dev Teddy Lee (이경록) 👋. YouTube 테디노트; 블로그 테디노트; LinkedIn; LangChain. LangChain 한국어 튜토리얼 Github; LangChain 한국어 튜토리얼 위키독스 전자책\\\\\\", \\\\\\"raw\\\\\\": null}\\"}, {\\"url\\": \\"https://teddylee777.github.io/about/\\", \\"content\\": \\"{\\\\\\"title\\\\\\": \\\\\\"이경록 (Teddy Lee) - 테디노트\\\\\\", \\\\\\"content\\\\\\": \\\\\\"① 테디노트 유튜브 - 구경하러 가기! ② LangChain 한국어 튜토리얼 바로가기 👀 ③ 랭체인 노트 무료 전자책(wikidocs) 바로가기 🙌 ④ RAG 비법노트 LangChain 강의오픈 바로가기 🙌 ⑤ 서울대 PyTorch 딥러닝 강의 바로가기 🙌. 이경록 (Teddy Lee) 목차. Contact; Career; Lecture\\\\\\", \\\\\\"raw\\\\\\": \\\\\\"🔥알림🔥\\\\\\\\n① 테디노트 유튜브 -\\\\\\\\n구경하러 가기!\\\\\\\\n② LangChain 한국어 튜토리얼\\\\\\\\n바로가기 👀\\\\\\\\n③ 랭체인 노트 무료 전자책(wikidocs)\\\\\\\\n이해가 쏙쏙 되는 강의와 블로그 주소들을 메모해 두었다가 정리해 본 내용이에요.\\\\\\\\n그 밖에 실습파일, 블로그, 논문 등도 잘 정리해 두었으니, 지나가다 쓱 들러보세요😊\\\\\\\\n👀 (주의) 내용이 무척 많으니, 다 습득하려 하지 마시고, 모르는 내용만 발췌해서 보세요\\\\\\\\n📌 지금 당장 혼공 하러가기\\\\\\"}\\"}]"' name='tavily_web_search' id='7aa1ee68-66a2-473a-bd4c-d9d45766a7e9' tool_call_id='call_yFcDDsMxrcuqBkvkOM01i9Eg'
+
+==============
+STEP: chatbot
+==============
+
+content='테디노트(TeddyNote)는 이경록(Teddy Lee)이라는 인물이 운영하는 YouTube 채널입니다. 이 채널에서는 머신러닝, 데이터 분석, 딥러닝 등 다양한 주제로 강의 영상을 제공하고 있습니다. \n\n**테디노트 관련 링크:**\n- [테디노트 공식 웹사이트](https://teddynote.com/)\n- [이경록의 강의 정보](https://teddylee777.github.io/lectures/)\n- [YouTube 채널 바로가기](https://teddylee777.github.io/about/) - 유튜브 채널에서는 주제별로 강의 영상을 시리즈로 모아놓았으며, 구독과 좋아요를 통해 지원할 수 있습니다.\n\n강의는 주로 데이터 분석, 머신러닝, 텐서플로우 관련 내용으로 구성되어 있으며, 수강생들로부터 긍정적인 평가를 받고 있습니다.' additional_kwargs={'refusal': None} response_metadata={'token_usage': {'completion_tokens': 201, 'prompt_tokens': 3085, 'total_tokens': 3286, 'completion_tokens_details': {'audio_tokens': None, 'reasoning_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': None, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_7693ae462b', 'finish_reason': 'stop', 'logprobs': None} id='run-6a51c788-603d-4ada-95dc-4baadacecad3-0' usage_metadata={'input_tokens': 3085, 'output_tokens': 201, 'total_tokens': 3286, 'input_token_details': {'cache_read': 0}, 'output_token_details': {'reasoning': 0}}</code></pre>
+<ul>
+<li>출력값의 <code>STEP: chatbot</code>을 보면 content는 없지만 <code>tool_calls</code>가 포함된 메시지가 출력되는 것을 볼 수 있다.</li>
+<li><code>STEP: tools</code>에서는 도구 노드가 실행되어 <code>tool_calls</code>의 결과가 출력되는 것을 볼 수 있다.</li>
+<li><code>STEP: chatbot</code>에서는 도구 노드의 결과가 반영된 최종 답변이 출력되는 것을 볼 수 있다.</li>
+</ul>
+<p>도구 호출 후 구조에 대한 이미지</p>
+<p><img src="./image/tool-message-01.png" class="img-fluid"></p>
+<ul>
+<li><a href="https://smith.langchain.com/public/4f82ddfa-a452-40f3-ab09-4eb088b812a4/r">이전 실행에 대한 LangSmith 추적</a></li>
+</ul>
+
+
+</section>
+</section>
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const onCopySuccess = function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  }
+  const getTextToCopy = function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+    text: getTextToCopy
+  });
+  clipboard.on('success', onCopySuccess);
+  if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+    // For code content inside modals, clipBoardJS needs to be initialized with a container option
+    // TODO: Check when it could be a function (https://github.com/zenorocha/clipboard.js/issues/860)
+    const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+      text: getTextToCopy,
+      container: window.document.getElementById('quarto-embedded-source-code-modal')
+    });
+    clipboardModal.on('success', onCopySuccess);
+  }
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("kk3225\.netlify\.app");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

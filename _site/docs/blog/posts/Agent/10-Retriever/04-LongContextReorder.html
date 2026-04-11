@@ -1,0 +1,1618 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.5.56">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="LLM이 긴 문맥의 중간 정보를 간과하는 ‘Lost in the Middle’ 현상의 원인을 분석한다. Context window 크기와의 관계, Attention 희석 메커니즘, Long context 모델의 이중 취약성을 다루고, LangChain의 LongContextReorder와 시맨틱 태그 기반 프롬프트 구조화를 통한 대응 전략을 정리한다.">
+
+<title>긴 문맥 재정렬(LongContextReorder) – Kwangmin Kim</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="긴 문맥 재정렬(LongContextReorder) – Kwangmin Kim">
+<meta property="og:description" content="LLM이 긴 문맥의 중간 정보를 간과하는 ‘Lost in the Middle’ 현상의 원인을 분석한다. Context window 크기와의 관계, Attention 희석 메커니즘, Long context 모델의 이중 취약성을 다루고, LangChain의 LongContextReorder와 시맨틱 태그 기반 프롬프트 구조화를 통한 대응 전략을 정리한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">긴 문맥 재정렬(LongContextReorder)</h1>
+            <p class="subtitle lead">Lost in the Middle 현상, Attention 희석, 그리고 RAG 성능 최적화</p>
+                  <div>
+        <div class="description">
+          <p>LLM이 긴 문맥의 중간 정보를 간과하는 ‘Lost in the Middle’ 현상의 원인을 분석한다. Context window 크기와의 관계, Attention 희석 메커니즘, Long context 모델의 이중 취약성을 다루고, LangChain의 LongContextReorder와 시맨틱 태그 기반 프롬프트 구조화를 통한 대응 전략을 정리한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">AI</div>
+                <div class="quarto-category">RAG</div>
+                <div class="quarto-category">LangChain</div>
+                <div class="quarto-category">Agent</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2024년 05월 04일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#lost-in-the-middle-현상" id="toc-lost-in-the-middle-현상" class="nav-link active" data-scroll-target="#lost-in-the-middle-현상"><span class="header-section-number">1</span> Lost in the Middle 현상</a>
+  <ul class="collapse">
+  <li><a href="#문제-정의" id="toc-문제-정의" class="nav-link" data-scroll-target="#문제-정의"><span class="header-section-number">1.1</span> 문제 정의</a></li>
+  <li><a href="#핵심-발견" id="toc-핵심-발견" class="nav-link" data-scroll-target="#핵심-발견"><span class="header-section-number">1.2</span> 핵심 발견</a></li>
+  </ul></li>
+  <li><a href="#context-window-크기와-lost-in-the-middle의-관계" id="toc-context-window-크기와-lost-in-the-middle의-관계" class="nav-link" data-scroll-target="#context-window-크기와-lost-in-the-middle의-관계"><span class="header-section-number">2</span> Context Window 크기와 Lost in the Middle의 관계</a>
+  <ul class="collapse">
+  <li><a href="#context-window가-커지면-더-심해지는가" id="toc-context-window가-커지면-더-심해지는가" class="nav-link" data-scroll-target="#context-window가-커지면-더-심해지는가"><span class="header-section-number">2.1</span> Context Window가 커지면 더 심해지는가?</a></li>
+  <li><a href="#attention-희석-attention-dilution" id="toc-attention-희석-attention-dilution" class="nav-link" data-scroll-target="#attention-희석-attention-dilution"><span class="header-section-number">2.2</span> Attention 희석 (Attention Dilution)</a></li>
+  <li><a href="#positional-bias-vs-attention-희석" id="toc-positional-bias-vs-attention-희석" class="nav-link" data-scroll-target="#positional-bias-vs-attention-희석"><span class="header-section-number">2.3</span> Positional Bias vs Attention 희석</a></li>
+  <li><a href="#long-context-모델의-개선-노력과-한계" id="toc-long-context-모델의-개선-노력과-한계" class="nav-link" data-scroll-target="#long-context-모델의-개선-노력과-한계"><span class="header-section-number">2.4</span> Long Context 모델의 개선 노력과 한계</a></li>
+  <li><a href="#프롬프트-구조화로-lost-in-the-middle-완화" id="toc-프롬프트-구조화로-lost-in-the-middle-완화" class="nav-link" data-scroll-target="#프롬프트-구조화로-lost-in-the-middle-완화"><span class="header-section-number">2.5</span> 프롬프트 구조화로 Lost in the Middle 완화</a></li>
+  <li><a href="#실무적-함의" id="toc-실무적-함의" class="nav-link" data-scroll-target="#실무적-함의"><span class="header-section-number">2.6</span> 실무적 함의</a></li>
+  </ul></li>
+  <li><a href="#관련-연구-lost-in-the-middle" id="toc-관련-연구-lost-in-the-middle" class="nav-link" data-scroll-target="#관련-연구-lost-in-the-middle"><span class="header-section-number">3</span> 관련 연구: Lost in the Middle</a>
+  <ul class="collapse">
+  <li><a href="#논문-개요" id="toc-논문-개요" class="nav-link" data-scroll-target="#논문-개요"><span class="header-section-number">3.1</span> 논문 개요</a></li>
+  <li><a href="#평가-방법론" id="toc-평가-방법론" class="nav-link" data-scroll-target="#평가-방법론"><span class="header-section-number">3.2</span> 평가 방법론</a></li>
+  <li><a href="#논문의-기여" id="toc-논문의-기여" class="nav-link" data-scroll-target="#논문의-기여"><span class="header-section-number">3.3</span> 논문의 기여</a></li>
+  <li><a href="#실험-결과-요약" id="toc-실험-결과-요약" class="nav-link" data-scroll-target="#실험-결과-요약"><span class="header-section-number">3.4</span> 실험 결과 요약</a></li>
+  <li><a href="#해결-방안-문서-재정렬" id="toc-해결-방안-문서-재정렬" class="nav-link" data-scroll-target="#해결-방안-문서-재정렬"><span class="header-section-number">3.5</span> 해결 방안: 문서 재정렬</a></li>
+  </ul></li>
+  <li><a href="#실습-longcontextreorder-적용" id="toc-실습-longcontextreorder-적용" class="nav-link" data-scroll-target="#실습-longcontextreorder-적용"><span class="header-section-number">4</span> 실습: LongContextReorder 적용</a>
+  <ul class="collapse">
+  <li><a href="#환경-설정" id="toc-환경-설정" class="nav-link" data-scroll-target="#환경-설정"><span class="header-section-number">4.1</span> 환경 설정</a></li>
+  <li><a href="#longcontextreorder-의-재순위-방식-핵심-로직" id="toc-longcontextreorder-의-재순위-방식-핵심-로직" class="nav-link" data-scroll-target="#longcontextreorder-의-재순위-방식-핵심-로직"><span class="header-section-number">4.2</span> LongContextReorder 의 재순위 방식 — 핵심 로직</a></li>
+  <li><a href="#문서-재정렬-적용" id="toc-문서-재정렬-적용" class="nav-link" data-scroll-target="#문서-재정렬-적용"><span class="header-section-number">4.3</span> 문서 재정렬 적용</a></li>
+  </ul></li>
+  <li><a href="#rag-체인에-context-reordering-통합" id="toc-rag-체인에-context-reordering-통합" class="nav-link" data-scroll-target="#rag-체인에-context-reordering-통합"><span class="header-section-number">5</span> RAG 체인에 Context Reordering 통합</a></li>
+  <li><a href="#성능-비교-및-결론" id="toc-성능-비교-및-결론" class="nav-link" data-scroll-target="#성능-비교-및-결론"><span class="header-section-number">6</span> 성능 비교 및 결론</a>
+  <ul class="collapse">
+  <li><a href="#longcontextreorder의-효과" id="toc-longcontextreorder의-효과" class="nav-link" data-scroll-target="#longcontextreorder의-효과"><span class="header-section-number">6.1</span> LongContextReorder의 효과</a></li>
+  <li><a href="#실무-적용-가이드" id="toc-실무-적용-가이드" class="nav-link" data-scroll-target="#실무-적용-가이드"><span class="header-section-number">6.2</span> 실무 적용 가이드</a></li>
+  <li><a href="#추가-최적화-전략" id="toc-추가-최적화-전략" class="nav-link" data-scroll-target="#추가-최적화-전략"><span class="header-section-number">6.3</span> 추가 최적화 전략</a></li>
+  <li><a href="#핵심-요약" id="toc-핵심-요약" class="nav-link" data-scroll-target="#핵심-요약"><span class="header-section-number">6.4</span> 핵심 요약</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="lost-in-the-middle-현상" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="lost-in-the-middle-현상"><span class="header-section-number">1</span> Lost in the Middle 현상</h2>
+<section id="문제-정의" class="level3" data-number="1.1">
+<h3 data-number="1.1" class="anchored" data-anchor-id="문제-정의"><span class="header-section-number">1.1</span> 문제 정의</h3>
+<p>RAG 시스템에서 벡터 검색을 수행하면 일반적으로 유사도 점수에 따라 문서가 내림차순으로 정렬된다. 그러나 검색된 문서가 10개 이상일 때, 단순히 유사도 순서대로 LLM에 전달하는 것이 최선의 전략은 아니다.</p>
+</section>
+<section id="핵심-발견" class="level3" data-number="1.2">
+<h3 data-number="1.2" class="anchored" data-anchor-id="핵심-발견"><span class="header-section-number">1.2</span> 핵심 발견</h3>
+<p><strong>성능 저하 현상</strong><br>
+- 모델 아키텍처와 무관하게 10개 이상의 문서를 입력할 경우 성능이 상당히 저하된다<br>
+- 특정 훈련 방식(Instruction Tuning 등)과 관계없이 모든 LLM에서 공통적으로 나타난다</p>
+<p><strong>원인: 위치 편향 (Positional Bias)</strong></p>
+<ul>
+<li>LLM은 시작과 끝 토큰에 더 높은 주의 가중치(Attention Weight)를 할당하는 학습된 편향을 가지고 있다.</li>
+<li>이는 Transformer의 Self-Attention 메커니즘 학습 과정에서 형성된다.</li>
+</ul>
+<p><strong>학습된 편향의 형성 과정</strong></p>
+<ol type="1">
+<li><strong>초기 상태</strong>: Transformer는 초기에 단어 간의 관계만 학습한다</li>
+<li><strong>편향 학습</strong>: 학습 데이터셋에서 <strong>핵심 정보가 시작과 끝에 자주 위치</strong>했기 때문에 위치적 편향이 형성된다</li>
+<li><strong>파라미터 조정</strong>:
+<ul>
+<li>시작 토큰의 <span class="math inline">\(\text{Q}\)</span> (Query)가 다른 토큰의 <span class="math inline">\(\text{K}\)</span> (Key)와 강한 유사도를 갖도록 학습</li>
+<li>끝 토큰의 <span class="math inline">\(\text{K}\)</span> 가 다른 토큰의 <span class="math inline">\(\text{Q}\)</span> 와 강한 유사도를 갖도록 학습</li>
+</ul></li>
+<li><strong>결과</strong>: 중간 위치 토큰은 상대적으로 낮은 주의 가중치를 받게 되어 <strong>‘Lost in the Middle’</strong> 현상 발생</li>
+</ol>
+<p><strong>은닉 표현 공간에서의 정보 경쟁</strong></p>
+<p>중간 위치의 정보가 손실되는 이유는 벡터 공간의 제약에서 비롯된다.</p>
+<ol type="1">
+<li><strong>벡터화 한계</strong>: 모든 정보를 고정 크기 벡터로 압축해야 하는 제약</li>
+<li><strong>신호 희석 (Signal Dilution)</strong>:
+<ul>
+<li>중간 위치의 관련 정보는 앞뒤 토큰들로부터의 주의 신호와 경쟁한다</li>
+<li>은닉 표현 공간에서 노이즈 정보에 의해 <strong>희석</strong>되거나 <strong>덮어쓰인다</strong></li>
+<li>결과적으로 모델이 해당 정보를 “잊어버린” 것처럼 동작한다</li>
+</ul></li>
+</ol>
+<p><strong>학습 데이터의 영향</strong></p>
+<ul>
+<li>대부분의 잘 설계된 글은 중요한 정보를 시작(서론)이나 끝(결론)에 배치한다.</li>
+<li>LLM은 이러한 패턴을 내재화하여 위치 기반 휴리스틱을 학습하게 된다.</li>
+</ul>
+</section>
+</section>
+<section id="context-window-크기와-lost-in-the-middle의-관계" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="context-window-크기와-lost-in-the-middle의-관계"><span class="header-section-number">2</span> Context Window 크기와 Lost in the Middle의 관계</h2>
+<section id="context-window가-커지면-더-심해지는가" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="context-window가-커지면-더-심해지는가"><span class="header-section-number">2.1</span> Context Window가 커지면 더 심해지는가?</h3>
+<p><strong>Yes.</strong> Lost in the Middle은 context window 크기와 무관하게 발생하지만, context가 길어질수록 U자형 골이 <strong>깊고 넓어진다.</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 28%">
+<col style="width: 57%">
+<col style="width: 13%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Context 크기</th>
+<th>Lost in the Middle 심각도</th>
+<th>이유</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>4K 토큰</td>
+<td>발생하지만 경미</td>
+<td>전체 내용이 짧아서 “중간”이 상대적으로 가까움</td>
+</tr>
+<tr class="even">
+<td>32K 토큰</td>
+<td>뚜렷하게 발생</td>
+<td>중간 영역이 넓어짐</td>
+</tr>
+<tr class="odd">
+<td>128K+ 토큰</td>
+<td>가장 심각</td>
+<td>중간 영역이 매우 넓고, attention이 희석됨</td>
+</tr>
+</tbody>
+</table>
+<p>4K에서 “중간”이라고 해봐야 2K 지점이지만, 128K에서는 “중간”이 30K~90K 구간에 해당한다. <strong>중간 영역의 절대적 크기가 커지므로 정보 손실 구간도 비례하여 확대</strong>된다.</p>
+</section>
+<section id="attention-희석-attention-dilution" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="attention-희석-attention-dilution"><span class="header-section-number">2.2</span> Attention 희석 (Attention Dilution)</h3>
+<p>Lost in the Middle의 근본 원인 중 하나는 Transformer의 softmax attention이 확률 분포라는 점에서 비롯된다.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1"></a><span class="co"># 짧은 시퀀스 (1K 토큰)</span></span>
+<span id="cb1-2"><a href="#cb1-2"></a>attention_weight <span class="op">=</span> softmax(Q <span class="op">@</span> K.T <span class="op">/</span> sqrt(d))</span>
+<span id="cb1-3"><a href="#cb1-3"></a><span class="co"># 각 토큰에 평균 1/1000 = 0.001 할당</span></span>
+<span id="cb1-4"><a href="#cb1-4"></a></span>
+<span id="cb1-5"><a href="#cb1-5"></a><span class="co"># 긴 시퀀스 (128K 토큰)</span></span>
+<span id="cb1-6"><a href="#cb1-6"></a>attention_weight <span class="op">=</span> softmax(Q <span class="op">@</span> K.T <span class="op">/</span> sqrt(d))</span>
+<span id="cb1-7"><a href="#cb1-7"></a><span class="co"># 각 토큰에 평균 1/128000 = 0.0000078 할당</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>softmax가 더 많은 토큰에 확률을 분배해야 하므로, 개별 토큰에 대한 attention이 희석</strong>된다. 이것은 수학적으로 불가피한 현상이다.</p>
+</section>
+<section id="positional-bias-vs-attention-희석" class="level3" data-number="2.3">
+<h3 data-number="2.3" class="anchored" data-anchor-id="positional-bias-vs-attention-희석"><span class="header-section-number">2.3</span> Positional Bias vs Attention 희석</h3>
+<p>두 현상은 관련되어 있지만 메커니즘이 다르다.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 10%">
+<col style="width: 64%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>측면</th>
+<th>Positional Bias (Lost in the Middle)</th>
+<th>Attention 희석</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>원인</td>
+<td>학습 데이터에서 형성된 위치 편향</td>
+<td>softmax 확률 분배의 수학적 한계</td>
+</tr>
+<tr class="even">
+<td>발생 위치</td>
+<td>중간 구간에 집중</td>
+<td>전체적으로 균일하게 발생</td>
+</tr>
+<tr class="odd">
+<td>모델 크기 영향</td>
+<td>큰 모델도 동일 패턴</td>
+<td>큰 모델에서 약간 완화</td>
+</tr>
+<tr class="even">
+<td>해결 가능성</td>
+<td>학습 방식으로 일부 완화 가능</td>
+<td>아키텍처 한계 (근본적)</td>
+</tr>
+</tbody>
+</table>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+중요
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>이중 취약성</strong>: Long context 모델에서는 두 현상이 동시에 작용한다.</p>
+<ol type="1">
+<li>attention 희석으로 중간 토큰에 대한 attention이 약해지고</li>
+<li>positional bias로 중간 토큰이 추가로 무시됨</li>
+<li>두 효과가 곱해져서 중간 구간의 정보 손실이 가속됨</li>
+</ol>
+</div>
+</div>
+</section>
+<section id="long-context-모델의-개선-노력과-한계" class="level3" data-number="2.4">
+<h3 data-number="2.4" class="anchored" data-anchor-id="long-context-모델의-개선-노력과-한계"><span class="header-section-number">2.4</span> Long Context 모델의 개선 노력과 한계</h3>
+<p>최근 모델들이 시도하는 대응 방식이다.</p>
+<section id="rope-스케일링-position-embedding-개선" class="level4" data-number="2.4.1">
+<h4 data-number="2.4.1" class="anchored" data-anchor-id="rope-스케일링-position-embedding-개선"><span class="header-section-number">2.4.1</span> RoPE 스케일링 (Position Embedding 개선)</h4>
+<p>기존에는 학습된 위치 범위(예: 4K)를 넘기면 성능이 급락했다. YaRN, NTK-aware 스케일링 등으로 위치 인코딩을 확장하여 긴 시퀀스 처리 자체는 가능해졌지만, <strong>Lost in the Middle 패턴은 여전히 관찰</strong>된다.</p>
+</section>
+<section id="학습-데이터-구성" class="level4" data-number="2.4.2">
+<h4 data-number="2.4.2" class="anchored" data-anchor-id="학습-데이터-구성"><span class="header-section-number">2.4.2</span> 학습 데이터 구성</h4>
+<p>정답이 중간에 있는 학습 데이터를 의도적으로 늘려 positional bias를 완화한다. Claude 3.5, GPT-4 Turbo 등 최신 모델에서 부분적으로 개선되었지만 완전히 해결되지는 않았다.</p>
+</section>
+<section id="sliding-window-attention" class="level4" data-number="2.4.3">
+<h4 data-number="2.4.3" class="anchored" data-anchor-id="sliding-window-attention"><span class="header-section-number">2.4.3</span> Sliding Window Attention</h4>
+<p>Mistral 등이 사용하는 방식으로, 전체 시퀀스에 대한 full attention 대신 window 단위로 attention을 계산한다. attention 희석은 줄이지만, <strong>window 밖의 정보에 접근하기 어렵다는 새로운 trade-off</strong>가 생긴다.</p>
+</section>
+</section>
+<section id="프롬프트-구조화로-lost-in-the-middle-완화" class="level3" data-number="2.5">
+<h3 data-number="2.5" class="anchored" data-anchor-id="프롬프트-구조화로-lost-in-the-middle-완화"><span class="header-section-number">2.5</span> 프롬프트 구조화로 Lost in the Middle 완화</h3>
+<p>LongContextReorder가 RAG의 검색 문서 배치를 다룬다면, <strong>시스템 프롬프트 내부에서도 동일한 원리를 적용</strong>할 수 있다.</p>
+<section id="배치-전략" class="level4" data-number="2.5.1">
+<h4 data-number="2.5.1" class="anchored" data-anchor-id="배치-전략"><span class="header-section-number">2.5.1</span> 배치 전략</h4>
+<pre><code>[최우선 규칙]           &lt;- 앞쪽: Primacy bias 활용
+[중요도 낮은 규칙]       &lt;- 중간: 놓쳐도 치명적이지 않은 내용
+[Few-shot 예시]         &lt;- 중간~뒤쪽
+[Context/문서]          &lt;- 뒤쪽
+[질문 + 출력 지시]       &lt;- 맨 뒤: Recency bias 활용</code></pre>
+</section>
+<section id="시맨틱-xml-태그의-앵커-효과" class="level4" data-number="2.5.2">
+<h4 data-number="2.5.2" class="anchored" data-anchor-id="시맨틱-xml-태그의-앵커-효과"><span class="header-section-number">2.5.2</span> 시맨틱 XML 태그의 앵커 효과</h4>
+<div class="sourceCode" id="cb3"><pre class="sourceCode numberSource xml number-lines code-with-copy"><code class="sourceCode xml"><span id="cb3-1"><a href="#cb3-1"></a><span class="co">&lt;!-- XML 태그가 attention의 "앵커" 역할 --&gt;</span></span>
+<span id="cb3-2"><a href="#cb3-2"></a>&lt;<span class="kw">boundaries</span>&gt;가장 중요한 제약 조건&lt;/<span class="kw">boundaries</span>&gt;</span>
+<span id="cb3-3"><a href="#cb3-3"></a></span>
+<span id="cb3-4"><a href="#cb3-4"></a>&lt;<span class="kw">domain-rules</span>&gt;도메인 규칙 (중간에 위치해도 태그로 강조)&lt;/<span class="kw">domain-rules</span>&gt;</span>
+<span id="cb3-5"><a href="#cb3-5"></a></span>
+<span id="cb3-6"><a href="#cb3-6"></a>&lt;<span class="kw">output-format</span>&gt;출력 형식 지시&lt;/<span class="kw">output-format</span>&gt;</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>시맨틱 XML 태그는 positional bias를 완화하는 실용적 수단이다. 태그 자체가 attention을 끌어모으는 앵커 역할을 하여, 중간에 위치한 내용도 놓치지 않게 돕는다. 비구조화된 텍스트 나열에서는 중간 규칙이 무시되기 쉽지만, <code>&lt;boundaries&gt;</code>나 <code>&lt;fix-...&gt;</code> 같은 태그로 감싸면 LLM이 섹션 경계를 인식하여 중간 내용도 잘 참조한다.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+힌트
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>RAG에서는 <strong>LongContextReorder</strong>로 검색 문서를 재배치하고, 시스템 프롬프트에서는 <strong>시맨틱 태그 + 배치 전략</strong>으로 중요 규칙의 위치를 관리하는 것이 Lost in the Middle에 대한 이중 방어선이다.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="실무적-함의" class="level3" data-number="2.6">
+<h3 data-number="2.6" class="anchored" data-anchor-id="실무적-함의"><span class="header-section-number">2.6</span> 실무적 함의</h3>
+<p><strong>문제 상황</strong> - 쿼리와 관련된 핵심 문서가 컨텍스트 중간에 위치할 경우 LLM의 답변 정확도가 크게 저하된다 - 모델이 제공된 문서를 무시하고 사전 학습 지식에만 의존하는 경향이 나타난다</p>
+<p><strong>해결 방안</strong> - <strong>문서 재정렬 (Re-ordering)</strong>: 관련성 높은 문서를 시작과 끝에 배치 - <strong>재순위화 (Re-ranking)</strong>: 검색 후 추가 모델로 순위 재조정 - <strong>LongContextReorder</strong>: 중간 문서를 시작/끝으로 교대 배치하는 LangChain 기법</p>
+</section>
+</section>
+<section id="관련-연구-lost-in-the-middle" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="관련-연구-lost-in-the-middle"><span class="header-section-number">3</span> 관련 연구: Lost in the Middle</h2>
+<section id="논문-개요" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="논문-개요"><span class="header-section-number">3.1</span> 논문 개요</h3>
+<p><a href="https://arxiv.org/abs/2307.03172">Lost in the Middle: How Language Models Use Long Contexts</a> (Liu et al., 2023)</p>
+<p>이 논문은 최근 언어 모델들이 긴 컨텍스트를 입력받을 수 있음에도 불구하고, 컨텍스트 내 정보를 얼마나 효과적으로 활용하는지를 체계적으로 분석한 연구다.</p>
+<p><strong>핵심 발견</strong>: LLM이 문맥 중간에 위치한 정보를 검색할 때 성능이 현저히 저하되는 <strong>‘Lost in the Middle’</strong> 현상을 발견했다. ### 실험 설계</p>
+<p>연구팀은 <strong>멀티 문서 질의응답(Multi-Document QA)</strong>과 <strong>키-값 검색(Key-Value Retrieval)</strong> 두 가지 작업을 설계하여 모델 성능을 평가했다.</p>
+<p><strong>주요 발견</strong></p>
+<ol type="1">
+<li><strong>정보 위치에 따른 성능 저하</strong>
+<ul>
+<li>관련 정보의 위치가 변경될 때 언어 모델의 성능이 크게 저하된다</li>
+<li>현재 LLM은 긴 입력 컨텍스트의 정보를 강건하게(robustly) 활용하지 못한다</li>
+</ul></li>
+<li><strong>위치별 성능 패턴</strong>
+<ul>
+<li>성능 순서: <strong>앞 부분 &gt; 뒷 부분 &gt; 중간 부분</strong></li>
+<li>시작(Beginning) 또는 끝(End) 위치: 최고 성능</li>
+<li>중간(Middle) 위치: 현저한 성능 저하</li>
+</ul></li>
+<li><strong>범용적 현상</strong>
+<ul>
+<li>Long Context를 명시적으로 지원하는 모델(GPT-4, Claude 등)에서도 동일하게 관찰된다</li>
+<li>모델 크기, 아키텍처와 무관하게 공통적으로 나타난다</li>
+</ul></li>
+</ol>
+</section>
+<section id="평가-방법론" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="평가-방법론"><span class="header-section-number">3.2</span> 평가 방법론</h3>
+<p><strong>실험 설계 원칙</strong>: 관련 정보의 <strong>위치를 체계적으로 변화</strong>시키면서 성능을 측정한다.</p>
+<p><strong>작업 1: 다중 문서 질의응답 (Multi-Document QA)</strong></p>
+<p>목적: 여러 문서 중에서 정답을 포함한 문서를 식별하고 정확한 답변을 추출하는 능력을 평가한다.</p>
+<ul>
+<li><strong>데이터셋</strong>: Natural Questions, HotpotQA 등 기존 QA 벤치마크 활용</li>
+<li><strong>컨텍스트 구성</strong>:
+<ul>
+<li><strong>관련 문서 (Relevant Document)</strong>: 질문에 대한 정답 포함</li>
+<li><strong>방해 문서 (Distractor Documents)</strong>: 무작위로 선택된 비관련 문서들</li>
+<li>두 종류를 결합하여 매우 긴 컨텍스트를 생성한다</li>
+</ul></li>
+</ul>
+<p><strong>작업 2: 키-값 검색 (Key-Value Retrieval)</strong></p>
+<p>목적: 긴 입력에서 특정 키에 해당하는 값을 정확히 추출하는 능력을 평가한다.</p>
+<ul>
+<li><strong>컨텍스트 구성</strong>: 수많은 무작위 키-값 쌍으로 구성</li>
+<li><strong>평가 방식</strong>:
+<ol type="1">
+<li>모델에게 특정 키 제시</li>
+<li>해당 키와 정확히 일치하는 값을 출력하는지 확인</li>
+<li>정확도(Exact Match) 측정</li>
+</ol></li>
+</ul>
+<p><strong>‘Lost in the Middle’ 현상 측정 프로토콜</strong></p>
+<p>두 작업 모두에서 관련 정보의 위치를 체계적으로 조작하여 성능을 측정한다.</p>
+<ol type="1">
+<li><strong>관련 정보 추출</strong>
+<ul>
+<li>QA: 정답이 포함된 문서</li>
+<li>키-값 검색: 질문과 관련된 키-값 쌍</li>
+</ul></li>
+<li><strong>위치 삽입 (Position Shifting)</strong>
+<ul>
+<li>전체 컨텍스트의 다양한 위치에 삽입한다</li>
+<li>위치: 시작(Index 0), 1/4 지점, 중간(Middle), 3/4 지점, 끝(Index N)</li>
+</ul></li>
+<li><strong>성능 측정</strong>
+<ul>
+<li>각 위치별로 정답 정확도(Accuracy) 측정</li>
+<li>위치에 따른 성능 곡선 분석</li>
+</ul></li>
+</ol>
+</section>
+<section id="논문의-기여" class="level3" data-number="3.3">
+<h3 data-number="3.3" class="anchored" data-anchor-id="논문의-기여"><span class="header-section-number">3.3</span> 논문의 기여</h3>
+<p><strong>학술적 기여</strong> 1. LLM이 긴 컨텍스트를 처리하는 메커니즘에 대한 실증적 분석을 제공한다 2. Long Context LLM 성능 평가를 위한 새로운 벤치마크 프로토콜을 제시한다 3. 위치 편향이라는 LLM의 근본적 한계를 밝혔다</p>
+<p><strong>실무적 시사점</strong></p>
+<p>논문은 <strong>문서 재정렬(Re-ordering)</strong> 전략을 제안한다: - 중간 부분의 문서를 시작과 끝으로 교대 배치한다 - 가장 관련성 높은 문서를 시작과 끝에 위치시킨다 - LangChain의 <code>LongContextReorder</code>가 이 전략을 구현한 것이다</p>
+</section>
+<section id="실험-결과-요약" class="level3" data-number="3.4">
+<h3 data-number="3.4" class="anchored" data-anchor-id="실험-결과-요약"><span class="header-section-number">3.4</span> 실험 결과 요약</h3>
+<p><strong>위치별 성능 패턴</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 30%">
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 30%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">관련 정보 위치</th>
+<th style="text-align: left;">예상 성능</th>
+<th style="text-align: left;">실험 결과</th>
+<th style="text-align: left;">성능 저하 정도</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><strong>시작 (Beginning)</strong></td>
+<td style="text-align: left;">높음</td>
+<td style="text-align: left;">최고 성능 (90-95%)</td>
+<td style="text-align: left;">-</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>1/4 지점</strong></td>
+<td style="text-align: left;">중간</td>
+<td style="text-align: left;">중간 성능 (70-80%)</td>
+<td style="text-align: left;">약 15% 저하</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>중간 (Middle)</strong></td>
+<td style="text-align: left;">낮음</td>
+<td style="text-align: left;"><strong>최저 성능 (50-60%)</strong></td>
+<td style="text-align: left;"><strong>최대 40% 저하</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>3/4 지점</strong></td>
+<td style="text-align: left;">중간</td>
+<td style="text-align: left;">중간 성능 (75-85%)</td>
+<td style="text-align: left;">약 10% 저하</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>끝 (End)</strong></td>
+<td style="text-align: left;">높음</td>
+<td style="text-align: left;">높은 성능 (85-90%)</td>
+<td style="text-align: left;">약 5% 저하</td>
+</tr>
+</tbody>
+</table>
+<p><strong>핵심 인사이트</strong> - 시작 위치가 가장 높은 성능을 보인다 - 중간 위치는 최대 40%의 성능 저하가 발생한다 - 끝 위치도 높은 성능을 보이지만 시작보다는 약간 낮다</p>
+</section>
+<section id="해결-방안-문서-재정렬" class="level3" data-number="3.5">
+<h3 data-number="3.5" class="anchored" data-anchor-id="해결-방안-문서-재정렬"><span class="header-section-number">3.5</span> 해결 방안: 문서 재정렬</h3>
+<p>이 문제를 해결하기 위해 검색된 문서의 순서를 전략적으로 재배열하여 LLM에 입력한다.</p>
+</section>
+</section>
+<section id="실습-longcontextreorder-적용" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="실습-longcontextreorder-적용"><span class="header-section-number">4</span> 실습: LongContextReorder 적용</h2>
+<section id="환경-설정" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="환경-설정"><span class="header-section-number">4.1</span> 환경 설정</h3>
+<p>이 실습에서는 다음을 수행한다: 1. <code>Chroma</code> 벡터 저장소로 텍스트 데이터를 저장하고 검색한다 2. 일반 검색 결과와 재정렬된 결과를 비교한다 3. RAG 체인에 <code>LongContextReorder</code>를 통합한다</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1"></a><span class="co"># API 키를 환경변수로 관리하기 위한 설정 파일</span></span>
+<span id="cb4-2"><a href="#cb4-2"></a><span class="im">from</span> dotenv <span class="im">import</span> load_dotenv</span>
+<span id="cb4-3"><a href="#cb4-3"></a></span>
+<span id="cb4-4"><a href="#cb4-4"></a><span class="co"># API 키 정보 로드</span></span>
+<span id="cb4-5"><a href="#cb4-5"></a>load_dotenv()</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode" id="cb5"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1"></a><span class="co"># LangSmith 추적을 설정합니다. https://smith.langchain.com</span></span>
+<span id="cb5-2"><a href="#cb5-2"></a><span class="co"># !pip install langchain-teddynote</span></span>
+<span id="cb5-3"><a href="#cb5-3"></a><span class="im">from</span> langchain_teddynote <span class="im">import</span> logging</span>
+<span id="cb5-4"><a href="#cb5-4"></a></span>
+<span id="cb5-5"><a href="#cb5-5"></a><span class="co"># 프로젝트 이름을 입력합니다.</span></span>
+<span id="cb5-6"><a href="#cb5-6"></a>logging.langsmith(<span class="st">"CH10-Retriever"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="longcontextreorder-의-재순위-방식-핵심-로직" class="level3" data-number="4.2">
+<h3 data-number="4.2" class="anchored" data-anchor-id="longcontextreorder-의-재순위-방식-핵심-로직"><span class="header-section-number">4.2</span> LongContextReorder 의 재순위 방식 — 핵심 로직</h3>
+<p>LongContextReorder 의 transform_documents(docs) 함수는 내부적으로 다음과 같은 단계를 거쳐 재정렬한다.</p>
+<ol type="1">
+<li>retriever가 반환한 문서 리스트를 받는다. 이 리스트는 통상적으로 유사도 기준으로 정렬되어 있다 (가장 관련 높은 문서가 앞쪽).</li>
+</ol>
+<ul>
+<li>원본: [D0(높음), D1, D2, D3, D4(낮음)]</li>
+</ul>
+<ol start="2" type="1">
+<li>내부적으로 리스트를 역순(reverse)으로 뒤집는다.</li>
+</ol>
+<ul>
+<li>reverse 결과: [D4, D3, D2, D1, D0]</li>
+</ul>
+<ol start="3" type="1">
+<li>그 뒤 “양끝 먼저, 중간은 나중” 식의 로직으로 다시 문서를 배치한다. 구체적으로:</li>
+</ol>
+<ul>
+<li>역순된 리스트에서 인덱스 <code>i</code>가 짝수인 문서를 결과 리스트의 맨 앞(front)에 삽입.</li>
+<li>인덱스 <code>i</code>가 홀수인 문서를 결과 리스트의 맨 뒤(back)에 삽입.</li>
+<li>대화 초반에 멀리 떨어진 문서를 먼저, 후반엔 가까운 문서를 배치</li>
+<li>이걸 i=0→4 순으로 처리하면:
+<ul>
+<li>i=0 → D4 (짝수 → 앞에 넣기) 결과: [D4]</li>
+<li>i=1 → D3 (홀수 → 뒤에 넣기) 결과: [D4, D3]</li>
+<li>i=2 → D2 (짝수 → 앞에 넣기) 결과: [D2, D4, D3]</li>
+<li>i=3 → D1 (홀수 → 뒤에 넣기) 결과: [D2, D4, D3, D1]</li>
+<li>i=4 → D0 (짝수 → 앞에 넣기) 결과: [D0, D2, D4, D3, D1]</li>
+</ul></li>
+<li>결과적으로, 원래 유사도가 높은 문서들이 앞과 뒤(즉, 컨텍스트의 처음과 끝)에 배치되고, 덜 관련 있거나 중간 순위 문서들은 가운데 쪽에 모이게 된다.</li>
+</ul>
+<div class="sourceCode" id="cb6"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1"></a><span class="im">from</span> langchain_core.prompts <span class="im">import</span> PromptTemplate</span>
+<span id="cb6-2"><a href="#cb6-2"></a><span class="im">from</span> langchain_community.document_transformers <span class="im">import</span> LongContextReorder</span>
+<span id="cb6-3"><a href="#cb6-3"></a><span class="im">from</span> langchain_community.vectorstores <span class="im">import</span> Chroma</span>
+<span id="cb6-4"><a href="#cb6-4"></a><span class="im">from</span> langchain_openai <span class="im">import</span> OpenAIEmbeddings</span>
+<span id="cb6-5"><a href="#cb6-5"></a></span>
+<span id="cb6-6"><a href="#cb6-6"></a></span>
+<span id="cb6-7"><a href="#cb6-7"></a><span class="co"># 임베딩을 가져옵니다.</span></span>
+<span id="cb6-8"><a href="#cb6-8"></a>embeddings <span class="op">=</span> OpenAIEmbeddings(model<span class="op">=</span><span class="st">"text-embedding-3-small"</span>)</span>
+<span id="cb6-9"><a href="#cb6-9"></a></span>
+<span id="cb6-10"><a href="#cb6-10"></a>texts <span class="op">=</span> [</span>
+<span id="cb6-11"><a href="#cb6-11"></a>    <span class="st">"이건 그냥 내가 아무렇게나 적어본 글입니다."</span>,</span>
+<span id="cb6-12"><a href="#cb6-12"></a>    <span class="st">"사용자와 대화하는 것처럼 설계된 AI인 ChatGPT는 다양한 질문에 답할 수 있습니다."</span>,</span>
+<span id="cb6-13"><a href="#cb6-13"></a>    <span class="st">"아이폰, 아이패드, 맥북 등은 애플이 출시한 대표적인 제품들입니다."</span>,</span>
+<span id="cb6-14"><a href="#cb6-14"></a>    <span class="st">"챗GPT는 OpenAI에 의해 개발되었으며, 지속적으로 개선되고 있습니다."</span>,</span>
+<span id="cb6-15"><a href="#cb6-15"></a>    <span class="st">"챗지피티는 사용자의 질문을 이해하고 적절한 답변을 생성하기 위해 대량의 데이터를 학습했습니다."</span>,</span>
+<span id="cb6-16"><a href="#cb6-16"></a>    <span class="st">"애플 워치와 에어팟 같은 웨어러블 기기도 애플의 인기 제품군에 속합니다."</span>,</span>
+<span id="cb6-17"><a href="#cb6-17"></a>    <span class="st">"ChatGPT는 복잡한 문제를 해결하거나 창의적인 아이디어를 제안하는 데에도 사용될 수 있습니다."</span>,</span>
+<span id="cb6-18"><a href="#cb6-18"></a>    <span class="st">"비트코인은 디지털 금이라고도 불리며, 가치 저장 수단으로서 인기를 얻고 있습니다."</span>,</span>
+<span id="cb6-19"><a href="#cb6-19"></a>    <span class="st">"ChatGPT의 기능은 지속적인 학습과 업데이트를 통해 더욱 발전하고 있습니다."</span>,</span>
+<span id="cb6-20"><a href="#cb6-20"></a>    <span class="st">"FIFA 월드컵은 네 번째 해마다 열리며, 국제 축구에서 가장 큰 행사입니다."</span>,</span>
+<span id="cb6-21"><a href="#cb6-21"></a>]</span>
+<span id="cb6-22"><a href="#cb6-22"></a></span>
+<span id="cb6-23"><a href="#cb6-23"></a></span>
+<span id="cb6-24"><a href="#cb6-24"></a><span class="co"># 검색기를 생성합니다. (K는 10으로 설정합니다)</span></span>
+<span id="cb6-25"><a href="#cb6-25"></a>retriever <span class="op">=</span> Chroma.from_texts(texts, embedding<span class="op">=</span>embeddings).as_retriever(</span>
+<span id="cb6-26"><a href="#cb6-26"></a>    search_kwargs<span class="op">=</span>{<span class="st">"k"</span>: <span class="dv">10</span>}</span>
+<span id="cb6-27"><a href="#cb6-27"></a>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>검색기에 쿼리를 입력하여 검색을 수행합니다.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1"></a>query <span class="op">=</span> <span class="st">"ChatGPT에 대해 무엇을 말해줄 수 있나요?"</span></span>
+<span id="cb7-2"><a href="#cb7-2"></a></span>
+<span id="cb7-3"><a href="#cb7-3"></a><span class="co"># 관련성 점수에 따라 정렬된 관련 문서를 가져옵니다.</span></span>
+<span id="cb7-4"><a href="#cb7-4"></a>docs <span class="op">=</span> retriever.invoke(query)</span>
+<span id="cb7-5"><a href="#cb7-5"></a>docs</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>[Document(page_content='ChatGPT는 복잡한 문제를 해결하거나 창의적인 아이디어를 제안하는 데에도 사용될 수 있습니다.'), 
+Document(page_content='ChatGPT의 기능은 지속적인 학습과 업데이트를 통해 더욱 발전하고 있습니다.'), 
+Document(page_content='사용자와 대화하는 것처럼 설계된 AI인 ChatGPT는 다양한 질문에 답할 수 있습니다.'), 
+Document(page_content='챗GPT는 OpenAI에 의해 개발되었으며, 지속적으로 개선되고 있습니다.'), 
+Document(page_content='이건 그냥 내가 아무렇게나 적어본 글입니다.'), 
+Document(page_content='챗지피티는 사용자의 질문을 이해하고 적절한 답변을 생성하기 위해 대량의 데이터를 학습했습니다.'),
+Document(page_content='비트코인은 디지털 금이라고도 불리며, 가치 저장 수단으로서 인기를 얻고 있습니다.'),
+Document(page_content='아이폰, 아이패드, 맥북 등은 애플이 출시한 대표적인 제품들입니다.'), 
+Document(page_content='애플 워치와 에어팟 같은 웨어러블 기기도 애플의 인기 제품군에 속합니다.'), 
+Document(page_content='FIFA 월드컵은 네 번째 해마다 열리며, 국제 축구에서 가장 큰 행사입니다.')]</code></pre>
+<p><strong>검색 결과 분석</strong></p>
+<p>ChatGPT와 관련성이 높은 문서들이 상위에 정렬되어 있으며, 유사도 점수에 따라 내림차순으로 정렬된다.</p>
+<ul>
+<li><strong>상위 3개</strong>: ChatGPT 직접 관련 문서 (높은 관련성)</li>
+<li><strong>4-6번</strong>: ChatGPT 언급 문서 (중간 관련성)</li>
+<li><strong>7-10번</strong>: 무관한 문서 (낮은 관련성)</li>
+</ul>
+<p>이제 <code>LongContextReorder</code>를 적용하여 문서 순서를 재배치한다.</p>
+</section>
+<section id="문서-재정렬-적용" class="level3" data-number="4.3">
+<h3 data-number="4.3" class="anchored" data-anchor-id="문서-재정렬-적용"><span class="header-section-number">4.3</span> 문서 재정렬 적용</h3>
+<p><code>LongContextReorder</code> 클래스의 인스턴스인 <code>reordering</code>을 생성합니다.</p>
+<ul>
+<li><code>reordering.transform_documents(docs)</code>를 호출하여 문서 목록 <code>docs</code>를 재정렬
+<ul>
+<li>덜 관련된 문서는 목록의 중간에 위치시킨다</li>
+<li>더 관련된 문서는 시작과 끝에 위치시킨다</li>
+</ul></li>
+</ul>
+<div class="sourceCode" id="cb9"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1"></a><span class="co"># 문서를 재정렬한다</span></span>
+<span id="cb9-2"><a href="#cb9-2"></a><span class="co"># 덜 관련된 문서는 목록의 중간에 위치하고 더 관련된 요소는 시작/끝에 위치한다</span></span>
+<span id="cb9-3"><a href="#cb9-3"></a>reordering <span class="op">=</span> LongContextReorder()</span>
+<span id="cb9-4"><a href="#cb9-4"></a>reordered_docs <span class="op">=</span> reordering.transform_documents(docs)  <span class="co"># 순위 재조정</span></span>
+<span id="cb9-5"><a href="#cb9-5"></a></span>
+<span id="cb9-6"><a href="#cb9-6"></a><span class="co"># ChatGPT 관련 문서가 시작과 끝에 위치하는지 확인한다</span></span>
+<span id="cb9-7"><a href="#cb9-7"></a>reordered_docs</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>[Document(page_content='ChatGPT의 기능은 지속적인 학습과 업데이트를 통해 더욱 발전하고 있습니다.'), 
+Document(page_content='챗GPT는 OpenAI에 의해 개발되었으며, 지속적으로 개선되고 있습니다.'),
+Document(page_content='챗지피티는 사용자의 질문을 이해하고 적절한 답변을 생성하기 위해 대량의 데이터를 학습했습니다.'), 
+Document(page_content='아이폰, 아이패드, 맥북 등은 애플이 출시한 대표적인 제품들입니다.'), 
+Document(page_content='FIFA 월드컵은 네 번째 해마다 열리며, 국제 축구에서 가장 큰 행사입니다.'), 
+Document(page_content='애플 워치와 에어팟 같은 웨어러블 기기도 애플의 인기 제품군에 속합니다.'), 
+Document(page_content='비트코인은 디지털 금이라고도 불리며, 가치 저장 수단으로서 인기를 얻고 있습니다.'), 
+Document(page_content='이건 그냥 내가 아무렇게나 적어본 글입니다.'), 
+Document(page_content='사용자와 대화하는 것처럼 설계된 AI인 ChatGPT는 다양한 질문에 답할 수 있습니다.'), 
+Document(page_content='ChatGPT는 복잡한 문제를 해결하거나 창의적인 아이디어를 제안하는 데에도 사용될 수 있습니다.')]</code></pre>
+<p><strong>재정렬 결과 분석</strong></p>
+<p>재정렬 전후를 비교하면 다음과 같은 패턴을 확인할 수 있다:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th style="text-align: left;">위치</th>
+<th style="text-align: left;">재정렬 전</th>
+<th style="text-align: left;">재정렬 후</th>
+<th style="text-align: left;">관련성</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><strong>0-1번</strong></td>
+<td style="text-align: left;">높은 관련성</td>
+<td style="text-align: left;">중간 관련성</td>
+<td style="text-align: left;">시작에 중간 문서 배치</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>2-7번</strong></td>
+<td style="text-align: left;">중간/낮은 관련성</td>
+<td style="text-align: left;">낮은 관련성</td>
+<td style="text-align: left;">중간에 무관 문서 집중</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>8-9번</strong></td>
+<td style="text-align: left;">낮은 관련성</td>
+<td style="text-align: left;"><strong>높은 관련성</strong></td>
+<td style="text-align: left;">끝에 핵심 문서 배치</td>
+</tr>
+</tbody>
+</table>
+<p><strong>재정렬 전략</strong>: - 가장 관련성 높은 문서(1, 10번)를 끝에 배치한다 - 중간 관련성 문서(2-4번)를 시작에 배치한다 - 무관한 문서(5-8번)를 중간에 배치한다</p>
+<p>이렇게 하면 LLM이 시작과 끝에서 관련 정보를 찾을 수 있어 성능이 향상된다.</p>
+</section>
+</section>
+<section id="rag-체인에-context-reordering-통합" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="rag-체인에-context-reordering-통합"><span class="header-section-number">5</span> RAG 체인에 Context Reordering 통합</h2>
+<div class="sourceCode" id="cb11"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1"></a><span class="kw">def</span> format_docs(docs):</span>
+<span id="cb11-2"><a href="#cb11-2"></a>    <span class="cf">return</span> <span class="st">"</span><span class="ch">\n</span><span class="st">"</span>.join([doc.page_content <span class="cf">for</span> i, doc <span class="kw">in</span> <span class="bu">enumerate</span>(docs)])</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode" id="cb12"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1"></a><span class="bu">print</span>(format_docs(docs))</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>ChatGPT는 복잡한 문제를 해결하거나 창의적인 아이디어를 제안하는 데에도 사용될 수 있습니다.
+ChatGPT의 기능은 지속적인 학습과 업데이트를 통해 더욱 발전하고 있습니다.
+사용자와 대화하는 것처럼 설계된 AI인 ChatGPT는 다양한 질문에 답할 수 있습니다.
+챗GPT는 OpenAI에 의해 개발되었으며, 지속적으로 개선되고 있습니다.
+이건 그냥 내가 아무렇게나 적어본 글입니다.
+챗지피티는 사용자의 질문을 이해하고 적절한 답변을 생성하기 위해 대량의 데이터를 학습했습니다.
+비트코인은 디지털 금이라고도 불리며, 가치 저장 수단으로서 인기를 얻고 있습니다.
+아이폰, 아이패드, 맥북 등은 애플이 출시한 대표적인 제품들입니다.
+애플 워치와 에어팟 같은 웨어러블 기기도 애플의 인기 제품군에 속합니다.
+FIFA 월드컵은 네 번째 해마다 열리며, 국제 축구에서 가장 큰 행사입니다.</code></pre>
+<div class="sourceCode" id="cb14"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1"></a><span class="kw">def</span> format_docs(docs):</span>
+<span id="cb14-2"><a href="#cb14-2"></a>    <span class="cf">return</span> <span class="st">"</span><span class="ch">\n</span><span class="st">"</span>.join(</span>
+<span id="cb14-3"><a href="#cb14-3"></a>        [</span>
+<span id="cb14-4"><a href="#cb14-4"></a>            <span class="ss">f"[</span><span class="sc">{</span>i<span class="sc">}</span><span class="ss">] </span><span class="sc">{</span>doc<span class="sc">.</span>page_content<span class="sc">}</span><span class="ss"> [source: teddylee777@gmail.com]"</span></span>
+<span id="cb14-5"><a href="#cb14-5"></a>            <span class="cf">for</span> i, doc <span class="kw">in</span> <span class="bu">enumerate</span>(docs)</span>
+<span id="cb14-6"><a href="#cb14-6"></a>        ]</span>
+<span id="cb14-7"><a href="#cb14-7"></a>    )</span>
+<span id="cb14-8"><a href="#cb14-8"></a></span>
+<span id="cb14-9"><a href="#cb14-9"></a></span>
+<span id="cb14-10"><a href="#cb14-10"></a><span class="kw">def</span> reorder_documents(docs):</span>
+<span id="cb14-11"><a href="#cb14-11"></a>    <span class="co"># 재정렬</span></span>
+<span id="cb14-12"><a href="#cb14-12"></a>    reordering <span class="op">=</span> LongContextReorder()</span>
+<span id="cb14-13"><a href="#cb14-13"></a>    reordered_docs <span class="op">=</span> reordering.transform_documents(docs)</span>
+<span id="cb14-14"><a href="#cb14-14"></a>    combined <span class="op">=</span> format_docs(reordered_docs)</span>
+<span id="cb14-15"><a href="#cb14-15"></a>    <span class="bu">print</span>(combined)</span>
+<span id="cb14-16"><a href="#cb14-16"></a>    <span class="cf">return</span> combined</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>재정렬된 문서를 출력합니다.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1"></a><span class="co"># 재정렬된 문서를 출력</span></span>
+<span id="cb15-2"><a href="#cb15-2"></a>_ <span class="op">=</span> reorder_documents(docs)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>[0] ChatGPT의 기능은 지속적인 학습과 업데이트를 통해 더욱 발전하고 있습니다. [source: teddylee777@gmail.com]
+[1] 챗GPT는 OpenAI에 의해 개발되었으며, 지속적으로 개선되고 있습니다. [source: teddylee777@gmail.com]
+[2] 챗지피티는 사용자의 질문을 이해하고 적절한 답변을 생성하기 위해 대량의 데이터를 학습했습니다. [source: teddylee777@gmail.com]
+[3] 아이폰, 아이패드, 맥북 등은 애플이 출시한 대표적인 제품들입니다. [source: teddylee777@gmail.com]
+[4] FIFA 월드컵은 네 번째 해마다 열리며, 국제 축구에서 가장 큰 행사입니다. [source: teddylee777@gmail.com]
+[5] 애플 워치와 에어팟 같은 웨어러블 기기도 애플의 인기 제품군에 속합니다. [source: teddylee777@gmail.com]
+[6] 비트코인은 디지털 금이라고도 불리며, 가치 저장 수단으로서 인기를 얻고 있습니다. [source: teddylee777@gmail.com]
+[7] 이건 그냥 내가 아무렇게나 적어본 글입니다. [source: teddylee777@gmail.com]
+[8] 사용자와 대화하는 것처럼 설계된 AI인 ChatGPT는 다양한 질문에 답할 수 있습니다. [source: teddylee777@gmail.com]
+[9] ChatGPT는 복잡한 문제를 해결하거나 창의적인 아이디어를 제안하는 데에도 사용될 수 있습니다. [source: teddylee777@gmail.com]</code></pre>
+<div class="sourceCode" id="cb17"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1"></a><span class="im">from</span> langchain.prompts <span class="im">import</span> ChatPromptTemplate</span>
+<span id="cb17-2"><a href="#cb17-2"></a><span class="im">from</span> operator <span class="im">import</span> itemgetter</span>
+<span id="cb17-3"><a href="#cb17-3"></a><span class="im">from</span> langchain_openai <span class="im">import</span> ChatOpenAI</span>
+<span id="cb17-4"><a href="#cb17-4"></a><span class="im">from</span> langchain_core.output_parsers <span class="im">import</span> StrOutputParser</span>
+<span id="cb17-5"><a href="#cb17-5"></a><span class="im">from</span> langchain_core.runnables <span class="im">import</span> RunnableLambda</span>
+<span id="cb17-6"><a href="#cb17-6"></a></span>
+<span id="cb17-7"><a href="#cb17-7"></a><span class="co"># 프롬프트 템플릿</span></span>
+<span id="cb17-8"><a href="#cb17-8"></a>template <span class="op">=</span> <span class="st">"""Given this text extracts:</span></span>
+<span id="cb17-9"><a href="#cb17-9"></a><span class="sc">{context}</span></span>
+<span id="cb17-10"><a href="#cb17-10"></a></span>
+<span id="cb17-11"><a href="#cb17-11"></a><span class="st">-----</span></span>
+<span id="cb17-12"><a href="#cb17-12"></a><span class="st">Please answer the following question:</span></span>
+<span id="cb17-13"><a href="#cb17-13"></a><span class="sc">{question}</span></span>
+<span id="cb17-14"><a href="#cb17-14"></a></span>
+<span id="cb17-15"><a href="#cb17-15"></a><span class="st">Answer in the following languages: </span><span class="sc">{language}</span></span>
+<span id="cb17-16"><a href="#cb17-16"></a><span class="st">"""</span></span>
+<span id="cb17-17"><a href="#cb17-17"></a></span>
+<span id="cb17-18"><a href="#cb17-18"></a><span class="co"># 프롬프트 정의</span></span>
+<span id="cb17-19"><a href="#cb17-19"></a>prompt <span class="op">=</span> ChatPromptTemplate.from_template(template)</span>
+<span id="cb17-20"><a href="#cb17-20"></a></span>
+<span id="cb17-21"><a href="#cb17-21"></a><span class="co"># Chain 정의</span></span>
+<span id="cb17-22"><a href="#cb17-22"></a>chain <span class="op">=</span> (</span>
+<span id="cb17-23"><a href="#cb17-23"></a>    {</span>
+<span id="cb17-24"><a href="#cb17-24"></a>        <span class="st">"context"</span>: itemgetter(<span class="st">"question"</span>)</span>
+<span id="cb17-25"><a href="#cb17-25"></a>        <span class="op">|</span> retriever</span>
+<span id="cb17-26"><a href="#cb17-26"></a>        <span class="op">|</span> RunnableLambda(reorder_documents),  <span class="co"># 질문을 기반으로 문맥을 검색합니다.</span></span>
+<span id="cb17-27"><a href="#cb17-27"></a>        <span class="st">"question"</span>: itemgetter(<span class="st">"question"</span>),  <span class="co"># 질문을 추출합니다.</span></span>
+<span id="cb17-28"><a href="#cb17-28"></a>        <span class="st">"language"</span>: itemgetter(<span class="st">"language"</span>),  <span class="co"># 답변 언어를 추출합니다.</span></span>
+<span id="cb17-29"><a href="#cb17-29"></a>    }</span>
+<span id="cb17-30"><a href="#cb17-30"></a>    <span class="op">|</span> prompt  <span class="co"># 프롬프트 템플릿에 값을 전달합니다.</span></span>
+<span id="cb17-31"><a href="#cb17-31"></a>    <span class="op">|</span> ChatOpenAI(model<span class="op">=</span><span class="st">"gpt-4o-mini"</span>)  <span class="co"># 언어 모델에 프롬프트를 전달합니다.</span></span>
+<span id="cb17-32"><a href="#cb17-32"></a>    <span class="op">|</span> StrOutputParser()  <span class="co"># 모델의 출력을 문자열로 파싱합니다.</span></span>
+<span id="cb17-33"><a href="#cb17-33"></a>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><code>question</code> 에 쿼리를 입력하고 <code>language</code> 에 언어를 입력합니다.</p>
+<ul>
+<li>재정렬된 문서의 검색 결과도 확인합니다.</li>
+</ul>
+<div class="sourceCode" id="cb18"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1"></a>answer <span class="op">=</span> chain.invoke(</span>
+<span id="cb18-2"><a href="#cb18-2"></a>    {<span class="st">"question"</span>: <span class="st">"ChatGPT에 대해 무엇을 말해줄 수 있나요?"</span>, <span class="st">"language"</span>: <span class="st">"KOREAN"</span>}</span>
+<span id="cb18-3"><a href="#cb18-3"></a>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>[0] ChatGPT의 기능은 지속적인 학습과 업데이트를 통해 더욱 발전하고 있습니다. [source: teddylee777@gmail.com]
+[1] 챗GPT는 OpenAI에 의해 개발되었으며, 지속적으로 개선되고 있습니다. [source: teddylee777@gmail.com]
+[2] 챗지피티는 사용자의 질문을 이해하고 적절한 답변을 생성하기 위해 대량의 데이터를 학습했습니다. [source: teddylee777@gmail.com]
+[3] 아이폰, 아이패드, 맥북 등은 애플이 출시한 대표적인 제품들입니다. [source: teddylee777@gmail.com]
+[4] FIFA 월드컵은 네 번째 해마다 열리며, 국제 축구에서 가장 큰 행사입니다. [source: teddylee777@gmail.com]
+[5] 애플 워치와 에어팟 같은 웨어러블 기기도 애플의 인기 제품군에 속합니다. [source: teddylee777@gmail.com]
+[6] 비트코인은 디지털 금이라고도 불리며, 가치 저장 수단으로서 인기를 얻고 있습니다. [source: teddylee777@gmail.com]
+[7] 이건 그냥 내가 아무렇게나 적어본 글입니다. [source: teddylee777@gmail.com]
+[8] 사용자와 대화하는 것처럼 설계된 AI인 ChatGPT는 다양한 질문에 답할 수 있습니다. [source: teddylee777@gmail.com]
+[9] ChatGPT는 복잡한 문제를 해결하거나 창의적인 아이디어를 제안하는 데에도 사용될 수 있습니다. [source: teddylee777@gmail.com]</code></pre>
+<p>답변을 출력합니다.</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1"></a><span class="bu">print</span>(answer)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<pre><code>ChatGPT는 OpenAI에 의해 개발된 인공지능으로, 사용자의 질문을 이해하고 적절한 답변을 생성하는 데 대량의 데이터를 학습했습니다. 이 AI는 지속적인 학습과 업데이트를 통해 더욱 발전하고 있으며, 다양한 질문에 답하거나 복잡한 문제를 해결하는 데에도 사용될 수 있습니다. 또한 창의적인 아이디어를 제안하는 기능도 갖추고 있습니다. 사용자는 ChatGPT와 대화하는 것처럼 상호작용할 수 있습니다.</code></pre>
+</section>
+<section id="성능-비교-및-결론" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="성능-비교-및-결론"><span class="header-section-number">6</span> 성능 비교 및 결론</h2>
+<section id="longcontextreorder의-효과" class="level3" data-number="6.1">
+<h3 data-number="6.1" class="anchored" data-anchor-id="longcontextreorder의-효과"><span class="header-section-number">6.1</span> LongContextReorder의 효과</h3>
+<p><strong>기대 효과</strong> 1. <strong>답변 정확도 향상</strong>: 관련 문서를 시작과 끝에 배치하여 LLM이 핵심 정보를 놓치지 않도록 한다 2. <strong>환각(Hallucination) 감소</strong>: 제공된 컨텍스트를 더 잘 활용하여 사실 기반 답변 생성을 촉진한다 3. <strong>일관성 향상</strong>: 동일한 질문에 대해 더 안정적인 답변을 제공한다</p>
+</section>
+<section id="실무-적용-가이드" class="level3" data-number="6.2">
+<h3 data-number="6.2" class="anchored" data-anchor-id="실무-적용-가이드"><span class="header-section-number">6.2</span> 실무 적용 가이드</h3>
+<p><strong>언제 사용해야 하는가?</strong></p>
+<p><strong>사용 권장 상황</strong> - 검색된 문서가 10개 이상일 때 - 긴 문서를 여러 개 처리해야 할 때 - 답변 품질이 일관되지 않을 때 - 중요 정보가 중간에 묻힐 가능성이 있을 때</p>
+<p><strong>사용 불필요 상황</strong> - 검색 문서가 3-5개 이하일 때 - 모든 문서가 고도로 관련성이 있을 때 - 짧은 컨텍스트만 다룰 때</p>
+</section>
+<section id="추가-최적화-전략" class="level3" data-number="6.3">
+<h3 data-number="6.3" class="anchored" data-anchor-id="추가-최적화-전략"><span class="header-section-number">6.3</span> 추가 최적화 전략</h3>
+<p><code>LongContextReorder</code>와 함께 사용하면 좋은 기법들:</p>
+<ol type="1">
+<li><strong>하이브리드 검색</strong>: BM25 + 벡터 검색 조합으로 다양한 관련 문서 확보</li>
+<li><strong>재순위화(Re-ranking)</strong>: Cross-encoder로 검색 결과 품질 향상 후 재정렬 적용</li>
+<li><strong>청크 크기 최적화</strong>: 문서를 적절한 크기로 분할하여 관련성 높은 청크만 검색</li>
+<li><strong>메타데이터 필터링</strong>: 재정렬 전에 무관한 문서를 사전 필터링</li>
+</ol>
+</section>
+<section id="핵심-요약" class="level3" data-number="6.4">
+<h3 data-number="6.4" class="anchored" data-anchor-id="핵심-요약"><span class="header-section-number">6.4</span> 핵심 요약</h3>
+<p><strong>Lost in the Middle 문제</strong> - LLM은 긴 컨텍스트의 중간에 위치한 정보를 잘 활용하지 못한다 - 시작과 끝 위치에 더 높은 주의를 기울이는 학습된 편향이 원인이다</p>
+<p><strong>해결책: LongContextReorder</strong> - 관련성 높은 문서를 시작과 끝에 배치한다 - 무관한 문서를 중간에 집중시킨다 - RAG 시스템의 답변 정확도와 일관성을 향상시킨다</p>
+<p><strong>실무 적용</strong> - 10개 이상의 문서를 다룰 때 필수적이다 - 다른 최적화 기법(재순위화, 하이브리드 검색)과 조합하여 사용한다 - LangChain의 <code>LongContextReorder</code>로 간단히 구현할 수 있다</p>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const onCopySuccess = function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  }
+  const getTextToCopy = function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+    text: getTextToCopy
+  });
+  clipboard.on('success', onCopySuccess);
+  if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+    // For code content inside modals, clipBoardJS needs to be initialized with a container option
+    // TODO: Check when it could be a function (https://github.com/zenorocha/clipboard.js/issues/860)
+    const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+      text: getTextToCopy,
+      container: window.document.getElementById('quarto-embedded-source-code-modal')
+    });
+    clipboardModal.on('success', onCopySuccess);
+  }
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("kk3225\.netlify\.app");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

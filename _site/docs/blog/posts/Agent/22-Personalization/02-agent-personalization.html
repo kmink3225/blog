@@ -1,0 +1,2075 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.5.56">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="Segmentation(그룹 전략)에서 Personalization(개인 전략)으로 확장하는 방법을 다룬다. 프롬프트 템플릿 + 변수 주입 방식, 단일 Retriever에 메타데이터 필터를 적용하는 검색 개인화, 그리고 개인화 효과를 측정하기 위한 실험 설계(within-subject design, mixed effects model)를 포함한다. 1000명의 고유한 사용자에게 1000개의 프롬프트를 작성하지 않고도 개인화를 구현하는 실무 아키텍처를 설계한다.">
+
+<title>Agent Personalization – Kwangmin Kim</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Agent Personalization – Kwangmin Kim">
+<meta property="og:description" content="Segmentation(그룹 전략)에서 Personalization(개인 전략)으로 확장하는 방법을 다룬다. 프롬프트 템플릿 + 변수 주입 방식, 단일 Retriever에 메타데이터 필터를 적용하는 검색 개인화, 그리고 개인화 효과를 측정하기 위한 실험 설계(within-subject design, mixed effects model)를 포함한다. 1000명의 고유한 사용자에게 1000개의 프롬프트를 작성하지 않고도 개인화를 구현하는 실무 아키텍처를 설계한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">Agent Personalization</h1>
+            <p class="subtitle lead">개인 단위 맞춤 전략 설계와 효과 측정</p>
+                  <div>
+        <div class="description">
+          <p>Segmentation(그룹 전략)에서 Personalization(개인 전략)으로 확장하는 방법을 다룬다. 프롬프트 템플릿 + 변수 주입 방식, 단일 Retriever에 메타데이터 필터를 적용하는 검색 개인화, 그리고 개인화 효과를 측정하기 위한 실험 설계(within-subject design, mixed effects model)를 포함한다. 1000명의 고유한 사용자에게 1000개의 프롬프트를 작성하지 않고도 개인화를 구현하는 실무 아키텍처를 설계한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Agent</div>
+                <div class="quarto-category">AI</div>
+                <div class="quarto-category">Statistics</div>
+                <div class="quarto-category">Experimentation</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2026년 03월 07일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#agent-personalization" id="toc-agent-personalization" class="nav-link active" data-scroll-target="#agent-personalization"><span class="header-section-number">1</span> Agent Personalization</a>
+  <ul class="collapse">
+  <li><a href="#segmentation과의-관계" id="toc-segmentation과의-관계" class="nav-link" data-scroll-target="#segmentation과의-관계"><span class="header-section-number">1.1</span> Segmentation과의 관계</a></li>
+  <li><a href="#프롬프트-개인화" id="toc-프롬프트-개인화" class="nav-link" data-scroll-target="#프롬프트-개인화"><span class="header-section-number">1.2</span> 프롬프트 개인화</a>
+  <ul class="collapse">
+  <li><a href="#명에게-1000개의-프롬프트를-작성해야-하는가" id="toc-명에게-1000개의-프롬프트를-작성해야-하는가" class="nav-link" data-scroll-target="#명에게-1000개의-프롬프트를-작성해야-하는가"><span class="header-section-number">1.2.1</span> 1000명에게 1000개의 프롬프트를 작성해야 하는가?</a></li>
+  <li><a href="#아키텍처" id="toc-아키텍처" class="nav-link" data-scroll-target="#아키텍처"><span class="header-section-number">1.2.2</span> 아키텍처</a></li>
+  <li><a href="#프롬프트-템플릿-설계" id="toc-프롬프트-템플릿-설계" class="nav-link" data-scroll-target="#프롬프트-템플릿-설계"><span class="header-section-number">1.2.3</span> 프롬프트 템플릿 설계</a></li>
+  <li><a href="#user-profile-구축" id="toc-user-profile-구축" class="nav-link" data-scroll-target="#user-profile-구축"><span class="header-section-number">1.2.4</span> User Profile 구축</a></li>
+  </ul></li>
+  <li><a href="#검색retrieval-개인화" id="toc-검색retrieval-개인화" class="nav-link" data-scroll-target="#검색retrieval-개인화"><span class="header-section-number">1.3</span> 검색(Retrieval) 개인화</a>
+  <ul class="collapse">
+  <li><a href="#명에게-1000개의-retriever를-만들어야-하는가" id="toc-명에게-1000개의-retriever를-만들어야-하는가" class="nav-link" data-scroll-target="#명에게-1000개의-retriever를-만들어야-하는가"><span class="header-section-number">1.3.1</span> 1000명에게 1000개의 Retriever를 만들어야 하는가?</a></li>
+  <li><a href="#아키텍처-1" id="toc-아키텍처-1" class="nav-link" data-scroll-target="#아키텍처-1"><span class="header-section-number">1.3.2</span> 아키텍처</a></li>
+  <li><a href="#메타데이터-필터-활용" id="toc-메타데이터-필터-활용" class="nav-link" data-scroll-target="#메타데이터-필터-활용"><span class="header-section-number">1.3.3</span> 메타데이터 필터 활용</a></li>
+  <li><a href="#개인-대화-히스토리-관리" id="toc-개인-대화-히스토리-관리" class="nav-link" data-scroll-target="#개인-대화-히스토리-관리"><span class="header-section-number">1.3.4</span> 개인 대화 히스토리 관리</a></li>
+  </ul></li>
+  <li><a href="#효과-측정" id="toc-효과-측정" class="nav-link" data-scroll-target="#효과-측정"><span class="header-section-number">1.4</span> 효과 측정</a>
+  <ul class="collapse">
+  <li><a href="#between-subject-vs-within-subject" id="toc-between-subject-vs-within-subject" class="nav-link" data-scroll-target="#between-subject-vs-within-subject"><span class="header-section-number">1.4.1</span> Between-subject vs Within-subject</a></li>
+  <li><a href="#실험-설계" id="toc-실험-설계" class="nav-link" data-scroll-target="#실험-설계"><span class="header-section-number">1.4.2</span> 실험 설계</a></li>
+  <li><a href="#mixed-effects-model" id="toc-mixed-effects-model" class="nav-link" data-scroll-target="#mixed-effects-model"><span class="header-section-number">1.4.3</span> Mixed Effects Model</a></li>
+  <li><a href="#핵심-메트릭" id="toc-핵심-메트릭" class="nav-link" data-scroll-target="#핵심-메트릭"><span class="header-section-number">1.4.4</span> 핵심 메트릭</a></li>
+  </ul></li>
+  <li><a href="#구현-파이프라인" id="toc-구현-파이프라인" class="nav-link" data-scroll-target="#구현-파이프라인"><span class="header-section-number">1.5</span> 구현 파이프라인</a>
+  <ul class="collapse">
+  <li><a href="#phase-1-프로필-시스템-구축" id="toc-phase-1-프로필-시스템-구축" class="nav-link" data-scroll-target="#phase-1-프로필-시스템-구축"><span class="header-section-number">1.5.1</span> Phase 1: 프로필 시스템 구축</a></li>
+  <li><a href="#phase-2-개인화-엔진-구현" id="toc-phase-2-개인화-엔진-구현" class="nav-link" data-scroll-target="#phase-2-개인화-엔진-구현"><span class="header-section-number">1.5.2</span> Phase 2: 개인화 엔진 구현</a></li>
+  <li><a href="#phase-3-효과-측정-체계" id="toc-phase-3-효과-측정-체계" class="nav-link" data-scroll-target="#phase-3-효과-측정-체계"><span class="header-section-number">1.5.3</span> Phase 3: 효과 측정 체계</a></li>
+  <li><a href="#phase-4-고도화" id="toc-phase-4-고도화" class="nav-link" data-scroll-target="#phase-4-고도화"><span class="header-section-number">1.5.4</span> Phase 4: 고도화</a></li>
+  </ul></li>
+  <li><a href="#통합-시나리오-codementor의-personalization-도입" id="toc-통합-시나리오-codementor의-personalization-도입" class="nav-link" data-scroll-target="#통합-시나리오-codementor의-personalization-도입"><span class="header-section-number">1.6</span> 통합 시나리오: CodeMentor의 Personalization 도입</a>
+  <ul class="collapse">
+  <li><a href="#프로젝트-배경-segmentation-이후" id="toc-프로젝트-배경-segmentation-이후" class="nav-link" data-scroll-target="#프로젝트-배경-segmentation-이후"><span class="header-section-number">1.6.1</span> 프로젝트 배경 (Segmentation 이후)</a></li>
+  <li><a href="#step-1-user-profile-스키마-설계" id="toc-step-1-user-profile-스키마-설계" class="nav-link" data-scroll-target="#step-1-user-profile-스키마-설계"><span class="header-section-number">1.6.2</span> Step 1: User Profile 스키마 설계</a></li>
+  <li><a href="#step-2-온보딩-플로우-설계" id="toc-step-2-온보딩-플로우-설계" class="nav-link" data-scroll-target="#step-2-온보딩-플로우-설계"><span class="header-section-number">1.6.3</span> Step 2: 온보딩 플로우 설계</a></li>
+  <li><a href="#step-3-cold-start-personalization-전환-흐름" id="toc-step-3-cold-start-personalization-전환-흐름" class="nav-link" data-scroll-target="#step-3-cold-start-personalization-전환-흐름"><span class="header-section-number">1.6.4</span> Step 3: Cold Start → Personalization 전환 흐름</a></li>
+  <li><a href="#step-4-개인화된-응답-생성-예시" id="toc-step-4-개인화된-응답-생성-예시" class="nav-link" data-scroll-target="#step-4-개인화된-응답-생성-예시"><span class="header-section-number">1.6.5</span> Step 4: 개인화된 응답 생성 예시</a></li>
+  <li><a href="#step-5-stepped-wedge-실험-실행" id="toc-step-5-stepped-wedge-실험-실행" class="nav-link" data-scroll-target="#step-5-stepped-wedge-실험-실행"><span class="header-section-number">1.6.6</span> Step 5: Stepped Wedge 실험 실행</a></li>
+  <li><a href="#step-6-mixed-effects-model-분석" id="toc-step-6-mixed-effects-model-분석" class="nav-link" data-scroll-target="#step-6-mixed-effects-model-분석"><span class="header-section-number">1.6.7</span> Step 6: Mixed Effects Model 분석</a></li>
+  <li><a href="#step-7-subgroup-분석-및-후속-조치" id="toc-step-7-subgroup-분석-및-후속-조치" class="nav-link" data-scroll-target="#step-7-subgroup-분석-및-후속-조치"><span class="header-section-number">1.6.8</span> Step 7: Subgroup 분석 및 후속 조치</a></li>
+  <li><a href="#step-8-최종-결과-및-비즈니스-임팩트" id="toc-step-8-최종-결과-및-비즈니스-임팩트" class="nav-link" data-scroll-target="#step-8-최종-결과-및-비즈니스-임팩트"><span class="header-section-number">1.6.9</span> Step 8: 최종 결과 및 비즈니스 임팩트</a></li>
+  </ul></li>
+  <li><a href="#정리" id="toc-정리" class="nav-link" data-scroll-target="#정리"><span class="header-section-number">1.7</span> 정리</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="agent-personalization" class="level1" data-number="1">
+<h1 data-number="1"><span class="header-section-number">1</span> Agent Personalization</h1>
+<p>Segmentation이 <strong>그룹 단위</strong> 전략이라면, Personalization은 <strong>개인 단위</strong> 전략이다. 같은 세그먼트(예: MIEP)에 속하더라도 사용자 A는 Python, 사용자 B는 JavaScript에 관심이 있을 수 있다. Personalization은 이 차이를 반영한다.</p>
+<section id="segmentation과의-관계" class="level2" data-number="1.1">
+<h2 data-number="1.1" class="anchored" data-anchor-id="segmentation과의-관계"><span class="header-section-number">1.1</span> Segmentation과의 관계</h2>
+<pre><code>Segmentation: 그룹별 전략 → Cold Start 해결 (신규 유저)
+     ↓
+Personalization: 개인별 전략 → 데이터가 쌓이면 점진적 전환
+     ↓
+Hyperpersonalization: 개인 + 실시간 컨텍스트</code></pre>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>구분</th>
+<th>Segmentation</th>
+<th>Personalization</th>
+<th>Hyperpersonalization</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>단위</strong></td>
+<td>그룹</td>
+<td>개인</td>
+<td>개인 + 상황</td>
+</tr>
+<tr class="even">
+<td><strong>기준</strong></td>
+<td>공통 특성</td>
+<td>과거 행동/선호</td>
+<td>실시간 컨텍스트</td>
+</tr>
+<tr class="odd">
+<td><strong>정적/동적</strong></td>
+<td>정적</td>
+<td>반정적</td>
+<td>완전 동적</td>
+</tr>
+<tr class="even">
+<td><strong>데이터</strong></td>
+<td>분류 기준</td>
+<td>사용자 히스토리</td>
+<td>다중 소스 실시간</td>
+</tr>
+<tr class="odd">
+<td><strong>기술</strong></td>
+<td>규칙 기반 분류</td>
+<td>프로필 기반 조건 분기</td>
+<td>AI/ML 예측 모델</td>
+</tr>
+</tbody>
+</table>
+<p><strong>구체적 차이 예시 — 같은 질문 “정렬 알고리즘 설명해줘”에 대한 응답:</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 37%">
+<col style="width: 62%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>단계</th>
+<th>적용 결과</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Segmentation만</strong> (SIUP)</td>
+<td>간결한 답변 + 후속 질문 제안. 모든 SIUP 사용자에게 동일</td>
+</tr>
+<tr class="even">
+<td><strong>+ Personalization</strong></td>
+<td>사용자 A(Python 초보)에게는 <code>sorted()</code> 예시 중심, 사용자 B(CS 전공)에게는 시간복잡도 비교표 중심</td>
+</tr>
+<tr class="odd">
+<td><strong>+ Hyperpersonalization</strong></td>
+<td>사용자 A가 지금 코딩 테스트 준비 중이라는 실시간 컨텍스트 반영 → LeetCode 스타일 문제 풀이와 연결</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="프롬프트-개인화" class="level2" data-number="1.2">
+<h2 data-number="1.2" class="anchored" data-anchor-id="프롬프트-개인화"><span class="header-section-number">1.2</span> 프롬프트 개인화</h2>
+<section id="명에게-1000개의-프롬프트를-작성해야-하는가" class="level3" data-number="1.2.1">
+<h3 data-number="1.2.1" class="anchored" data-anchor-id="명에게-1000개의-프롬프트를-작성해야-하는가"><span class="header-section-number">1.2.1</span> 1000명에게 1000개의 프롬프트를 작성해야 하는가?</h3>
+<p><strong>아니다.</strong> 템플릿 1개 + 변수 주입 방식으로 해결한다.</p>
+</section>
+<section id="아키텍처" class="level3" data-number="1.2.2">
+<h3 data-number="1.2.2" class="anchored" data-anchor-id="아키텍처"><span class="header-section-number">1.2.2</span> 아키텍처</h3>
+<pre><code>사용자 요청
+    ↓
+[User Profile DB] → 개인 변수 조회
+    ↓
+[Prompt Template] + {변수 주입}
+    ↓
+[LLM] → 개인화된 응답
+    ↓
+[Profile Update] ← 대화 결과 반영</code></pre>
+</section>
+<section id="프롬프트-템플릿-설계" class="level3" data-number="1.2.3">
+<h3 data-number="1.2.3" class="anchored" data-anchor-id="프롬프트-템플릿-설계"><span class="header-section-number">1.2.3</span> 프롬프트 템플릿 설계</h3>
+<p><strong>템플릿 (1개):</strong></p>
+<pre><code>당신은 {role} 분야의 전문 어시스턴트입니다.
+
+## 사용자 프로필
+- 전문성 수준: {expertise_level}
+- 선호 응답 스타일: {response_style}
+- 주요 관심 분야: {interests}
+- 선호 언어: {language}
+- 최근 대화 요약: {recent_context}
+
+## 응답 지침
+- {expertise_level}에 맞는 용어 수준으로 설명하십시오
+- {response_style} 형식으로 응답하십시오
+- {interests} 관련 예시를 우선 사용하십시오</code></pre>
+<p><strong>사용자 A의 프로필:</strong></p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode numberSource json number-lines code-with-copy"><code class="sourceCode json"><span id="cb4-1"><a href="#cb4-1"></a><span class="fu">{</span></span>
+<span id="cb4-2"><a href="#cb4-2"></a>  <span class="dt">"user_id"</span><span class="fu">:</span> <span class="st">"user_A"</span><span class="fu">,</span></span>
+<span id="cb4-3"><a href="#cb4-3"></a>  <span class="dt">"segment"</span><span class="fu">:</span> <span class="st">"MIEP"</span><span class="fu">,</span></span>
+<span id="cb4-4"><a href="#cb4-4"></a>  <span class="dt">"expertise_level"</span><span class="fu">:</span> <span class="st">"중급"</span><span class="fu">,</span></span>
+<span id="cb4-5"><a href="#cb4-5"></a>  <span class="dt">"response_style"</span><span class="fu">:</span> <span class="st">"코드 예시 중심, 간결하게"</span><span class="fu">,</span></span>
+<span id="cb4-6"><a href="#cb4-6"></a>  <span class="dt">"interests"</span><span class="fu">:</span> <span class="ot">[</span><span class="st">"Python"</span><span class="ot">,</span> <span class="st">"데이터 분석"</span><span class="ot">,</span> <span class="st">"통계"</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb4-7"><a href="#cb4-7"></a>  <span class="dt">"language"</span><span class="fu">:</span> <span class="st">"ko"</span><span class="fu">,</span></span>
+<span id="cb4-8"><a href="#cb4-8"></a>  <span class="dt">"recent_context"</span><span class="fu">:</span> <span class="st">"pandas DataFrame 조작 학습 중"</span></span>
+<span id="cb4-9"><a href="#cb4-9"></a><span class="fu">}</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>사용자 B의 프로필:</strong></p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode numberSource json number-lines code-with-copy"><code class="sourceCode json"><span id="cb5-1"><a href="#cb5-1"></a><span class="fu">{</span></span>
+<span id="cb5-2"><a href="#cb5-2"></a>  <span class="dt">"user_id"</span><span class="fu">:</span> <span class="st">"user_B"</span><span class="fu">,</span></span>
+<span id="cb5-3"><a href="#cb5-3"></a>  <span class="dt">"segment"</span><span class="fu">:</span> <span class="st">"MIEP"</span><span class="fu">,</span></span>
+<span id="cb5-4"><a href="#cb5-4"></a>  <span class="dt">"expertise_level"</span><span class="fu">:</span> <span class="st">"초급"</span><span class="fu">,</span></span>
+<span id="cb5-5"><a href="#cb5-5"></a>  <span class="dt">"response_style"</span><span class="fu">:</span> <span class="st">"단계별 설명, 비유 활용"</span><span class="fu">,</span></span>
+<span id="cb5-6"><a href="#cb5-6"></a>  <span class="dt">"interests"</span><span class="fu">:</span> <span class="ot">[</span><span class="st">"JavaScript"</span><span class="ot">,</span> <span class="st">"웹 개발"</span><span class="ot">,</span> <span class="st">"React"</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb5-7"><a href="#cb5-7"></a>  <span class="dt">"language"</span><span class="fu">:</span> <span class="st">"ko"</span><span class="fu">,</span></span>
+<span id="cb5-8"><a href="#cb5-8"></a>  <span class="dt">"recent_context"</span><span class="fu">:</span> <span class="st">"React 컴포넌트 구조 학습 중"</span></span>
+<span id="cb5-9"><a href="#cb5-9"></a><span class="fu">}</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>같은 템플릿, 같은 세그먼트(MIEP)이지만 변수가 다르므로 완전히 다른 응답이 생성된다.</p>
+<p><strong>동일한 질문 “비동기 처리가 뭐야?”에 대한 개인화된 응답 비교:</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>사용자 A (Python/중급/코드 중심)</th>
+<th>사용자 B (JavaScript/초급/비유 활용)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>“<code>asyncio</code>를 사용한 비동기 처리입니다. 데이터 분석에서 여러 API를 동시에 호출할 때 유용합니다.” + <code>async/await</code> 코드 예시</td>
+<td>“비동기 처리는 ’카페에서 커피 주문’과 비슷해요. 주문 후 기다리지 않고 자리에 앉아있다가 완성되면 받는 거죠.” + React의 <code>useEffect</code> + <code>fetch</code> 단계별 설명</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="user-profile-구축" class="level3" data-number="1.2.4">
+<h3 data-number="1.2.4" class="anchored" data-anchor-id="user-profile-구축"><span class="header-section-number">1.2.4</span> User Profile 구축</h3>
+<p>프로필은 <strong>명시적 데이터</strong>와 <strong>암묵적 데이터</strong>로 구성한다.</p>
+<p><strong>명시적 데이터 (사용자가 직접 제공):</strong></p>
+<ul>
+<li>관심 분야 선택</li>
+<li>전문성 수준 자기 평가</li>
+<li>선호 응답 형식</li>
+</ul>
+<p><strong>암묵적 데이터 (대화에서 추출):</strong></p>
+<ul>
+<li>사용하는 기술 용어의 수준 → 전문성 추정</li>
+<li>질문의 깊이와 후속 질문 패턴 → 학습 스타일</li>
+<li>긍정/부정 피드백 → 선호 응답 스타일</li>
+<li>주제 분포 → 관심 분야</li>
+</ul>
+<p><strong>암묵적 데이터 추출 예시:</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 19%">
+<col style="width: 32%">
+<col style="width: 48%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>발화</th>
+<th>추출 정보</th>
+<th>프로필 업데이트</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>“sklearn의 Pipeline에서 ColumnTransformer 쓸 때 remainder 옵션이 뭐야?”</td>
+<td>sklearn, Pipeline, ColumnTransformer 언급 → 중급 이상</td>
+<td><code>expertise_level</code>: “초급” → “중급”</td>
+</tr>
+<tr class="even">
+<td>“아 그냥 코드로 보여줘 설명 길어”</td>
+<td>간결한 코드 선호</td>
+<td><code>response_style</code>: “단계별 설명” → “코드 예시 중심, 간결하게”</td>
+</tr>
+<tr class="odd">
+<td>최근 10개 세션 주제: ML 7회, 통계 2회, Python 기초 1회</td>
+<td>ML 관심 높음</td>
+<td><code>interests</code>: [“Python”] → [“Python”, “ML”, “통계”]</td>
+</tr>
+<tr class="even">
+<td>“이거 실무에서 어떻게 쓰여?” (3회 반복)</td>
+<td>실무 적용 관심</td>
+<td><code>response_style</code>에 “실무 예시 포함” 추가</td>
+</tr>
+</tbody>
+</table>
+<p><strong>LLM 기반 프로필 업데이트:</strong></p>
+<pre><code>매 세션 종료 시:
+
+[프로필 업데이트 프롬프트]
+다음 대화를 분석하여 사용자 프로필을 업데이트하십시오.
+
+현재 프로필: {current_profile}
+새로운 대화: {session_transcript}
+
+업데이트할 필드와 근거를 JSON으로 출력하십시오.
+변경이 없으면 빈 객체를 반환하십시오.</code></pre>
+<p><strong>업데이트 결과 예시:</strong></p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode numberSource json number-lines code-with-copy"><code class="sourceCode json"><span id="cb7-1"><a href="#cb7-1"></a><span class="fu">{</span></span>
+<span id="cb7-2"><a href="#cb7-2"></a>  <span class="dt">"updates"</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb7-3"><a href="#cb7-3"></a>    <span class="dt">"expertise_level"</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb7-4"><a href="#cb7-4"></a>      <span class="dt">"old"</span><span class="fu">:</span> <span class="st">"초급"</span><span class="fu">,</span></span>
+<span id="cb7-5"><a href="#cb7-5"></a>      <span class="dt">"new"</span><span class="fu">:</span> <span class="st">"중급"</span><span class="fu">,</span></span>
+<span id="cb7-6"><a href="#cb7-6"></a>      <span class="dt">"reason"</span><span class="fu">:</span> <span class="st">"사용자가 sklearn Pipeline, ColumnTransformer 등 중급 API를 자연스럽게 사용함"</span></span>
+<span id="cb7-7"><a href="#cb7-7"></a>    <span class="fu">},</span></span>
+<span id="cb7-8"><a href="#cb7-8"></a>    <span class="dt">"interests"</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb7-9"><a href="#cb7-9"></a>      <span class="dt">"old"</span><span class="fu">:</span> <span class="ot">[</span><span class="st">"Python"</span><span class="ot">,</span> <span class="st">"데이터 분석"</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb7-10"><a href="#cb7-10"></a>      <span class="dt">"new"</span><span class="fu">:</span> <span class="ot">[</span><span class="st">"Python"</span><span class="ot">,</span> <span class="st">"데이터 분석"</span><span class="ot">,</span> <span class="st">"ML 파이프라인"</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb7-11"><a href="#cb7-11"></a>      <span class="dt">"reason"</span><span class="fu">:</span> <span class="st">"최근 3개 세션에서 ML 파이프라인 관련 질문 집중"</span></span>
+<span id="cb7-12"><a href="#cb7-12"></a>    <span class="fu">}</span></span>
+<span id="cb7-13"><a href="#cb7-13"></a>  <span class="fu">},</span></span>
+<span id="cb7-14"><a href="#cb7-14"></a>  <span class="dt">"no_change"</span><span class="fu">:</span> <span class="ot">[</span><span class="st">"response_style"</span><span class="ot">,</span> <span class="st">"language"</span><span class="ot">]</span></span>
+<span id="cb7-15"><a href="#cb7-15"></a><span class="fu">}</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="검색retrieval-개인화" class="level2" data-number="1.3">
+<h2 data-number="1.3" class="anchored" data-anchor-id="검색retrieval-개인화"><span class="header-section-number">1.3</span> 검색(Retrieval) 개인화</h2>
+<section id="명에게-1000개의-retriever를-만들어야-하는가" class="level3" data-number="1.3.1">
+<h3 data-number="1.3.1" class="anchored" data-anchor-id="명에게-1000개의-retriever를-만들어야-하는가"><span class="header-section-number">1.3.1</span> 1000명에게 1000개의 Retriever를 만들어야 하는가?</h3>
+<p><strong>아니다.</strong> Retriever는 1개, <strong>필터링 조건만 개인화</strong>한다.</p>
+</section>
+<section id="아키텍처-1" class="level3" data-number="1.3.2">
+<h3 data-number="1.3.2" class="anchored" data-anchor-id="아키텍처-1"><span class="header-section-number">1.3.2</span> 아키텍처</h3>
+<pre><code>사용자 질문
+    ↓
+[Query Rewriter] ← User Profile (관심 분야, 컨텍스트)
+    ↓
+[Vector Store] (공통, 1개)
+    ↓ metadata filter: {user_interests, difficulty_level}
+[Filtered Results]
+    ↓
+[Reranker] ← 개인 선호도 가중치
+    ↓
+개인화된 검색 결과</code></pre>
+</section>
+<section id="메타데이터-필터-활용" class="level3" data-number="1.3.3">
+<h3 data-number="1.3.3" class="anchored" data-anchor-id="메타데이터-필터-활용"><span class="header-section-number">1.3.3</span> 메타데이터 필터 활용</h3>
+<div class="sourceCode" id="cb9"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1"></a><span class="co"># 공통 벡터 스토어, 필터만 다르게</span></span>
+<span id="cb9-2"><a href="#cb9-2"></a><span class="kw">def</span> personalized_retrieval(query, user_profile):</span>
+<span id="cb9-3"><a href="#cb9-3"></a>    <span class="co"># 1. 쿼리 재작성 (개인 컨텍스트 반영)</span></span>
+<span id="cb9-4"><a href="#cb9-4"></a>    rewritten_query <span class="op">=</span> rewrite_query(</span>
+<span id="cb9-5"><a href="#cb9-5"></a>        query,</span>
+<span id="cb9-6"><a href="#cb9-6"></a>        context<span class="op">=</span>user_profile[<span class="st">"recent_context"</span>]</span>
+<span id="cb9-7"><a href="#cb9-7"></a>    )</span>
+<span id="cb9-8"><a href="#cb9-8"></a></span>
+<span id="cb9-9"><a href="#cb9-9"></a>    <span class="co"># 2. 메타데이터 필터 적용</span></span>
+<span id="cb9-10"><a href="#cb9-10"></a>    filters <span class="op">=</span> {</span>
+<span id="cb9-11"><a href="#cb9-11"></a>        <span class="st">"difficulty"</span>: user_profile[<span class="st">"expertise_level"</span>],</span>
+<span id="cb9-12"><a href="#cb9-12"></a>        <span class="st">"category"</span>: {<span class="st">"$in"</span>: user_profile[<span class="st">"interests"</span>]}</span>
+<span id="cb9-13"><a href="#cb9-13"></a>    }</span>
+<span id="cb9-14"><a href="#cb9-14"></a></span>
+<span id="cb9-15"><a href="#cb9-15"></a>    <span class="co"># 3. 검색 실행</span></span>
+<span id="cb9-16"><a href="#cb9-16"></a>    results <span class="op">=</span> vector_store.similarity_search(</span>
+<span id="cb9-17"><a href="#cb9-17"></a>        rewritten_query,</span>
+<span id="cb9-18"><a href="#cb9-18"></a>        <span class="bu">filter</span><span class="op">=</span>filters,</span>
+<span id="cb9-19"><a href="#cb9-19"></a>        k<span class="op">=</span><span class="dv">10</span></span>
+<span id="cb9-20"><a href="#cb9-20"></a>    )</span>
+<span id="cb9-21"><a href="#cb9-21"></a></span>
+<span id="cb9-22"><a href="#cb9-22"></a>    <span class="co"># 4. 개인 선호도 기반 재정렬</span></span>
+<span id="cb9-23"><a href="#cb9-23"></a>    reranked <span class="op">=</span> rerank(results, user_profile[<span class="st">"preferences"</span>])</span>
+<span id="cb9-24"><a href="#cb9-24"></a></span>
+<span id="cb9-25"><a href="#cb9-25"></a>    <span class="cf">return</span> reranked[:<span class="dv">5</span>]</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>구체적 예시 — 같은 질문 “데이터 정규화 방법”에 대한 검색 결과 차이:</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>단계</th>
+<th>사용자 A (ML 엔지니어, 중급)</th>
+<th>사용자 B (DB 개발자, 초급)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>원본 쿼리</strong></td>
+<td>“데이터 정규화 방법”</td>
+<td>“데이터 정규화 방법”</td>
+</tr>
+<tr class="even">
+<td><strong>쿼리 재작성</strong></td>
+<td>“머신러닝 feature scaling 정규화 MinMaxScaler StandardScaler”</td>
+<td>“데이터베이스 정규화 1NF 2NF 3NF 입문”</td>
+</tr>
+<tr class="odd">
+<td><strong>메타데이터 필터</strong></td>
+<td><code>category: ["ML"], difficulty: "중급"</code></td>
+<td><code>category: ["DB"], difficulty: "초급"</code></td>
+</tr>
+<tr class="even">
+<td><strong>검색 결과</strong></td>
+<td>sklearn 정규화 문서, feature engineering 가이드</td>
+<td>DB 정규화 개념 설명, 1NF~3NF 예제</td>
+</tr>
+</tbody>
+</table>
+<p>쿼리 재작성 단계에서 사용자의 <code>interests</code>와 <code>recent_context</code>를 반영하므로, “정규화”라는 동음이의어가 사용자 맥락에 맞게 해석된다.</p>
+</section>
+<section id="개인-대화-히스토리-관리" class="level3" data-number="1.3.4">
+<h3 data-number="1.3.4" class="anchored" data-anchor-id="개인-대화-히스토리-관리"><span class="header-section-number">1.3.4</span> 개인 대화 히스토리 관리</h3>
+<p>대화 히스토리는 두 계층으로 관리한다:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 23%">
+<col style="width: 30%">
+<col style="width: 23%">
+<col style="width: 23%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>계층</th>
+<th>저장소</th>
+<th>용도</th>
+<th>예시</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>단기 기억</td>
+<td>세션 메모리 (in-memory)</td>
+<td>현재 대화의 맥락 유지</td>
+<td>“아까 말한 그 함수” → 현재 세션의 이전 답변 참조</td>
+</tr>
+<tr class="even">
+<td>장기 기억</td>
+<td>별도 컬렉션/DB</td>
+<td>과거 세션 요약, 선호도, 학습 이력</td>
+<td>“저번에 알려준 Docker 설정” → 2주 전 세션 요약에서 검색</td>
+</tr>
+</tbody>
+</table>
+<p><strong>장기 기억 요약 전략:</strong></p>
+<pre><code>매 세션 종료 시:
+1. 대화 전체를 LLM으로 요약 (3~5문장)
+2. 핵심 키워드/주제 추출
+3. 사용자 프로필 업데이트
+4. 원본 대화는 일정 기간 후 삭제 (비용/프라이버시)</code></pre>
+<p><strong>장기 기억 활용 예시:</strong></p>
+<pre><code>[저장된 세션 요약 - 2주 전]
+"사용자가 FastAPI로 REST API를 구축하는 과정을 학습함.
+ Pydantic 모델 정의, 라우트 설계, CORS 설정까지 완료.
+ 다음 단계로 DB 연동(SQLAlchemy)을 하고 싶다고 언급."
+
+[오늘 대화]
+User: "저번에 하던 API 프로젝트 이어서 할게. DB 연결하려면?"
+Agent: "지난번에 FastAPI + Pydantic까지 완료하셨죠!
+        다음 단계인 SQLAlchemy 연동을 진행하겠습니다.
+        기존 프로젝트 구조에 맞춰 설명드릴게요."</code></pre>
+<p>장기 기억이 없으면 에이전트는 “어떤 프레임워크를 사용하고 계세요?”부터 다시 물어봐야 한다.</p>
+</section>
+</section>
+<section id="효과-측정" class="level2" data-number="1.4">
+<h2 data-number="1.4" class="anchored" data-anchor-id="효과-측정"><span class="header-section-number">1.4</span> 효과 측정</h2>
+<section id="between-subject-vs-within-subject" class="level3" data-number="1.4.1">
+<h3 data-number="1.4.1" class="anchored" data-anchor-id="between-subject-vs-within-subject"><span class="header-section-number">1.4.1</span> Between-subject vs Within-subject</h3>
+<p>Personalization의 효과를 측정하는 실험 설계는 Segmentation과 다르다.</p>
+<p><strong>Between-subject (그룹 간 비교):</strong></p>
+<ul>
+<li>개인화 적용 그룹 vs 미적용 그룹</li>
+<li>일반적인 A/B 테스트</li>
+<li>Segmentation 전략 검증에 적합</li>
+</ul>
+<p><strong>Within-subject (개인 전후 비교):</strong></p>
+<ul>
+<li>같은 사용자의 개인화 전/후 변화 추적</li>
+<li>Personalization 효과 측정에 적합</li>
+<li>개인 차이(individual difference)를 통제할 수 있어 검정력이 높음</li>
+</ul>
+<p><strong>왜 Within-subject가 필요한가 — 구체적 예시:</strong></p>
+<pre><code>Between-subject 문제점:
+
+Control 그룹 평균 만족도: 3.8
+Treatment 그룹 평균 만족도: 4.1
+→ 차이: 0.3, p = 0.12 (유의하지 않음)
+
+그런데 이건 두 그룹의 사용자가 원래 달라서일 수 있다.
+Treatment 그룹에 원래 만족도가 높은 파워 유저가 더 많았다면?
+
+Within-subject 해결:
+
+같은 사용자의 전/후 비교:
+- 사용자 1: 3.5 → 4.2 (변화: +0.7)
+- 사용자 2: 4.0 → 4.3 (변화: +0.3)
+- 사용자 3: 3.2 → 3.8 (변화: +0.6)
+→ 평균 변화: +0.53, p = 0.003 (유의함)
+
+개인차를 통제했기 때문에 더 정확한 효과 추정이 가능하다.</code></pre>
+</section>
+<section id="실험-설계" class="level3" data-number="1.4.2">
+<h3 data-number="1.4.2" class="anchored" data-anchor-id="실험-설계"><span class="header-section-number">1.4.2</span> 실험 설계</h3>
+<p><strong>Design 1: Stepped Wedge Design</strong></p>
+<p>모든 사용자에게 순차적으로 개인화를 적용하고, 전환 시점 전후를 비교한다.</p>
+<pre><code>Week 1:  [Control] [Control] [Control] [Control]
+Week 2:  [Treat  ] [Control] [Control] [Control]
+Week 3:  [Treat  ] [Treat  ] [Control] [Control]
+Week 4:  [Treat  ] [Treat  ] [Treat  ] [Control]
+Week 5:  [Treat  ] [Treat  ] [Treat  ] [Treat  ]
+         Cohort 1  Cohort 2  Cohort 3  Cohort 4</code></pre>
+<ul>
+<li>윤리적: 모든 사용자가 결국 개인화 혜택을 받음</li>
+<li>시간 효과(time trend)를 분리할 수 있음</li>
+<li>Cluster randomization과 결합 가능</li>
+</ul>
+<p><strong>구체적 적용 예시:</strong></p>
+<pre><code>CodeMentor 서비스 (MAU 50,000명)
+
+Week 1: 전체 Control (baseline 수집)
+Week 2: 상위 활성 사용자 12,500명에 Personalization 적용
+Week 3: 추가 12,500명 적용 (누적 25,000명)
+Week 4: 추가 12,500명 적용 (누적 37,500명)
+Week 5: 나머지 12,500명 적용 (전체 50,000명)
+
+각 Cohort의 전환 시점 전후를 비교하여 Personalization 효과 추정
++ 시간 경과에 따른 자연스러운 변화(계절성 등)를 통제</code></pre>
+<p><strong>Design 2: Crossover Design</strong></p>
+<p>동일 사용자가 Control과 Treatment를 모두 경험한다.</p>
+<pre><code>Period 1: Group A → Control,   Group B → Treatment
+    (washout period: 1주)
+Period 2: Group A → Treatment, Group B → Control</code></pre>
+<ul>
+<li>개인 내 비교이므로 검정력이 높음</li>
+<li>Carryover effect 주의 (washout period 필요)</li>
+</ul>
+<p><strong>구체적 적용 예시:</strong></p>
+<pre><code>실험 대상: 주 5회 이상 사용하는 활성 사용자 2,000명
+
+Period 1 (2주):
+- Group A (1,000명): 기본 프롬프트 (개인화 없음)
+- Group B (1,000명): 개인화 프롬프트
+
+Washout (1주): 양쪽 모두 기본 프롬프트
+
+Period 2 (2주):
+- Group A (1,000명): 개인화 프롬프트
+- Group B (1,000명): 기본 프롬프트 (개인화 없음)
+
+주의: Personalization은 프로필이 누적되므로 carryover 위험이 크다.
+→ Washout 기간에 프로필 기반 응답을 중지하되, 프로필 자체는 유지
+→ 또는 Stepped Wedge가 더 적합할 수 있음</code></pre>
+</section>
+<section id="mixed-effects-model" class="level3" data-number="1.4.3">
+<h3 data-number="1.4.3" class="anchored" data-anchor-id="mixed-effects-model"><span class="header-section-number">1.4.3</span> Mixed Effects Model</h3>
+<p>Personalization 효과를 측정할 때, 사용자별 반복 측정 데이터가 생성된다. 이 데이터 구조에서는 <strong>Mixed Effects Model</strong> (혼합 효과 모델)이 적합하다.</p>
+<section id="왜-mixed-effects-model인가" class="level4" data-number="1.4.3.1">
+<h4 data-number="1.4.3.1" class="anchored" data-anchor-id="왜-mixed-effects-model인가"><span class="header-section-number">1.4.3.1</span> 왜 Mixed Effects Model인가</h4>
+<p>일반적인 t-test나 ANOVA의 가정:</p>
+<ul>
+<li>관측치가 <strong>독립</strong>이어야 한다</li>
+</ul>
+<p>Personalization 데이터의 현실:</p>
+<ul>
+<li>같은 사용자의 반복 측정 → 관측치가 <strong>종속적</strong></li>
+<li>사용자마다 기본 만족도 수준이 다름 (개인차)</li>
+<li>시간에 따라 개인화가 성숙 (학습 효과)</li>
+</ul>
+<p>이 구조를 무시하고 단순 평균 비교를 하면:</p>
+<ul>
+<li>표준 오차가 과소 추정됨</li>
+<li>False positive 증가</li>
+<li>Simpson’s Paradox 발생 가능</li>
+</ul>
+<p><strong>구체적 예시 — 왜 t-test가 부적절한가:</strong></p>
+<pre><code>데이터 구조:
+┌─────────┬───────┬──────────┬────────┐
+│ user_id │ week  │ treatment│ 만족도  │
+├─────────┼───────┼──────────┼────────┤
+│ user_1  │   1   │    0     │  3.5   │
+│ user_1  │   2   │    0     │  3.6   │
+│ user_1  │   3   │    1     │  4.2   │  ← Week 3부터 개인화 적용
+│ user_1  │   4   │    1     │  4.4   │
+│ user_2  │   1   │    0     │  4.0   │
+│ user_2  │   2   │    1     │  4.3   │  ← Week 2부터 개인화 적용
+│ user_2  │   3   │    1     │  4.5   │
+│ user_2  │   4   │    1     │  4.6   │
+│  ...    │  ...  │   ...    │  ...   │
+└─────────┴───────┴──────────┴────────┘
+
+t-test를 쓰면:
+- user_1의 4개 관측치와 user_2의 4개 관측치를 독립으로 취급
+- 실제로는 같은 사용자의 반복 측정 → 독립성 위반
+- user_1이 원래 만족도가 낮은 사람이라는 정보를 무시
+- 결과: 표준오차 과소추정 → p-value가 실제보다 작아짐 → False positive</code></pre>
+</section>
+<section id="모델-구조" class="level4" data-number="1.4.3.2">
+<h4 data-number="1.4.3.2" class="anchored" data-anchor-id="모델-구조"><span class="header-section-number">1.4.3.2</span> 모델 구조</h4>
+<p><span class="math display">\[Y_{ij} = \beta_0 + \beta_1 \cdot \text{Treatment}_{ij} + \beta_2 \cdot \text{Time}_{ij} + u_i + \epsilon_{ij}\]</span></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 19%">
+<col style="width: 28%">
+<col style="width: 52%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>항</th>
+<th>의미</th>
+<th>구체적 예시</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(Y_{ij}\)</span></td>
+<td>사용자 <span class="math inline">\(i\)</span>의 <span class="math inline">\(j\)</span>번째 측정값</td>
+<td>user_1의 Week 3 만족도 = 4.2</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\beta_0\)</span></td>
+<td>전체 평균 (고정 효과)</td>
+<td>전체 baseline 만족도 ≈ 3.7</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\beta_1\)</span></td>
+<td>개인화 처리 효과 (고정 효과) - <strong>관심 대상</strong></td>
+<td>개인화 적용 시 만족도 +0.5</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\beta_2\)</span></td>
+<td>시간 효과 (고정 효과)</td>
+<td>주당 만족도 자연 증가 +0.05</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(u_i\)</span></td>
+<td>사용자별 랜덤 절편 (랜덤 효과)</td>
+<td>user_1은 기본이 -0.3, user_2는 +0.2</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\epsilon_{ij}\)</span></td>
+<td>잔차</td>
+<td>측정 오차</td>
+</tr>
+</tbody>
+</table>
+<p><strong>고정 효과 (Fixed Effects):</strong></p>
+<ul>
+<li>Treatment 효과: 개인화 적용 여부</li>
+<li>Time 효과: 시간에 따른 자연스러운 변화</li>
+<li>세그먼트: 기존 세그먼트의 효과</li>
+</ul>
+<p><strong>랜덤 효과 (Random Effects):</strong></p>
+<ul>
+<li>사용자별 랜덤 절편: 각 사용자의 기본 수준 차이</li>
+<li>(선택) 사용자별 랜덤 기울기: 개인화에 대한 반응 차이</li>
+</ul>
+<p><strong>코드 예시:</strong></p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1"></a><span class="co"># Python (statsmodels)</span></span>
+<span id="cb18-2"><a href="#cb18-2"></a><span class="im">import</span> statsmodels.formula.api <span class="im">as</span> smf</span>
+<span id="cb18-3"><a href="#cb18-3"></a></span>
+<span id="cb18-4"><a href="#cb18-4"></a>model <span class="op">=</span> smf.mixedlm(</span>
+<span id="cb18-5"><a href="#cb18-5"></a>    <span class="st">"satisfaction ~ treatment + week + segment"</span>,</span>
+<span id="cb18-6"><a href="#cb18-6"></a>    data<span class="op">=</span>df,</span>
+<span id="cb18-7"><a href="#cb18-7"></a>    groups<span class="op">=</span>df[<span class="st">"user_id"</span>],      <span class="co"># 랜덤 효과의 그룹</span></span>
+<span id="cb18-8"><a href="#cb18-8"></a>    re_formula<span class="op">=</span><span class="st">"~treatment"</span>     <span class="co"># 사용자별 treatment 반응도 다를 수 있음</span></span>
+<span id="cb18-9"><a href="#cb18-9"></a>)</span>
+<span id="cb18-10"><a href="#cb18-10"></a>result <span class="op">=</span> model.fit()</span>
+<span id="cb18-11"><a href="#cb18-11"></a><span class="bu">print</span>(result.summary())</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode" id="cb19"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1"></a><span class="co"># R (lme4)</span></span>
+<span id="cb19-2"><a href="#cb19-2"></a><span class="fu">library</span>(lme4)</span>
+<span id="cb19-3"><a href="#cb19-3"></a></span>
+<span id="cb19-4"><a href="#cb19-4"></a>model <span class="ot">&lt;-</span> <span class="fu">lmer</span>(</span>
+<span id="cb19-5"><a href="#cb19-5"></a>  satisfaction <span class="sc">~</span> treatment <span class="sc">+</span> week <span class="sc">+</span> segment <span class="sc">+</span> (<span class="dv">1</span> <span class="sc">+</span> treatment <span class="sc">|</span> user_id),</span>
+<span id="cb19-6"><a href="#cb19-6"></a>  <span class="at">data =</span> df</span>
+<span id="cb19-7"><a href="#cb19-7"></a>)</span>
+<span id="cb19-8"><a href="#cb19-8"></a><span class="fu">summary</span>(model)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>결과 해석 예시:</strong></p>
+<pre><code>Fixed Effects:
+                  Estimate  Std.Error  z-value  p-value
+(Intercept)         3.72      0.08     46.5    &lt; 0.001
+treatment           0.48      0.06      8.0    &lt; 0.001  ← 개인화 효과: +0.48점
+week                0.03      0.01      3.0     0.003   ← 주당 자연 증가
+segment[MIEP]       0.35      0.10      3.5    &lt; 0.001  ← MIEP이 기본 만족도 높음
+
+Random Effects:
+                  Variance  Std.Dev.
+user_id (Intercept)  0.42     0.65   ← 사용자 간 기본 차이가 큼
+user_id (treatment)  0.15     0.39   ← 개인화 반응도 사용자마다 다름
+
+해석:
+- 개인화 적용 시 만족도가 평균 0.48점 상승 (p &lt; 0.001)
+- 시간 효과를 통제한 순수 Treatment 효과
+- 사용자별 반응 차이도 존재 (SD = 0.39)
+  → 일부 사용자에게는 효과가 0.1 미만, 일부에게는 0.9 이상
+  → 후속 분석: 어떤 사용자 특성이 개인화 효과를 조절하는가?</code></pre>
+</section>
+<section id="실무에서의-위치" class="level4" data-number="1.4.3.3">
+<h4 data-number="1.4.3.3" class="anchored" data-anchor-id="실무에서의-위치"><span class="header-section-number">1.4.3.3</span> 실무에서의 위치</h4>
+<p>현실적으로 대부분의 AI 엔지니어는 mixed effects model을 사용하지 않는다.</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>분석 수준</th>
+<th>방법</th>
+<th>사용 빈도</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>기본</td>
+<td>전환율 비교, t-test</td>
+<td>매우 흔함</td>
+</tr>
+<tr class="even">
+<td>중급</td>
+<td>CUPED, Bayesian A/B</td>
+<td>가끔</td>
+</tr>
+<tr class="odd">
+<td>고급</td>
+<td>Mixed effects, Causal inference</td>
+<td>드묾</td>
+</tr>
+</tbody>
+</table>
+<p>그러나 <strong>못 쓰는 것</strong>이지 필요 없어서가 아니다. 개인화 효과를 제대로 측정하려면 사용자별 반복 측정 데이터를 다뤄야 하고, 그것은 mixed effects model의 영역이다. 단순 평균 비교로는 Simpson’s Paradox, 개인차 미통제, 시간 효과 혼재 등의 함정에 빠질 수 있다.</p>
+</section>
+</section>
+<section id="핵심-메트릭" class="level3" data-number="1.4.4">
+<h3 data-number="1.4.4" class="anchored" data-anchor-id="핵심-메트릭"><span class="header-section-number">1.4.4</span> 핵심 메트릭</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 22%">
+<col style="width: 17%">
+<col style="width: 28%">
+<col style="width: 31%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>메트릭</th>
+<th>정의</th>
+<th>측정 방법</th>
+<th>구체적 예시</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>개인화 정확도</td>
+<td>추천/응답이 사용자 의도와 일치하는 비율</td>
+<td>LLM Judge 또는 사용자 피드백</td>
+<td>Python 사용자에게 Python 예시 제공 비율: 92%</td>
+</tr>
+<tr class="even">
+<td>프로필 성숙도</td>
+<td>프로필의 완성도 (필드 채움 비율)</td>
+<td>자동 계산</td>
+<td>7개 필드 중 5개 채워짐 = 71%</td>
+</tr>
+<tr class="odd">
+<td>개인화 리프트</td>
+<td>개인화 전 대비 후 메트릭 향상률</td>
+<td>Within-subject 비교</td>
+<td>세션 길이: 2.1턴 → 3.4턴 (+62%)</td>
+</tr>
+<tr class="even">
+<td>세션당 턴 수</td>
+<td>평균 대화 턴 수 변화</td>
+<td>로그 분석</td>
+<td>개인화 전 2.1 → 개인화 후 3.4</td>
+</tr>
+<tr class="odd">
+<td>재방문 주기</td>
+<td>재방문까지의 평균 기간</td>
+<td>생존 분석</td>
+<td>4.2일 → 2.8일</td>
+</tr>
+<tr class="even">
+<td>Cold Start 전환 시간</td>
+<td>세그먼트 기반 → 개인화 전환까지 소요 시간</td>
+<td>프로필 성숙도 기준</td>
+<td>평균 5개 세션 후 프로필 성숙도 70% 달성</td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="구현-파이프라인" class="level2" data-number="1.5">
+<h2 data-number="1.5" class="anchored" data-anchor-id="구현-파이프라인"><span class="header-section-number">1.5</span> 구현 파이프라인</h2>
+<section id="phase-1-프로필-시스템-구축" class="level3" data-number="1.5.1">
+<h3 data-number="1.5.1" class="anchored" data-anchor-id="phase-1-프로필-시스템-구축"><span class="header-section-number">1.5.1</span> Phase 1: 프로필 시스템 구축</h3>
+<pre><code>1. User Profile 스키마 설계
+   - 명시적/암묵적 필드 정의
+   - 업데이트 주기와 방법 결정
+
+2. 프로필 업데이트 파이프라인
+   - 세션 종료 시 LLM 기반 프로필 추출
+   - 프로필 DB (PostgreSQL, MongoDB 등)
+
+3. Cold Start 전략
+   - 신규 유저 → 세그먼트 기반 기본 프로필 할당
+   - 온보딩 시 최소한의 선호도 수집</code></pre>
+</section>
+<section id="phase-2-개인화-엔진-구현" class="level3" data-number="1.5.2">
+<h3 data-number="1.5.2" class="anchored" data-anchor-id="phase-2-개인화-엔진-구현"><span class="header-section-number">1.5.2</span> Phase 2: 개인화 엔진 구현</h3>
+<pre><code>1. Prompt Template 시스템
+   - Jinja2/Mustache 등 템플릿 엔진
+   - 프로필 변수 자동 주입
+
+2. Retrieval 개인화
+   - 메타데이터 필터 파이프라인
+   - 개인 컨텍스트 기반 쿼리 재작성
+
+3. 장기 기억 관리
+   - 세션 요약 자동화
+   - 프라이버시 정책에 따른 데이터 보존/삭제</code></pre>
+</section>
+<section id="phase-3-효과-측정-체계" class="level3" data-number="1.5.3">
+<h3 data-number="1.5.3" class="anchored" data-anchor-id="phase-3-효과-측정-체계"><span class="header-section-number">1.5.3</span> Phase 3: 효과 측정 체계</h3>
+<pre><code>1. 실험 설계
+   - Stepped Wedge 또는 Crossover 설계 선택
+   - 샘플 크기 산정
+   - 메트릭 대시보드 구축
+
+2. 분석 파이프라인
+   - Mixed effects model 구현 (R: lme4, Python: statsmodels)
+   - 세그먼트별 subgroup 분석
+   - 시간에 따른 개인화 성숙도 곡선
+
+3. 의사결정 프레임워크
+   - 실험 결과 해석 기준 수립
+   - Go/No-go 판단 기준 명문화</code></pre>
+</section>
+<section id="phase-4-고도화" class="level3" data-number="1.5.4">
+<h3 data-number="1.5.4" class="anchored" data-anchor-id="phase-4-고도화"><span class="header-section-number">1.5.4</span> Phase 4: 고도화</h3>
+<pre><code>1. Hyperpersonalization 확장
+   - 실시간 컨텍스트 (시간대, 디바이스, 감정 상태)
+   - 예측 모델 (다음 질문 예측, 이탈 예측)
+
+2. 프라이버시와 윤리
+   - 데이터 최소 수집 원칙
+   - 사용자 프로필 열람/삭제 권한
+   - 개인화 해제 옵션
+
+3. 지속적 최적화
+   - 프로필 정확도 모니터링
+   - 개인화 전략의 A/B 테스트 반복
+   - 세그먼트 정의 재검토</code></pre>
+</section>
+</section>
+<section id="통합-시나리오-codementor의-personalization-도입" class="level2" data-number="1.6">
+<h2 data-number="1.6" class="anchored" data-anchor-id="통합-시나리오-codementor의-personalization-도입"><span class="header-section-number">1.6</span> 통합 시나리오: CodeMentor의 Personalization 도입</h2>
+<p>Segmentation 포스트에서 다룬 CodeMentor 프로젝트가 Segmentation을 성공적으로 도입한 후, Personalization으로 확장하는 과정을 단계별로 살펴본다.</p>
+<section id="프로젝트-배경-segmentation-이후" class="level3" data-number="1.6.1">
+<h3 data-number="1.6.1" class="anchored" data-anchor-id="프로젝트-배경-segmentation-이후"><span class="header-section-number">1.6.1</span> 프로젝트 배경 (Segmentation 이후)</h3>
+<ul>
+<li><strong>현황</strong>: Segmentation 적용 완료. 재방문율 22.5%, NPS 39</li>
+<li><strong>문제 발견</strong>: 같은 SIUP 세그먼트 내에서 만족도 편차가 크다
+<ul>
+<li>Python 초보에게 고급 코드 → “이거 뭔 소리야” (이탈)</li>
+<li>시니어 개발자에게 기초 설명 → “이건 아는데…” (이탈)</li>
+</ul></li>
+<li><strong>목표</strong>: Personalization 도입으로 재방문율 30%, NPS 50 달성</li>
+</ul>
+</section>
+<section id="step-1-user-profile-스키마-설계" class="level3" data-number="1.6.2">
+<h3 data-number="1.6.2" class="anchored" data-anchor-id="step-1-user-profile-스키마-설계"><span class="header-section-number">1.6.2</span> Step 1: User Profile 스키마 설계</h3>
+<div class="sourceCode" id="cb25"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1"></a><span class="co"># User Profile 스키마</span></span>
+<span id="cb25-2"><a href="#cb25-2"></a>user_profile_schema <span class="op">=</span> {</span>
+<span id="cb25-3"><a href="#cb25-3"></a>    <span class="co"># === 명시적 데이터 (온보딩 시 수집) ===</span></span>
+<span id="cb25-4"><a href="#cb25-4"></a>    <span class="st">"user_id"</span>: <span class="st">"user_42"</span>,</span>
+<span id="cb25-5"><a href="#cb25-5"></a>    <span class="st">"display_name"</span>: <span class="st">"김개발"</span>,</span>
+<span id="cb25-6"><a href="#cb25-6"></a>    <span class="st">"onboarding"</span>: {</span>
+<span id="cb25-7"><a href="#cb25-7"></a>        <span class="st">"primary_language"</span>: <span class="st">"Python"</span>,        <span class="co"># 주 사용 언어</span></span>
+<span id="cb25-8"><a href="#cb25-8"></a>        <span class="st">"experience_years"</span>: <span class="dv">2</span>,               <span class="co"># 경력</span></span>
+<span id="cb25-9"><a href="#cb25-9"></a>        <span class="st">"learning_goal"</span>: <span class="st">"데이터 분석 역량 강화"</span>,  <span class="co"># 학습 목표</span></span>
+<span id="cb25-10"><a href="#cb25-10"></a>        <span class="st">"preferred_style"</span>: <span class="st">"코드 중심"</span>         <span class="co"># 설명/코드/혼합</span></span>
+<span id="cb25-11"><a href="#cb25-11"></a>    },</span>
+<span id="cb25-12"><a href="#cb25-12"></a></span>
+<span id="cb25-13"><a href="#cb25-13"></a>    <span class="co"># === 암묵적 데이터 (대화에서 자동 추출) ===</span></span>
+<span id="cb25-14"><a href="#cb25-14"></a>    <span class="st">"inferred"</span>: {</span>
+<span id="cb25-15"><a href="#cb25-15"></a>        <span class="st">"expertise_level"</span>: <span class="st">"중급"</span>,           <span class="co"># LLM이 대화에서 추정</span></span>
+<span id="cb25-16"><a href="#cb25-16"></a>        <span class="st">"topic_distribution"</span>: {              <span class="co"># 최근 30일 주제 분포</span></span>
+<span id="cb25-17"><a href="#cb25-17"></a>            <span class="st">"pandas"</span>: <span class="fl">0.35</span>,</span>
+<span id="cb25-18"><a href="#cb25-18"></a>            <span class="st">"sklearn"</span>: <span class="fl">0.25</span>,</span>
+<span id="cb25-19"><a href="#cb25-19"></a>            <span class="st">"matplotlib"</span>: <span class="fl">0.20</span>,</span>
+<span id="cb25-20"><a href="#cb25-20"></a>            <span class="st">"SQL"</span>: <span class="fl">0.15</span>,</span>
+<span id="cb25-21"><a href="#cb25-21"></a>            <span class="st">"기타"</span>: <span class="fl">0.05</span></span>
+<span id="cb25-22"><a href="#cb25-22"></a>        },</span>
+<span id="cb25-23"><a href="#cb25-23"></a>        <span class="st">"response_preference"</span>: {</span>
+<span id="cb25-24"><a href="#cb25-24"></a>            <span class="st">"code_first"</span>: <span class="va">True</span>,              <span class="co"># 코드를 먼저 원하는가</span></span>
+<span id="cb25-25"><a href="#cb25-25"></a>            <span class="st">"step_by_step"</span>: <span class="va">False</span>,           <span class="co"># 단계별 설명 선호</span></span>
+<span id="cb25-26"><a href="#cb25-26"></a>            <span class="st">"analogy_usage"</span>: <span class="va">False</span>,          <span class="co"># 비유 활용 선호</span></span>
+<span id="cb25-27"><a href="#cb25-27"></a>            <span class="st">"practical_examples"</span>: <span class="va">True</span>       <span class="co"># 실무 예시 선호</span></span>
+<span id="cb25-28"><a href="#cb25-28"></a>        },</span>
+<span id="cb25-29"><a href="#cb25-29"></a>        <span class="st">"pain_points"</span>: [<span class="st">"시각화 커스터마이징"</span>, <span class="st">"SQL 조인 성능"</span>],</span>
+<span id="cb25-30"><a href="#cb25-30"></a>        <span class="st">"strengths"</span>: [<span class="st">"pandas 기본 조작"</span>, <span class="st">"numpy 연산"</span>]</span>
+<span id="cb25-31"><a href="#cb25-31"></a>    },</span>
+<span id="cb25-32"><a href="#cb25-32"></a></span>
+<span id="cb25-33"><a href="#cb25-33"></a>    <span class="co"># === 세그먼트 (Segmentation에서 상속) ===</span></span>
+<span id="cb25-34"><a href="#cb25-34"></a>    <span class="st">"segment"</span>: <span class="st">"MIUP"</span>,</span>
+<span id="cb25-35"><a href="#cb25-35"></a></span>
+<span id="cb25-36"><a href="#cb25-36"></a>    <span class="co"># === 메타 데이터 ===</span></span>
+<span id="cb25-37"><a href="#cb25-37"></a>    <span class="st">"profile_maturity"</span>: <span class="fl">0.73</span>,    <span class="co"># 프로필 성숙도 (0~1)</span></span>
+<span id="cb25-38"><a href="#cb25-38"></a>    <span class="st">"total_sessions"</span>: <span class="dv">28</span>,</span>
+<span id="cb25-39"><a href="#cb25-39"></a>    <span class="st">"last_session_summary"</span>: <span class="st">"sklearn의 cross_val_score 사용법 학습. GridSearchCV로 확장 예정."</span>,</span>
+<span id="cb25-40"><a href="#cb25-40"></a>    <span class="st">"created_at"</span>: <span class="st">"2026-01-15"</span>,</span>
+<span id="cb25-41"><a href="#cb25-41"></a>    <span class="st">"updated_at"</span>: <span class="st">"2026-03-05"</span></span>
+<span id="cb25-42"><a href="#cb25-42"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="step-2-온보딩-플로우-설계" class="level3" data-number="1.6.3">
+<h3 data-number="1.6.3" class="anchored" data-anchor-id="step-2-온보딩-플로우-설계"><span class="header-section-number">1.6.3</span> Step 2: 온보딩 플로우 설계</h3>
+<p>신규 사용자에게 최소한의 명시적 데이터를 수집한다.</p>
+<pre><code>[첫 방문 시 온보딩 대화]
+
+Agent: "안녕하세요! CodeMentor입니다.
+        맞춤형 도움을 드리기 위해 간단히 여쭤볼게요.
+        주로 사용하시는 프로그래밍 언어가 뭔가요?"
+User:  "Python이요"
+
+Agent: "좋아요! 프로그래밍 경력이 어느 정도 되시나요?
+        1) 입문 (6개월 미만)
+        2) 초급 (6개월~2년)
+        3) 중급 (2~5년)
+        4) 고급 (5년 이상)"
+User:  "2"
+
+Agent: "지금 가장 관심 있는 분야가 뭔가요?
+        1) 웹 개발  2) 데이터 분석  3) AI/ML  4) 자동화  5) 기타"
+User:  "2"
+
+Agent: "감사합니다! 이 정보를 바탕으로 맞춤형 도움을 드릴게요.
+        대화하면서 점점 더 정확해질 거예요.
+        무엇이든 물어보세요!"</code></pre>
+<p>온보딩에서 수집한 3개 정보만으로도 기본 개인화가 가능하다:</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode numberSource json number-lines code-with-copy"><code class="sourceCode json"><span id="cb27-1"><a href="#cb27-1"></a><span class="fu">{</span></span>
+<span id="cb27-2"><a href="#cb27-2"></a>  <span class="dt">"primary_language"</span><span class="fu">:</span> <span class="st">"Python"</span><span class="fu">,</span></span>
+<span id="cb27-3"><a href="#cb27-3"></a>  <span class="dt">"experience_years"</span><span class="fu">:</span> <span class="dv">1</span><span class="fu">,</span></span>
+<span id="cb27-4"><a href="#cb27-4"></a>  <span class="dt">"learning_goal"</span><span class="fu">:</span> <span class="st">"데이터 분석"</span></span>
+<span id="cb27-5"><a href="#cb27-5"></a><span class="fu">}</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>이후 대화가 축적되면 암묵적 데이터가 프로필을 풍부하게 만든다.</p>
+</section>
+<section id="step-3-cold-start-personalization-전환-흐름" class="level3" data-number="1.6.4">
+<h3 data-number="1.6.4" class="anchored" data-anchor-id="step-3-cold-start-personalization-전환-흐름"><span class="header-section-number">1.6.4</span> Step 3: Cold Start → Personalization 전환 흐름</h3>
+<pre><code>세션 1~3 (Cold Start):
+├── 프로필 성숙도: 20~40%
+├── 전략: 세그먼트 기반 (SIUP) + 온보딩 데이터
+└── 개인화 수준: 기본 (언어, 난이도만 반영)
+
+세션 4~8 (성장기):
+├── 프로필 성숙도: 40~70%
+├── 전략: 세그먼트 + 주제 분포 반영 시작
+├── 개인화 수준: 중간 (관심 주제, 응답 스타일 반영)
+└── 예: pandas 질문 시 → 이전에 학습한 DataFrame 조작과 연결하여 설명
+
+세션 9+ (성숙기):
+├── 프로필 성숙도: 70~100%
+├── 전략: 완전 개인화
+├── 개인화 수준: 높음 (학습 경로, pain points, 강점 모두 반영)
+└── 예: "이전에 시각화 커스터마이징에 어려움이 있으셨는데,
+         이번 분석 결과를 seaborn으로 시각화하는 법도 함께 알려드릴까요?"</code></pre>
+</section>
+<section id="step-4-개인화된-응답-생성-예시" class="level3" data-number="1.6.5">
+<h3 data-number="1.6.5" class="anchored" data-anchor-id="step-4-개인화된-응답-생성-예시"><span class="header-section-number">1.6.5</span> Step 4: 개인화된 응답 생성 예시</h3>
+<p><strong>같은 질문 “groupby 사용법 알려줘”에 대한 3명의 다른 응답:</strong></p>
+<p><strong>사용자 A</strong> — Python 초보, 데이터 분석 입문, 비유 선호:</p>
+<pre><code>Agent: "groupby는 '반 별로 줄 서기'와 비슷해요.
+        전교생이 섞여 있는 데이터를 반(그룹)별로 나눠서
+        각 반의 평균 점수를 구하는 것이죠.
+
+        import pandas as pd
+
+        # 학생 성적 데이터
+        df = pd.DataFrame({
+            '반': ['A', 'A', 'B', 'B'],
+            '점수': [85, 90, 78, 92]
+        })
+
+        # 반별 평균
+        df.groupby('반')['점수'].mean()
+
+        먼저 이 예시를 따라해 보시고, 결과가 나오면 알려주세요!
+        다음 단계에서 여러 집계 함수를 배워볼 거예요."</code></pre>
+<p><strong>사용자 B</strong> — 중급, sklearn 학습 중, 코드 중심, 실무 예시 선호:</p>
+<pre><code>Agent: "# 데이터 분석에서 자주 쓰는 groupby 패턴
+
+        # 1. 기본 집계
+        df.groupby('category')['sales'].agg(['mean', 'sum', 'count'])
+
+        # 2. 다중 컬럼 그룹핑
+        df.groupby(['region', 'category'])['sales'].mean().unstack()
+
+        # 3. transform (원본 크기 유지 — feature engineering에 유용)
+        df['category_mean'] = df.groupby('category')['sales'].transform('mean')
+
+        3번 패턴은 sklearn 파이프라인에서 feature로 바로 쓸 수 있어요.
+        이전에 학습하신 ColumnTransformer와 결합하면 효과적입니다."</code></pre>
+<p><strong>사용자 C</strong> — 시니어, SQL 배경, 성능 관심:</p>
+<pre><code>Agent: "SQL의 GROUP BY와 동일한 개념. 주요 차이점 위주로:
+
+        | SQL | pandas |
+        |-----|--------|
+        | GROUP BY + HAVING | .groupby().filter() |
+        | window function | .groupby().transform() |
+        | ROLLUP | pd.pivot_table(margins=True) |
+
+        성능 팁: 100만 행 이상일 때
+        - category가 string이면 .astype('category')로 변환 후 groupby → ~30% 빠름
+        - numba 엔진: .groupby().agg(func, engine='numba')
+
+        이전에 SQL 조인 성능 관련 질문하셨는데,
+        pandas merge + groupby 조합의 성능 비교도 다뤄볼까요?"</code></pre>
+</section>
+<section id="step-5-stepped-wedge-실험-실행" class="level3" data-number="1.6.6">
+<h3 data-number="1.6.6" class="anchored" data-anchor-id="step-5-stepped-wedge-실험-실행"><span class="header-section-number">1.6.6</span> Step 5: Stepped Wedge 실험 실행</h3>
+<pre><code>실험 설계:
+- 대상: MAU 50,000명 중 활성 사용자 20,000명
+- 5개 Cohort × 4,000명
+- 기간: 6주 (1주 baseline + 5주 순차 적용)
+- Primary Metric: 세션당 만족도 (1~5 Likert, 세션 종료 후 수집)
+- Secondary Metric: 재방문율, 세션 길이
+
+실험 타임라인:
+Week 1: [Baseline]  [Baseline]  [Baseline]  [Baseline]  [Baseline]
+Week 2: [Personal]  [Baseline]  [Baseline]  [Baseline]  [Baseline]
+Week 3: [Personal]  [Personal]  [Baseline]  [Baseline]  [Baseline]
+Week 4: [Personal]  [Personal]  [Personal]  [Baseline]  [Baseline]
+Week 5: [Personal]  [Personal]  [Personal]  [Personal]  [Baseline]
+Week 6: [Personal]  [Personal]  [Personal]  [Personal]  [Personal]
+         Cohort 1    Cohort 2    Cohort 3    Cohort 4    Cohort 5</code></pre>
+</section>
+<section id="step-6-mixed-effects-model-분석" class="level3" data-number="1.6.7">
+<h3 data-number="1.6.7" class="anchored" data-anchor-id="step-6-mixed-effects-model-분석"><span class="header-section-number">1.6.7</span> Step 6: Mixed Effects Model 분석</h3>
+<div class="sourceCode" id="cb33"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1"></a><span class="im">import</span> statsmodels.formula.api <span class="im">as</span> smf</span>
+<span id="cb33-2"><a href="#cb33-2"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
+<span id="cb33-3"><a href="#cb33-3"></a></span>
+<span id="cb33-4"><a href="#cb33-4"></a><span class="co"># 데이터 로드 (20,000명 × 6주 ≈ 120,000 관측치)</span></span>
+<span id="cb33-5"><a href="#cb33-5"></a>df <span class="op">=</span> pd.read_csv(<span class="st">"experiment_data.csv"</span>)</span>
+<span id="cb33-6"><a href="#cb33-6"></a></span>
+<span id="cb33-7"><a href="#cb33-7"></a><span class="co"># 모델 피팅</span></span>
+<span id="cb33-8"><a href="#cb33-8"></a>model <span class="op">=</span> smf.mixedlm(</span>
+<span id="cb33-9"><a href="#cb33-9"></a>    <span class="st">"satisfaction ~ personalized + week + segment"</span>,</span>
+<span id="cb33-10"><a href="#cb33-10"></a>    data<span class="op">=</span>df,</span>
+<span id="cb33-11"><a href="#cb33-11"></a>    groups<span class="op">=</span>df[<span class="st">"user_id"</span>],</span>
+<span id="cb33-12"><a href="#cb33-12"></a>    re_formula<span class="op">=</span><span class="st">"~personalized"</span></span>
+<span id="cb33-13"><a href="#cb33-13"></a>)</span>
+<span id="cb33-14"><a href="#cb33-14"></a>result <span class="op">=</span> model.fit()</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>결과:</strong></p>
+<pre><code>Fixed Effects:
+                      Estimate  Std.Error  p-value
+(Intercept)             3.65      0.05    &lt; 0.001
+personalized            0.52      0.04    &lt; 0.001  ← 개인화 효과: +0.52점
+week                    0.02      0.01     0.042   ← 주당 자연 증가
+segment[MIEP]           0.38      0.07    &lt; 0.001
+segment[SIUP]          -0.12      0.06     0.045
+
+Random Effects:
+                      Variance
+user_id (Intercept)     0.48   ← 사용자 간 기본 차이
+user_id (personalized)  0.18   ← 개인화 반응도 차이</code></pre>
+<p><strong>결과 해석:</strong></p>
+<ul>
+<li>개인화 적용 시 만족도 평균 <strong>+0.52점</strong> 상승 (5점 만점 기준, 효과 크기 큼)</li>
+<li>시간 효과(주당 +0.02)를 통제한 순수 개인화 효과</li>
+<li>사용자별 개인화 반응 편차 존재 (SD = 0.42)
+<ul>
+<li>하위 25%: 효과 +0.1 이하 → 프로필 정확도 점검 필요</li>
+<li>상위 25%: 효과 +0.9 이상 → 이 사용자들의 공통 특성 분석</li>
+</ul></li>
+</ul>
+</section>
+<section id="step-7-subgroup-분석-및-후속-조치" class="level3" data-number="1.6.8">
+<h3 data-number="1.6.8" class="anchored" data-anchor-id="step-7-subgroup-분석-및-후속-조치"><span class="header-section-number">1.6.8</span> Step 7: Subgroup 분석 및 후속 조치</h3>
+<pre><code>세그먼트별 개인화 효과:
+┌───────────┬──────────┬────────┬──────────────────┐
+│ 세그먼트    │ 효과 크기 │ p-value│ 조치              │
+├───────────┼──────────┼────────┼──────────────────┤
+│ MIEP      │  +0.71   │ &lt;0.001 │ 효과 최대 → 유지    │
+│ MIUP      │  +0.58   │ &lt;0.001 │ 효과 큼 → 유지      │
+│ SIUP      │  +0.41   │ &lt;0.001 │ 보통 → 프로필 수집 강화│
+│ SINP      │  +0.62   │  0.003 │ 불만 사용자에 효과적  │
+│ SIUZ      │  +0.23   │  0.087 │ 유의하지 않음 → 전략 재검토│
+└───────────┴──────────┴────────┴──────────────────┘
+
+핵심 발견:
+1. MIEP에서 개인화 효과가 가장 큼 → 충성 고객을 더 충성스럽게
+2. SINP(불만 + 싱글턴)에서도 효과 큼 → 공감 + 개인화 조합이 이탈 방지에 강력
+3. SIUZ에서 효과 미미 → 이 세그먼트는 개인화보다 속도가 더 중요할 수 있음
+
+후속 실험:
+- SIUZ에 대해 "응답 속도 최적화" vs "개인화 심화" A/B 테스트
+- MIEP에 대해 Gamification + 개인화 결합 효과 측정</code></pre>
+</section>
+<section id="step-8-최종-결과-및-비즈니스-임팩트" class="level3" data-number="1.6.9">
+<h3 data-number="1.6.9" class="anchored" data-anchor-id="step-8-최종-결과-및-비즈니스-임팩트"><span class="header-section-number">1.6.9</span> Step 8: 최종 결과 및 비즈니스 임팩트</h3>
+<pre><code>Personalization 도입 전후 비교 (6주 후):
+
+┌──────────────┬────────┬────────┬────────┐
+│ 메트릭        │ Before │ After  │ 변화    │
+├──────────────┼────────┼────────┼────────┤
+│ 재방문율 (7일)│  22.5% │  29.3% │ +30%   │
+│ NPS          │   39   │   48   │ +23%   │
+│ 세션당 턴 수  │   2.8  │   3.9  │ +39%   │
+│ 프리미엄 전환 │   3.2% │   5.1% │ +59%   │
+│ 이탈률 (N계열)│  29.7% │  21.4% │ -28%   │
+└──────────────┴────────┴────────┴────────┘
+
+ROI 추정:
+- 프리미엄 전환 +59% → MAU 50,000명 기준 월 950명 추가 전환
+- 구독료 $10/월 기준 → 월 $9,500 추가 매출
+- 개인화 시스템 운영 비용: LLM API $200/월 + 인프라 $300/월
+- 순이익: $9,000/월</code></pre>
+</section>
+</section>
+<section id="정리" class="level2" data-number="1.7">
+<h2 data-number="1.7" class="anchored" data-anchor-id="정리"><span class="header-section-number">1.7</span> 정리</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 17%">
+<col style="width: 17%">
+<col style="width: 28%">
+<col style="width: 37%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>단계</th>
+<th>대상</th>
+<th>핵심 기술</th>
+<th>데이터 요구량</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Segmentation</td>
+<td>그룹</td>
+<td>LLM 태깅 + A/B 테스트</td>
+<td>낮음 (발화 로그)</td>
+</tr>
+<tr class="even">
+<td>Personalization</td>
+<td>개인</td>
+<td>템플릿 + 프로필 DB + 필터</td>
+<td>중간 (대화 히스토리)</td>
+</tr>
+<tr class="odd">
+<td>Hyperpersonalization</td>
+<td>개인 + 상황</td>
+<td>실시간 컨텍스트 + 예측 모델</td>
+<td>높음 (다중 소스)</td>
+</tr>
+</tbody>
+</table>
+<p>신규 유저에게는 Segmentation 기반 기본 전략을 제공하고, 데이터가 축적되면 Personalization으로, 충분한 데이터가 쌓이면 Hyperpersonalization으로 점진적으로 전환하는 것이 실무적으로 가장 효과적인 접근이다.</p>
+<pre><code>[전체 로드맵]
+
+Phase 1: Segmentation (1~2개월)
+├── TASS 태깅 시스템 구축
+├── 세그먼트별 프롬프트 전략
+├── A/B 테스트로 효과 검증
+└── 목표: 재방문율 +25%, NPS +20%
+
+Phase 2: Personalization (2~3개월)
+├── 프로필 시스템 구축 (온보딩 + 암묵적 추출)
+├── 템플릿 + 변수 주입 개인화
+├── Retrieval 메타데이터 필터
+├── Stepped Wedge 실험 + Mixed Effects 분석
+└── 목표: 재방문율 +30%, NPS +30%, 프리미엄 전환 +50%
+
+Phase 3: Hyperpersonalization (3~6개월)
+├── 실시간 컨텍스트 (시간대, 감정, 작업 환경)
+├── 다음 질문 예측 모델
+├── 이탈 예측 + 선제적 개입
+└── 목표: LTV +40%, 이탈률 -50%</code></pre>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const onCopySuccess = function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  }
+  const getTextToCopy = function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+    text: getTextToCopy
+  });
+  clipboard.on('success', onCopySuccess);
+  if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+    // For code content inside modals, clipBoardJS needs to be initialized with a container option
+    // TODO: Check when it could be a function (https://github.com/zenorocha/clipboard.js/issues/860)
+    const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+      text: getTextToCopy,
+      container: window.document.getElementById('quarto-embedded-source-code-modal')
+    });
+    clipboardModal.on('success', onCopySuccess);
+  }
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp("kk3225\.netlify\.app");
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>
