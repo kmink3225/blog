@@ -1,0 +1,601 @@
+---
+title: "Strang 부록 — 행렬 분해 카탈로그 (Matrix Factorizations)"
+subtitle: "$LU$ 부터 $A^+$ 까지: 11+개 분해를 한 장에 묶고, 어떤 문제에 어떤 분해를 쓸지 결정하기"
+description: |
+  Strang, *Introduction to Linear Algebra* (4th ed.) 565 페이지 부록 "Matrix Factorizations" 는
+  책 전체의 정수를 한 페이지로 응축한 카탈로그다. $A = LU$ 부터 $A = U\Sigma V^\top$, 의사역행렬
+  $A^+$, 극분해 $A = QH$, Schur, FFT 재귀까지 11개 핵심 분해의 정의·요건·의미를 한 자리에 모은다.
+  이 포스트는 그 카탈로그를 (1) 왜 필요한가, (2) 삼각·직교·스펙트럼 세 가족으로 묶어 보기,
+  (3) 각 분해의 한 줄 직관과 미니 예시, (4) 어떤 문제에 어떤 분해를 골라야 하는지 의사결정 표,
+  (5) NumPy 로 모든 분해를 직접 확인하는 코드까지 다룬다.
+categories:
+  - Math
+  - Linear Algebra
+author: Kwangmin Kim
+date: 04/11/2026
+execute:
+  eval: false
+---
+
+## 왜 분해 카탈로그가 필요한가
+
+선형대수의 한 학기 — 또는 한 권 — 을 공부하고 나면 머릿속에 흩어진 분해들이 쌓인다. 가우스 소거에서는 $LU$, 그람-슈미트에서는 $QR$, 고유값에서는 $S \Lambda S^{-1}$, 대칭 행렬에서는 $Q \Lambda Q^\top$, 마지막에는 모든 행렬에 통하는 SVD $A = U \Sigma V^\top$. 그리고 그 옆에 의사역행렬, 극분해, Cholesky, Jordan, Schur 가 따라붙는다.
+
+각자는 자신의 동기가 있고 자신의 요건이 있고 자신의 응용이 있다. 그러나 실무에서 필요한 건 한 가지 질문에 대한 빠른 답이다.
+
+> "이 행렬에 이 작업을 하려면, 어떤 분해를 써야 하는가?"
+
+Strang 의 부록 "Matrix Factorizations" 가 바로 이 답을 한 페이지에 모아 놓은 카탈로그다 (Strang, 2009, Appendix). 이 포스트는 그 카탈로그를 데이터 사이언스·머신러닝 맥락에서 다시 정렬하고, 각 분해의 요건과 직관을 같은 형식으로 제시한 다음, 마지막에 의사결정 표로 마감한다.
+
+::: {.callout-tip}
+## 한 문장 요약
+
+행렬 분해는 "복잡한 행렬 = 여러 단순 행렬의 곱" 으로 다시 쓰는 일이며, 어떤 단순함을 원하느냐에 따라 분해가 결정된다 — 삼각이면 풀기 쉽고, 직교면 길이를 보존하고, 대각이면 거듭제곱과 역행렬이 자명하다.
+:::
+
+---
+
+## 분해를 보는 두 시각
+
+같은 카탈로그를 두 가지 방식으로 분류할 수 있다. 둘 다 머릿속에 있어야 어느 방향에서 질문이 와도 답할 수 있다.
+
+### 시각 1 — 결과 행렬의 모양으로 분류
+
+| 모양 | 분해 | 핵심 특성 |
+|---|---|---|
+| 삼각 (triangular) | $LU$, $LDU$, $PA=LU$, $A=L_1 P_1 U_1$, $QR$, Schur $UTU^{-1}$ | $Ax=b$ 가 전·후방 대입으로 풀린다 |
+| 직교 (orthogonal/unitary) | $QR$, $Q\Lambda Q^\top$, $U\Sigma V^\top$, Polar $QH$, Schur $UTU^{-1}$ | 길이·각도 보존, $Q^{-1}=Q^\top$ |
+| 대각 (diagonal) | $LDU$, $S\Lambda S^{-1}$, $Q\Lambda Q^\top$, $U\Sigma V^\top$, $A^+$ | 거듭제곱·역행렬·함수 적용이 자명 |
+| 블록 (block) | Jordan $MJM^{-1}$ | 결손 행렬을 다룰 수 있는 정규형 |
+| 재귀 (recursive) | FFT $F_n = \cdots$ | $O(n^2) \to O(n \log n)$ |
+
+같은 분해가 여러 행에 나타난다는 점에 주목하자. SVD 는 직교이면서 동시에 대각이라 가장 강력하고, $QR$ 은 직교이면서 동시에 삼각이라 수치적으로 가장 안정적이다.
+
+### 시각 2 — 행렬에 요구되는 조건으로 분류
+
+| 요건 | 가능한 분해 |
+|---|---|
+| 임의 행렬 (직사각·정사각·결손 모두) | SVD, $A^+$, $EA=R$, FFT (정사각이지만 임의 데이터) |
+| 임의 정사각 | $PA=LU$, Jordan, Schur |
+| $n$개 독립 고유벡터 보유 | $S\Lambda S^{-1}$ |
+| 대칭 (real symmetric) | $Q\Lambda Q^\top$, $LDL^\top$ |
+| 대칭 양정부호 | Cholesky $C^\top C$ |
+| 정규 ($A^\top A = AA^\top$) | $U\Lambda U^{-1}$ (직교 대각화) |
+| 가역 + 행교환 없는 $LU$ 가능 | $A = LU$ |
+| 열독립 | $QR$ |
+
+데이터 분석의 행렬은 대부분 두 번째 시각의 첫 줄("임의 행렬") 에 해당한다. 그래서 SVD 와 의사역행렬이 사실상의 표준 도구가 되며, 나머지 분해들은 특수 구조를 활용해 속도나 안정성을 얻으려는 최적화로 이해하면 된다.
+
+---
+
+## 가족 1 — 삼각 분해 (Gaussian Elimination 의 자손)
+
+$Ax = b$ 를 풀고 싶을 때 가장 먼저 떠오르는 길이다. 삼각 행렬은 전·후방 대입으로 한 번에 풀린다 ($O(n^2)$).
+
+### 1. $A = LU$ — 가장 단순한 가우스 소거
+
+::: {.callout-note}
+## 정의
+
+$$
+A = \underbrace{L}_{\text{대각이 1인 하삼각}} \cdot \underbrace{U}_{\text{대각에 피벗이 있는 상삼각}}
+$$
+
+**요건**: 가우스 소거 중 행 교환이 필요 없을 것.
+:::
+
+**직관**. 가우스 소거의 각 단계는 하삼각 기본 행렬을 곱하는 일이다. 그 곱들의 역이 $L$, 결과가 $U$. 즉 $L$ 은 "어떤 곱셈자(multiplier)들이 사용되었는가" 의 기록이다.
+
+**의미**. $Ax = b \;\Leftrightarrow\; Ly = b$ 풀고 $Ux = y$ 풀기. 두 번의 삼각 풀이는 일반 $A^{-1}$ 곱셈보다 훨씬 빠르고 수치적으로 안정적이다.
+
+### 2. $A = LDU$ — 피벗을 떼어 낸 형태
+
+$U$ 의 대각에 들어 있는 피벗을 별도 대각 행렬 $D$ 로 빼낸다. 그러면 $L$, $U$ 모두 대각이 1이 된다.
+
+**왜 떼어 내는가**. 대칭 행렬에서 깔끔한 등식을 얻기 위해서다. $A$ 가 대칭이면 $U = L^\top$ 이므로
+
+$$
+A = L D L^\top
+$$
+
+이 된다. 양정부호이면 $D$ 의 모든 원소가 양수라 $\sqrt{D}$ 가 정의되고, 그것이 곧 다음 항목 Cholesky 로 이어진다.
+
+### 3. $PA = LU$ — 행 교환을 미리 정리
+
+::: {.callout-note}
+## 정의
+
+$$
+P A = L U, \quad P = \text{치환 행렬 (어떤 순서로 행을 섞을지 미리 결정)}
+$$
+
+**요건**: $A$ 가 가역. (피벗 자리에 0 이 와도 행 교환으로 우회 가능.)
+:::
+
+**직관**. 일반적인 행렬은 가우스 소거 도중 0 피벗이 등장하기 마련이다. 이때 행 교환이 필요한데, 행 교환을 그때그때 끼워 넣는 대신 미리 한 번에 모아 $P$ 로 정리하면 그 뒤로는 평범한 $LU$ 와 똑같이 작동한다. 수치 선형대수 라이브러리는 거의 항상 이 형태(Partial pivoting) 를 사용한다.
+
+### 4. $EA = R$ — 임의 행렬의 RREF
+
+::: {.callout-note}
+## 정의
+
+$$
+E A = R = \text{rref}(A)
+$$
+
+여기서 $E$ 는 $m \times m$ 가역 행렬이고 $R$ 은 행축약 사다리꼴(reduced row echelon form).
+
+**요건**: 없음. 모든 행렬에 대해 가능.
+:::
+
+**의미**. 이 식은 $LU$ 의 직사각·결손 일반화다. $E$ 의 마지막 $m - r$ 행은 $A$ 의 좌영공간 기저, $E^{-1}$ 의 처음 $r$ 열은 열공간 기저가 된다 — 즉 한 분해에서 네 부분 공간이 통째로 떨어져 나온다. 이론적 가치는 크지만 수치 계산용은 아니다 (rref 는 부동소수점에서 매우 불안정).
+
+### 5. $A = C^\top C$ — Cholesky
+
+::: {.callout-note}
+## 정의
+
+$$
+A = C^\top C, \quad C = \text{상삼각}
+$$
+
+**요건**: $A$ 가 대칭이고 양정부호.
+:::
+
+**직관**. $A = LDL^\top$ 의 가운데 $D$ 가 양수 대각이므로 $\sqrt{D}$ 를 양쪽으로 흡수해 한 행렬 $C = \sqrt{D}\, L^\top$ 로 합칠 수 있다. 결과는 한 상삼각 행렬과 그 전치의 곱.
+
+**의미**. Cholesky 는 양정부호 시스템을 푸는 가장 빠른 방법이다 (일반 $LU$ 보다 약 두 배 빠름). 가우스 분포의 공분산 행렬, 정규방정식의 $A^\top A$, 커널 행렬, 이차 최적화의 헤시안 같은 양정부호 행렬을 다룰 때 표준 도구.
+
+| 응용 | 사용처 |
+|---|---|
+| 다변량 정규분포 샘플링 | $\mathbf{x} = \boldsymbol\mu + C^\top \mathbf{z}$, $\mathbf{z} \sim N(0, I)$ |
+| 가우시안 프로세스 회귀 | 커널 행렬의 Cholesky 로 대수 시스템 풀이 |
+| 수치 최적화 | 신뢰 영역의 양정부호 헤시안 시스템 |
+
+---
+
+## 가족 2 — 직교 분해 (길이를 지키는 것들)
+
+직교(orthogonal) 행렬은 길이와 각도를 보존하고, 그 역행렬이 자기 자신의 전치와 같다. 수치적으로 가장 안정적이라 응용에서 먼저 고려되는 가족이다.
+
+### 6. $A = QR$ — 그람-슈미트의 결과물
+
+::: {.callout-note}
+## 정의
+
+$$
+A = \underbrace{Q}_{\text{정규직교 열}} \cdot \underbrace{R}_{\text{상삼각}}
+$$
+
+**요건**: $A$ 의 열들이 선형 독립.
+:::
+
+**직관**. $A$ 의 열들에 그람-슈미트 직교화를 적용한 결과가 $Q$ 의 열들이고, 그 변환에 사용된 계수들이 $R$ 에 모인다. 즉 $R$ 은 "원래 열을 직교 열들의 조합으로 어떻게 적었는지" 의 장부.
+
+**의미**. 두 가지 핵심 응용이 있다.
+
+1. **최소제곱**. $Ax = b$ 가 풀 수 없으면 정규방정식 $A^\top A \widehat{x} = A^\top b$ 를 푼다. 그런데 $A^\top A$ 는 조건수가 제곱되어 수치적으로 불안정하다. $A = QR$ 을 쓰면 $R \widehat{x} = Q^\top b$ — 한 번의 삼각 풀이로 끝난다. 조건수가 제곱되지 않는다.
+2. **고유값 계산**. 반복적으로 $A_k = Q_k R_k$, $A_{k+1} = R_k Q_k$ 를 적용하면 $A_k$ 가 슈어 형식으로 수렴한다. 이것이 수치 라이브러리의 표준 고유값 알고리즘 (QR algorithm).
+
+::: {.callout-tip}
+## 직관: 왜 QR 이 정규방정식보다 안정적인가
+
+조건수 $\kappa(A) = \sigma_1 / \sigma_n$ 은 행렬이 얼마나 ill-conditioned 인지를 측정한다. $A^\top A$ 를 만들면 $\kappa(A^\top A) = \kappa(A)^2$ — 즉 입력의 수치 노이즈가 제곱되어 증폭된다. $QR$ 은 $A$ 자체에서 직접 작업하므로 이 증폭이 없다.
+:::
+
+### 7. $A = Q \Lambda Q^\top$ — 스펙트럴 정리
+
+::: {.callout-note}
+## 정의
+
+$$
+A = Q \Lambda Q^\top, \quad Q^\top = Q^{-1}
+$$
+
+**요건**: $A$ 가 실대칭.
+:::
+
+**직관**. 대칭 행렬은 이중의 보너스를 받는다 — (1) 모든 고유값이 실수, (2) 고유벡터들을 정규직교로 잡을 수 있다. 두 보너스를 결합하면 변환이 "정규직교 축 위에서의 순수한 늘이기" 가 된다 — 이중축 회전, 스큐, 결손 같은 어려운 현상이 일절 없다.
+
+**의미**. 데이터 분석의 가장 자주 등장하는 두 행렬 — 공분산 행렬과 그래프 라플라시안 — 이 정확히 이 부류다. 그래서 PCA 가 단순히 "공분산의 고유분해" 가 아니라 "**스펙트럴 정리** 를 데이터에 적용한 것" 으로 표현된다.
+
+| 응용 | 행렬 | 분해의 의미 |
+|---|---|---|
+| PCA | 공분산 $C$ | 고유벡터 = 주성분, 고유값 = 분산 |
+| 스펙트럴 클러스터링 | 그래프 라플라시안 $L$ | 작은 고유값의 고유벡터 = 클러스터 표시자 |
+| 정상 모드 분석 | 강성 행렬 $K$ | 고유값 = 진동 주파수의 제곱 |
+
+### 8. $A = U \Sigma V^\top$ — SVD (모든 행렬의 표준형)
+
+::: {.callout-important}
+## 정의
+
+$$
+A = U \Sigma V^\top
+$$
+
+- $U$ — $m \times m$ 직교
+- $V$ — $n \times n$ 직교
+- $\Sigma$ — $m \times n$ 대각, $\sigma_1 \ge \cdots \ge \sigma_r > 0$
+
+**요건**: 없음. 모든 행렬에 대해 항상 존재.
+:::
+
+**직관**. $A$ 가 무엇이든 — 직사각이든, 결손이든, 복소든 — 입력 쪽에 적당한 정규직교 기저($V$ 의 열) 와 출력 쪽에 또 다른 정규직교 기저($U$ 의 열) 를 잡으면 두 기저 사이에서는 $A$ 가 단순한 대각 행렬 $\Sigma$ 가 된다. 이 보편성이 SVD 의 핵심이다.
+
+**의미**. SVD 는 다른 어떤 분해도 줄 수 없는 정보를 준다.
+
+- **랭크와 조건수**: $\sigma_i$ 가 0 이 되는 자리가 랭크의 경계, $\sigma_1 / \sigma_r$ 이 조건수.
+- **최선의 저차원 근사** (Eckart–Young 정리): 큰 $\sigma_i$ 만 남겨 잘라낸 것이 모든 같은 랭크의 근사 중 Frobenius·스펙트럴 노름에서 최선.
+- **네 부분 공간 동시 산출**: $U$ 의 첫 $r$ 열 = 열공간, 나머지 = 좌영공간; $V$ 의 첫 $r$ 열 = 행공간, 나머지 = 영공간.
+
+| 응용 | 사용 형태 |
+|---|---|
+| PCA | 데이터 행렬의 SVD = 공분산의 고유분해 (수치적으로 더 안정) |
+| 잠재 의미 분석 (LSA) | 단어×문서 행렬의 절단 SVD |
+| 추천 시스템 | 사용자×아이템 행렬의 저랭크 근사 |
+| 이미지 압축 | 픽셀 행렬의 절단 SVD |
+| 노이즈 제거 | 작은 $\sigma$ 에 들어 있는 성분 절단 |
+| 회귀 진단 | 조건수, 다중공선성 분석 |
+
+자세한 유도와 예시는 [Ch.6 §6.7 SVD](./mit-06-7-gilbert-strang-svd.qmd) 와 [Ch.7 §7.3 대각화·의사역행렬](./mit-07-3-gilbert-strang-diagonalization-pseudoinverse.qmd) 에 정리해 두었다.
+
+### 9. $A^+ = V \Sigma^+ U^\top$ — 의사역행렬
+
+::: {.callout-note}
+## 정의
+
+$$
+A^+ = V \Sigma^+ U^\top, \quad \Sigma^+_{ii} = \begin{cases} 1/\sigma_i & (\sigma_i > 0) \\ 0 & (\sigma_i = 0) \end{cases}
+$$
+
+**요건**: 없음.
+:::
+
+**직관**. SVD 를 거꾸로 돌리되, $\sigma_i = 0$ 자리에서 무한대를 쓰는 대신 그냥 0 을 쓴다 — "할 수 있는 만큼만 한다."
+
+**의미**.
+
+- $A A^+$ = 열공간으로의 정규직교 사영
+- $A^+ A$ = 행공간으로의 정규직교 사영
+- $\widehat x = A^+ b$ = $\|Ax - b\|$ 를 최소화하면서 동시에 $\|x\|$ 도 최소화하는 유일 해 — **최단 최소제곱해**
+
+다중공선성이 있는 회귀, 과소결정 시스템, 잉여 자유도 역기구학 같은 "정상적인 역행렬이 존재하지 않는" 모든 상황의 표준 도구.
+
+### 10. $A = QH$ — 극분해
+
+::: {.callout-note}
+## 정의
+
+$$
+A = Q H, \quad Q = U V^\top \text{ (직교)}, \quad H = V \Sigma V^\top \text{ (대칭 양반정부호)}
+$$
+
+**요건**: $A$ 가 정사각. 가역이면 $H$ 가 양정부호.
+:::
+
+**직관**. 복소수의 극형식 $z = re^{i\theta}$ 의 행렬판이다 — $H$ 가 "크기"(늘이기), $Q$ 가 "방향"(회전). SVD 의 가운데에 $V^\top V = I$ 를 끼워 넣으면 자동으로 떨어진다.
+
+**의미**. 변환을 회전과 변형으로 분리한다. 연속체 역학에서 변형 구배 $F = QH$ 로 강체 회전과 순수 변형을 정확히 가르는 도구이며, 컴퓨터 비전에서 잡음이 섞인 회전 추정값을 가장 가까운 정직교 행렬로 정사영할 때 ($Q = $ "polar Q") 에도 쓰인다.
+
+---
+
+## 가족 3 — 스펙트럼 분해 (정사각의 진짜 정체)
+
+같은 행렬을 거듭제곱·미분방정식·마르코프 체인 같은 동역학 맥락에서 다룰 때 핵심이 되는 가족이다.
+
+### 11. $A = S \Lambda S^{-1}$ — 일반 대각화
+
+::: {.callout-note}
+## 정의
+
+$$
+A = S \Lambda S^{-1}, \quad S = [\,\mathbf{x}_1 \;\cdots\; \mathbf{x}_n\,], \quad \Lambda = \mathrm{diag}(\lambda_1, \ldots, \lambda_n)
+$$
+
+**요건**: $A$ 가 정사각이고 $n$ 개의 선형 독립 고유벡터를 가질 것.
+:::
+
+**직관**. 고유벡터 기저에서 보면 $A$ 가 각 축을 자기 축 위에서만 늘이는 단순한 변환이 된다.
+
+**의미**. 거듭제곱이 자명해진다.
+
+$$
+A^k = S \Lambda^k S^{-1}, \qquad e^{At} = S e^{\Lambda t} S^{-1}
+$$
+
+마르코프 체인의 정상상태, 미분방정식 시스템 $\dot{\mathbf{x}} = A\mathbf{x}$ 의 해, 동적 시스템의 안정성 분석이 모두 이 한 식에서 나온다. 단점은 요건이 까다롭다는 것 — 결손 행렬에는 못 쓴다.
+
+### 12. $A = MJM^{-1}$ — 조르당 표준형
+
+::: {.callout-note}
+## 정의
+
+$$
+A = M J M^{-1}
+$$
+
+여기서 $J$ 는 각 독립 고유벡터마다 한 블록(조르당 블록) 을 가지는 블록 대각 행렬.
+
+**요건**: 임의 정사각 행렬.
+:::
+
+**직관**. 결손 행렬이라 대각화가 불가능할 때 차선책. 대각 위(superdiagonal) 에 1 이 한두 개 들어가는 것 외에는 거의 대각이다.
+
+**의미**. 이론적으로 모든 행렬을 분류하는 도구이며 미분방정식의 일반해 구조(반복 고유값에 대한 $te^{\lambda t}$ 항이 어디서 오는지)를 설명하지만, 수치적으로는 매우 불안정해 실무에서 직접 계산하지는 않는다. 그 자리는 다음의 슈어 분해가 차지한다.
+
+### 13. $A = U \Lambda U^{-1}$ — 정규 행렬의 직교 대각화
+
+::: {.callout-note}
+## 정의
+
+$$
+A = U \Lambda U^{-1}, \quad U^{-1} = U^H = \bar U^\top
+$$
+
+**요건**: $A^H A = A A^H$ ($A$ 가 정규).
+:::
+
+**직관**. 정규 행렬의 부류는 "고유벡터들을 정규직교로 잡을 수 있는" 모든 행렬을 정확히 포착한다. 실대칭, 반대칭, 직교 행렬이 모두 포함된다.
+
+**의미**. 스펙트럴 정리($A = Q\Lambda Q^\top$) 의 복소 일반화. 양자역학에서 관측가능량이 에르미트 행렬이고 그 고유분해가 측정 결과를 주는 까닭이 여기 있다.
+
+### 14. $A = U T U^{-1}$ — 슈어 삼각화
+
+::: {.callout-note}
+## 정의
+
+$$
+A = U T U^{-1}, \quad T = \text{상삼각, 대각에 } \lambda_i, \quad U^{-1} = U^H
+$$
+
+**요건**: 임의 정사각 행렬.
+:::
+
+**직관**. "모든 정사각 행렬은 어떤 정규직교 기저에서 보면 상삼각이 된다." 대각화는 못 해도 삼각화는 항상 된다는 보장. 결손 행렬에서도 작동한다는 점이 핵심이다.
+
+**의미**. QR 알고리즘이 결국 도달하는 형태가 슈어 분해다. 수치 라이브러리에서 일반 행렬의 고유값을 계산할 때 실제로 산출되는 것은 이 형태이며, 거기서 대각만 읽어 내면 고유값이 나온다. 결손 행렬에서도 안전하다.
+
+### 15. $F_n$ 의 재귀 분해 — FFT
+
+::: {.callout-note}
+## 정의
+
+$$
+F_n = \begin{bmatrix} I & D \\ I & -D \end{bmatrix}
+\begin{bmatrix} F_{n/2} & \\ & F_{n/2} \end{bmatrix}
+\begin{bmatrix} \text{even-odd} \\ \text{permutation} \end{bmatrix}
+$$
+
+**요건**: $F_n$ 이 푸리에 행렬, $n = 2^\ell$.
+:::
+
+**직관**. 푸리에 행렬은 모든 원소가 0 이 아니라 진짜 dense 행렬이지만, 짝/홀 인덱스로 분리하면 절반 크기의 푸리에 변환 두 개로 환원된다. 이 재귀가 $n$ 단계 들어가면 $\frac{1}{2} n \log_2 n$ 곱셈으로 끝난다 — 직접 곱셈이 $n^2$ 인 것에 비해 압도적이다.
+
+**의미**. FFT 는 "행렬 분해의 알고리즘적 응용" 의 가장 인상적인 예시다. 같은 행렬을 어떻게 곱하느냐에 따라 복잡도가 $O(n^2)$ 에서 $O(n \log n)$ 으로 바뀐다는 사실 — 그리고 그 차이가 신호 처리·이미지 압축·딥러닝 컨볼루션 가속의 실용적 기반이라는 사실 — 이 한 분해 식 안에 다 들어 있다.
+
+---
+
+## 의사결정: 어떤 문제에 어떤 분해?
+
+카탈로그를 외우는 대신 "이 문제에 어떤 분해를 골라야 하는가" 의 표를 머릿속에 가지고 있는 것이 훨씬 유용하다.
+
+### 문제 → 분해
+
+| 풀고자 하는 문제 | 추천 분해 | 이유 |
+|---|---|---|
+| 일반 $Ax=b$ (정사각, 가역) | $PA = LU$ | 표준, 빠르고 안정 (행교환 포함) |
+| 양정부호 $Ax=b$ | Cholesky $C^\top C$ | $LU$ 의 두 배 빠름 |
+| 최소제곱 (열 풀랭크) | $QR$ | 조건수 제곱되지 않음 |
+| 최소제곱 (랭크 결손, 다중공선성) | SVD → $A^+$ | 최단 해, 자동 정칙화 |
+| 고유값/고유벡터 (대칭) | $Q\Lambda Q^\top$ (`eigh`) | 실수 고유값, 수치 안정 |
+| 고유값/고유벡터 (일반) | 슈어 → QR algorithm (`eig`) | 결손에도 안전 |
+| 거듭제곱 $A^k$ / $e^{At}$ | $S\Lambda S^{-1}$ (가능 시), 아니면 슈어 | $\Lambda^k$ 자명 |
+| PCA | SVD of 데이터 행렬 | $X^\top X$ 만들지 않아 안정 |
+| 저차원 근사 | 절단 SVD | Eckart–Young 최선성 |
+| 다변량 정규 샘플링 | Cholesky of $\Sigma$ | $\mathbf{x} = \mu + C\mathbf{z}$ |
+| 정칙화 회귀 ($\lambda \to 0$) | SVD → $A^+$ | 의사역과 일치 |
+| 회전 추정 (잡음 있는) | Polar $QH$ | 가장 가까운 직교 |
+| 푸리에 변환 | FFT $F_n$ 재귀 | $O(n \log n)$ |
+| 네 부분 공간 직접 산출 | SVD (또는 $EA = R$) | 직교 기저까지 |
+
+### 행렬 → 가능한 분해
+
+| 행렬 모양·성질 | 가능한 분해 |
+|---|---|
+| 임의 직사각 | SVD, $A^+$, $EA=R$ |
+| 임의 정사각 | $PA=LU$, Jordan, 슈어, SVD, $A^+$ |
+| $n$개 독립 고유벡터 | + $S\Lambda S^{-1}$ |
+| 대칭 | + $Q\Lambda Q^\top$, $LDL^\top$ |
+| 대칭 양정부호 | + Cholesky |
+| 직교 | $Q\Lambda Q^\top$ (특수 경우), 자기 자신이 분해 |
+| 정규 (실수) | $Q\Lambda Q^\top$ (단, $\Lambda$ 가 복소 가능) |
+| 푸리에 | FFT 재귀 |
+
+이 두 표만 머릿속에 두면 새로운 문제를 만났을 때 어디서 시작할지 빠르게 결정할 수 있다.
+
+---
+
+## 코드 검증: NumPy 한 자리에서
+
+각 분해를 직접 만들고 NumPy 의 표준 함수와 비교한다. 같은 행렬을 여러 분해에 통과시켜 각 분해가 원래 행렬을 어떻게 복원하는지 한눈에 본다.
+
+### Step 1: 공통 행렬과 양정부호 변형 준비
+
+```python
+import numpy as np
+np.set_printoptions(precision=4, suppress=True)
+rng = np.random.default_rng(0)
+
+# 일반 정사각
+A = rng.standard_normal((4, 4))
+# 양정부호 (Cholesky·spectral 둘 다 통과)
+SPD = A @ A.T + 4 * np.eye(4)
+# 직사각 (SVD·QR·pinv 용)
+M = rng.standard_normal((6, 3))
+# 랭크 결손 직사각 (의사역행렬용)
+Mdef = M.copy()
+Mdef[:, 2] = Mdef[:, 0] + Mdef[:, 1]              # 3번째 열 = 1번째 + 2번째
+print("rank(Mdef) =", np.linalg.matrix_rank(Mdef))  # 2
+```
+
+### Step 2: 삼각 가족 — LU, Cholesky, QR
+
+```python
+from scipy.linalg import lu, cholesky, qr
+
+# 1. PA = LU
+P, L, U = lu(A)
+print("max(PA - LU):", np.max(np.abs(P @ A - L @ U)))            # ~0
+
+# 2. Cholesky (양정부호)
+C = cholesky(SPD)                                                   # 상삼각
+print("max(SPD - C^T C):", np.max(np.abs(SPD - C.T @ C)))          # ~0
+
+# 3. QR (직사각도 가능)
+Q, R = qr(M, mode='economic')
+print("max(M - QR):", np.max(np.abs(M - Q @ R)))                   # ~0
+print("Q^T Q (정규직교?):\n", Q.T @ Q)                              # ~ I
+```
+
+### Step 3: 스펙트럴 가족 — eig, eigh, schur
+
+```python
+from scipy.linalg import schur
+
+# 4. 일반 대각화 S Lambda S^{-1}
+lam, S = np.linalg.eig(A)
+print("max(A - S Λ S^-1):",
+      np.max(np.abs(A - S @ np.diag(lam) @ np.linalg.inv(S))))
+
+# 5. 대칭 대각화 Q Λ Q^T (eigh 가 자동 직교)
+lam_s, Qs = np.linalg.eigh(SPD)
+print("max(SPD - Q Λ Q^T):",
+      np.max(np.abs(SPD - Qs @ np.diag(lam_s) @ Qs.T)))
+print("Q^T Q (직교?):\n", Qs.T @ Qs)                                # ~ I
+
+# 6. 슈어 분해 (결손에도 안전)
+T, U_schur = schur(A)
+print("max(A - U T U^T):", np.max(np.abs(A - U_schur @ T @ U_schur.T)))
+print("T 의 대각 (= 고유값):", np.diag(T))
+```
+
+### Step 4: 보편 분해 — SVD, 의사역행렬, 극분해
+
+```python
+# 7. SVD
+U_svd, sv, Vt = np.linalg.svd(M, full_matrices=False)
+print("max(M - U Σ V^T):",
+      np.max(np.abs(M - U_svd @ np.diag(sv) @ Vt)))
+
+# 8. 의사역행렬 — 랭크 결손에서도 작동
+Mdef_pinv = np.linalg.pinv(Mdef)
+print("M_def 의사역의 핵심 성질:")
+print("  M M+ M ≈ M :", np.allclose(Mdef @ Mdef_pinv @ Mdef, Mdef))
+print("  M+ M M+ ≈ M+:", np.allclose(Mdef_pinv @ Mdef @ Mdef_pinv, Mdef_pinv))
+print("  (M M+)^T = M M+:", np.allclose((Mdef @ Mdef_pinv).T, Mdef @ Mdef_pinv))
+
+# 9. 극분해 A = QH (정사각 A 에 대해)
+U_a, s_a, Vt_a = np.linalg.svd(A)
+Q_polar = U_a @ Vt_a                                                # 직교
+H_polar = Vt_a.T @ np.diag(s_a) @ Vt_a                              # 대칭 양반정부호
+print("max(A - Q H):", np.max(np.abs(A - Q_polar @ H_polar)))
+print("Q 가 직교?:", np.allclose(Q_polar.T @ Q_polar, np.eye(4)))
+print("H 가 대칭?:", np.allclose(H_polar, H_polar.T))
+```
+
+### Step 5: 같은 일을 여러 길로 — 최소제곱 비교
+
+같은 회귀 문제를 정규방정식, $QR$, SVD 세 가지로 풀어 본다.
+
+```python
+import numpy as np
+from scipy.linalg import qr, solve_triangular
+
+rng = np.random.default_rng(1)
+n, p = 100, 5
+X = rng.standard_normal((n, p))
+y_true = rng.standard_normal(p)
+y = X @ y_true + 0.1 * rng.standard_normal(n)
+
+# 길 1: 정규방정식 (조건수 제곱)
+beta_normal = np.linalg.solve(X.T @ X, X.T @ y)
+
+# 길 2: QR (조건수 그대로)
+Q, R = qr(X, mode='economic')
+beta_qr = solve_triangular(R, Q.T @ y)
+
+# 길 3: SVD / 의사역행렬 (랭크 결손에도 안전)
+beta_svd = np.linalg.pinv(X) @ y
+
+print("normal:", beta_normal)
+print("QR    :", beta_qr)
+print("SVD   :", beta_svd)
+print("max diff (normal vs SVD):", np.max(np.abs(beta_normal - beta_svd)))
+print("max diff (QR vs SVD)    :", np.max(np.abs(beta_qr - beta_svd)))
+# 잘 conditioned 된 문제에서는 셋이 거의 같다.
+# X 에 다중공선성을 넣으면 정규방정식만 무너진다.
+```
+
+---
+
+## 정리
+
+부록 한 페이지를 풀어 쓰면 다음 한 표가 남는다.
+
+| 번호 | 분해 | 한 줄 의미 | 요건 |
+|---|---|---|---|
+| 1 | $A = LU$ | 가우스 소거 | 행 교환 불필요 |
+| 2 | $A = LDU$ | 피벗 분리 | 1과 같음, 대칭이면 $LDL^\top$ |
+| 3 | $PA = LU$ | 행 교환을 미리 | 가역 |
+| 4 | $EA = R$ | 임의 행렬의 RREF | 없음 |
+| 5 | $A = C^\top C$ | Cholesky | 대칭 양정부호 |
+| 6 | $A = QR$ | 직교화 + 삼각 | 열 독립 |
+| 7 | $A = Q\Lambda Q^\top$ | 스펙트럴 정리 | 실대칭 |
+| 8 | $A = U\Sigma V^\top$ | SVD | 없음 |
+| 9 | $A^+ = V\Sigma^+ U^\top$ | 의사역행렬 | 없음 |
+| 10 | $A = QH$ | 회전·변형 분리 | 정사각 |
+| 11 | $A = S\Lambda S^{-1}$ | 일반 대각화 | $n$개 독립 고유벡터 |
+| 12 | $A = MJM^{-1}$ | 조르당 표준형 | 임의 정사각 |
+| 13 | $A = U\Lambda U^{-1}$ | 직교 대각화 | 정규 |
+| 14 | $A = UTU^{-1}$ | 슈어 삼각화 | 임의 정사각 |
+| 15 | $F_n$ 재귀 | FFT | 푸리에, $n=2^\ell$ |
+
+세 가지를 기억하면 충분하다.
+
+- **데이터가 임의 직사각이면 SVD 부터 시작한다.** 거기서 의사역행렬·PCA·저차원 근사·랭크 진단이 모두 떨어진다.
+- **양정부호이면 Cholesky 가 최선이다.** 두 배 빠르고, 다변량 정규 샘플링까지 한 번에 해결한다.
+- **최소제곱은 정규방정식이 아니라 $QR$ 또는 SVD 로 푼다.** 조건수가 제곱되지 않는다.
+
+나머지 분해들은 이 셋을 둘러싼 특수화·일반화·알고리즘적 트릭으로 이해하면 카탈로그가 외우는 대상이 아니라 한 그림이 된다.
+
+---
+
+## 관련 주제
+
+**선행 지식 (각 분해의 도입 포스트)**
+
+- [Ch.2 §2.6 — $A=LU$ 분해](./mit-02-6-gilbert-strang-factorization.qmd)
+- [Ch.4 — 그람-슈미트와 $A=QR$](./mit-17-gilbert-strang-orthogonal-matrices.qmd)
+- [Ch.6 §6.7 — 특이값 분해 (SVD)](./mit-06-7-gilbert-strang-svd.qmd)
+- [Ch.7 §7.3 — 대각화와 의사역행렬](./mit-07-3-gilbert-strang-diagonalization-pseudoinverse.qmd)
+
+**같은 카탈로그의 인접 항목**
+
+- [Ch.7 §7.1 — 선형 변환 개요](./mit-07-1-gilbert-strang-linear-transformations-overview.qmd)
+- [Ch.7 §7.2 — 선형 변환의 행렬](./mit-07-2-gilbert-strang-matrix-of-linear-transformation.qmd)
+
+**다른 카테고리 연결**
+
+- [PCA 와 SVD 의 통계적 해석](../../Statistics/pca_geometry.qmd)
+- [정칙화 회귀 (릿지·라쏘)](../../Statistics/regularization.qmd) — 의사역행렬의 극한
+- [추천 시스템의 행렬 분해](../../Machine_Learning/matrix_factorization.qmd) — 절단 SVD 의 산업적 활용
+- [FFT 와 컨볼루션](../../Deep_Learning/fft_convolution.qmd) — 분해의 알고리즘적 응용
+
+---
+
+## 참고문헌
+
+- Strang, G. (2009). *Introduction to Linear Algebra* (4th ed.), Appendix "Matrix Factorizations" (pp. 563–565). Wellesley-Cambridge Press.
+- Golub, G. H., & Van Loan, C. F. (2013). *Matrix Computations* (4th ed.). Johns Hopkins University Press. — 각 분해의 수치 알고리즘과 안정성 분석.
+- Trefethen, L. N., & Bau, D. (1997). *Numerical Linear Algebra*. SIAM. — 분해를 골라야 하는 실무 관점의 표준 교재.
