@@ -1,116 +1,105 @@
-# HANDOFF — Netlify 빌드 방식 전환
+# HANDOFF — Netlify 배포 파이프라인
 
 최초 작성일: 2026-04-11  
 최종 업데이트: 2026-04-11
 
 ---
 
-## 목표
+## 현재 배포 방식 (최종)
 
-블로그 배포 방식을 로컬 `_site/` 생성 후 Git push 방식에서 **Netlify 서버 측 빌드(Remote Build)** 방식으로 전환한다.
+**로컬 렌더 → `_site/` git 커밋 → git push → Netlify 정적 서빙**
 
-### 전환 이유
-
-- 로컬 렌더링 시 `_site/`가 초기화되어 Git 파일 유실 및 동기화 사고 빈번함.
-- Netlify 서버에서 직접 `quarto render`를 수행하여 빌드 무결성 확보.
-
----
-
-## 현재 상태 (2026-04-11 최종)
-
-- **배포 방식**: `quarto publish netlify` — 로컬 렌더 후 Netlify API 직접 배포. git push는 소스만.
-- **Netlify 자동 빌드**: **비활성화됨** (`stop_builds: true` — API로 설정). git push가 빌드 트리거 안 함.
-- **`_publish.yml`**: Site ID `6c4bf604-e6da-4fbd-9067-52e53472d51f` 등록됨.
-- **빌드 환경**:
-  - `netlify.toml`: `publish = "_site"` 만. 빌드 커맨드 없음.
-  - `_publish.yml`: Netlify site ID 등록.
-  - `package.json`: 삭제됨 (플러그인 불필요).
-  - `requirements.txt`, `runtime.txt`: **삭제됨** — Python 엔진 불필요.
-  - `_site/`: **git 추적 제외** (`.gitignore`에 `/_site/` 등록). 플러그인이 매번 새로 생성.
-  - `_freeze/`: git 추적 유지.
-  - `_quarto.yml`: `freeze: auto`, `eval: false`, `cache: false`.
-- **실행 가능 청크**: `{python}` 0개, `{r}` 0개 — 완전 정적 블로그 (166+21+2 = 189개 변환).
-- **render-changed.ps1**: plain `quarto` 사용, `quarto publish netlify --no-render` 포함.
-
-### 현재 `netlify.toml`
-
-```toml
-[build]
-  publish = "_site"
+```
+[로컬 PC]
+.qmd 수정/추가
+    ↓
+quarto render <파일>   ← 변경된 파일만, 수초~수분
+    ↓
+_site/ 업데이트됨
+    ↓
+git add -A             ← .qmd + _site/ 동시 포함
+git commit && git push
+    ↓
+[Netlify] 빌드 없이 _site/ 그대로 서빙 → kk3225.netlify.app 즉시 반영
 ```
 
-### 현재 배포 워크플로우
+### 핵심 설정
 
-```powershell
-# 포스트 수정/추가 후:
-.\render-changed.ps1
-# → 변경된 .qmd만 렌더링 → quarto publish netlify --no-render → git push
-```
-
-또는 수동:
-```bash
-quarto render <파일>          # 변경된 파일만 렌더
-quarto publish netlify --no-render --no-browser  # Netlify 배포
-git add -A && git commit && git push             # 소스 push
-```
+| 파일 | 내용 |
+|------|------|
+| `netlify.toml` | `publish = "_site"`, 빌드 커맨드 없음 |
+| `.gitignore` | `/_site/` **제외** — git 추적 허용 |
+| `_quarto.yml` | `freeze: auto`, `eval: false`, `cache: false` |
+| `_publish.yml` | Site ID 등록 (quarto publish 쓸 경우 참고용) |
 
 ---
 
-## 알려진 한계 — 로컬 렌더링 필요
+## 왜 `_site/`를 git에 넣는가?
 
-`quarto publish netlify` 방식은 **Netlify 서버 빌드 분을 소모하지 않는다**.
-단점: 포스트 추가/수정 시 반드시 로컬에서 렌더링 후 배포해야 한다.
-`render-changed.ps1`이 이 과정을 자동화한다 (변경된 파일만 렌더 → Netlify 배포 → git push).
+Quarto 공식 레포(`quarto-dev/quarto-web`)는 `_site/`를 `.gitignore`에 넣는다.
+이유: **GitHub Actions로 서버 렌더링 후 Netlify API 직접 배포**하기 때문에 git에 넣을 필요가 없다.
 
----
+이 블로그는 다르다:
 
-## 해결된 문제들 (전체 이력)
+| | 공식 Quarto 레포 | 이 블로그 |
+|--|--|--|
+| CI/CD | GitHub Actions | 없음 |
+| 렌더링 위치 | GitHub 서버 | 로컬 PC |
+| `_site/` in git | ❌ 불필요 | ✅ 필요 (백업 + 배포) |
+| `_site/` 날아가면? | 서버가 다시 렌더 | 로컬에서 20분 재렌더 |
 
-1. **Python 버전 설치 실패 (`mise` 오류)**:
-   - `runtime.txt`에 `python-3.10` 형식 사용 → mise/pyenv가 `python@python-3.10`으로 해석, 정의 없음 오류.
-   - `MISE_VERSION="disable"`은 mise 비활성화 변수가 아님 — mise 자체 버전 지정 변수였음.
-   - **해결**: 정확한 패치 버전 `3.11.11` 지정 후, Python 엔진 자체가 불필요함을 확인하고 완전 제거.
+`_site/`를 git에 넣으면:
+- **절대 날아가지 않는다** — git clone 하면 복원됨
+- **git push = 배포** — Netlify가 빌드 없이 서빙
+- `git add -A` 하나로 소스와 빌드 결과 동시 커밋
 
-2. **`skfda`, `torch`, `transformers` 설치 실패**:
-   - `skfda`: Python 3.12+ 전용, `torch`/`transformers`: 용량 ~2GB로 빌드 타임아웃 유발.
-   - **해결**: `requirements.txt`에서 제거.
-
-3. **Python 엔진 완전 제거**:
-   - 166개 `.qmd` 파일의 ` ```{python} ` → ` ```python ` 변환 (정적 코드 블록).
-   - `_quarto.yml`에 `eval: false` 전역 설정 + 모든 청크 정적화 → Jupyter 커널 불필요.
-   - `requirements.txt`, `runtime.txt` 삭제.
-
-4. **`apt-get` 권한 오류**:
-   - Netlify noble 빌드 컨테이너는 `apt-get`에 root 권한 없음.
-   - R 청크는 `eval: false` + `_freeze/` 캐시로 실행 불필요 → R 설치 단계 제거.
-
-5. **R 엔진 오류 (`Rscript: No such file or directory`)**:
-   - `{r}` 청크가 남아있어 Quarto가 knitr 엔진(R)을 호출, 빌드 336/946에서 중단.
-   - **해결**: 21개 `.qmd` 파일의 ` ```{r} ` → ` ```r ` 변환. 전체 실행 가능 청크 0개 달성.
-
-6. **무한 리다이렉트 루프**:
-   - `netlify.toml`의 `[[redirects]] from="/*" to="/index.html" status=200` 규칙이 SPA용 설정.
-   - Quarto 정적 사이트에서 `index.html`의 상대경로 meta-refresh와 결합 → URL 무한 누적.
-   - **해결**: `[[redirects]]` 규칙 완전 제거.
-
-7. **루트 페이지가 `docs/projects/backfitting/`으로 리다이렉트**:
-   - 과거 로컬 빌드로 생성된 깨진 `_site/index.html`이 git에 추적된 채 배포됨.
-   - **해결**: `git rm -r --cached _site/` 로 `_site/` 전체를 git 추적에서 제거.
-
-8. **수동 Quarto 설치 방식 → 공식 플러그인으로 교체**:
-   - `curl`로 Quarto tar.gz를 `/tmp`에 직접 설치하는 방식은 비공식적이며 불안정.
-   - **해결**: `@quarto/netlify-plugin-quarto` 공식 플러그인 + `package.json`으로 교체.
+Quarto 공식 문서도 이 방식을 유효한 방법으로 명시한다:
+> "If you have your _site directory checked into version control then everything is now configured and your site will be deployed to Netlify automatically whenever you commit to your repository."
 
 ---
 
-## 향후 유지보수 가이드
+## 주의사항
 
-- **새 포스트 추가**: `.qmd` 작성 후 `.\render-changed.ps1` 실행 → 렌더 + 배포 + git push 자동.
-- **전체 재렌더 필요 시**: `quarto render` → `quarto publish netlify --no-render --no-browser`.
-- **`{python}` 청크 주의**: 새 포스트에서 실행 가능한 ` ```{python} ` 청크를 사용하지 않는다. 반드시 ` ```python ` 정적 형식으로 작성.
-- **`{r}` 청크 주의**: 마찬가지로 ` ```{r} ` 대신 ` ```r ` 정적 형식으로 작성.
-- **`_site/`를 절대 git add 하지 않는다**: `.gitignore`에 `/_site/` 등록됨.
-- **빌드 오류 발생 시**: Netlify 대시보드 → Deploys → 최근 빌드 로그 확인.
+- **렌더 없이 push하면 사이트에 반영 안 됨** — `.qmd`는 최신이지만 `_site/` HTML은 구버전
+- **반드시 순서**: `quarto render` → `git add -A` → `git push`
+- `git add -A`는 완전히 OK — `_site/` 변경분이 자동으로 포함됨
+- 전체 재렌더가 필요한 경우: `quarto render` (936개, ~20분)
+
+---
+
+## 실행 가능 청크 현황
+
+- `{python}` 0개, `{r}` 0개 — 완전 정적 블로그
+- 총 189개 청크 정적 변환 (166 python + 21 r + 2 LLFS)
+- 새 포스트 작성 시: ` ```python `, ` ```r ` 형식 사용 (중괄호 없음)
+
+---
+
+## 해결된 문제 이력
+
+1. **Python 버전 설치 실패** — mise `python-3.10` 형식 오류 → Python 엔진 완전 제거
+2. **`skfda`/`torch` 설치 실패** — `requirements.txt` 제거
+3. **`apt-get` 권한 오류** — Netlify noble 컨테이너 root 없음 → R 설치 제거
+4. **R 엔진 오류** — 21개 `{r}` 청크 정적 변환
+5. **무한 리다이렉트 루프** — SPA용 `[[redirects]]` 규칙 제거
+6. **루트가 backfitting으로 리다이렉트** — 깨진 `_site/` git rm --cached
+7. **Netlify 서버 재렌더 (~7분/커밋)** — `@quarto/netlify-plugin-quarto` → 로컬 렌더 방식 전환
+8. **`docs/projects/LLFS/` 렌더 실패** — 2개 `{r}` 청크 정적 변환
+
+---
+
+## 관련 커밋
+
+| 커밋 | 내용 |
+|---|---|
+| `6e3f6c1e` | 166개 `{python}` 정적 변환, Python 파이프라인 제거 |
+| `19495f38` | 21개 `{r}` 정적 변환, R 엔진 제거 |
+| `19872d8c` | `[[redirects]]` 무한 루프 제거 |
+| `7030e382` | `@quarto/netlify-plugin-quarto` 플러그인 전환 |
+| `6a82b564` | `quarto publish netlify` 방식, `_publish.yml` 추가 |
+| `5cd9bf95` | `docs/projects/LLFS/` 2개 `{r}` 정적 변환 |
+| `3fc7a0ec` | `_site/` git 커밋, `.gitignore` 수정, Netlify 자동빌드 재활성화 |
+
 
 ---
 
