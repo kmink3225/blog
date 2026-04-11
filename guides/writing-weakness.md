@@ -71,6 +71,7 @@ last_updated: YYYY-MM-DD
 |------|------|-----------|
 | 1순위 | R2 Focus, R5 Structure | 항상 피드백 |
 | 2순위 | R3 Syntax, R4 Cohesion, R6 Depth, R8 Paraphrasing, R9 Universality | R2·R5 모두 Resolved 후 활성 |
-| 3순위 | R7 Flow | R2~R6, R8~R9 전체 Resolved 후 활성 |
+| 3순위 | R7 Flow, R10 Rhetoric, R11 Diction | R2~R6, R8~R9 전체 Resolved 후 활성 |
 
 R2·R5가 Active인 동안은 2순위·3순위 피드백을 억제한다.
+R10/R11(표현력)은 논리·구조 기준이 모두 Resolved된 뒤에만 활성화한다.

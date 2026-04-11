@@ -3,7 +3,7 @@ name: writing-tutor
 type: skill
 description: >
   논리적 글쓰기 전문 튜터. 한국어/영어 통합. Lv.1(중학생)~Lv.7(학술 논문) 7단계.
-  R1 Gate + R2~R9 40점 루브릭 채점. 세션을 Writing 카테고리 포스트로 저장.
+  R1 Gate + R2~R11 50점 루브릭 채점(논리·구조·표현력 통합). 세션을 Writing 카테고리 포스트로 저장.
 prerequisite:
   - AGENT_GUIDE.md
   - docs/blog/posts/Writing/GUIDE.md
@@ -25,13 +25,13 @@ sub-guides:
 
 | 레벨 | 대상 | 핵심 목표 | 합격선 |
 |------|------|----------|--------|
-| Lv.1 | 중학생 | 주장과 근거 구분 | 16/40 |
-| Lv.2 | 고등학생 | 근거 제시, 논리 비약 인식 | 20/40 |
-| Lv.3 | 수능 논술 | 5단락 구조, 반론 기초 | 24/40 |
-| Lv.4 | 대학 리포트 / TOEFL | Evidence 기반, 인용 구조 | 28/40 |
-| Lv.5 | GRE AW | Toulmin 구조, 반론 심화 | 32/40 |
-| Lv.6 | 실무 보고서 | Executive summary, 의사결정 근거 | 35/40 |
-| Lv.7 | 학술 논문 | Peer-review 수준, 방법론 방어 | 37/40 |
+| Lv.1 | 중학생 | 주장과 근거 구분 | 20/50 |
+| Lv.2 | 고등학생 | 근거 제시, 논리 비약 인식 | 25/50 |
+| Lv.3 | 수능 논술 | 5단락 구조, 반론 기초 | 30/50 |
+| Lv.4 | 대학 리포트 / TOEFL | Evidence 기반, 인용 구조 | 35/50 |
+| Lv.5 | GRE AW | Toulmin 구조, 반론 심화 | 40/50 |
+| Lv.6 | 실무 보고서 | Executive summary, 의사결정 근거 | 44/50 |
+| Lv.7 | 학술 논문 | Peer-review 수준, 방법론 방어 | 46/50 |
 
 ---
 
@@ -139,10 +139,11 @@ Step 1: R1 Gate 판정 (레벨별 루브릭 기준)
   - Soft Fail → R1 피드백만 제공, 재제출 후 Step 2 진행
   - Pass → Step 2 진행
     ↓
-Step 2: R2~R9 채점 (writing-rubric-lv{N}.md 기준)
+Step 2: R2~R11 채점 (writing-rubric-lv{N}.md 기준)
     ↓
 Step 3: 총점 공개 + 피드백 최대 3개
-  - 피드백 우선순위: R2·R5 → R3·R4·R6·R8·R9 → R7
+  - 피드백 우선순위: R2·R5 → R3·R4·R6·R8·R9 → R7·R10·R11
+  - R10/R11(표현력)은 논리·구조가 먼저 통과된 다음에 지적한다
   - weakness 트래커 참조하여 반복 패턴 강조
     ↓
 Step 4: 개선 유도
@@ -187,7 +188,7 @@ Step 3: "직접 써볼까?" → Mode B로 연결
 [R1 Gate: Pass / Soft Fail / Hard Fail]
 [레벨: Lv.N — 대상]
 [루브릭: writing-rubric-lv{N}.md]
-총점: N/40
+총점: N/50
 
 | 기준            | 점수 |
 |----------------|------|
@@ -199,6 +200,8 @@ Step 3: "직접 써볼까?" → Mode B로 연결
 | R7 Flow        | N/5  |
 | R8 Paraphrasing| N/5  |
 | R9 Universality| N/5  |
+| R10 Rhetoric   | N/5  |
+| R11 Diction    | N/5  |
 
 피드백 (최대 3개):
 1. [R? 기준명 - N점] 구체적 문제 지적.
