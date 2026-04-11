@@ -18,61 +18,49 @@
 
 ## 현재 상태 (2026-04-11 최종)
 
-- **배포 방식**: `@quarto/netlify-plugin-quarto` 공식 플러그인 사용. Git push → Netlify 서버 빌드.
+- **배포 방식**: `quarto publish netlify` — 로컬 렌더 후 Netlify API 직접 배포. git push는 소스만.
+- **Netlify 자동 빌드**: **비활성화됨** (`stop_builds: true` — API로 설정). git push가 빌드 트리거 안 함.
+- **`_publish.yml`**: Site ID `6c4bf604-e6da-4fbd-9067-52e53472d51f` 등록됨.
 - **빌드 환경**:
-  - `netlify.toml`: 빌드 커맨드 없음, `publish = "_site"` + Quarto 플러그인만 선언.
-  - `package.json`: `@quarto/netlify-plugin-quarto: ^0.0.5` 의존성.
-  - `r_requirements.txt`: 로컬 참고용으로만 유지 (빌드에서 사용 안 함).
+  - `netlify.toml`: `publish = "_site"` 만. 빌드 커맨드 없음.
+  - `_publish.yml`: Netlify site ID 등록.
+  - `package.json`: 삭제됨 (플러그인 불필요).
   - `requirements.txt`, `runtime.txt`: **삭제됨** — Python 엔진 불필요.
   - `_site/`: **git 추적 제외** (`.gitignore`에 `/_site/` 등록). 플러그인이 매번 새로 생성.
   - `_freeze/`: git 추적 유지.
   - `_quarto.yml`: `freeze: auto`, `eval: false`, `cache: false`.
-- **실행 가능 청크**: `{python}` 0개, `{r}` 0개 — 완전 정적 블로그.
-- **render-changed.ps1**: conda 의존성 제거, plain `quarto` 사용.
+- **실행 가능 청크**: `{python}` 0개, `{r}` 0개 — 완전 정적 블로그 (166+21+2 = 189개 변환).
+- **render-changed.ps1**: plain `quarto` 사용, `quarto publish netlify --no-render` 포함.
 
 ### 현재 `netlify.toml`
 
 ```toml
 [build]
   publish = "_site"
-
-[[plugins]]
-  package = "@quarto/netlify-plugin-quarto"
 ```
 
-### 현재 `package.json`
+### 현재 배포 워크플로우
 
-```json
-{
-  "dependencies": {
-    "@quarto/netlify-plugin-quarto": "^0.0.5"
-  }
-}
+```powershell
+# 포스트 수정/추가 후:
+.\render-changed.ps1
+# → 변경된 .qmd만 렌더링 → quarto publish netlify --no-render → git push
+```
+
+또는 수동:
+```bash
+quarto render <파일>          # 변경된 파일만 렌더
+quarto publish netlify --no-render --no-browser  # Netlify 배포
+git add -A && git commit && git push             # 소스 push
 ```
 
 ---
 
-## 알려진 한계 — 전체 재렌더링
+## 알려진 한계 — 로컬 렌더링 필요
 
-Netlify 서버 빌드 방식은 **커밋할 때마다 935개 파일을 전부 재렌더링**한다 (~7분/회).
-서버는 이전 빌드의 `_site/`를 기억하지 못하기 때문이다.
-`freeze: auto`는 코드 실행 결과 캐싱이며, 마크다운→HTML 렌더링 시간에는 영향 없다.
-
-### 빌드 시간 최적화 방법 (미적용)
-
-`quarto publish netlify` 명령을 사용하면 로컬에서 렌더 후 Netlify API로 직접 배포한다:
-
-```bash
-quarto publish netlify   # 최초 실행 시 브라우저 인증 + _publish.yml 자동 생성
-```
-
-이후에는 다음 스크립트로 운영:
-1. `quarto render <변경된파일>` (또는 `.\render-changed.ps1`)
-2. `quarto publish netlify --no-render` (이미 렌더된 `_site/` 배포)
-3. `git push` (소스 `.qmd` 파일만 push)
-
-이 방식은 Netlify 빌드 분을 소모하지 않으며 Netlify 서버에서 렌더링하지 않는다.
-`_publish.yml`에 Site ID를 등록해야 한다 (최초 1회 `quarto publish netlify` 대화형 실행 필요).
+`quarto publish netlify` 방식은 **Netlify 서버 빌드 분을 소모하지 않는다**.
+단점: 포스트 추가/수정 시 반드시 로컬에서 렌더링 후 배포해야 한다.
+`render-changed.ps1`이 이 과정을 자동화한다 (변경된 파일만 렌더 → Netlify 배포 → git push).
 
 ---
 
@@ -117,7 +105,8 @@ quarto publish netlify   # 최초 실행 시 브라우저 인증 + _publish.yml 
 
 ## 향후 유지보수 가이드
 
-- **새 포스트 추가**: `.qmd` 파일 작성 후 `git push` → Netlify 자동 빌드 (~7분).
+- **새 포스트 추가**: `.qmd` 작성 후 `.\render-changed.ps1` 실행 → 렌더 + 배포 + git push 자동.
+- **전체 재렌더 필요 시**: `quarto render` → `quarto publish netlify --no-render --no-browser`.
 - **`{python}` 청크 주의**: 새 포스트에서 실행 가능한 ` ```{python} ` 청크를 사용하지 않는다. 반드시 ` ```python ` 정적 형식으로 작성.
 - **`{r}` 청크 주의**: 마찬가지로 ` ```{r} ` 대신 ` ```r ` 정적 형식으로 작성.
 - **`_site/`를 절대 git add 하지 않는다**: `.gitignore`에 `/_site/` 등록됨.
@@ -136,4 +125,6 @@ quarto publish netlify   # 최초 실행 시 브라우저 인증 + _publish.yml 
 | `19495f38` | 21개 파일 `{r}` → `r` 정적 변환, R 엔진 의존성 완전 제거 |
 | `7030e382` | 공식 `@quarto/netlify-plugin-quarto` 플러그인으로 전환, `package.json` 추가 |
 | `95c89bb6` | `render-changed.ps1` conda 의존성 제거 |
+| `6a82b564` | `quarto publish netlify` 로컬 배포 방식 전환, `_publish.yml` 추가, `package.json` 삭제 |
+| `5cd9bf95` | `docs/projects/LLFS/` 2개 파일 `{r}` → `r` 정적 변환 |
 
