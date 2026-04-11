@@ -65,6 +65,10 @@
    - Netlify noble 빌드 컨테이너는 `apt-get`에 root 권한 없음.
    - R 청크는 `eval: false` + `_freeze/` 캐시로 실행 불필요 → R 설치 단계 제거.
 
+5. **R 엔진 오류 (`Rscript: No such file or directory`)**:
+   - `{r}` 청크가 남아있어 Quarto가 knitr 엔진(R)을 호출, 빌드 336/946에서 중단.
+   - **해결**: 21개 `.qmd` 파일의 ` ```{r} ` → ` ```r ` 변환. 전체 실행 가능 청크 0개 달성.
+
 5. **무한 리다이렉트 루프**:
    - `netlify.toml`의 `[[redirects]] from="/*" to="/index.html" status=200` 규칙이 SPA용 설정.
    - Quarto 정적 사이트에서 `index.html`의 상대경로 meta-refresh와 결합 → URL 무한 누적.
@@ -80,7 +84,8 @@
 
 - **새 포스트 추가**: `.qmd` 파일 작성 후 push → Netlify 자동 빌드.
 - **`{python}` 청크 주의**: 새 포스트에서 실행 가능한 ` ```{python} ` 청크를 사용하지 않는다. 반드시 ` ```python ` 정적 형식으로 작성.
-- **`{r}` 청크**: `eval: false` 전역 설정으로 실행 안 됨. 출력이 필요하면 로컬에서 렌더링 후 `_freeze/`를 커밋.
+- **`{r}` 청크 주의**: 마찬가지로 ` ```{r} ` 대신 ` ```r ` 정적 형식으로 작성.
+- **출력이 필요한 코드**: 로컬에서 렌더링 후 `_freeze/`를 커밋하면 Netlify에서 캐시 사용.
 - **빌드 오류 발생 시**: Netlify 대시보드 → Deploys → 최근 빌드 로그 확인.
   - `quarto render` 이후 출력에서 실패 파일 확인.
   - `|| true`로 인해 빌드 "성공"으로 표시돼도 특정 파일 렌더링이 누락될 수 있음.
@@ -107,4 +112,4 @@
 | `6e3f6c1e` | 166개 파일 `{python}` → `python` 정적 변환, `torch`/`transformers` 제거 |
 | `94b35886` | `requirements.txt`, `runtime.txt` 삭제, Python 파이프라인 완전 제거 |
 | `19872d8c` | `[[redirects]]` 무한 루프 규칙 제거 |
-| `d288e16d` | `_site/` git 추적 제거, `netlify.toml` 최종 단순화 |
+| `19495f38` | 21개 파일 `{r}` → `r` 정적 변환, R 엔진 의존성 완전 제거 |
