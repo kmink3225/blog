@@ -33,7 +33,7 @@ if (-not $SkipRender) {
     # 2. 변경된 파일만 렌더
     foreach ($file in $targets) {
         Write-Host "`n[렌더] $file" -ForegroundColor Green
-        conda run -n blog quarto render $file
+        quarto render $file
         if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: $file 렌더 실패" -ForegroundColor Red
             exit 1
@@ -42,7 +42,7 @@ if (-not $SkipRender) {
 
     # 3. 블로그 index 재렌더 (목록/네비게이션 업데이트)
     Write-Host "`n[index 업데이트]" -ForegroundColor Cyan
-    conda run -n blog quarto render docs/blog/index.qmd
+    quarto render docs/blog/index.qmd
 } else {
     Write-Host "=== 렌더링 스킵 (-SkipRender 옵션) ===" -ForegroundColor Yellow
     $targets = @()
