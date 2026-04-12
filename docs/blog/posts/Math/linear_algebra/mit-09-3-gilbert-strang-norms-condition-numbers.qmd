@@ -1,0 +1,492 @@
+---
+title: "노름과 조건수 (Norms and Condition Numbers)"
+subtitle: "행렬의 크기를 재는 자, 그리고 오차의 증폭률"
+description: |
+  행렬 노름은 "행렬이 벡터를 얼마나 늘리는가"의 최악값이다. 조건수는
+  "입력 오차가 해에 얼마나 증폭되는가"의 상한이다. 이 포스트는 Strang §9.2
+  를 뼈대로 삼아 벡터 노름 → 행렬 노름의 공리 → 연산자 노름의 정의 →
+  Rayleigh 몫으로 $\|A\| = \sigma_{\max}$ 유도 → 조건수 $c = \|A\|\|A^{-1}\|$ →
+  상대오차 부등식의 증명까지를 한 줄기로 정리한다. SVD의 타원체 기하,
+  "$\log c$ 자리수 손실" 규칙의 의미, 실무 회귀·역문제·PageRank에서의
+  함의도 함께 다룬다.
+categories:
+  - Mathematics
+  - Machine Learning
+author: Kwangmin Kim
+date: 04/13/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+선형 시스템 $\mathbf{A}\mathbf{x} = \mathbf{b}$ 를 풀 때 입력 $\mathbf{b}$ 에 작은 오차 $\Delta \mathbf{b}$ 가 있으면 해 $\mathbf{x}$ 의 오차 $\Delta \mathbf{x}$ 는 얼마나 되는가? 답은 한 문장이다.
+
+$$
+\frac{\|\Delta \mathbf{x}\|}{\|\mathbf{x}\|} \leq \kappa(\mathbf{A}) \cdot \frac{\|\Delta \mathbf{b}\|}{\|\mathbf{b}\|}, \qquad \kappa(\mathbf{A}) = \|\mathbf{A}\| \cdot \|\mathbf{A}^{-1}\|
+$$
+
+이 부등식이 수치 선형대수의 **핵심 등식**이고, 여기에 등장하는 두 양 $\|\mathbf{A}\|$ (행렬 노름)과 $\kappa(\mathbf{A})$ (조건수)가 이 포스트의 주인공이다.
+
+직관적으로
+
+- **행렬 노름** $\|\mathbf{A}\|$ = "행렬 $\mathbf{A}$ 가 벡터를 얼마나 늘리는가"의 최악 비율 (**늘림의 최댓값**)
+- **조건수** $\kappa(\mathbf{A})$ = "늘림의 최댓값 대 최솟값 비율" (**얼마나 찌그러져 있는가**)
+
+이 둘이 작으면 문제는 안정적이고, 크면 같은 입력 오차라도 해가 크게 흔들린다.
+
+이 포스트는 Strang (2009) *Introduction to Linear Algebra* Ch.9 §9.2 "Norms and Condition Numbers" 의 논리 흐름을 따르되, Rayleigh 몫과 SVD의 기하학적 해석, 실무에서 자주 마주치는 조건수 계산과 "$\log \kappa$ 자리수 손실" 규칙까지 포함해 한 편에서 완결되도록 정리한다.
+
+---
+
+## 벡터 노름에서 시작한다
+
+행렬 노름을 논하기 전에 벡터 노름의 공리를 확인한다. 벡터 $\mathbf{x} \in \mathbb{R}^n$ 의 노름 $\|\mathbf{x}\|$ 은 다음 세 성질을 만족하는 함수다.
+
+1. **양정치성**: $\|\mathbf{x}\| \geq 0$, $\|\mathbf{x}\| = 0 \iff \mathbf{x} = \mathbf{0}$
+2. **스케일 동차성**: $\|c\mathbf{x}\| = |c| \cdot \|\mathbf{x}\|$
+3. **삼각 부등식**: $\|\mathbf{x} + \mathbf{y}\| \leq \|\mathbf{x}\| + \|\mathbf{y}\|$
+
+가장 흔한 예는 **2-노름(유클리드 길이)** $\|\mathbf{x}\|_2 = \sqrt{\sum x_i^2}$ 이다. 이하 기본 노름은 2-노름으로 고정한다.
+
+::: {.callout-note}
+## 직관: 세 공리가 말하는 것
+
+(1)은 "길이는 0 이상이고 0이면 영벡터" — 길이의 기본. (2)는 "벡터를 $c$ 배 늘리면 길이도 $|c|$ 배" — 방향에 무관한 스케일. (3)은 "두 변의 합은 제3변보다 크다" — 유클리드 기하의 삼각형 부등식 그 자체다. 이 세 조건을 만족하면 "길이 비슷한 무언가"로 인정한다. 2-노름 외에 $\ell^1$(절댓값 합), $\ell^\infty$(최댓값) 등 무수한 변형이 같은 공리를 따른다.
+:::
+
+---
+
+## 행렬 노름: 크기 측정에 필요한 추가 공리
+
+행렬은 "공간을 변환하는 연산자"이므로, 벡터 노름 공리 외에 **곱셈 호환성** 이 필요하다. 행렬 노름 $\|\mathbf{A}\|$ 은 다음을 만족해야 한다.
+
+1. 벡터 노름의 세 공리 (양정치성, 스케일 동차성, 삼각 부등식)
+2. **성장 조건** (Strang의 식 (2)):
+   $$
+   \|\mathbf{A}\mathbf{x}\| \leq \|\mathbf{A}\| \cdot \|\mathbf{x}\|, \qquad \|\mathbf{A}\mathbf{B}\| \leq \|\mathbf{A}\| \cdot \|\mathbf{B}\|
+   $$
+
+첫 부등식은 "$\mathbf{A}$ 가 벡터 $\mathbf{x}$ 의 길이를 얼마까지 늘릴 수 있는가"를 $\|\mathbf{A}\|$ 로 상한을 둔다. 두 번째는 행렬 곱의 노름이 각각의 곱을 넘지 않는다는 보장이다.
+
+### Frobenius 노름: 쉽지만 부족하다
+
+가장 먼저 떠오르는 정의는 "모든 원소 제곱합의 제곱근"이다.
+
+$$
+\|\mathbf{A}\|_F = \sqrt{\sum_{i,j} a_{ij}^2}
+$$
+
+이는 $\mathbf{A}$ 를 길이 $mn$ 짜리 긴 벡터로 보고 2-노름을 잰 것이다. 계산이 간단하고 유용한 경우가 많지만, 행렬 곱의 성장 조건을 **가장 타이트하게** 반영하지는 못한다. 구체적으로 $\|\mathbf{A}\mathbf{x}\|_2 \leq \|\mathbf{A}\|_F \cdot \|\mathbf{x}\|_2$ 는 성립하지만, 이 상한이 느슨할 수 있다.
+
+### 연산자 노름 (Operator Norm): 정의
+
+더 정확한 행렬 크기는 **"벡터를 가장 많이 늘릴 때의 비율"** 로 정의한다. Strang의 식 (3):
+
+::: {.callout-note}
+## 정의: 연산자 노름 (Operator Norm, Induced Norm)
+
+행렬 $\mathbf{A} \in \mathbb{R}^{m \times n}$ 의 2-노름에 유도된 연산자 노름은
+
+$$
+\|\mathbf{A}\| = \max_{\mathbf{x} \neq \mathbf{0}} \frac{\|\mathbf{A}\mathbf{x}\|_2}{\|\mathbf{x}\|_2}
+$$
+
+로 정의된다. 즉 단위 구 위의 모든 $\mathbf{x}$ 에 대해 $\mathbf{A}$ 를 적용했을 때 얻을 수 있는 **최대 길이**다.
+:::
+
+정의에서 바로 $\|\mathbf{A}\mathbf{x}\| \leq \|\mathbf{A}\|\cdot\|\mathbf{x}\|$ 이 따라 나온다 (최댓값의 성질). 또한 $\|\mathbf{A}\mathbf{B}\mathbf{x}\| \leq \|\mathbf{A}\|\cdot\|\mathbf{B}\mathbf{x}\| \leq \|\mathbf{A}\|\cdot\|\mathbf{B}\|\cdot\|\mathbf{x}\|$ 에서 $\|\mathbf{A}\mathbf{B}\| \leq \|\mathbf{A}\|\cdot\|\mathbf{B}\|$ 도 따라 나온다 (Strang §9.2 Problem 3).
+
+::: {.callout-note}
+## 직관: 연산자 노름은 "가장 긴 늘림"
+
+행렬은 단위 구 $\{\mathbf{x} : \|\mathbf{x}\|_2 = 1\}$ 를 **타원체**로 보낸다. 이 타원체의 가장 긴 반축의 길이가 $\|\mathbf{A}\|$ 다. 즉 $\mathbf{A}$ 가 할 수 있는 "최대 스트레칭"의 크기이다.
+
+- $\mathbf{A} = \mathbf{I}$ (항등): 구 → 구. 반축 1. $\|\mathbf{I}\| = 1$.
+- $\mathbf{A} = \mathbf{Q}$ (직교): 구 → 구 (회전·반사만). $\|\mathbf{Q}\| = 1$.
+- $\mathbf{A} = \text{diag}(2, 3)$: $x$ 축으로 2배, $y$ 축으로 3배 늘어난 타원체. $\|\mathbf{A}\| = 3$.
+
+직교 행렬의 노름이 1이라는 것은 "직교 변환은 길이를 보존한다"의 재진술이다 — 이 때문에 직교 행렬을 사용하는 알고리즘(QR, SVD, Householder)은 오차를 증폭하지 않는다.
+:::
+
+### 간단한 예시
+
+**예 1: 항등 행렬**. $\mathbf{I}\mathbf{x} = \mathbf{x}$ 이므로 $\|\mathbf{I}\mathbf{x}\|/\|\mathbf{x}\| = 1$, 따라서 $\|\mathbf{I}\| = 1$.
+
+**예 2: 대각 행렬**. $\mathbf{A} = \text{diag}(d_1, \dots, d_n)$ 의 노름은 $\|\mathbf{A}\| = \max_i |d_i|$ 이다. 이 최댓값은 해당 $d_i$ 에 대응하는 표준기저 $\mathbf{e}_i$ 에서 달성된다: $\mathbf{A}\mathbf{e}_i = d_i \mathbf{e}_i$.
+
+**예 3: 직교 행렬**. $\mathbf{Q}^\top \mathbf{Q} = \mathbf{I}$ 이면 $\|\mathbf{Q}\mathbf{x}\|^2 = \mathbf{x}^\top \mathbf{Q}^\top \mathbf{Q}\mathbf{x} = \|\mathbf{x}\|^2$ 이므로 $\|\mathbf{Q}\| = 1$.
+
+---
+
+## 핵심 정리: $\|\mathbf{A}\| = \sigma_{\max}$
+
+대칭·비대칭 어떤 행렬이든 다음 공식이 성립한다.
+
+$$
+\|\mathbf{A}\|^2 = \max_{\mathbf{x} \neq \mathbf{0}} \frac{\mathbf{x}^\top \mathbf{A}^\top \mathbf{A}\mathbf{x}}{\mathbf{x}^\top \mathbf{x}} = \lambda_{\max}(\mathbf{A}^\top \mathbf{A})
+$$
+
+따라서
+
+$$
+\|\mathbf{A}\| = \sqrt{\lambda_{\max}(\mathbf{A}^\top \mathbf{A})} = \sigma_{\max}(\mathbf{A})
+$$
+
+(최대 특이값).
+
+### 유도 (Strang §9.2 논법)
+
+$\|\mathbf{A}\mathbf{x}\|^2 = (\mathbf{A}\mathbf{x})^\top(\mathbf{A}\mathbf{x}) = \mathbf{x}^\top \mathbf{A}^\top \mathbf{A}\mathbf{x}$ 이므로
+
+$$
+\frac{\|\mathbf{A}\mathbf{x}\|^2}{\|\mathbf{x}\|^2} = \frac{\mathbf{x}^\top \mathbf{A}^\top \mathbf{A}\mathbf{x}}{\mathbf{x}^\top \mathbf{x}} = R_{\mathbf{A}^\top \mathbf{A}}(\mathbf{x})
+$$
+
+이 오른쪽이 바로 대칭 행렬 $\mathbf{M} = \mathbf{A}^\top \mathbf{A}$ 에 대한 **Rayleigh 몫**이다. $\mathbf{A}^\top \mathbf{A}$ 는 항상 대칭 반양정치(symmetric positive semidefinite)이므로 스펙트럼 분해 $\mathbf{A}^\top \mathbf{A} = \sum \lambda_i \mathbf{q}_i \mathbf{q}_i^\top$ 를 갖는다. $\mathbf{x} = \sum c_i \mathbf{q}_i$ 로 분해하면 직교성 $\mathbf{q}_i^\top \mathbf{q}_j = \delta_{ij}$ 에 의해
+
+$$
+R_{\mathbf{A}^\top \mathbf{A}}(\mathbf{x}) = \frac{\sum c_i^2 \lambda_i}{\sum c_i^2}
+$$
+
+이는 $\lambda_i$ 들의 **가중평균**이므로 $\lambda_{\min} \leq R \leq \lambda_{\max}$ 이다. 최댓값은 $\mathbf{x}$ 가 $\lambda_{\max}$ 고유벡터 방향을 가질 때 달성된다.
+
+### 비대칭 함정: 고유값은 노름을 재지 못한다
+
+비대칭 행렬은 **고유값이 노름과 일치하지 않는다**. Strang의 인상적 예:
+
+$$
+\mathbf{A} = \begin{pmatrix} 0 & 2 \\ 0 & 0 \end{pmatrix}, \quad \lambda_1 = \lambda_2 = 0
+$$
+
+고유값은 둘 다 0이지만 $\mathbf{A}\begin{pmatrix}0\\1\end{pmatrix} = \begin{pmatrix}2\\0\end{pmatrix}$ 이므로 이 벡터의 늘림은 2이다. 실제로 $\mathbf{A}^\top \mathbf{A} = \text{diag}(0, 4)$ 이고 $\lambda_{\max}(\mathbf{A}^\top\mathbf{A}) = 4$, 따라서 $\|\mathbf{A}\| = 2$.
+
+::: {.callout-note}
+## 직관: 왜 $\mathbf{A}^\top \mathbf{A}$ 로 가는가
+
+비대칭 행렬은 벡터를 "밀고 회전시킨다"를 동시에 한다. 고유값은 "특정 방향이 스케일만 받을 때의 배율"이라, 회전이 섞이면 최대 늘림을 놓친다. 반면 $\mathbf{A}^\top \mathbf{A}$ 는 대칭이므로 회전을 제거한 "순수 스트레칭"만 남는다 — $\mathbf{A}$ 로 한 번 늘린 뒤 $\mathbf{A}^\top$ 으로 되돌리는 과정에서 회전이 상쇄되기 때문이다. 이 대칭화된 행렬의 최대 고유값이 원래 $\mathbf{A}$ 의 최대 늘림 제곱이다.
+:::
+
+### SVD와의 일치
+
+$\mathbf{A} = \mathbf{U} \boldsymbol{\Sigma} \mathbf{V}^\top$ (SVD) 에서 $\mathbf{A}^\top \mathbf{A} = \mathbf{V} \boldsymbol{\Sigma}^2 \mathbf{V}^\top$ 이므로 $\mathbf{A}^\top \mathbf{A}$ 의 고유값은 $\sigma_i^2$, 따라서
+
+$$
+\|\mathbf{A}\| = \sigma_{\max}
+$$
+
+이 공식이 노름을 SVD와 연결하는 다리다. 단위 구 → 타원체 변환의 **가장 긴 반축**이 정확히 $\sigma_{\max}$ 이고, 이것이 노름의 기하학적 의미다.
+
+---
+
+## 조건수: 오차의 증폭률
+
+### 동기: $\|\mathbf{A}^{-1}\|$ 만으로는 부족하다
+
+$\mathbf{A}\mathbf{x} = \mathbf{b}$ 에서 $\mathbf{b}$ 가 $\mathbf{b} + \Delta \mathbf{b}$ 로 바뀌면 해는 $\mathbf{x} + \Delta \mathbf{x}$ 로 바뀐다. 두 방정식을 빼면 Strang의 식 (5):
+
+$$
+\mathbf{A}(\Delta \mathbf{x}) = \Delta \mathbf{b}, \qquad \Delta \mathbf{x} = \mathbf{A}^{-1} \Delta \mathbf{b}
+$$
+
+오차 크기는 $\|\Delta \mathbf{x}\| \leq \|\mathbf{A}^{-1}\|\cdot\|\Delta \mathbf{b}\|$. 이것만 보면 "$\|\mathbf{A}^{-1}\|$ 이 오차 증폭률"이라고 할 법하다.
+
+그러나 이 양에는 심각한 결함이 있다. $\mathbf{A}$ 를 1000배 하면 $\mathbf{A}^{-1}$ 은 1/1000배가 되어 수치가 작아진다. 문제 자체는 바뀌지 않는데 측정치만 달라지는 것이다. 해결책은 **상대오차**로 비교하는 것이다.
+
+### 조건수 정의
+
+::: {.callout-note}
+## 정의: 조건수 (Condition Number)
+
+정칙 행렬 $\mathbf{A}$ 의 조건수는
+
+$$
+\kappa(\mathbf{A}) = \|\mathbf{A}\| \cdot \|\mathbf{A}^{-1}\|
+$$
+
+로 정의된다. 2-노름을 쓰면
+
+$$
+\kappa_2(\mathbf{A}) = \frac{\sigma_{\max}(\mathbf{A})}{\sigma_{\min}(\mathbf{A})}
+$$
+
+이며, 항상 $\kappa(\mathbf{A}) \geq 1$ 이다. 등호는 $\mathbf{A}$ 가 스칼라 배의 직교 행렬일 때 성립한다.
+:::
+
+스케일 불변성이 즉시 따라 나온다: $\kappa(c\mathbf{A}) = |c|\|\mathbf{A}\| \cdot |c|^{-1}\|\mathbf{A}^{-1}\| = \kappa(\mathbf{A})$. 조건수는 **문제의 성질**이지 스케일의 성질이 아니다.
+
+::: {.callout-note}
+## 직관: 조건수는 타원체의 찌그러짐
+
+SVD 관점에서 $\kappa_2 = \sigma_{\max}/\sigma_{\min}$ 은 "$\mathbf{A}$ 가 단위 구를 보낸 타원체의 가장 긴 반축 대 가장 짧은 반축의 비"다.
+
+- $\kappa = 1$: 구를 다시 구로 보낸다 (직교 변환). 모든 방향이 동등.
+- $\kappa = 100$: 긴 축이 짧은 축의 100배. 짧은 축 방향으로의 입력 오차가 긴 축 방향으로의 해 오차로 100배 증폭된다.
+- $\kappa \to \infty$: 타원체가 납작해져 한 방향이 0에 가까워진다 ($\mathbf{A}$ 가 거의 특이). 짧은 축 방향은 정보가 소실된다.
+
+"찌그러진 타원체를 뒤집을 때 긴 축이 가장 심하게 꺾인다"가 조건수의 물리적 의미다.
+:::
+
+### 상대오차 부등식
+
+Strang의 식 (6):
+
+$$
+\frac{\|\Delta \mathbf{x}\|}{\|\mathbf{x}\|} \leq \kappa(\mathbf{A}) \cdot \frac{\|\Delta \mathbf{b}\|}{\|\mathbf{b}\|}
+$$
+
+**증명** (Strang §9.2 증명 그대로). 두 부등식을 얻는다.
+
+$$
+\|\mathbf{b}\| = \|\mathbf{A}\mathbf{x}\| \leq \|\mathbf{A}\|\cdot\|\mathbf{x}\|, \qquad \|\Delta \mathbf{x}\| \leq \|\mathbf{A}^{-1}\|\cdot\|\Delta \mathbf{b}\|
+$$
+
+좌·우 변을 곱하면
+
+$$
+\|\mathbf{b}\|\cdot\|\Delta \mathbf{x}\| \leq \|\mathbf{A}\|\cdot\|\mathbf{A}^{-1}\|\cdot\|\mathbf{x}\|\cdot\|\Delta \mathbf{b}\| = \kappa\cdot\|\mathbf{x}\|\cdot\|\Delta \mathbf{b}\|
+$$
+
+양변을 $\|\mathbf{b}\|\cdot\|\mathbf{x}\|$ 로 나누면 원하는 부등식. $\square$
+
+**해석**: $\mathbf{b}$ 에 $0.01\%$ 오차가 있고 $\kappa = 10^4$ 이면 $\mathbf{x}$ 에 최대 $100\%$ 오차가 생길 수 있다. 즉 해가 완전히 무의미해질 수 있다. 이 부등식이 수치 해석의 **공식적 경고**다.
+
+### 행렬 자체의 오차에 대해서도 동일
+
+$\mathbf{A}$ 가 $\mathbf{A} + \Delta \mathbf{A}$ 로 교란되어도 (Strang 식 (7)):
+
+$$
+\frac{\|\Delta \mathbf{x}\|}{\|\mathbf{x} + \Delta \mathbf{x}\|} \leq \kappa(\mathbf{A}) \cdot \frac{\|\Delta \mathbf{A}\|}{\|\mathbf{A}\|}
+$$
+
+즉 조건수는 $\mathbf{b}$ 쪽 오차뿐 아니라 $\mathbf{A}$ 쪽 오차(반올림·측정)에도 동일하게 적용되는 **보편적 증폭률**이다.
+
+### "$\log \kappa$ 자리수 손실" 규칙
+
+Strang이 §9.2 말미에 제시하는 실험 규칙이다.
+
+> **컴퓨터는 가우스 소거에서 약 $\log_{10} \kappa$ 자리수의 10진 정확도를 잃는다.**
+
+double precision ($\varepsilon_\text{mach} \approx 10^{-16}$, 약 16자리)에서
+
+| $\kappa(\mathbf{A})$ | 손실 자리수 | 유효 자릿수 |
+|---|---|---|
+| $1$ (직교) | 0 | 16 (최상) |
+| $10^4$ | 4 | 12 |
+| $10^8$ | 8 | 8 |
+| $10^{12}$ | 12 | 4 |
+| $10^{16}$ | 16 | **0 (해 전체 무의미)** |
+
+이 규칙은 부등식 (6)에 $\Delta \mathbf{b}/\mathbf{b} \approx \varepsilon_\text{mach}$ 를 대입한 결과다: $\|\Delta \mathbf{x}\|/\|\mathbf{x}\| \approx \kappa \cdot \varepsilon_\text{mach} = 10^{\log_{10} \kappa - 16}$, 즉 해의 상대오차가 $10^{-(16 - \log_{10} \kappa)}$ 수준이 된다.
+
+실무 함의:
+
+- **$\kappa < 10^8$**: double precision으로 충분히 정확한 해
+- **$10^8 < \kappa < 10^{12}$**: 조심해야 함. 정규화·재스케일링 검토
+- **$\kappa > 10^{12}$**: double 한계. 고정밀(quad, arbitrary precision)이나 문제 재구성 필요
+
+---
+
+## 예시: 조건수 계산
+
+### 예시 1: SPD 대각 행렬
+
+$\mathbf{A} = \text{diag}(6, 2)$. 고유값 $\lambda_1 = 6, \lambda_2 = 2$.
+
+$$
+\|\mathbf{A}\| = \lambda_{\max} = 6, \quad \|\mathbf{A}^{-1}\| = \frac{1}{\lambda_{\min}} = \frac{1}{2}, \quad \kappa = 6 \cdot \frac{1}{2} = 3
+$$
+
+(Strang §9.2 Example 3). 대각 SPD 행렬에서 조건수는 "가장 큰 스케일 / 가장 작은 스케일"이다.
+
+### 예시 2: 최악의 오차가 실제로 달성됨
+
+같은 $\mathbf{A} = \text{diag}(6, 2)$ 에서 $\mathbf{b} = (1, 0)^\top$ (첫 고유벡터 방향)을 고르면 $\mathbf{x} = (1/6, 0)^\top$. $\Delta \mathbf{b} = (0, \epsilon)^\top$ (두 번째 고유벡터) 이면 $\Delta \mathbf{x} = (0, \epsilon/2)^\top$.
+
+상대오차 비:
+
+$$
+\frac{\|\Delta \mathbf{x}\|/\|\mathbf{x}\|}{\|\Delta \mathbf{b}\|/\|\mathbf{b}\|} = \frac{(\epsilon/2)/(1/6)}{\epsilon/1} = 3
+$$
+
+정확히 $\kappa = 3$. 부등식의 상한이 **실제로 달성된다**는 증거다. 조건수는 최악의 방향에서 빡빡한(tight) 상한이다 (Strang §9.2 Example 4).
+
+### 예시 3: Hilbert 행렬 — 악조건의 교과서
+
+$\mathbf{H}_{ij} = 1/(i + j - 1)$. $n = 5$ 에서 $\kappa_2 \approx 4.8 \times 10^5$, $n = 10$ 에서 $\kappa_2 \approx 1.6 \times 10^{13}$. double precision으로는 $n \geq 12$ 에서 사실상 풀 수 없다. 다항 회귀의 Vandermonde 행렬, 푸리에 기저의 이산화 등이 유사한 악조건을 보인다.
+
+---
+
+## ML/DL 실무 응용
+
+조건수가 실제로 문제가 되는 상황들:
+
+| 상황 | 원인 | 조건수 | 완화책 |
+|---|---|---|---|
+| 정규방정식 $\mathbf{X}^\top \mathbf{X} \boldsymbol{\beta} = \mathbf{X}^\top \mathbf{y}$ | $\kappa(\mathbf{X}^\top \mathbf{X}) = \kappa(\mathbf{X})^2$ — 제곱화 | $\kappa(\mathbf{X})^2$ | QR 또는 SVD로 직접 해, Ridge 정규화 |
+| 다중공선성 (상관 피처) | $\sigma_{\min}(\mathbf{X}) \to 0$ | $\to \infty$ | PCA, Ridge, 피처 제거 |
+| 특성 스케일 불균형 | $\sigma_{\max}/\sigma_{\min}$ 가 스케일 비율 | 스케일 비율 | 표준화 (StandardScaler) |
+| 이미지 디블러링, 토모그래피 | 역문제 본질적 악조건 | $10^{10}$ 이상 | Tikhonov 정규화, TV 정규화 |
+| 딥러닝 배치 정규화 전 활성화 분포 | 층마다 스케일 누적 | 점점 악화 | BatchNorm, LayerNorm |
+| PageRank 계산 수렴 속도 | $1/(1 - \lambda_2/\lambda_1)$ | 그래프 구조 | damping factor 조정 |
+
+### 구체적 사례: Ridge 회귀의 수치적 해석
+
+Ridge 회귀 $(\mathbf{X}^\top \mathbf{X} + \lambda \mathbf{I}) \boldsymbol{\beta} = \mathbf{X}^\top \mathbf{y}$ 에서 새 행렬의 고유값은 $\sigma_i^2 + \lambda$ 이다 ($\sigma_i$ 는 $\mathbf{X}$ 의 특이값). 따라서
+
+$$
+\kappa(\mathbf{X}^\top \mathbf{X} + \lambda \mathbf{I}) = \frac{\sigma_{\max}^2 + \lambda}{\sigma_{\min}^2 + \lambda}
+$$
+
+$\sigma_{\min} \to 0$ 일 때 $\lambda$ 가 없으면 조건수가 폭증하지만, $\lambda > 0$ 이면 분모에 바닥이 생겨 조건수가 제한된다. Ridge의 통계적 해석(편의-분산 트레이드오프)과 별개로, **수치적 안정화**라는 독립된 효과가 있다.
+
+### 구체적 사례: 딥러닝 초기화
+
+신경망 가중치 $\mathbf{W}$ 의 조건수가 크면 초기 학습이 불안정하다. He 초기화, Xavier 초기화는 **가중치의 분산을 조절하여 층별 활성화의 조건수를 보존**하는 것이 목표다. 직교 초기화(orthogonal init)는 한 걸음 더 나아가 $\mathbf{W}$ 를 직교 행렬로 시작시켜 초기 $\kappa = 1$ 을 보장한다.
+
+---
+
+## 코드 예시
+
+### Step 1: 순수 Python — 노름과 조건수의 관계
+
+```{python}
+import numpy as np
+
+def spectral_norm(A):
+    """연산자 2-노름 = 최대 특이값 = sqrt(max eigenvalue of A^T A)"""
+    return np.sqrt(np.max(np.linalg.eigvalsh(A.T @ A)))
+
+def cond_number(A):
+    """조건수 = sigma_max / sigma_min"""
+    s = np.linalg.svd(A, compute_uv=False)
+    return s[0] / s[-1]
+
+# 예시 1: SPD 대각
+A1 = np.diag([6.0, 2.0])
+print(f"||A1|| = {spectral_norm(A1):.4f}  (이론: 6)")
+print(f"kappa(A1) = {cond_number(A1):.4f}  (이론: 3)")
+
+# 예시 2: 비대칭, 고유값은 0이지만 노름은 0 아님
+A2 = np.array([[0.0, 2.0], [0.0, 0.0]])
+print(f"||A2|| = {spectral_norm(A2):.4f}  (이론: 2)")
+print(f"eigvals(A2) = {np.linalg.eigvals(A2)}  (둘 다 0)")
+
+# 예시 3: Hilbert
+H = np.array([[1.0/(i+j+1) for j in range(10)] for i in range(10)])
+print(f"kappa(H_10) = {cond_number(H):.2e}  (double로 풀기 어려움)")
+```
+
+### Step 2: 최악의 오차 방향 실험
+
+```{python}
+import numpy as np
+
+A = np.diag([6.0, 2.0])
+b = np.array([1.0, 0.0])         # 첫 고유벡터 방향
+x = np.linalg.solve(A, b)         # x = (1/6, 0)
+
+eps = 1e-6
+delta_b_worst = np.array([0.0, eps])    # 두 번째 고유벡터 — 최악 방향
+delta_b_best  = np.array([eps, 0.0])    # 첫 고유벡터 — 최선 방향
+
+dx_worst = np.linalg.solve(A, delta_b_worst)
+dx_best  = np.linalg.solve(A, delta_b_best)
+
+kappa = np.linalg.cond(A)
+print(f"kappa(A) = {kappa}")
+
+amp_worst = (np.linalg.norm(dx_worst)/np.linalg.norm(x)) / (np.linalg.norm(delta_b_worst)/np.linalg.norm(b))
+amp_best  = (np.linalg.norm(dx_best )/np.linalg.norm(x)) / (np.linalg.norm(delta_b_best )/np.linalg.norm(b))
+print(f"최악 방향 증폭률: {amp_worst}  (이론 kappa = 3)")
+print(f"최선 방향 증폭률: {amp_best }  (이론 1)")
+```
+
+이 코드의 핵심: 조건수는 **최악의 방향에서의 증폭률**이다. 입력 오차가 운 좋게 "긴 축" 방향에 정렬되면 증폭되지 않지만, 가장 작은 특이값 방향에 정렬되면 $\kappa$ 배 증폭된다.
+
+### Step 3: 정규방정식의 조건수 제곱화 시연
+
+```{python}
+import numpy as np
+
+np.random.seed(42)
+m, n = 200, 50
+U, _ = np.linalg.qr(np.random.randn(m, n))
+V, _ = np.linalg.qr(np.random.randn(n, n))
+sigma = np.logspace(0, -6, n)          # 특이값 1 ~ 1e-6
+X = U @ np.diag(sigma) @ V.T
+
+kappa_X    = np.linalg.cond(X)
+kappa_XtX  = np.linalg.cond(X.T @ X)
+
+print(f"kappa(X)     = {kappa_X:.2e}")
+print(f"kappa(X^T X) = {kappa_XtX:.2e}")
+print(f"비율:         {kappa_XtX / kappa_X:.2e}  (이론: kappa_X, 즉 제곱화)")
+```
+
+정규방정식 $\mathbf{X}^\top \mathbf{X} \boldsymbol{\beta} = \mathbf{X}^\top \mathbf{y}$ 은 조건수를 제곱한다. $\kappa(\mathbf{X}) = 10^6$ 이면 $\kappa(\mathbf{X}^\top \mathbf{X}) = 10^{12}$ 로 double 한계에 접근한다. 이것이 실무 회귀 구현이 QR 또는 SVD를 쓰는 이유다.
+
+### Step 4: Ridge의 조건수 완화 효과
+
+```{python}
+import numpy as np
+
+np.random.seed(0)
+X = U @ np.diag(np.logspace(0, -8, n)) @ V.T   # sigma_min = 1e-8
+XtX = X.T @ X
+
+for lam in [0, 1e-6, 1e-3, 1e-1]:
+    A = XtX + lam * np.eye(n)
+    kappa = np.linalg.cond(A)
+    print(f"lambda = {lam:.0e}  ->  kappa = {kappa:.2e}")
+```
+
+$\lambda$ 가 0일 때 조건수는 $\sigma_{\min}^{-2}$ 수준으로 폭증하지만, $\lambda = 10^{-3}$ 만 넣어도 $\sigma_{\min}^2 + \lambda \approx \lambda$ 로 바닥이 생겨 조건수가 극적으로 낮아진다.
+
+---
+
+## 다른 노름들과의 관계
+
+2-노름 외에도 실무에서 쓰이는 행렬 노름이 있다. 참고로 짧게 정리한다.
+
+| 노름 | 정의 | 계산 비용 | 용도 |
+|---|---|---|---|
+| $\|\mathbf{A}\|_1$ (최대 열합) | $\max_j \sum_i \|a_{ij}\|$ | $O(mn)$ | $\ell^1$ 문제, MCMC |
+| $\|\mathbf{A}\|_\infty$ (최대 행합) | $\max_i \sum_j \|a_{ij}\|$ | $O(mn)$ | 최대오차 분석 |
+| $\|\mathbf{A}\|_2$ (스펙트럼) | $\sigma_{\max}$ | $O(mn \cdot \text{SVD step})$ | 수치 안정성의 표준 |
+| $\|\mathbf{A}\|_F$ (Frobenius) | $\sqrt{\sum a_{ij}^2} = \sqrt{\sum \sigma_i^2}$ | $O(mn)$ | 저랭크 근사 오차, Nuclear 대리 |
+| $\|\mathbf{A}\|_*$ (Nuclear) | $\sum \sigma_i$ | SVD | 랭크의 볼록 완화, 행렬 완성 |
+
+부등식 관계: $\|\mathbf{A}\|_2 \leq \|\mathbf{A}\|_F \leq \sqrt{r}\cdot\|\mathbf{A}\|_2$ ($r = \text{rank}(\mathbf{A})$). 즉 Frobenius가 보수적 상한이다.
+
+$\ell^1$ · $\ell^\infty$ 노름 조건수는 double 정확도 경고 규칙의 동일 형태로 해석된다 — 특정 노름 하의 "$\log \kappa$ 자리수 손실"이다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [수치 선형대수 개요](./mit-09-1-gilbert-strang-numerical-linear-algebra-overview.qmd) — 조건수·안정성·알고리즘 지도
+- [SVD](./mit-06-7-gilbert-strang-svd.qmd) — $\sigma_{\max}$, $\sigma_{\min}$ 의 정의
+- [대칭 행렬과 스펙트럼 분해](./mit-06-4-gilbert-strang-symmetric-matrices.qmd) — Rayleigh 몫의 배경
+- [양정치 행렬](./mit-06-5-gilbert-strang-positive-definite-matrices.qmd) — $\mathbf{A}^\top \mathbf{A}$ 의 구조
+
+**후속 주제**
+
+- [실전 가우스 소거법](./mit-09-2-gilbert-strang-gaussian-elimination-in-practice.qmd) — 후향 안정성·성장 인자
+- [§9.3 반복법과 전처리기 (placeholder)](./mit-09-4-gilbert-strang-iterative-methods-preconditioners.qmd) — 조건수와 CG 수렴 속도
+- Frobenius 노름과 저랭크 근사 (placeholder, 교재 외)
+- Nuclear 노름과 행렬 완성 (placeholder, 교재 외)
+
+**다른 카테고리 연결**
+
+- [Ridge와 정규화의 수치적 역할](../../Machine_Learning/index.qmd) — $\lambda$ 를 통한 조건수 제어
+- [정규 방정식 vs QR vs SVD](../../Statistics/regression-normal-equations-vs-qr.qmd) — 회귀의 수치 구현 선택 (placeholder)
+- [PageRank와 스펙트럼 반경](../../Agent/index.qmd) — Power iteration의 수렴
+
+**참고 교재**
+
+- Strang (2009) *Introduction to Linear Algebra* Ch.9 §9.2 — 본 포스트의 논리 뼈대
+- Trefethen & Bau (1997) *Numerical Linear Algebra* Lect.12, 14 — 조건수·후향 안정성의 표준
+- Higham (2002) *Accuracy and Stability of Numerical Algorithms* — 조건수 이론의 포괄적 레퍼런스
