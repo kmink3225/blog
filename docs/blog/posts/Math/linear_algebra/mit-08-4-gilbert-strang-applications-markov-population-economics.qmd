@@ -1,0 +1,438 @@
+---
+title: "Ch.8 §8.3 Markov Matrices, Population, and Economics — $\\lambda_{\\max}$ 가 다스리는 세계"
+subtitle: "마르코프 정상상태, Perron-Frobenius 정리, Leslie 인구 모델, Leontief 산업연관표를 한 골격으로"
+description: |
+  Strang Ch.8 §8.3을 단독으로 상세히 다룬다. 양의(또는 비음의) 행렬 $A$ 의 거듭제곱 $A^k$ 는
+  거의 항상 가장 큰 고유값 $\lambda_{\max}$ 와 그 고유벡터 한 방향에 의해 지배된다는 사실
+  (Perron-Frobenius 정리)이 마르코프 체인의 정상 분포, Leslie 인구 모델의 장기 성장률,
+  Leontief 산업연관표의 생산 가능성 ($(I - A)^{-1}$ 가 비음일 조건)을 모두 한 줄로 설명한다.
+  대각화를 통한 손계산, 렌터카·인구·경제 예제, NumPy 시뮬레이션, PageRank·MCMC 등 현대
+  데이터 사이언스 응용까지 정리한다.
+categories:
+  - Math
+  - Linear Algebra
+author: Kwangmin Kim
+date: 04/12/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+::: {.callout-tip}
+## 한 줄 요약
+**비음 행렬 $A \ge 0$ 의 운명은 가장 큰 고유값 $\lambda_{\max}$ 가 결정한다.** $\lambda_{\max} = 1$ 이면 마르코프 체인처럼 **정상상태로 수렴** 하고, $\lambda_{\max} > 1$ 이면 Leslie 모델처럼 **지수적으로 성장** 하며, $\lambda_{\max} < 1$ 이면 Leontief 경제처럼 **모든 수요를 안정적으로 충족** 할 수 있다. 이 단 한 가지 사실(Perron-Frobenius 정리)이 §8.3 전체를 관통하는 골격이다.
+:::
+
+§8.1과 §8.2가 **평형 방정식 $K u = f$** 의 골격을 다뤘다면, §8.3은 **거듭제곱 $A^k u_0$** 의 골격을 다룬다. 같은 행렬을 반복해서 곱했을 때 무엇이 살아남고 무엇이 사라지는가? 답은 거의 항상 같다 — **가장 큰 고유값에 해당하는 한 방향만이 살아남는다.** 이 한 줄이 인구 통계, 사회 이동, 검색 엔진 랭킹, 산업연관표, 마르코프 연쇄 몬테카를로(MCMC), 그리고 대부분의 강화학습 가치 반복(value iteration)을 모두 설명한다.
+
+이 절은 다음 세 가지 주요 사례를 다룬다.
+
+| 사례 | 행렬 | $\lambda_{\max}$ | 의미 |
+|---|---|---|---|
+| **마르코프 체인** | 열 합이 1인 비음 행렬 | $= 1$ | 보존되는 분포가 정상상태로 수렴 |
+| **Leslie 인구 모델** | 출산·생존 행렬 | 자유 (보통 $\approx 1$) | $\lambda_{\max} > 1$ 이면 성장, $< 1$ 이면 멸종 |
+| **Leontief 경제** | 소비행렬 | $< 1$ 이어야 | 모든 양의 수요를 충족 가능 |
+
+세 사례의 수학은 사실상 한 정리 — **Perron-Frobenius** — 의 다른 얼굴이다.
+
+## 마르코프 행렬: 정의와 두 성질
+
+**정의** — 행렬 $A \in \mathbb{R}^{n \times n}$ 이 다음 두 조건을 만족하면 **마르코프 행렬(column-stochastic)** 이라 한다.
+
+1. **비음(nonnegative)**: 모든 성분 $a_{ij} \ge 0$.
+2. **열 합 = 1**: 모든 $j$ 에 대해 $\sum_{i} a_{ij} = 1$.
+
+(행 합이 1인 관습도 존재하나 Strang은 열 합 관습을 따른다. 두 관습은 단지 $A$ 와 $A^\top$ 의 차이다.)
+
+**왜 이 두 성질이 핵심인가** — 두 성질이 함께 다음 두 사실을 강제하기 때문이다.
+
+- 비음 벡터 $u_0 \ge 0$ 에 $A$ 를 곱해도 결과 $A u_0$ 는 여전히 비음이다 (확률은 음수가 될 수 없다).
+- 성분 합이 1인 벡터(확률 분포)에 $A$ 를 곱해도 합이 그대로 1이다 (확률의 총량은 보존된다).
+
+두 번째 사실의 한 줄 증명. 모든 성분이 1인 행벡터 $\mathbf{1}^\top = (1, \dots, 1)$ 을 생각하면, 열 합 조건은 정확히
+
+$$
+\mathbf{1}^\top A = \mathbf{1}^\top.
+$$
+
+따라서 임의의 $u_0$ 에 대해
+
+$$
+\mathbf{1}^\top (A u_0) = (\mathbf{1}^\top A) u_0 = \mathbf{1}^\top u_0.
+$$
+
+성분 합이 보존된다. 이런 벡터를 **확률 벡터(probability vector)** 라 부르고, 마르코프 체인은 확률 벡터를 다른 확률 벡터로 보내는 사상이다.
+
+::: {.callout-note}
+## 직관: 사람·차·돈은 사라지지 않는다
+열 합 = 1 의 의미는 "$j$ 번째 상태에서 출발한 한 사람(확률 1)은 한 시점 뒤 어딘가에는 반드시 있다" 이다. 어떤 상태로도 가지 않는 것은 허용되지 않는다. 따라서 $A^k u_0$ 의 총합은 $k$ 가 아무리 커져도 $u_0$ 의 총합과 같다 — **보존 법칙** 이 자동으로 새겨져 있다.
+:::
+
+## 정상상태와 $\lambda = 1$ 의 강제 등장
+
+마르코프 체인의 핵심 질문은 "거듭제곱 $A^k u_0$ 가 어떤 한 분포 $u_\infty$ 로 수렴하는가?" 이다. 만약 수렴한다면, 그 극한 $u_\infty$ 는 다음을 만족해야 한다.
+
+$$
+A u_\infty = u_\infty.
+$$
+
+즉 $u_\infty$ 는 **고유값 1에 대응하는 고유벡터** 다. 그런데 $\lambda = 1$ 이 항상 마르코프 행렬의 고유값이라는 사실은 한 줄로 보장된다.
+
+$$
+\mathbf{1}^\top A = \mathbf{1}^\top \;\Longleftrightarrow\; A^\top \mathbf{1} = \mathbf{1}.
+$$
+
+즉 $\mathbf{1}$ 은 $A^\top$ 의 고유벡터 (고유값 1) 다. $A$ 와 $A^\top$ 는 같은 고유값을 공유하므로 $A$ 도 $\lambda = 1$ 을 가진다. 따라서 **마르코프 행렬은 항상 1을 고유값으로 가진다** — 단, 그에 대응하는 고유벡터가 우리가 원하는 정상 분포가 되려면 더 조건이 필요하다.
+
+문제는 $\lambda = 1$ 만으로는 부족하다는 것이다. 다른 고유값의 절댓값이 1을 넘으면 거듭제곱 $A^k$ 가 발산하거나 진동한다. 다행히 마르코프 행렬에서는 그런 일이 일어나지 않는다.
+
+**핵심 정리** — 마르코프 행렬 $A$ 의 모든 고유값은 $|\lambda| \le 1$ 을 만족한다.
+
+증명 스케치 — 만약 $|\lambda| > 1$ 인 고유값이 존재한다면, 거듭제곱 $A^k$ 의 그 방향 성분은 발산한다. 그런데 $A^k$ 도 마르코프 행렬이라 모든 성분이 비음이고 열 합이 1이다. 비음 성분이 1을 넘는 합으로 발산하는 것은 불가능하다 (모순). 따라서 $|\lambda| \le 1$.
+
+::: {.callout-tip}
+## 두 단계의 핵심 사실
+마르코프 행렬의 두 핵심 사실을 한 표로 정리한다.
+
+| 사실 | 한 줄 증명 |
+|---|---|
+| $\lambda = 1$ 은 항상 고유값 | $\mathbf{1}^\top A = \mathbf{1}^\top$ → $A^\top \mathbf{1} = \mathbf{1}$ |
+| 모든 다른 고유값은 $|\lambda| \le 1$ | $A^k$ 도 마르코프 → 발산 불가 |
+
+이 둘이 합쳐지면 $\lambda_{\max} = 1$ 이고, 그 고유벡터가 정상 분포다.
+:::
+
+남은 한 가지 문제는 "$|\lambda| = 1$ 인 다른 고유값이 있을 가능성" 이다. 예를 들어 순열 행렬
+
+$$
+A = \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix}
+$$
+
+은 마르코프 행렬이지만 고유값이 $\{1, -1\}$ 이라 거듭제곱이 진동한다. 이 문제를 피하려면 **$A$ (또는 어떤 거듭제곱 $A^k$)가 strictly positive** 여야 한다 (zero entry가 없음). 이 조건을 만족하는 마르코프 행렬을 **regular(정칙적)** 또는 **primitive(원시적)** 이라 부르고, 이 경우 $\lambda = 1$ 이 strictly 가장 큰 고유값이고 정상상태로의 수렴이 보장된다.
+
+## 손계산 예제: 렌터카 시장
+
+Strang의 고전적 예제. 시장 전체에서 렌터카의 80% 는 덴버에, 20% 는 다른 도시에 있다고 시작하자(편의상 정확한 숫자는 다르지만 골격은 같다). 매월 다음과 같이 움직인다.
+
+- 덴버 차량의 80% 는 덴버에 머물고, 20% 는 외부로 나간다.
+- 외부 차량의 5% 는 덴버로 들어오고, 95% 는 외부에 머문다.
+
+이 동역학은 다음 마르코프 행렬로 표현된다.
+
+$$
+A = \begin{bmatrix} 0.80 & 0.05 \\ 0.20 & 0.95 \end{bmatrix}.
+$$
+
+(첫 행: 다음 시점 덴버에 있을 비율, 둘째 행: 다음 시점 외부에 있을 비율. 각 열의 합이 1.)
+
+**1단계: 고유값 찾기**
+
+대각합(trace) = $0.80 + 0.95 = 1.75$, 행렬식 = $0.80 \cdot 0.95 - 0.05 \cdot 0.20 = 0.76 - 0.01 = 0.75$. 두 고유값은 $\lambda_1 + \lambda_2 = 1.75$, $\lambda_1 \lambda_2 = 0.75$ 를 만족하므로
+
+$$
+\lambda_1 = 1, \qquad \lambda_2 = 0.75.
+$$
+
+(마르코프 행렬이므로 $\lambda_1 = 1$ 은 미리 알 수 있다.)
+
+**2단계: 고유벡터 찾기**
+
+$\lambda_1 = 1$ 에 대해 $(A - I) x = 0$ 을 풀면
+
+$$
+\begin{bmatrix} -0.20 & 0.05 \\ 0.20 & -0.05 \end{bmatrix} x = 0
+\;\Longrightarrow\;
+x_1 \propto \begin{bmatrix} 0.05 \\ 0.20 \end{bmatrix} \propto \begin{bmatrix} 1 \\ 4 \end{bmatrix}.
+$$
+
+성분 합이 1이 되도록 정규화하면
+
+$$
+u_\infty = \begin{bmatrix} 0.2 \\ 0.8 \end{bmatrix}.
+$$
+
+$\lambda_2 = 0.75$ 에 대해 $(A - 0.75 I) x = 0$ 은
+
+$$
+\begin{bmatrix} 0.05 & 0.05 \\ 0.20 & 0.20 \end{bmatrix} x = 0
+\;\Longrightarrow\;
+x_2 \propto \begin{bmatrix} 1 \\ -1 \end{bmatrix}.
+$$
+
+(두 성분 합이 0임에 주목하자 — 정상이 아닌 모든 마르코프 고유벡터는 합이 0이다. 이는 곧 보일 일반 사실의 사례다.)
+
+**3단계: 임의의 출발점에서의 $u_k$**
+
+출발 분포 $u_0$ 를 두 고유벡터의 선형 결합으로 분해한다.
+
+$$
+u_0 = c_1 u_\infty + c_2 x_2.
+$$
+
+거듭제곱은
+
+$$
+u_k = A^k u_0 = c_1 \cdot 1^k \cdot u_\infty + c_2 \cdot 0.75^k \cdot x_2 = c_1 u_\infty + c_2 (0.75)^k x_2.
+$$
+
+두 번째 항은 $k \to \infty$ 에서 $0$ 으로 사라진다. 따라서
+
+$$
+\boxed{\;u_k \xrightarrow{k \to \infty} c_1 u_\infty.\;}
+$$
+
+그리고 $u_0$ 의 성분 합이 1이고 $u_\infty$ 의 성분 합이 1, $x_2$ 의 성분 합이 0이므로 $c_1 = 1$ 이 자동으로 강제된다. **즉 어떤 출발 분포에서 시작하든 정확히 같은 정상 분포 $u_\infty = (0.2, 0.8)$ 으로 수렴한다.**
+
+**해석** — 시장이 어떤 초기 분포에서 시작하든, 결국 덴버에 20%, 외부에 80% 가 자리잡는다. 이 비율은 행렬의 두 전이 확률(0.20 vs 0.05)의 비를 그대로 반영한다 — 외부에서 덴버로 들어오는 비율이 그 반대보다 4배 작으므로, 정상상태에서 외부 비율이 4배 크다.
+
+::: {.callout-note}
+## "정상이 아닌" 고유벡터의 합이 0인 이유
+일반 사실: $\lambda \neq 1$ 인 모든 고유벡터 $x$ 는 성분 합이 0이다. 증명은 한 줄이다.
+
+$$
+A x = \lambda x \;\Longrightarrow\; \mathbf{1}^\top A x = \lambda \mathbf{1}^\top x.
+$$
+
+$\mathbf{1}^\top A = \mathbf{1}^\top$ 이므로 좌변은 $\mathbf{1}^\top x$ 다. 따라서
+
+$$
+\mathbf{1}^\top x = \lambda \mathbf{1}^\top x \;\Longrightarrow\; (1 - \lambda) \mathbf{1}^\top x = 0 \;\Longrightarrow\; \mathbf{1}^\top x = 0.
+$$
+
+이 사실 덕분에 임의의 출발 분포는 정확히 $u_\infty + (\text{합 0인 성분들})$ 로 분해되고, 합 0인 부분만 거듭제곱에서 사라지면서 정상 분포가 그대로 보존된다.
+:::
+
+## Perron-Frobenius 정리
+
+위 모든 사실을 일반화한 것이 **Perron-Frobenius 정리** 다. 마르코프 조건(열 합 = 1)이 없어도, 단지 $A > 0$ (모든 성분이 strictly positive)이기만 하면 다음이 성립한다.
+
+**Perron-Frobenius 정리 (강한 형태, $A > 0$)**
+
+1. 가장 큰 고유값 $\lambda_{\max}$ 는 **실수이며 양수** 다.
+2. 그에 대응하는 고유벡터는 **모든 성분이 strictly positive** 인 방향으로 잡을 수 있다.
+3. $\lambda_{\max}$ 는 **단순(simple)** 고유값이다 (중복도 1).
+4. 다른 모든 고유값은 strictly $|\lambda| < \lambda_{\max}$ 를 만족한다.
+
+이 정리가 사실상 §8.3 전체를 관통한다.
+
+- 마르코프 체인 ($\lambda_{\max} = 1$): 정상상태가 유일하고 strictly positive하며 다른 모든 모드가 사라진다.
+- Leslie 인구 모델 ($\lambda_{\max}$ = 장기 성장률): 어떤 초기 인구 구성에서 시작해도 같은 안정 연령 분포 (stable age distribution)에 도달한다.
+- Leontief 경제 ($\lambda_{\max} < 1$ 이 생산 가능 조건): $(I - A)^{-1}$ 의 비음성을 보장한다.
+
+::: {.callout-tip}
+## 약한 형태 ($A \ge 0$)
+$A$ 가 비음이지만 일부 성분이 0이라면 (예: Leslie 행렬, 대부분의 실제 마르코프 행렬), 정리의 일부가 약해진다 — $\lambda_{\max}$ 는 여전히 실수 비음이고 비음 고유벡터가 존재하지만, **단순 고유값이 아닐 수 있고** 정상상태로의 수렴이 깨질 수 있다 (앞서 본 순열 행렬 예시).
+
+이 약한 경우를 구원하는 조건이 **irreducible(기약)**(그래프가 연결됨) + **primitive(원시적)**(어떤 거듭제곱 $A^k$ 가 strictly positive)이다. 이 둘이 만족되면 강한 형태가 그대로 성립한다. 실제 응용에서 만나는 행렬은 거의 항상 이 두 조건을 만족한다.
+:::
+
+증명의 핵심 아이디어는 다음 한 줄이다.
+
+$$
+\lambda_{\max} = \max\{ t : A x \ge t x \text{ 인 비음 } x \neq 0 \text{ 가 존재} \}.
+$$
+
+즉 "$A$ 가 어떤 비음 벡터를 적어도 $t$ 배 이상으로 키울 수 있는 최대의 $t$" 를 찾는다. 이 최댓값을 달성하는 $t$ 가 곧 $\lambda_{\max}$ 이고, 그때의 $x$ 가 Perron 고유벡터다. (자세한 증명은 Strang Ch.8, 또는 [Ch.8 Applications 종합 개요](./mit-08-1-gilbert-strang-applications-overview.qmd) 참조.)
+
+## Leslie 인구 모델: $\lambda_{\max} > 1$ vs $\lambda_{\max} < 1$
+
+Leslie 모델은 인구를 연령 그룹으로 나눈다. 예를 들어 20년 단위로 그룹 1 = $(0, 20)$, 그룹 2 = $(20, 40)$, 그룹 3 = $(40, 60)$ 이라 하자. 그룹 $i$ 의 크기를 $n_i$ 라 하면, 한 시점(20년 후)의 새로운 인구는
+
+$$
+\begin{bmatrix} n_1^{\text{new}} \\ n_2^{\text{new}} \\ n_3^{\text{new}} \end{bmatrix}
+=
+\underbrace{\begin{bmatrix}
+F_1 & F_2 & F_3 \\
+P_1 & 0 & 0 \\
+0 & P_2 & 0
+\end{bmatrix}}_{A}
+\begin{bmatrix} n_1 \\ n_2 \\ n_3 \end{bmatrix}.
+$$
+
+- **첫 행**: 출산. 그룹 $i$ 가 새 그룹 1을 $F_i$ 만큼 만든다. 일반적으로 $F_2$ 가 가장 크다 (가임기).
+- **둘째 행**: 그룹 1의 생존율 $P_1$ 만큼이 그룹 2가 된다.
+- **셋째 행**: 그룹 2의 생존율 $P_2$ 만큼이 그룹 3이 된다.
+
+Strang의 수치 예제
+
+$$
+A = \begin{bmatrix}
+0.04 & 1.10 & 0.01 \\
+0.98 & 0 & 0 \\
+0 & 0.92 & 0
+\end{bmatrix}.
+$$
+
+이 행렬은 $A \ge 0$ 이지만 $A > 0$ 은 아니다. 하지만 $A^3 > 0$ 이므로 Perron-Frobenius가 약한 형태로 적용되고, $\lambda_{\max} \approx 1.06$ 이라는 strictly positive 고유값과 strictly positive 고유벡터 $x \approx (0.63, 0.58, 0.51)$ 이 존재한다.
+
+**해석** — 어떤 초기 인구 구성에서 시작하든, 충분한 시간 뒤 인구는 $\lambda_{\max} = 1.06$ 의 비율로 매 20년마다 6% 씩 증가하며, 세 연령 그룹의 비율은 점점 $0.63 : 0.58 : 0.51$ 로 수렴한다. 이를 **안정 연령 분포(stable age distribution)** 라 한다. 인구 통계학자가 한 사회의 단기적 베이비붐이나 전쟁 이후 세대 격차를 보고도 "충분한 시간이 지나면 결국 같은 모양이 된다" 고 자신 있게 말할 수 있는 것은 정확히 Perron-Frobenius 덕분이다.
+
+**결정적 임계점** — $\lambda_{\max}$ 가 1보다 약간만 작아지면 인구는 매 단계마다 같은 비율로 줄어들어 결국 멸종에 이른다. 환경 변화나 출산율 하락이 행렬의 성분을 10% 만 바꾸어도 $\lambda_{\max}$ 가 1 아래로 떨어질 수 있다. 따라서 **민감도 분석(sensitivity analysis)** — $\lambda_{\max}$ 가 행렬 성분에 어떻게 의존하는지 — 이 모델링의 중심 도구가 된다. 결과는 다음 한 줄이다.
+
+$$
+\frac{\partial \lambda_{\max}}{\partial a_{ij}} = y_i \, x_j,
+$$
+
+여기서 $x$ 는 우고유벡터(right eigenvector), $y$ 는 좌고유벡터(left eigenvector)다. 즉 어떤 성분의 변화에 $\lambda_{\max}$ 가 가장 민감한지는 두 고유벡터의 곱으로 결정된다.
+
+## Leontief 경제: $\lambda_{\max} < 1$ 이 생산 가능 조건
+
+이번엔 정반대 방향. **Leontief 산업연관표** 는 $n$ 개 산업이 서로의 생산물을 입력으로 사용하는 경제를 모델링한다. 행렬 $A$ 의 성분 $a_{ij}$ 는 "산업 $j$ 가 단위 생산물을 만들기 위해 산업 $i$ 의 출력을 얼마나 소비하는가" 를 나타낸다. 예를 들어 화학산업이 1단위를 만들기 위해 화학 0.2단위, 식품 0.3단위, 석유 0.4단위를 소비한다면, $A$ 의 첫 열은 $(0.2, 0.3, 0.4)$ 다.
+
+**문제** — 외부 수요 $y \ge 0$ (소비자, 정부, 수출이 원하는 양)을 충족하려면 각 산업이 얼마나 생산해야 하는가?
+
+각 산업의 총 생산을 $p$ 라 하면, 그 중 $A p$ 만큼은 다른 산업의 입력으로 소비된다. 따라서 외부에 남는 양은 $p - A p = (I - A) p$ 다. 외부 수요를 정확히 충족하려면
+
+$$
+(I - A) p = y \;\Longleftrightarrow\; p = (I - A)^{-1} y.
+$$
+
+여기서 진짜 질문은 **"$(I - A)^{-1} \ge 0$ 인가?"** 다. 만약 비음이 아니라면, 양의 수요 $y$ 를 위해 음의 생산 $p$ 가 필요하다는 비현실적인 답이 나온다.
+
+**핵심 정리** — $(I - A)^{-1} \ge 0$ 일 필요충분조건은 $\lambda_{\max}(A) < 1$ 이다.
+
+증명의 직관은 기하급수다. 스칼라 기하급수
+
+$$
+\frac{1}{1 - x} = 1 + x + x^2 + x^3 + \cdots, \qquad |x| < 1
+$$
+
+의 행렬 버전은
+
+$$
+(I - A)^{-1} = I + A + A^2 + A^3 + \cdots.
+$$
+
+이 급수가 수렴할 필요충분조건은 모든 고유값 $|\lambda| < 1$ 이다. $A \ge 0$ 이면 모든 항 $A^k$ 가 비음이므로 합도 비음이 되고, 따라서 $(I - A)^{-1} \ge 0$ 이다.
+
+**경제학적 직관** — $A^k$ 의 $(i, j)$ 성분은 "산업 $j$ 의 단위 생산이 $k$ 단계의 간접 효과를 거쳐 산업 $i$ 의 출력을 얼마나 소비하는가" 다. 이를 모든 단계에 대해 합산한 것이 $(I - A)^{-1}$ 의 그 성분이고, 이를 **Leontief 역행렬(Leontief inverse)** 또는 **총 요구 행렬(total requirements matrix)** 이라 부른다. 어떤 산업의 단위 수요가 경제 전체에 미치는 직간접 파급효과를 한 번에 표현한 것이다.
+
+::: {.callout-tip}
+## 한 줄 비교
+- **마르코프**: $\lambda_{\max} = 1$, 거듭제곱이 정상상태로 수렴. **확률 보존.**
+- **Leslie**: $\lambda_{\max}$ = 자유, 거듭제곱이 그 비율로 지수 성장. **세대 누적.**
+- **Leontief**: $\lambda_{\max} < 1$ 필요, $(I - A)^{-1}$ 의 기하급수가 수렴. **간접 수요 누적.**
+
+세 사례 모두 같은 행렬 거듭제곱 $A^k$ 의 거동에 대한 질문이고, 답은 모두 $\lambda_{\max}$ 가 결정한다.
+:::
+
+## 코드: NumPy 시뮬레이션과 Perron-Frobenius 검증
+
+```python
+import numpy as np
+
+# 사례 1: 렌터카 마르코프
+A_markov = np.array([
+    [0.80, 0.05],
+    [0.20, 0.95],
+])
+
+# 임의 출발 분포에서 정상상태로 수렴 확인
+u = np.array([0.5, 0.5])  # 어떤 출발이든
+for k in range(50):
+    u = A_markov @ u
+print("정상 분포 (수치) =", u)  # ≈ [0.2, 0.8]
+
+# 고유분해로 검증
+vals, vecs = np.linalg.eig(A_markov)
+print("고유값 =", vals)  # [1.   0.75]
+# lambda=1 에 해당하는 고유벡터를 정규화
+idx = np.argmax(vals.real)
+v = vecs[:, idx].real
+v = v / v.sum()
+print("정상 분포 (해석) =", v)  # [0.2, 0.8]
+```
+
+```python
+# 사례 2: Leslie 인구 모델
+A_leslie = np.array([
+    [0.04, 1.10, 0.01],
+    [0.98, 0.00, 0.00],
+    [0.00, 0.92, 0.00],
+])
+
+vals, vecs = np.linalg.eig(A_leslie)
+lam_max = np.max(np.abs(vals))
+print("lambda_max =", round(lam_max, 4))   # ≈ 1.0610  → 매 세대 6% 성장
+
+# 안정 연령 분포: lambda_max 에 해당하는 고유벡터 (양의 방향)
+idx = np.argmax(vals.real)
+x = vecs[:, idx].real
+x = np.abs(x) / np.abs(x).sum()
+print("안정 연령 분포 =", np.round(x, 3))  # 비율로 ≈ [0.366, 0.337, 0.297]
+
+# 시뮬레이션: 한 세대만 있는 출발에서 시작
+n = np.array([0.0, 1.0, 0.0])
+for k in range(40):
+    n = A_leslie @ n
+n = n / n.sum()
+print("40세대 후 (정규화) =", np.round(n, 3))   # 위의 안정 분포로 수렴
+```
+
+```python
+# 사례 3: Leontief 경제
+A_leontief = np.array([
+    [0.2, 0.3, 0.4],
+    [0.4, 0.4, 0.1],
+    [0.5, 0.1, 0.3],
+])
+vals = np.linalg.eigvals(A_leontief)
+lam_max = np.max(np.abs(vals))
+print("lambda_max =", round(lam_max, 4))   # ≈ 0.9 → 생산 가능
+
+# Leontief 역행렬
+L = np.linalg.inv(np.eye(3) - A_leontief)
+print("Leontief 역행렬 ≥ 0 ?", np.all(L >= 0))   # True
+
+# 외부 수요 y 에 대한 총 생산
+y = np.array([10.0, 20.0, 15.0])
+p = L @ y
+print("총 생산 p =", np.round(p, 2))
+```
+
+위 세 코드는 §8.3의 모든 핵심을 한 번에 검증한다. 특히 마지막 사례에서 $\lambda_{\max} = 0.9 < 1$ 이라는 한 숫자가 "이 경제가 어떤 양의 수요든 생산으로 충족할 수 있다" 는 사실 전체를 보장한다.
+
+## 데이터 사이언스와의 연결
+
+$\lambda_{\max}$ 와 그 고유벡터의 지배 구조는 현대 ML 의 여러 알고리즘의 핵심이다.
+
+| 알고리즘 | 행렬 | 무엇이 $\lambda_{\max}$ 인가 |
+|---|---|---|
+| **PageRank** | $\alpha P + (1-\alpha) \frac{1}{n} \mathbf{1} \mathbf{1}^\top$ | $\lambda_{\max} = 1$, 고유벡터 = 페이지 랭크 |
+| **MCMC (Metropolis-Hastings)** | 전이 핵 | $\lambda_{\max} = 1$, 고유벡터 = 목표 분포 |
+| **HITS (hub-authority)** | $A^\top A$, $A A^\top$ | $\lambda_{\max}$ = 권위/허브 점수 |
+| **Spectral Clustering** | 정규화 라플라시안 (1−$L$) | 큰 고유값들 = 클러스터 |
+| **PCA** | 공분산 행렬 | $\lambda_{\max}$ = 최대 분산 방향 |
+| **Power Iteration** | 임의 행렬 | $\lambda_{\max}$ 와 고유벡터를 추출 |
+| **Value Iteration (RL)** | 할인 베일먼 연산자 | 수렴 속도 = $\gamma < 1$ (Leontief 형) |
+| **Stable Diffusion 등 forward diffusion** | 확률 전이 | 스펙트럼 갭이 수렴 속도 결정 |
+
+특히 **PageRank** 는 §8.3의 마르코프 골격을 거의 그대로 옮긴 것이다. 웹 그래프에서 출발해 무작위 서퍼(random surfer)가 링크를 따라가는 과정을 마르코프 체인으로 모델링하고, 그 정상 분포(고유값 1에 대응하는 고유벡터)를 페이지의 중요도로 정의한다. 1998년 Brin과 Page의 원래 PageRank 논문은 사실상 §8.3의 한 응용이고, 같은 행렬이 [Markov Matrices](./mit-24-gilbert-strang-markov-matrix.qmd) 강의노트에서도 설명된다.
+
+**MCMC** 는 정반대 방향이다. 우리가 샘플링하고 싶은 목표 분포 $\pi$ 가 주어졌을 때, $\pi$ 가 정상 분포가 되는 마르코프 체인의 전이 핵을 설계한다. Perron-Frobenius가 그 체인의 거듭제곱이 $\pi$ 로 수렴함을 보장하므로, 충분한 시간을 거치면 어떤 출발점에서도 $\pi$ 의 샘플을 얻는다. 이것이 베이지안 통계학과 통계물리의 기본 도구다.
+
+**강화학습의 가치 반복** 은 Leontief 형태에 가깝다. 베일먼 연산자 $T_\pi$ 의 할인계수 $\gamma < 1$ 이 정확히 $\lambda_{\max} < 1$ 의 역할을 한다 — 그래서 가치 함수의 기하급수가 수렴하고 $V = (I - \gamma P_\pi)^{-1} r$ 가 잘 정의된다. 이는 Leontief 역행렬과 같은 골격이다.
+
+## 정리
+
+§8.3 전체를 다음 한 표로 압축한다.
+
+| $\lambda_{\max}$ | 행렬 종류 | 거듭제곱 $A^k$ 의 거동 | 대표 사례 |
+|---|---|---|---|
+| $= 1$ | 마르코프 (열 합 1) | 정상 분포로 수렴 | 렌터카, PageRank, MCMC |
+| $> 1$ | Leslie (가임 + 생존) | 지수 성장, 안정 연령 분포 | 인구 통계, 생태학 |
+| $< 1$ | Leontief (소비행렬) | $(I - A)^{-1} \ge 0$ → 생산 가능 | 산업연관표, 가치 반복 |
+
+그리고 한 줄로:
+
+> **모든 비음 행렬의 운명은 $\lambda_{\max}$ 와 그에 대응하는 양의 고유벡터 한 쌍이 결정한다 (Perron-Frobenius). 마르코프, Leslie, Leontief 는 같은 정리의 세 응용이다.**
+
+## 관련 주제
+
+- [Ch.8 Applications — 7가지 응용 종합 개요](./mit-08-1-gilbert-strang-applications-overview.qmd) — Ch.8 전체 응용의 큰 그림
+- [Ch.8 §8.1 Matrices in Engineering](./mit-08-2-gilbert-strang-applications-engineering.qmd) — 평형 골격 $K = A^\top C A$
+- [Ch.8 §8.2 Graphs and Networks](./mit-08-3-gilbert-strang-applications-graphs-networks.qmd) — 그래프 라플라시안과 같은 골격
+- [MIT 18.06 Lecture 24 — Markov Matrices, Fourier Series](./mit-24-gilbert-strang-markov-matrix.qmd) — 마르코프 강의노트와 푸리에 급수
+- [Eigenvalues and Eigenvectors](./mit-21-gilbert-strang-eigenvalue.qmd) — 고유값/고유벡터의 정의와 기본 성질
+- [Diagonalization and Powers $A^k$](./mit-22-gilbert-strang-diagonalization.qmd) — $A^k = S \Lambda^k S^{-1}$ 의 유도
