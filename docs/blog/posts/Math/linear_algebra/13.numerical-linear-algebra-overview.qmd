@@ -1,0 +1,488 @@
+---
+title: "수치 선형대수 개요 (Numerical Linear Algebra Overview)"
+subtitle: "부동소수점, 조건수, 수치 안정성 -- 이론과 컴퓨터의 간극을 이해하는 지도"
+description: |
+  수치 선형대수는 "종이 위의 선형대수"를 컴퓨터에서 안정적으로 실행하는 방법을 다룬다.
+  부동소수점 산술의 본질적 오차, 문제 자체의 민감도인 조건수, 알고리즘의 전향/후향 안정성,
+  직접법(LU, QR, Cholesky, SVD)과 반복법(Jacobi, CG, Krylov)의 선택 기준,
+  고유값 알고리즘의 구조를 하나의 지도로 엮어 제시한다. ML/DL의 최적화, 회귀, 차원 축소,
+  그래프 임베딩이 왜 이 수치적 토대 위에서만 성립하는지 직관적으로 설명한다.
+categories:
+  - Mathematics
+  - Machine Learning
+  - Deep Learning
+author: Kwangmin Kim
+date: 04/13/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+선형대수 교재에서 $\mathbf{A}\mathbf{x} = \mathbf{b}$ 를 풀 때 "$\mathbf{x} = \mathbf{A}^{-1}\mathbf{b}$" 라고 쓴다. 수학적으로는 올바르지만, 컴퓨터에서 이대로 계산하면 느리고 부정확한 답이 나온다. **수치 선형대수(Numerical Linear Algebra, NLA)**는 이 간극을 다루는 분야이다.
+
+핵심 질문은 세 가지이다.
+
+1. **왜 수학적으로 정확한 공식이 컴퓨터에서는 부정확한가?** -- 부동소수점 산술의 본질적 오차
+2. **어떤 문제는 정답을 얻기 어렵고, 어떤 문제는 쉬운가?** -- 조건수(condition number)
+3. **같은 문제를 푸는 여러 알고리즘 중 어떤 것을 써야 하는가?** -- 수치 안정성과 계산 복잡도
+
+이 세 질문이 ML/DL의 거의 모든 파이프라인에 영향을 미친다. 회귀의 정규방정식 역행렬, SVD 기반 차원 축소, 역전파의 야코비안, GNN의 그래프 라플라시안 -- 이 모두가 NLA의 결과물이다. 이 포스트는 NLA의 전체 지형을 한 번에 개관하고, 각 세부 주제로의 학습 경로를 제시한다.
+
+---
+
+## 정의
+
+::: {.callout-note}
+## 정의: 수치 선형대수 (Numerical Linear Algebra)
+
+수치 선형대수는 **유한 정밀도(finite precision)** 를 가진 디지털 컴퓨터에서 선형대수 문제를 푸는 알고리즘과 그 오차 분석을 다루는 분야이다. 구체적으로 다음을 연구한다.
+
+- **문제 유형**: 선형 시스템 $\mathbf{A}\mathbf{x} = \mathbf{b}$, 최소제곱 $\min \|\mathbf{A}\mathbf{x} - \mathbf{b}\|_2$, 고유값 $\mathbf{A}\mathbf{v} = \lambda \mathbf{v}$, 특이값 분해 $\mathbf{A} = \mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$
+- **알고리즘 설계**: 직접법(LU, QR, Cholesky), 반복법(Jacobi, Gauss-Seidel, CG, Krylov), 고유값 반복(QR algorithm, Arnoldi/Lanczos)
+- **평가 지표**: 계산 복잡도(FLOPs), 저장 공간, 수치 안정성(backward/forward stability), 조건수 민감도
+:::
+
+표기법: $\mathbf{A} \in \mathbb{R}^{m \times n}$ 은 행렬, $\mathbf{x}, \mathbf{b} \in \mathbb{R}^n$ 은 벡터, $\kappa(\mathbf{A})$ 는 $\mathbf{A}$ 의 조건수, $\varepsilon_{\text{mach}}$ 는 기계 엡실론이다.
+
+---
+
+## 부동소수점 산술: 이론과 컴퓨터의 첫 번째 간극
+
+### IEEE 754 표현
+
+컴퓨터는 실수를 연속적으로 다루지 못한다. **부동소수점(floating point)** 형식은 실수를 다음과 같이 근사한다.
+
+$$
+x = \pm (1.f_1 f_2 \cdots f_p)_2 \times 2^e
+$$
+
+여기서 $p$ 는 가수부(mantissa) 비트 수, $e$ 는 지수부이다. 가장 널리 쓰이는 IEEE 754 배정밀도(double precision)는 $p = 52$ 비트, 총 64비트이다.
+
+| 형식 | 비트 | 기계 엡실론 $\varepsilon_{\text{mach}}$ | 유효 자릿수 |
+|---|---|---|---|
+| float32 (single) | 32 | $\approx 1.19 \times 10^{-7}$ | $\approx 7$ |
+| float64 (double) | 64 | $\approx 2.22 \times 10^{-16}$ | $\approx 16$ |
+| bfloat16 | 16 | $\approx 3.91 \times 10^{-3}$ | $\approx 3$ |
+
+**기계 엡실론**은 $1$ 과 $1$ 보다 큰 가장 가까운 부동소수점 수 사이의 간격이다. 즉 $1 + \varepsilon_{\text{mach}}$ 는 컴퓨터에서 $1$ 과 구분되는 최소 수이다.
+
+::: {.callout-note}
+## 직관: 부동소수점은 "눈금자의 간격이 위치에 따라 달라지는 자"이다
+
+일반 자는 0.1mm 간격이 어디서나 동일하지만, 부동소수점은 지수 $e$ 가 커질수록 표현 가능한 수들 사이의 간격이 **비례적으로** 넓어진다.
+
+- $1 \sim 2$ 구간: 간격 $\approx 2^{-52} \approx 2.2 \times 10^{-16}$
+- $10^{15} \sim 10^{15} + 1$: 간격 $\approx 1$ (즉 $10^{15}$ 에 $1$ 을 더해도 변하지 않는다!)
+- $10^{20}$ 근처: 간격 $\approx 2 \times 10^4$
+
+이것이 의미하는 바: **큰 수에서 작은 수를 빼면 유효 자릿수가 대규모로 손실된다.** 이 현상을 자릿수 소실(catastrophic cancellation)이라 한다.
+:::
+
+### 자릿수 소실의 구체 사례
+
+$f(x) = 1 - \cos x$ 를 $x = 10^{-8}$ 에서 계산한다고 하자. 해석적으로는 $\approx x^2/2 = 5 \times 10^{-17}$ 이다.
+
+```{python}
+import math
+x = 1e-8
+naive = 1 - math.cos(x)        # 0.0 (자릿수 소실)
+stable = 2 * math.sin(x/2)**2  # 5e-17 근사 (안정)
+print(naive, stable)
+```
+
+$\cos(10^{-8}) \approx 1 - 5 \times 10^{-17}$ 인데, $1$ 에서 이를 빼면 $1 - 1 = 0$ 이 된다. double precision에서 $10^{-17}$ 자리는 기계 엡실론($\sim 10^{-16}$)보다 작아 표현 자체가 불가능하다. $2\sin^2(x/2)$ 는 이 감산을 피하는 수학적 재구성이다.
+
+이 교훈은 NLA 전반에 적용된다. **수학적으로 동등한 공식이 수치적으로는 전혀 다른 정확도를 낸다.** 알고리즘 설계의 핵심은 자릿수 소실을 피하는 형태로 연산을 재배열하는 것이다.
+
+### 역행렬을 직접 쓰지 않는 이유
+
+$\mathbf{x} = \mathbf{A}^{-1}\mathbf{b}$ 를 코드로 구현할 때 `np.linalg.inv(A) @ b` 대신 `np.linalg.solve(A, b)` 를 써야 한다는 원칙이 있다. 이유는 두 가지이다.
+
+1. **정확도**: `solve` 는 LU 분해를 통해 직접 해를 구하고, `inv` 는 LU로 역행렬 전체를 만든 뒤 곱한다. 후자는 추가 연산이 들어가면서 오차가 누적된다.
+2. **효율**: `inv` 는 $n$ 번의 역행렬 열을 푸는 반면, `solve` 는 1번만 푼다. $O(n^3)$ 대 $O(n^3/3)$ 수준이지만 상수 차이가 크다.
+
+이것이 NLA의 첫 번째 실무 지침이다 -- **"역행렬을 피하라."**
+
+---
+
+## 조건수: 문제 자체의 민감도
+
+### 정의와 직관
+
+::: {.callout-note}
+## 정의: 조건수 (Condition Number)
+
+정칙 행렬 $\mathbf{A}$ 에 대한 (2-노름) 조건수는
+
+$$
+\kappa_2(\mathbf{A}) = \|\mathbf{A}\|_2 \cdot \|\mathbf{A}^{-1}\|_2 = \frac{\sigma_{\max}(\mathbf{A})}{\sigma_{\min}(\mathbf{A})}
+$$
+
+로 정의된다. $\sigma_{\max}, \sigma_{\min}$ 은 $\mathbf{A}$ 의 최대/최소 특이값이다. $\kappa = 1$ 은 가장 좋은 상태(직교 행렬), $\kappa \to \infty$ 는 특이행렬에 근접한 상태이다.
+:::
+
+조건수는 **알고리즘의 성질이 아니라 문제 자체의 성질**이다. $\mathbf{A}\mathbf{x} = \mathbf{b}$ 를 풀 때 $\mathbf{b}$ 에 상대오차 $\delta_b$ 가 있으면, 해 $\mathbf{x}$ 의 상대오차는 대략
+
+$$
+\frac{\|\delta\mathbf{x}\|}{\|\mathbf{x}\|} \lesssim \kappa(\mathbf{A}) \cdot \frac{\|\delta\mathbf{b}\|}{\|\mathbf{b}\|}
+$$
+
+이다. 즉 $\kappa = 10^{10}$ 이고 $\delta_b = 10^{-14}$ 이면 해의 오차는 $10^{-4}$ 까지 커진다. 입력의 16자리 정확도가 출력의 4자리 정확도로 증폭된다.
+
+::: {.callout-note}
+## 직관: 조건수는 "문제의 기울기 절벽"이다
+
+$\mathbf{A}\mathbf{x} = \mathbf{b}$ 를 $\mathbf{x}$ 공간에서 생각하자. $\mathbf{A}$ 는 $\mathbf{x}$ 를 $\mathbf{b}$ 로 보내는 선형 변환이다.
+
+- $\kappa = 1$ (직교 행렬): $\mathbf{A}$ 가 단위 구(sphere)를 단위 구로 보낸다. $\mathbf{b}$ 가 조금 움직이면 $\mathbf{x}$ 도 비례적으로 조금 움직인다
+- $\kappa \gg 1$: $\mathbf{A}$ 가 단위 구를 매우 긴 타원체로 변환한다. 타원체 상에서 **긴 축 방향**으로 $\mathbf{b}$ 가 조금만 움직여도 $\mathbf{x}$ 는 크게 움직인다 (역변환이 증폭한다)
+
+기하학적으로, 조건수는 "이 행렬이 표현하는 타원체가 얼마나 찌그러져 있는가"의 척도이다. 찌그러진 타원체일수록 특정 방향에서의 민감도가 폭증한다.
+:::
+
+### 조건수가 큰 대표적 상황
+
+| 상황 | 조건수 | 설명 |
+|---|---|---|
+| Vandermonde 행렬 (다항 회귀) | $O(2^n)$ | $n$ 이 커지면 지수적으로 악화 |
+| Hilbert 행렬 $H_{ij} = 1/(i+j-1)$ | $O((1+\sqrt{2})^{4n})$ | 대표적 ill-conditioned 예시 |
+| 특성 스케일이 크게 다른 데이터 | 스케일 비율 | 표준화로 완화 가능 |
+| 거의 공선(collinear)인 피처 | 상관 → 1일수록 ∞ | 다중공선성 문제 |
+| 이미지 디블러링 | $10^{10}$ 이상 | 역문제(inverse problem)의 본질 |
+
+ML 실무에서 **정규화(regularization)** 와 **피처 표준화(standardization)** 가 필수인 이유가 여기에 있다. Ridge 회귀 $(\mathbf{X}^\top\mathbf{X} + \lambda\mathbf{I})$ 는 $\lambda$ 를 더함으로써 최소 특이값을 올려 조건수를 낮춘다. 이는 통계적 편의-분산 트레이드오프 해석과 별개로, **수치적 안정성 관점의 해석**이기도 하다.
+
+### 조건수의 실무적 경험칙
+
+부동소수점 double 정밀도($\varepsilon_{\text{mach}} \approx 10^{-16}$)에서 유의 자릿수 손실은
+
+$$
+\text{손실 자릿수} \approx \log_{10} \kappa(\mathbf{A})
+$$
+
+이다. $\kappa = 10^8$ 이면 8자리 손실, $\kappa = 10^{16}$ 이면 사실상 모든 자리가 손실된다. **$\kappa > 10^{12}$ 인 문제는 double precision으로 풀 수 없다** -- 더 높은 정밀도나 문제 자체의 재구성이 필요하다.
+
+---
+
+## 알고리즘 안정성: 후향 오차 분석
+
+### 전향 vs 후향 안정성
+
+같은 문제를 푸는 알고리즘도 수치적 성질이 다르다. 알고리즘의 질을 평가하는 표준 프레임워크는 **후향 오차 분석(backward error analysis)**이다.
+
+::: {.callout-note}
+## 정의: 후향 안정성 (Backward Stability)
+
+알고리즘이 입력 $\mathbf{A}, \mathbf{b}$ 에 대해 계산한 해 $\hat{\mathbf{x}}$ 가, 어떤 약간 교란된 입력 $\mathbf{A} + \delta\mathbf{A}, \mathbf{b} + \delta\mathbf{b}$ 에 대한 **정확한 해**일 때, 그 교란이 기계 엡실론 수준이면($\|\delta\mathbf{A}\|/\|\mathbf{A}\| = O(\varepsilon_{\text{mach}})$) 그 알고리즘은 **후향 안정적(backward stable)**이다.
+:::
+
+직관적으로: "내가 푼 문제는 약간 다른 문제의 정확한 답"이라면 그 알고리즘은 충분히 좋다. 왜냐하면 입력 자체도 측정 오차나 반올림 오차로 이미 약간 교란된 것이기 때문이다.
+
+전향 오차와 후향 오차는 조건수를 통해 연결된다.
+
+$$
+\underbrace{\|\hat{\mathbf{x}} - \mathbf{x}\|}_{\text{전향 오차}} \lesssim \kappa(\mathbf{A}) \cdot \underbrace{\|\delta\mathbf{A}\|}_{\text{후향 오차}}
+$$
+
+이것이 NLA의 핵심 등식이다. **"알고리즘이 후향 안정적이면, 전향 오차는 문제의 조건수에 의해 결정된다."** 즉 결과가 나쁘면 알고리즘이 나빠서가 아니라 문제 자체가 어렵기 때문이다.
+
+### 주요 알고리즘의 안정성
+
+| 알고리즘 | 문제 | 후향 안정성 | 비고 |
+|---|---|---|---|
+| Gaussian elimination (no pivot) | $\mathbf{A}\mathbf{x}=\mathbf{b}$ | 불안정 | 작은 pivot에서 폭발 |
+| Partial pivoting LU | $\mathbf{A}\mathbf{x}=\mathbf{b}$ | 실무적 안정 | 이론적으로는 최악의 경우 지수 폭증이지만 실무에서 드묾 |
+| Householder QR | 최소제곱 | 후향 안정 | 표준 방법 |
+| Modified Gram-Schmidt | QR | 약한 안정성 | 직교성 손실 가능 |
+| Cholesky | SPD 시스템 | 후향 안정 | SPD 보장 시 최고 |
+| 정규방정식 $\mathbf{X}^\top\mathbf{X}\boldsymbol{\beta}=\mathbf{X}^\top\mathbf{y}$ | 최소제곱 | **조건수 제곱화** | $\kappa(\mathbf{X}^\top\mathbf{X}) = \kappa(\mathbf{X})^2$ |
+
+마지막 행이 중요하다. 통계학 교재에서 회귀계수를 "$(\mathbf{X}^\top\mathbf{X})^{-1}\mathbf{X}^\top\mathbf{y}$" 로 쓰는 것은 **수치적으로 나쁜 공식**이다. $\mathbf{X}$ 의 조건수가 $10^6$ 이면 $\mathbf{X}^\top\mathbf{X}$ 의 조건수는 $10^{12}$ 가 된다. 실무에서는 $\mathbf{X}$ 에 직접 QR을 적용하여 $\boldsymbol{\beta} = \mathbf{R}^{-1}\mathbf{Q}^\top\mathbf{y}$ 로 푼다. 이것이 `lm()` 이나 `sklearn.linear_model.LinearRegression` 의 내부 구현이다.
+
+---
+
+## 주요 문제와 알고리즘의 지형
+
+NLA의 문제는 네 가지 큰 범주로 나뉜다. 각 범주마다 **직접법(direct method)**과 **반복법(iterative method)**의 선택 기준이 있다.
+
+### 선형 시스템 $\mathbf{A}\mathbf{x} = \mathbf{b}$
+
+**직접법**: 유한 단계로 정확한(반올림 오차 한도 내) 해를 구한다.
+
+| 방법 | 복잡도 | 적용 조건 | 핵심 아이디어 |
+|---|---|---|---|
+| LU 분해 (+ 부분 피벗) | $O(n^3)$ | 일반 정칙 행렬 | $\mathbf{A} = \mathbf{P}\mathbf{L}\mathbf{U}$ 로 상하삼각 분해 |
+| Cholesky 분해 | $O(n^3/3)$ | 대칭 양정치 (SPD) | $\mathbf{A} = \mathbf{L}\mathbf{L}^\top$, LU 대비 절반 연산 |
+| QR 분해 | $O(2mn^2)$ | 최소제곱 / 계수 계산 | $\mathbf{A} = \mathbf{Q}\mathbf{R}$, 직교 변환으로 안정적 |
+| 밴드 / 희소 직접법 | $O(n \cdot b^2)$ | 밴드 폭 $b$ 희소 | 충진(fill-in) 최소화가 핵심 |
+
+**반복법**: 초기값에서 출발해 단계적으로 수렴시킨다. 큰 희소 시스템에 필수.
+
+| 방법 | 수렴 조건 | 수렴 속도 | 용도 |
+|---|---|---|---|
+| Jacobi | 대각 우세 | 느림 | 교육용, 병렬화 쉬움 |
+| Gauss-Seidel | 대각 우세 / SPD | Jacobi보다 빠름 | 격자 문제 |
+| Successive Over-Relaxation (SOR) | SPD + $\omega$ 조정 | Gauss-Seidel 대비 가속 | PDE 이산화 |
+| Conjugate Gradient (CG) | SPD | 조건수 민감, $O(\sqrt{\kappa})$ | 대규모 SPD |
+| GMRES, BiCGSTAB | 일반 행렬 | 메모리 $O(km)$ | 비대칭/부정치 |
+
+**직접법 vs 반복법 선택 기준**: $n$ 이 $10^4$ 이하이고 조밀(dense)하면 직접법, 그 이상이거나 희소(sparse)하면 반복법이 유리하다. PDE 이산화(유한요소법, 유한차분법)의 결과 행렬은 수백만 × 수백만이지만 행당 비영원소(nonzero)가 수십 개뿐이어서 반복법이 필수이다.
+
+### 최소제곱 $\min_\mathbf{x} \|\mathbf{A}\mathbf{x} - \mathbf{b}\|_2$
+
+$m \geq n$ (과결정 시스템). 세 가지 주된 방법이 있다.
+
+1. **정규방정식**: $\mathbf{A}^\top\mathbf{A}\mathbf{x} = \mathbf{A}^\top\mathbf{b}$ 를 Cholesky로 푼다. 가장 빠르지만 조건수 제곱화로 정확도 나쁨
+2. **QR 분해**: $\mathbf{A} = \mathbf{Q}\mathbf{R}$, $\mathbf{R}\mathbf{x} = \mathbf{Q}^\top\mathbf{b}$. 표준, 안정
+3. **SVD**: $\mathbf{A} = \mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$, $\mathbf{x} = \mathbf{V}\boldsymbol{\Sigma}^{+}\mathbf{U}^\top\mathbf{b}$. 가장 안정적, 계수 결핍(rank deficient)에도 대응
+
+**직관**: 정규방정식은 "가까운 길"이고, SVD는 "안전한 길"이다. 조건수가 나쁜 문제(다중공선성 있는 회귀, 이미지 복원)에서는 시간이 더 걸려도 SVD가 옳다.
+
+### 고유값 문제 $\mathbf{A}\mathbf{v} = \lambda\mathbf{v}$
+
+"고유값을 구하는 공식"은 $n \geq 5$ 에서는 존재하지 않는다 (Abel-Ruffini 정리: 5차 이상 다항식은 일반적으로 근의 공식이 없음). 따라서 모든 실용 알고리즘은 **반복적**이다.
+
+| 방법 | 구하는 것 | 복잡도 | 용도 |
+|---|---|---|---|
+| Power iteration | 최대 고유값 | $O(n^2)$/step | PageRank, 지배 고유벡터 |
+| Inverse iteration | 특정 고유값 근처 | $O(n^3)$ (초기 분해 후 $O(n^2)$/step) | 정확도 추구 |
+| QR algorithm | 모든 고유값 | $O(n^3)$ | 조밀 행렬 표준 |
+| Lanczos (대칭) | 소수의 고유값 | $O(nk^2)$ 메모리 $O(nk)$ | 대규모 희소 대칭 |
+| Arnoldi (일반) | 소수의 고유값 | $O(nk^2)$ | 대규모 희소 비대칭 |
+| Jacobi-Davidson | 내부 고유값 | 변동 | 양자역학, 주파수 응답 |
+
+::: {.callout-note}
+## 직관: Power iteration이 왜 지배 고유벡터로 수렴하는가
+
+$\mathbf{v}_0$ 를 임의로 고르고 $\mathbf{v}_{k+1} = \mathbf{A}\mathbf{v}_k / \|\mathbf{A}\mathbf{v}_k\|$ 를 반복한다. $\mathbf{v}_0 = c_1\mathbf{u}_1 + c_2\mathbf{u}_2 + \cdots$ 로 고유벡터 기저에서 전개하면
+
+$$
+\mathbf{A}^k\mathbf{v}_0 = c_1\lambda_1^k\mathbf{u}_1 + c_2\lambda_2^k\mathbf{u}_2 + \cdots = \lambda_1^k\left[c_1\mathbf{u}_1 + c_2(\lambda_2/\lambda_1)^k\mathbf{u}_2 + \cdots\right]
+$$
+
+$|\lambda_1| > |\lambda_2|$ 이면 $(\lambda_2/\lambda_1)^k \to 0$ 이므로 $\mathbf{A}^k\mathbf{v}_0$ 의 방향은 $\mathbf{u}_1$ 로 수렴한다. 수렴 속도는 $|\lambda_2/\lambda_1|$ 에 의해 결정된다 -- 이 비율이 1에 가까우면 느리다.
+
+PageRank가 작동하는 이유가 정확히 이것이다. 웹 링크 확률 행렬의 지배 고유벡터가 페이지의 중요도를 나타낸다.
+:::
+
+### 특이값 분해 (SVD)
+
+$\mathbf{A} = \mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$. 고유값 분해의 비대칭 버전이자 NLA의 "만능 도구"이다. 알고리즘은 두 단계.
+
+1. **이중대각화(bidiagonalization)**: $\mathbf{A}$ 를 이중대각 행렬로 변환 (Householder 반사)
+2. **이중대각 SVD**: QR-like 알고리즘으로 특이값 추출
+
+복잡도는 $O(mn^2)$ ($m \geq n$). 대규모 희소 행렬에서는 **randomized SVD**가 표준이다 -- 랜덤 프로젝션으로 저차원 근사 후 SVD를 수행, 상위 $k$ 특이값만 구할 때 $O(mn\log k + (m+n)k^2)$ 로 단축된다.
+
+---
+
+## 희소성과 구조의 활용
+
+실무 NLA 문제의 압도적 다수는 **희소(sparse)**하다. $n = 10^6$ 인 행렬에 밀집 저장을 쓰면 $10^{12}$ 개 원소로 8TB 메모리가 필요하지만, 행당 비영원소가 10개뿐이면 $10^7$ 개로 80MB만 쓴다.
+
+| 희소 구조 | 대표 문제 | 최적 알고리즘 |
+|---|---|---|
+| 대각 | 특성 스케일링 | $O(n)$ 직접 해 |
+| 삼중대각 (tridiagonal) | 1D 유한차분 | Thomas 알고리즘 $O(n)$ |
+| 밴드 | 1D PDE | 밴드 Cholesky $O(nb^2)$ |
+| 블록 구조 | 다중 블록 PDE | 블록 Gauss 소거 |
+| 일반 희소 (general sparse) | FEM, GNN | SuiteSparse, reordering + 반복법 |
+| 저계수 (low-rank) | 추천시스템, 차원 축소 | Randomized SVD, ALS |
+
+**Reordering**의 중요성: 희소 행렬을 LU 분해할 때 "0이었던 자리가 분해 중에 비영이 되는 현상"(fill-in)이 발생한다. 행/열 순서를 잘 바꾸면 fill-in을 극적으로 줄일 수 있다. AMD(Approximate Minimum Degree), METIS 등이 표준 reordering 알고리즘이다. 이것 없이는 희소 직접법이 성립하지 않는다.
+
+**저계수 구조**: 실무 데이터는 종종 명목 크기 $m \times n$ 이 크지만 실질적 계수 $r \ll \min(m,n)$ 이다. 추천 시스템의 사용자-아이템 행렬, 이미지 배치, 단어 임베딩이 모두 그렇다. 이 구조를 활용하면 $O(mn)$ 저장을 $O((m+n)r)$ 로, 연산을 $O(mn \cdot \text{step})$ 을 $O((m+n)r \cdot \text{step})$ 으로 줄일 수 있다.
+
+---
+
+## ML/DL에서의 응용
+
+NLA는 ML/DL 파이프라인 전반에 내재된다. 몇 가지 대표 사례를 보자.
+
+| 분야 | NLA 연산 | 왜 필요한가 |
+|---|---|---|
+| 선형 회귀 (OLS, Ridge) | QR 또는 Cholesky | 정규방정식의 조건수 제곱화 회피 |
+| PCA | SVD 또는 대칭 고유값 | 분산 방향으로 차원 축소 |
+| 최소제곱 배치 학습 | Cholesky + 업데이트 | 온라인 학습에서의 증분 해 |
+| GNN 메시지 전달 | 희소 SpMV (행렬-벡터 곱) | 그래프 라플라시안과의 행렬 곱 |
+| Attention (Transformer) | 배치 행렬 곱 + Softmax | $\mathbf{Q}\mathbf{K}^\top$ 대규모 연산 |
+| 신경망 역전파 | 야코비안-벡터 곱 | 암묵적 행렬, 명시적 저장 불필요 |
+| Gauss-Newton / LM | 정규방정식 해 | 비선형 최소제곱 국소 선형화 |
+| Hessian-free 최적화 | CG + 야코비안-벡터 곱 | 2차 방법의 메모리 병목 해소 |
+| Kalman Filter | 행렬 역연산 + Cholesky 업데이트 | 시계열 상태 추정의 수치 안정성 |
+| 추천시스템 행렬 분해 | Randomized SVD, ALS | 수십억 원소 희소 행렬 처리 |
+
+**구체적 사례: Hessian-free 최적화**
+큰 딥러닝 모델에서 2차 방법(Newton)을 직접 쓰려면 Hessian $\mathbf{H} \in \mathbb{R}^{p \times p}$ 을 저장해야 한다. $p = 10^9$ 이면 $10^{18}$ 바이트로 불가능. 하지만 Hessian-vector product $\mathbf{H}\mathbf{v}$ 는 자동 미분으로 $O(p)$ 에 계산 가능하다. CG 같은 반복법은 오직 $\mathbf{H}\mathbf{v}$ 만 요구하므로 Hessian 자체 없이도 Newton-like 업데이트가 가능해진다. 이것이 "Hessian-free" 방법의 핵심이며, NLA의 반복법-행렬 자유성의 직접적 응용이다.
+
+---
+
+## 코드 예시
+
+### Step 1: 순수 Python -- 조건수와 정확도의 관계 확인
+
+```{python}
+import numpy as np
+
+# Hilbert 행렬: 전형적 ill-conditioned
+def hilbert(n):
+    return np.array([[1.0/(i+j+1) for j in range(n)] for i in range(n)])
+
+for n in [5, 10, 15]:
+    A = hilbert(n)
+    x_true = np.ones(n)
+    b = A @ x_true
+
+    x_naive = np.linalg.inv(A) @ b     # 역행렬 직접 계산 (나쁜 관행)
+    x_solve = np.linalg.solve(A, b)    # LU 기반 해 (좋은 관행)
+
+    kappa = np.linalg.cond(A)
+    err_naive = np.linalg.norm(x_naive - x_true) / np.linalg.norm(x_true)
+    err_solve = np.linalg.norm(x_solve - x_true) / np.linalg.norm(x_true)
+
+    print(f"n={n:2d}  κ(A)={kappa:.2e}  inv 오차={err_naive:.2e}  solve 오차={err_solve:.2e}")
+```
+
+이 코드의 핵심: $n = 15$ 에서 Hilbert 행렬의 조건수는 $\sim 10^{17}$ 이다. double precision으로 사실상 풀 수 없는 상태이며, `inv` 와 `solve` 모두 큰 오차를 낸다. 조건수 $10^{10}$ 수준에서는 `solve` 가 눈에 띄게 더 정확하다.
+
+### Step 2: QR 기반 최소제곱 vs 정규방정식
+
+```{python}
+import numpy as np
+
+np.random.seed(0)
+m, n = 200, 50
+
+# 조건수가 큰 디자인 행렬 생성
+U, _ = np.linalg.qr(np.random.randn(m, n))
+V, _ = np.linalg.qr(np.random.randn(n, n))
+sigma = np.logspace(0, -8, n)     # 특이값 1에서 1e-8까지
+X = U @ np.diag(sigma) @ V.T
+beta_true = np.random.randn(n)
+y = X @ beta_true + 1e-10 * np.random.randn(m)
+
+# 방법 1: 정규방정식 (나쁨)
+beta_normal = np.linalg.solve(X.T @ X, X.T @ y)
+
+# 방법 2: QR (좋음)
+Q, R = np.linalg.qr(X)
+beta_qr = np.linalg.solve(R, Q.T @ y)
+
+# 방법 3: SVD (가장 안정적)
+beta_svd, *_ = np.linalg.lstsq(X, y, rcond=None)
+
+print(f"κ(X)     = {np.linalg.cond(X):.2e}")
+print(f"κ(X^T X) = {np.linalg.cond(X.T @ X):.2e}")
+print(f"Normal equation 오차: {np.linalg.norm(beta_normal - beta_true):.2e}")
+print(f"QR 오차:            {np.linalg.norm(beta_qr - beta_true):.2e}")
+print(f"SVD 오차:           {np.linalg.norm(beta_svd - beta_true):.2e}")
+```
+
+이 코드의 핵심: $\kappa(\mathbf{X}) = 10^8$ 이면 $\kappa(\mathbf{X}^\top\mathbf{X}) = 10^{16}$ 이다. 정규방정식은 수치적으로 파괴되고, QR과 SVD는 안정적 해를 낸다. 통계학 공식과 실무 코드가 달라야 하는 이유이다.
+
+### Step 3: Conjugate Gradient (반복법) 구현
+
+```{python}
+import numpy as np
+
+def cg(A, b, x0=None, tol=1e-10, max_iter=None):
+    """Conjugate Gradient for SPD system Ax = b."""
+    n = len(b)
+    x = np.zeros(n) if x0 is None else x0.copy()
+    r = b - A @ x
+    p = r.copy()
+    rs_old = r @ r
+    max_iter = max_iter or n
+
+    for k in range(max_iter):
+        Ap = A @ p
+        alpha = rs_old / (p @ Ap)
+        x += alpha * p
+        r -= alpha * Ap
+        rs_new = r @ r
+        if np.sqrt(rs_new) < tol:
+            return x, k + 1
+        p = r + (rs_new / rs_old) * p
+        rs_old = rs_new
+    return x, max_iter
+
+# 대규모 희소 SPD 시스템 예시
+np.random.seed(1)
+n = 1000
+M = np.random.randn(n, n)
+A = M.T @ M + n * np.eye(n)  # SPD 보장
+b = np.random.randn(n)
+
+x_direct = np.linalg.solve(A, b)
+x_cg, iters = cg(A, b, tol=1e-10)
+
+print(f"CG 수렴 반복수: {iters}")
+print(f"직접법과의 차이: {np.linalg.norm(x_cg - x_direct):.2e}")
+```
+
+이 코드의 핵심: CG는 SPD 시스템에 대해 이론적으로 $n$ 번 이내에 정확한 해에 도달하지만, 실무에서는 훨씬 적은 반복($\sim \sqrt{\kappa}$ 수준)으로 충분히 정확한 해를 얻는다. 희소 $\mathbf{A}$ 에서 행렬-벡터 곱 `A @ p` 만 효율적으로 구현하면 되므로 대규모 문제에 적합하다.
+
+---
+
+## 학습 로드맵
+
+이 포스트는 NLA의 지도에 해당한다. 각 세부 영역은 독립된 포스트로 깊이 다룬다 (일부는 기존 포스트, 일부는 placeholder).
+
+**1단계 -- 기초 분해법**
+
+- [LU 분해: A = LU](./mit-02-6-gilbert-strang-factorization.qmd) -- 소거법의 행렬 표현
+- [QR 분해: Gram-Schmidt와 Householder](./mit-04-5-gilbert-strang-orthogonal-bases-gram-schmidt.qmd)
+- [Cholesky 분해 (placeholder)](./14.cholesky-decomposition.qmd) -- SPD 전용 고속 분해
+- [SVD: A = UΣVᵀ](./mit-06-7-gilbert-strang-svd.qmd)
+
+**2단계 -- 수치 안정성과 조건수**
+
+- [부동소수점 산술과 기계 엡실론 (placeholder)](./15.floating-point-arithmetic.qmd)
+- [조건수와 후향 오차 분석 (placeholder)](./16.condition-number-backward-error.qmd)
+- [최소제곱의 3가지 수치 방법 (placeholder)](./17.least-squares-numerical-methods.qmd)
+
+**3단계 -- 반복법과 Krylov 부분공간**
+
+- [Conjugate Gradient와 SPD 시스템 (placeholder)](./18.conjugate-gradient.qmd)
+- [GMRES, BiCGSTAB: 비대칭 반복법 (placeholder)](./19.gmres-bicgstab.qmd)
+- [전처리기(Preconditioner)의 설계 (placeholder)](./20.preconditioner.qmd)
+
+**4단계 -- 고유값 알고리즘**
+
+- [Power iteration과 PageRank (placeholder)](./21.power-iteration-pagerank.qmd)
+- [QR 알고리즘 (placeholder)](./22.qr-algorithm.qmd)
+- [Lanczos/Arnoldi: 대규모 희소 고유값 (placeholder)](./23.lanczos-arnoldi.qmd)
+
+**5단계 -- 랜덤화와 저계수**
+
+- [Randomized SVD (placeholder)](./24.randomized-svd.qmd)
+- [희소 행렬 저장과 reordering (placeholder)](./25.sparse-matrix-reordering.qmd)
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [벡터 노름과 내적](./02.norm_dot-product.qmd)
+- [행렬 연산](./04.matrix_operations.qmd)
+- [선형 시스템 개요](./mit-02-1-gilbert-strang-solving-linear-equation-overview.qmd)
+- [LU 분해](./mit-02-6-gilbert-strang-factorization.qmd)
+- [QR과 Gram-Schmidt](./mit-04-5-gilbert-strang-orthogonal-bases-gram-schmidt.qmd)
+- [고유값 개요](./mit-06-1-gilbert-strang-eigenvalue-overview.qmd)
+- [SVD](./mit-06-7-gilbert-strang-svd.qmd)
+
+**다른 카테고리 연결**
+
+- [최소제곱 회귀의 통계적 해석](../../Statistics/132-simple-linear-regression-overview.qmd) -- 통계 공식과 실무 구현의 차이
+- [$\mathbf{X}^\top\mathbf{X}$ 와 공분산 행렬](./12.xtx-variance-covariance.qmd) -- 정규방정식의 구조
+- [Ridge와 정규화의 수치적 역할](../../Machine_Learning/index.qmd) -- 조건수 완화로서의 정규화
+- [Attention과 배치 행렬 곱](../../Deep_Learning/index.qmd) -- Transformer의 NLA 기반
+
+**참고 교재**
+
+- Trefethen & Bau, *Numerical Linear Algebra* (1997) -- 조건수·후향 안정성의 표준 교과서
+- Golub & Van Loan, *Matrix Computations* (4th ed., 2013) -- 가장 포괄적인 NLA 레퍼런스
+- Strang, *Introduction to Linear Algebra* (4th ed.) -- 기초 이론 (Ch.2 LU, Ch.4 QR, Ch.6 SVD)
+- Saad, *Iterative Methods for Sparse Linear Systems* (2nd ed., 2003) -- Krylov 방법론의 정석
