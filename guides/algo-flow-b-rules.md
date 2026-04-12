@@ -43,44 +43,80 @@ description: >
 
 ---
 
-## 주제 선정 규칙 (랜덤 선정)
+## 주제 선정 프로토콜
 
-사용자가 **구체적 주제(유형·알고리즘)를 지정하지 않으면** 아래 절차로 랜덤 선정한다.
+**모든 경우에 스크립트를 실행한다.** 사용자가 그룹을 지정했더라도 그룹 내 세부 토픽은 스크립트가 uniform random으로 선정한다.
 
-**"구체적 주제 지정" 판정 기준**
+```bash
+# 트랙·레벨만 지정 → 그룹·토픽 모두 random
+python scripts/tutoring_topic_picker.py --tutor algo --track DS --level N
+python scripts/tutoring_topic_picker.py --tutor algo --track AIE --level N
+python scripts/tutoring_topic_picker.py --tutor algo --track 공통 --level N
 
-| 지정됨 (사용자 의도 명확) | 미지정 (랜덤 선정 대상) |
-|---|---|
-| "Hash 문제", "DFS 연습" | "Lv.1 연습", "AIE 문제" |
-| "문자열 Lv.1", "DP Lv.3" | "알고리즘 문제 내줘", "Lv.2" |
-| "Two Pointer", "Stack 문제" | "문제 만들어줘" |
+# 그룹 키워드 지정 → 그룹은 고정, 토픽만 random
+python scripts/tutoring_topic_picker.py --tutor algo --track AIE --level 3 --group dfs
+python scripts/tutoring_topic_picker.py --tutor algo --track DS --level 2 --group hash
 
-**랜덤 선정 절차**
+# 그룹 번호 지정
+python scripts/tutoring_topic_picker.py --tutor algo --track DS --level 1 --group 2
 
-1. 지정된 트랙·Level의 공식 하위 유형 목록에서 후보 추출  
-   (예: DS Lv.1 → 데이터 조작, 문자열, Hash 기초, 리스트 슬라이싱, 집계 / AIE Lv.1 → Array, Hash, 기본 구현)
-2. 이전 3문제에서 나온 유형은 **제외** (다양성 보장)
-3. 남은 후보 중 랜덤 1개 선택
-4. **선정 결과를 사용자에게 알린다**:
+# seed 고정 (재현 필요 시)
+python scripts/tutoring_topic_picker.py --tutor algo --track DS --level 2 --seed 42
+```
 
-   - `go` 트리거 **없음**: 확인 대기 모드
-     ```
-     주제 랜덤 선정: DS Lv.1 "문자열 처리 (split + count 활용)"
-     다른 주제를 원하면 말해달라. 없으면 그대로 출제한다.
-     ```
-   - `go` 트리거 **있음**: 즉시 출제, 선정 결과는 문제 상단에 1줄로 표기
-     ```
-     ## 연습 문제: {제목}
-     **난이도**: DS Lv.1 | **유형**: 문자열 처리 | **주제 선정**: 랜덤 (go trigger)
-     ```
+JSON 출력에서 `track`, `group_name`, `topic` 필드를 추출한다.
 
-5. `go` 없는 경우 사용자가 별도 지시 없이 답하면 그대로 출제 진행
-6. 사용자가 "다른 걸로" 하면 후보에서 해당 유형 제외 후 재선정
+**입력 → 스크립트 인수 매핑**
+
+| 사용자 입력 | 스크립트 호출 |
+|------------|--------------|
+| `DS Lv1 random go` | `--track DS --level 1` (그룹·토픽 모두 random) |
+| `AIE Lv3 DFS go` | `--track AIE --level 3 --group dfs` (그룹 고정, 토픽 random) |
+| `DS Lv2 Hash go` | `--track DS --level 2 --group hash` |
+| `AIE Lv3 백트래킹 go` | `--track AIE --level 3 --group backtrack` |
+| `DS Lv4 DP go` | `--track DS --level 4 --group dp` |
+
+**선정 결과 표기**
+
+- `go` 트리거 **있음**: 즉시 출제, 선정 결과는 문제 상단 1줄로 표기
+  ```
+  ## 연습 문제: {제목}
+  **난이도**: {track} Lv.N | **유형**: {group_name} — {topic} | **주제 선정**: {랜덤 / 그룹 지정}
+  ```
+- `go` 트리거 **없음**: 확인 대기 모드
+  ```
+  주제 선정: {track} Lv.N "[그룹 M: {group_name}] {topic}"
+  다른 주제를 원하면 말해달라. 없으면 그대로 출제한다.
+  ```
+
+**그룹 키워드 목록** (`--group` 인수에 사용):
+
+| 트랙 | 레벨 | 그룹명 | 키워드 예시 |
+|------|------|--------|------------|
+| DS | 1 | 데이터조작 | 데이터, 조작 |
+| DS | 1 | 문자열처리 | 문자열, string |
+| DS | 1 | Hash기초 | hash |
+| DS | 2 | 정렬·비교 | 정렬, sort |
+| DS | 2 | Hash심화 | hash |
+| DS | 3 | 시뮬레이션 | 시뮬레이션, sim |
+| DS | 3 | 통계·누적합 | 통계, prefix |
+| DS | 4 | DP기초 | dp |
+| DS | 4 | 이진탐색 | binary, 이진 |
+| AIE | 1 | Array·Hash | array, hash |
+| AIE | 2 | Stack·Queue | stack, queue |
+| AIE | 2 | Two Pointer | pointer, sliding |
+| AIE | 3 | DFS·BFS | dfs, bfs |
+| AIE | 3 | 백트래킹 | backtrack |
+| AIE | 4 | DP | dp |
+| AIE | 4 | Tree·힙 | tree, heap |
+| 공통 | 1 | 기본구현 | 구현, impl |
+| 공통 | 3 | DFS·BFS | dfs, bfs |
+| 공통 | 4 | 이진탐색 | binary, 이진 |
 
 **주제 이력 추적**
 
-- 같은 세션에서 출제한 주제를 기억한다 (최근 3개)
-- 목적: 같은 유형이 연속으로 나오는 것 방지 → 실전 대비 커버리지 확보
+- 같은 세션에서 출제한 topic을 기억한다 (최근 3개)
+- 목적: 같은 주제가 연속으로 나오는 것 방지 → 스크립트의 uniform random과 시너지
 
 ---
 

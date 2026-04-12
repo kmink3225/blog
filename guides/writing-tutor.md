@@ -39,18 +39,18 @@ sub-guides:
 
 ## 주제 선정 프로토콜 (random 트리거 시)
 
-`random` 키워드가 포함된 명령어를 받으면 아래 절차를 따른다.
+`random` 키워드가 포함된 명령어를 받으면 아래 스크립트를 실행한다.
 
 ```
-1. scripts/writing_topic_picker.py 실행 (uniform random 보장)
-   - 그룹 지정 없으면: --level N
-   - 그룹 지정 있으면: --level N --group {키워드|번호}
-   - 재현 필요 시:    --level N --seed {숫자}
+1. scripts/tutoring_topic_picker.py 실행 (uniform random 보장)
+   - 그룹 지정 없으면: --tutor writing --level N
+   - 그룹 지정 있으면: --tutor writing --level N --group {키워드|번호}
+   - 재현 필요 시:    --tutor writing --level N --seed {숫자}
 
    예:
-     python scripts/writing_topic_picker.py --level 5
-     python scripts/writing_topic_picker.py --level 2 --group art
-     python scripts/writing_topic_picker.py --level 7 --seed 42
+     python scripts/tutoring_topic_picker.py --tutor writing --level 5
+     python scripts/tutoring_topic_picker.py --tutor writing --level 2 --group art
+     python scripts/tutoring_topic_picker.py --tutor writing --level 7 --seed 42
 
 2. JSON 출력에서 topic 필드 추출
 3. 출력: "[그룹 N: {group_name}] {topic}" → 즉시 출제 진행

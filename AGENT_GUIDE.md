@@ -1,9 +1,9 @@
 ---
 name: AGENT_GUIDE
 type: router
-version: 7.0
-last_updated: 2026-03-28
-changelog: "v7.0 (2026-03-28): 슬래시 커맨드 라우팅 도입. 공통 규칙을 guides/AGENT_GUIDE_CORE.md로 분리. AGENT_GUIDE.md는 순수 라우터로 전환."
+version: 8.0
+last_updated: 2026-04-13
+changelog: "v8.0 (2026-04-13): tutoring_topic_picker.py 도입 — sql-topics.md·algo-topics.md 기반 uniform random 주제 선정. 유형 직접 지정 시에도 스크립트로 토픽 선정. /writing 라우팅 오류 수정(weakness·rubric 파일명). 커맨드별 로드 비교 보강."
 description: >
   슬래시 커맨드 라우터. 사용자가 명령어를 입력하면 해당 태스크에 필요한 가이드만 로드한다.
   공통 규칙은 guides/AGENT_GUIDE_CORE.md에 있다 — 모든 태스크에서 반드시 먼저 로드한다.
@@ -91,9 +91,9 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 
 | 트리거 | 효과 |
 |--------|------|
-| `random` | 주제 랜덤 선정. 별도 확인 없이 바로 선정 결과를 문제 상단에 표기하고 진행 |
+| `random` | 그룹·토픽 모두 random. 스크립트 `--level N` 으로 호출 |
 | `go` 또는 `!` | 모든 확인 단계 건너뛰고 Step 1부터 시작. Self-Check·푸시 확인은 세션 종료 시 일괄 처리 |
-| 유형명 직접 지정 | `문자열`, `Hash`, `DFS`, `JOIN`, `NULL처리` 등 — Mode B 출제, 해당 유형 고정 |
+| 유형명 직접 지정 | `문자열`, `Hash`, `DFS`, `JOIN`, `NULL처리` 등 — **그룹을 고정하고** 스크립트 `--group {키워드}` 로 토픽 random 선정 |
 | `Programmers {문제명}` / URL | Mode A 실전 문제 튜터링 |
 | `concept` 또는 `concept:{주제}` | Mode C 개념 설명 |
 
@@ -111,14 +111,14 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 
 **예시 비교**:
 
-| 입력 | 동작 |
-|------|------|
-| `/algo DS Lv1 문자열` | 주제 선정·앵커·기대 시간 확인 후 진행 (확인 단계 유지) |
-| `/algo DS Lv1 문자열 random go` | 문자열 하위 유형 중 랜덤 선정 → 즉시 출제 |
-| `/algo DS Lv1 random go` | DS Lv.1 전체 유형 중 랜덤 → 즉시 출제 |
-| `/sql Lv2 JOIN` | 유형 확인·앵커 공개 후 진행 |
-| `/sql Lv2 JOIN go` | JOIN 고정 → 즉시 출제 |
-| `/sql DS Lv1 random go` | DS Lv.1 전체 랜덤 → 즉시 출제 |
+| 입력 | 스크립트 호출 | 동작 |
+|------|--------------|------|
+| `/algo DS Lv1 문자열` | `--track DS --level 1 --group string` | 확인 단계 유지 후 진행 |
+| `/algo DS Lv1 문자열 go` | `--track DS --level 1 --group string` | 문자열 그룹 내 토픽 random → 즉시 출제 |
+| `/algo DS Lv1 random go` | `--track DS --level 1` | DS Lv.1 전체 random → 즉시 출제 |
+| `/sql Lv2 JOIN` | `--level 2 --group join` | 확인 단계 유지 후 진행 |
+| `/sql Lv2 JOIN go` | `--level 2 --group join` | JOIN 그룹 내 토픽 random → 즉시 출제 |
+| `/sql Lv1 random go` | `--level 1` | Lv.1 전체 random → 즉시 출제 |
 
 **주의**: `go` 트리거는 **Mode B·C에서만** 유효하다. Mode A(실전 문제)는 앵커 문제가 명확히 지정되어 있어야 하므로 `go` 없이도 바로 진행한다.
 
