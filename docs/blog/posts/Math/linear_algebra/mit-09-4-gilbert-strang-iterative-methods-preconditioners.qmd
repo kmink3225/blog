@@ -1,0 +1,627 @@
+---
+title: "반복법과 전처리기 (Iterative Methods and Preconditioners)"
+subtitle: "분할, 스펙트럼 반경, Jacobi·Gauss-Seidel·SOR·ILU·CG·Multigrid"
+description: |
+  직접법(LU·QR·Cholesky)은 $O(n^3)$ 의 비용으로 정확한 해를 한 번에 구하지만,
+  $n$ 이 수백만인 대규모 희소 행렬에는 불가능하다. 반복법은 초기 추정에서
+  출발해 단계적으로 참해에 다가가는 전략이다. 이 포스트는 Strang §9.3 을
+  뼈대로 분할(splitting) $A = S - T$ 프레임워크 → 수렴 조건 $\rho(S^{-1}T) < 1$
+  → Jacobi / Gauss-Seidel / SOR / ILU → Multigrid → Krylov (CG, GMRES) →
+  전처리기까지, 왜 각 기법이 필요한지와 언제 어떤 것을 선택해야 하는지를
+  직관과 수식으로 정리한다.
+categories:
+  - Mathematics
+  - Machine Learning
+author: Kwangmin Kim
+date: 04/13/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+지금까지의 선형 시스템 풀이는 **직접법(direct method)** 이었다. LU, QR, Cholesky 분해로 유한 단계 안에 정확한 해를 얻는다. 이들은 작은 조밀 행렬($n \leq 10^4$)에서는 최적이지만, $n$ 이 $10^6$ 을 넘는 희소(sparse) 시스템에서는 **메모리와 시간 모두 한계**에 부딪힌다. PDE 이산화, 그래프 라플라시안, 대규모 최적화의 Hessian이 이 영역이다.
+
+**반복법(iterative method)** 은 다른 철학이다. 초기 추정 $\mathbf{x}_0$ 에서 출발해 매 단계 단순한 연산만 수행하여 참해에 점근적으로 접근한다. 각 단계는 저렴하지만 **많이 반복**한다. 경쟁 요소 두 개는 다음과 같다.
+
+1. **단계당 비용**이 작아야 한다 — 행렬-벡터 곱 수준이면 이상적.
+2. **빠르게 수렴**해야 한다 — 스펙트럼 반경이 작아야 한다.
+
+이 둘은 서로 상충한다. 단계가 단순할수록 수렴이 느리고, 수렴을 빠르게 하려면 단계가 무거워진다. 이 **속도-수렴 균형**이 반복법 설계의 중심 주제이며, 균형을 깨뜨리는 무기가 **전처리기(preconditioner)** 다.
+
+이 포스트는 Strang (2009) *Introduction to Linear Algebra* Ch.9 §9.3 "Iterative Methods and Preconditioners" 의 흐름을 따르되, 현대 수치해석의 표준인 Krylov 방법(CG, GMRES)과 Multigrid, preconditioned CG까지 확장해 다룬다. 세부 증명은 Trefethen & Bau (1997) Lect.32–40, Saad (2003) *Iterative Methods for Sparse Linear Systems* 를 보완 참고한다.
+
+---
+
+## 분할(Splitting) 프레임워크
+
+### 기본 아이디어
+
+$\mathbf{A}\mathbf{x} = \mathbf{b}$ 에서 $\mathbf{A}$ 를 두 조각으로 쪼갠다.
+
+$$
+\mathbf{A} = \mathbf{S} - \mathbf{T}
+$$
+
+여기서 $\mathbf{S}$ 는 **역연산이 쉬운** 행렬이고 $\mathbf{T} = \mathbf{S} - \mathbf{A}$ 는 나머지다. 원식을 옮겨 쓰면 $\mathbf{S}\mathbf{x} = \mathbf{T}\mathbf{x} + \mathbf{b}$ 이다. 이를 반복 공식으로 바꾼다.
+
+::: {.callout-note}
+## 정의: 분할 기반 반복법 (Stationary Iteration)
+
+분할 $\mathbf{A} = \mathbf{S} - \mathbf{T}$ 에 대해
+
+$$
+\mathbf{S}\mathbf{x}_{k+1} = \mathbf{T}\mathbf{x}_k + \mathbf{b}
+$$
+
+로 반복한다 (Strang 식 (2)). 등가적으로
+
+$$
+\mathbf{x}_{k+1} = \mathbf{S}^{-1}\mathbf{T}\mathbf{x}_k + \mathbf{S}^{-1}\mathbf{b} = \mathbf{B}\mathbf{x}_k + \mathbf{c}
+$$
+
+이며 $\mathbf{B} = \mathbf{S}^{-1}\mathbf{T}$ 를 **반복 행렬(iteration matrix)** 이라 한다.
+:::
+
+이것이 왜 의미 있는가. 참해 $\mathbf{x}^*$ 는 $\mathbf{S}\mathbf{x}^* = \mathbf{T}\mathbf{x}^* + \mathbf{b}$ 를 만족한다. 양변에서 $k+1$ 번째 식을 빼면 **오차 방정식**이 나온다.
+
+$$
+\mathbf{S}\mathbf{e}_{k+1} = \mathbf{T}\mathbf{e}_k \quad \Longleftrightarrow \quad \mathbf{e}_{k+1} = \mathbf{B}\mathbf{e}_k = \mathbf{B}^{k+1}\mathbf{e}_0
+$$
+
+오차는 매 단계 **같은 행렬 $\mathbf{B}$** 에 곱해진다. 따라서 $\mathbf{B}^k \to 0$ 이면 수렴, 그렇지 않으면 발산한다.
+
+::: {.callout-note}
+## 직관: 분할의 두 극단
+
+분할은 "**얼마나 단순화할 것인가**"의 선택이다.
+
+- 극단 1: $\mathbf{S} = \mathbf{A}, \mathbf{T} = \mathbf{0}$. 한 번의 반복이 원문제 자체라 수렴은 완벽하지만 단계가 직접법만큼 비싸다.
+- 극단 2: $\mathbf{S} = \mathbf{I}, \mathbf{T} = \mathbf{I} - \mathbf{A}$. 단계는 단순하나 $\mathbf{B} = \mathbf{I} - \mathbf{A}$ 의 스펙트럼 반경이 1 이상이면 발산한다.
+
+좋은 분할은 "$\mathbf{S}$ 를 풀기는 쉽고 $\mathbf{S}^{-1}\mathbf{T}$ 의 고유값은 0에 가깝게" 라는 두 목표를 함께 추구한다.
+:::
+
+---
+
+## 수렴 조건: 스펙트럼 반경
+
+### 정의와 정리
+
+::: {.callout-note}
+## 정의: 스펙트럼 반경 (Spectral Radius)
+
+정방 행렬 $\mathbf{B}$ 의 스펙트럼 반경은
+
+$$
+\rho(\mathbf{B}) = \max_i |\lambda_i(\mathbf{B})|
+$$
+
+즉 복소평면 원점에서 고유값까지 최대 거리다.
+:::
+
+**정리 (수렴 조건)**: $\mathbf{B}^k \to 0$ 필요충분조건은 $\rho(\mathbf{B}) < 1$. 따라서 분할법의 수렴은 반복 행렬 $\mathbf{B} = \mathbf{S}^{-1}\mathbf{T}$ 의 고유값이 전부 단위원 내부에 있을 때만 보장된다 (Strang §9.3 "Spectral Radius Controls Convergence").
+
+### 유도
+
+$\mathbf{B}$ 가 대각화 가능하면 $\mathbf{B} = \mathbf{M}\boldsymbol{\Lambda}\mathbf{M}^{-1}$ 이고 $\mathbf{B}^k = \mathbf{M}\boldsymbol{\Lambda}^k \mathbf{M}^{-1}$. 대각 원소는 $\lambda_i^k$ 이며, 모두가 0으로 가려면 $|\lambda_i| < 1$ 이 전 $i$ 에 대해 성립해야 한다.
+
+고유벡터 기저에서 오차를 전개하면 직관이 더 선명해진다. $\mathbf{e}_0 = \sum c_i \mathbf{v}_i$ 이면
+
+$$
+\mathbf{e}_k = \mathbf{B}^k \mathbf{e}_0 = \sum_i c_i \lambda_i^k \mathbf{v}_i
+$$
+
+각 고유성분이 $\lambda_i^k$ 배로 감쇠·증폭된다. 가장 큰 $|\lambda_i|$ 가 장기 수렴을 지배한다.
+
+::: {.callout-note}
+## 직관: 스펙트럼 반경은 "가장 느린 성분의 감쇠율"
+
+오차는 여러 고유방향으로 분해되어 각 방향이 독립적으로 진화한다. 어떤 방향은 $|\lambda_i| = 0.01$ 로 즉시 사라지지만, 다른 방향은 $|\lambda_i| = 0.999$ 로 거의 감쇠하지 않는다. 수렴 속도는 **가장 끈질긴 방향** — $\rho(\mathbf{B})$ — 에 의해 결정된다. 평균이 아니라 최댓값이 중요하다.
+
+두 예의 비교 (Strang §9.3 Example 1):
+
+- $\rho = 0.5$: 10번 반복 → 오차 $2^{-10} \approx 10^{-3}$ 배 (3자리 감소)
+- $\rho = 0.99$: 10번 반복 → 오차 $0.99^{10} \approx 0.90$ 배 (거의 그대로)
+
+1에 가까운 $\rho$ 는 "수렴하긴 하지만 실질적으로 쓸모없이 느리다"를 의미한다. 실무 PDE 이산화에서 Jacobi의 $\rho$ 가 전형적으로 $1 - O(h^2)$ ($h$ 는 격자 간격)여서 Jacobi 단독으로는 느리다.
+:::
+
+### 감쇠율과 자리수 감소
+
+10진 자리수 관점에서: 반복 1회당 평균 자리수 감소는 $-\log_{10} \rho$. 즉 $\rho = 0.9$ 는 한 자리 감소에 약 22 반복, $\rho = 0.99$ 는 약 230 반복이 필요하다. 실무 종료 조건(잔차 $10^{-6}$)에 도달하려면 각각 $\sim$130, $\sim$1400 반복이다.
+
+---
+
+## Jacobi 방법
+
+### 분할 선택
+
+$\mathbf{A} = \mathbf{D} + \mathbf{L} + \mathbf{U}$ ($\mathbf{D}$ 대각, $\mathbf{L}$ 엄밀 하삼각, $\mathbf{U}$ 엄밀 상삼각) 에서
+
+$$
+\mathbf{S} = \mathbf{D}, \qquad \mathbf{T} = -(\mathbf{L} + \mathbf{U})
+$$
+
+반복 공식은
+
+$$
+x_i^{(k+1)} = \frac{1}{a_{ii}} \left( b_i - \sum_{j \neq i} a_{ij} x_j^{(k)} \right)
+$$
+
+즉 각 미지수를 "다른 미지수들의 **이전 값**을 대입해 해당 방정식을 풀어" 업데이트한다. 각 단계가 벡터 연산만 요구하므로 **완전 병렬화 가능**하다.
+
+### 예시: Strang §9.3 모델 문제
+
+$$
+\mathbf{A} = \begin{pmatrix} 2 & -1 \\ -1 & 2 \end{pmatrix}, \quad \mathbf{b} = \begin{pmatrix} 4 \\ -2 \end{pmatrix}, \quad \mathbf{x}^* = \begin{pmatrix} 2 \\ 0 \end{pmatrix}
+$$
+
+$\mathbf{S} = 2\mathbf{I}, \mathbf{T} = \begin{pmatrix}0 & 1\\ 1 & 0\end{pmatrix}$ 이므로 $\mathbf{B} = \mathbf{S}^{-1}\mathbf{T} = \begin{pmatrix}0 & 1/2 \\ 1/2 & 0\end{pmatrix}$. 고유값 $\pm 1/2$, $\rho = 0.5$. $\mathbf{x}_0 = \mathbf{0}$ 에서 반복한 결과:
+
+$$
+\mathbf{x}_0 = \binom{0}{0},\quad \mathbf{x}_1 = \binom{2}{-1},\quad \mathbf{x}_2 = \binom{3/2}{0},\quad \mathbf{x}_3 = \binom{2}{-1/4},\quad \mathbf{x}_4 = \binom{15/8}{0}, \dots
+$$
+
+두 단계마다 오차가 정확히 $1/4$ 배로 줄어든다 ($\rho^2 = 1/4$).
+
+### 수렴 조건
+
+충분 조건: **대각 우세 (strict diagonal dominance)**
+
+$$
+|a_{ii}| > \sum_{j \neq i} |a_{ij}| \quad \forall i
+$$
+
+이 성립하면 $\rho(\mathbf{B}_J) < 1$ 이 보장된다. 직관: 각 변수가 자기 방정식에서 "주된 기여"를 하면 이웃 변수들의 오차가 들어와도 자기 변수는 여전히 잘 복원된다.
+
+---
+
+## Gauss-Seidel 방법
+
+### 분할 선택
+
+$$
+\mathbf{S} = \mathbf{D} + \mathbf{L}, \qquad \mathbf{T} = -\mathbf{U}
+$$
+
+반복 공식은
+
+$$
+x_i^{(k+1)} = \frac{1}{a_{ii}} \left( b_i - \sum_{j < i} a_{ij} x_j^{(k+1)} - \sum_{j > i} a_{ij} x_j^{(k)} \right)
+$$
+
+핵심 차이: **방금 계산한 새 값 $x_j^{(k+1)}$ ($j < i$) 을 바로 사용**한다. Jacobi는 이전 전체 벡터를 저장했다가 한꺼번에 업데이트하지만, Gauss-Seidel은 "즉시 반영". 결과적으로
+
+- 메모리 사용이 절반 (이전 벡터 불필요)
+- 정보 전달이 빨라 수렴도 빠름 (일반적으로)
+- 대신 순차적이라 병렬화가 어려움 (Red-Black 순서 등 기법으로 완화)
+
+### 스펙트럼 반경 비교
+
+Strang 모델 문제에서 $\mathbf{S} = \begin{pmatrix}2 & 0\\ -1 & 2\end{pmatrix}, \mathbf{S}^{-1}\mathbf{T} = \begin{pmatrix}0 & 1/2\\ 0 & 1/4\end{pmatrix}$, 고유값 $0, 1/4$, 따라서 $\rho_{GS} = 1/4 = (\rho_J)^2$.
+
+**정리 (Young 1954)**: 대칭 양정치 **삼중대각** 행렬(또는 일관성 있게 정렬된 행렬)에서
+
+$$
+\rho(\mathbf{B}_{GS}) = \rho(\mathbf{B}_J)^2
+$$
+
+즉 Gauss-Seidel은 Jacobi의 **두 배 빠르다** (같은 정확도에 도달하는 반복 수가 절반). 비삼중대각이면 이 관계가 깨지고 역전될 수도 있으므로 보편 규칙은 아니다.
+
+---
+
+## SOR: Successive Over-Relaxation
+
+### 아이디어
+
+Gauss-Seidel이 "매 단계 조금씩" 개선한다면, SOR은 "예상 방향으로 **과감히 더 나아간다**". 매개변수 $\omega > 1$ 을 도입하여
+
+$$
+x_i^{(k+1)} = (1 - \omega) x_i^{(k)} + \frac{\omega}{a_{ii}} \left( b_i - \sum_{j<i} a_{ij} x_j^{(k+1)} - \sum_{j>i} a_{ij} x_j^{(k)} \right)
+$$
+
+$\omega = 1$ 이면 Gauss-Seidel, $\omega > 1$ 이면 "과도 완화(over-relax)" — 새 값 방향으로 추가 이동.
+
+### 최적 $\omega$
+
+Strang $-1, 2, -1$ 테스트 행렬(1D Poisson 이산화) 의 크기 $n$ 에서 Jacobi 스펙트럼 반경은 $\rho_J = \cos\frac{\pi}{n+1}$ 이고 (고유값은 $2 - 2\cos\frac{k\pi}{n+1}$, $k = 1, \dots, n$), 각 방법의 스펙트럼 반경은:
+
+| 방법 | $\rho$ | 점근 ($n \to \infty$) |
+|---|---|---|
+| Jacobi | $\cos\frac{\pi}{n+1}$ | $1 - \frac{\pi^2}{2(n+1)^2}$ |
+| Gauss-Seidel | $\cos^2 \frac{\pi}{n+1}$ | $1 - \frac{\pi^2}{(n+1)^2}$ |
+| SOR (최적 $\omega^*$) | $\cos^2 \frac{\pi}{n+1} / (1 + \sin\frac{\pi}{n+1})^2$ | $1 - \frac{2\pi}{n+1}$ |
+
+(Strang §9.3)
+
+최적 매개변수는
+
+$$
+\omega^* = \frac{2}{1 + \sin\frac{\pi}{n+1}}
+$$
+
+이다.
+
+::: {.callout-note}
+## 직관: 왜 SOR이 차수를 한 단계 높이는가
+
+$n$ 이 커질 때 Jacobi·Gauss-Seidel의 $1 - \rho$ 는 $1/n^2$ 수준이므로 반복 수가 $n^2$ 에 비례한다. SOR 최적 $\omega^*$ 는 $1 - \rho$ 를 $1/n$ 수준으로 끌어올려 반복 수가 $n$ 에 비례한다. 즉 $n = 1000$ 격자에서 Gauss-Seidel은 $\sim 10^6$ 반복, SOR은 $\sim 10^3$ 반복이다 — **천 배 차이**.
+
+과도 완화가 왜 도움이 되는가. Jacobi·Gauss-Seidel은 "저주파(low-frequency) 오차 성분"을 거의 감쇠시키지 못한다 (이 성분의 고유값이 1에 매우 가깝다). $\omega > 1$ 은 각 단계에서 더 큰 걸음을 내디뎌 저주파 감쇠율을 인위적으로 키운다. 단 너무 크면 고주파 성분이 발산하므로 정확한 최적값이 존재한다.
+:::
+
+### 문제: $\omega^*$ 를 모른다
+
+실무에서 $\omega^*$ 는 $\mathbf{A}$ 의 스펙트럼에 의존하므로 **선험적으로 알 수 없다**. 대안:
+
+1. 샘플 반복으로 $\rho$ 를 추정해 $\omega$ 를 수치적으로 탐색
+2. 특정 문제군(Poisson, 등)에서 해석적 $\omega^*$ 를 사용
+3. SOR을 포기하고 Multigrid 또는 PCG로 이동
+
+현대 실무에서 SOR은 단독 해법보다 **전처리기 내부 구성 요소**로 쓰인다.
+
+---
+
+## ILU: 불완전 LU 전처리
+
+### 아이디어
+
+$\mathbf{A}$ 의 정확한 LU 분해는 fill-in 때문에 희소성을 파괴한다. **불완전 LU (Incomplete LU)** 는 LU 분해 과정에서 원래 $\mathbf{A}$ 에서 0이었던 자리의 fill-in을 **인위적으로 버린다**.
+
+$$
+\mathbf{A} \approx \mathbf{L}_0 \mathbf{U}_0, \qquad \mathbf{L}_0, \mathbf{U}_0 \text{ 는 } \mathbf{A} \text{ 와 같은 희소 패턴}
+$$
+
+$\mathbf{S} = \mathbf{L}_0 \mathbf{U}_0$ 로 분할하면 반복은 $\mathbf{L}_0\mathbf{U}_0 \mathbf{x}_{k+1} = (\mathbf{L}_0\mathbf{U}_0 - \mathbf{A})\mathbf{x}_k + \mathbf{b}$. 왼쪽은 삼각 대입 $O(\text{nnz})$, 오른쪽은 희소 행렬-벡터 곱.
+
+### 변종
+
+- **ILU(0)**: fill-in 전부 버림. 가장 싸다
+- **ILU($p$)**: $p$ 레벨까지 fill-in 허용. 정확도 vs 비용 타협
+- **ILUT**: 임계값 기반 drop — 작은 원소만 버림 (보다 적응적)
+
+ILU는 단독 해법보다 **Krylov 방법의 전처리기**로 주로 쓰인다. GMRES + ILU(0) 조합은 비대칭 희소 시스템의 사실상 표준이다.
+
+---
+
+## Multigrid: 다중 격자 방법
+
+### 저주파 오차 문제
+
+Jacobi·Gauss-Seidel의 치명적 약점: **저주파(low-frequency) 오차 성분이 느리게 감쇠**한다. 격자 한 점에서 이웃으로 정보가 퍼지려면 여러 반복이 필요하므로, 큰 규모(낮은 주파수) 오차는 전파 속도에 지배된다.
+
+### 해법: 여러 해상도를 오간다
+
+**Multigrid**의 통찰: "세밀한 격자에서 저주파는 거친 격자에서는 고주파로 보인다". 거친 격자에서는 Jacobi가 그 성분을 빨리 감쇠시킨다.
+
+V-cycle 한 단계:
+
+1. 세밀한 격자에서 Jacobi 몇 번 (**pre-smoothing**) — 고주파 성분 제거
+2. 잔차를 거친 격자로 제한 (**restriction**)
+3. 거친 격자에서 재귀적으로 해결 (**coarse-grid correction**) — 저주파 성분 처리
+4. 해를 세밀한 격자로 보간 (**prolongation**)
+5. Jacobi 몇 번 (**post-smoothing**) — 보간 오차 정돈
+
+### 성능
+
+타원형 PDE에서 Multigrid는 **$O(n)$ 에 기계 정밀도** 에 도달한다. 즉 반복 수가 격자 크기에 **의존하지 않는다**. 이는 모든 반복법 중 이 종류 문제에서 최적 성능이다.
+
+::: {.callout-note}
+## 직관: Multigrid는 "여러 망원경을 번갈아 쓴다"
+
+고배율 망원경으로 별의 세부를 보지만 전체 은하 구조는 안 보인다. 저배율 망원경으로 은하 구조를 보지만 세부는 안 보인다. 두 망원경을 번갈아 쓰면 세부와 전체를 모두 파악할 수 있다. Multigrid가 바로 이 전략이다 — 세밀한 격자(고주파 망원경)와 거친 격자(저주파 망원경)를 V자로 왕복한다.
+:::
+
+---
+
+## Krylov 부분공간 방법
+
+### Krylov 공간
+
+정상 반복법은 단계마다 **같은 행렬 $\mathbf{B}$** 를 곱하지만, 단계 $k$ 의 근사 $\mathbf{x}_k$ 는 이전 $\mathbf{x}_{k-1}$ 의 단순 변환이라 "이전에 수집한 정보를 다 쓰지 않는다". Krylov 방법은 $k$ 단계까지 생성된 전 벡터 $\mathbf{b}, \mathbf{A}\mathbf{b}, \mathbf{A}^2\mathbf{b}, \dots, \mathbf{A}^{k-1}\mathbf{b}$ 가 생성하는 부분공간에서 **최적** $\mathbf{x}_k$ 를 고른다.
+
+::: {.callout-note}
+## 정의: Krylov 부분공간
+
+$\mathbf{A} \in \mathbb{R}^{n \times n}$, $\mathbf{b} \in \mathbb{R}^n$ 에 대해 $k$-차 Krylov 부분공간은
+
+$$
+\mathcal{K}_k(\mathbf{A}, \mathbf{b}) = \text{span}\{\mathbf{b}, \mathbf{A}\mathbf{b}, \mathbf{A}^2\mathbf{b}, \dots, \mathbf{A}^{k-1}\mathbf{b}\}
+$$
+
+이다. Krylov 방법은 $\mathbf{x}_k \in \mathcal{K}_k$ 을 어떤 의미에서 최적으로 선택한다.
+:::
+
+### CG: Conjugate Gradient
+
+**전제**: $\mathbf{A}$ 가 대칭 양정치 (SPD). 최적성 기준: 에너지 노름 $\|\mathbf{e}\|_\mathbf{A}^2 = \mathbf{e}^\top \mathbf{A} \mathbf{e}$ 를 Krylov 공간 내에서 최소화.
+
+**알고리즘** (Strang Problem Set 9.3 p.491):
+
+```
+x_0 = 0, r_0 = b, d_0 = r_0
+for n = 1, 2, …
+    α_n = (r_{n-1}^T r_{n-1}) / (d_{n-1}^T A d_{n-1})   # 걸음 길이
+    x_n = x_{n-1} + α_n d_{n-1}                        # 해 업데이트
+    r_n = r_{n-1} - α_n A d_{n-1}                      # 잔차 업데이트
+    β_n = (r_n^T r_n) / (r_{n-1}^T r_{n-1})            # 이번 단계 개선도
+    d_n = r_n + β_n d_{n-1}                            # 새 탐색 방향
+```
+
+각 단계는 **행렬-벡터 곱 1번**(`A d_{n-1}`)과 내적 몇 번이 전부다. 행렬 자체를 저장할 필요 없이 "곱해 주는 함수"만 있으면 된다 (**matrix-free** 구현 가능).
+
+### CG의 두 보물
+
+1. **유한 수렴**: 이론적으로 $n$ 번 안에 정확한 해 (실제는 반올림으로 퇴화, 실무에서는 훨씬 일찍 멈춤).
+2. **조건수 기반 수렴 속도**:
+
+$$
+\|\mathbf{e}_k\|_\mathbf{A} \leq 2 \left( \frac{\sqrt{\kappa} - 1}{\sqrt{\kappa} + 1} \right)^k \|\mathbf{e}_0\|_\mathbf{A}
+$$
+
+반복 수는 $O(\sqrt{\kappa})$ 으로 목표 정확도에 도달한다. 정상 반복법의 $O(\kappa)$ 보다 **제곱근만큼** 빠르다.
+
+::: {.callout-note}
+## 직관: CG는 왜 빠른가
+
+Jacobi·GS는 매 단계 "현재 잔차 방향"으로만 움직인다. 같은 방향으로 반복 이동하다 보니 이미 처리한 방향을 **또 건드려** 자기 작업을 되돌리는 일이 생긴다. CG는 **$\mathbf{A}$-직교(conjugate)** 방향들을 생성하여 "한 방향에서 한 것은 다시 건드리지 않는다"를 보장한다. $n$ 차원 공간에서 서로 conjugate한 방향은 최대 $n$ 개이므로 최대 $n$ 번에 모든 방향이 처리된다. 그래서 유한 수렴이 가능하다.
+
+일상 비유: 쇼핑 목록의 물건을 한 번씩만 사러 가는 것(CG) vs 같은 물건을 여러 번 사러 왕복하는 것(Jacobi).
+:::
+
+### GMRES, MINRES, BiCGSTAB
+
+| 방법 | 적용 | 기준 |
+|---|---|---|
+| CG | SPD | $\|\mathbf{e}\|_\mathbf{A}$ 최소화 |
+| MINRES | 대칭 (부정치 허용) | $\|\mathbf{r}\|_2$ 최소화 |
+| GMRES | 일반 (비대칭) | $\|\mathbf{r}\|_2$ 최소화, Arnoldi 기반 |
+| BiCGSTAB | 일반 | 양측 Krylov, 메모리 $O(n)$ |
+
+GMRES의 비용은 단계마다 Arnoldi 재직교화로 $O(kn)$ 누적(최대 $k$ 단계), 메모리 $O(kn)$. 이 때문에 **재시작(restart)** GMRES(m)이 실무 표준이다.
+
+---
+
+## 전처리기 (Preconditioner)
+
+### 핵심 아이디어
+
+조건수 $\kappa$ 가 크면 Krylov 방법의 수렴이 느리다. **전처리(preconditioning)** 는 원 시스템을 **스펙트럼이 좋은 등가 시스템**으로 변환한다.
+
+$$
+\mathbf{M}^{-1} \mathbf{A} \mathbf{x} = \mathbf{M}^{-1} \mathbf{b}
+$$
+
+여기서 $\mathbf{M}$ 은 전처리기. 목표는 (1) $\mathbf{M}^{-1}\mathbf{A}$ 가 "항등에 가깝다" — 조건수 작음, (2) $\mathbf{M}\mathbf{y} = \mathbf{z}$ 를 싸게 풀 수 있다.
+
+### 전처리기 선택
+
+| 전처리기 | $\mathbf{M}$ | 비용 | 효과 |
+|---|---|---|---|
+| Jacobi | $\text{diag}(\mathbf{A})$ | 매우 싸 | 스케일 불균형만 해소 |
+| 대칭 Gauss-Seidel | $(\mathbf{D}+\mathbf{L})\mathbf{D}^{-1}(\mathbf{D}+\mathbf{U})$ | 싸 | 중간 |
+| ILU(0) / ILUT | 불완전 LU | 중 | 넓은 범위에서 유효 |
+| Multigrid (AMG) | 다중 격자 V-cycle | 비교적 비쌈 | 타원형 PDE에 최적 |
+| 블록 Jacobi / Schwarz | 영역 분할 | 병렬 | HPC 표준 |
+
+**Preconditioned CG (PCG)**: CG 알고리즘에서 내적을 $\mathbf{M}^{-1}$ 기반으로 수정하여 효과적으로 $\mathbf{M}^{-1}\mathbf{A}$ 의 스펙트럼으로 수렴시킨다. 각 단계에 $\mathbf{M}\mathbf{y} = \mathbf{z}$ 풀이 한 번만 추가된다.
+
+::: {.callout-note}
+## 직관: 전처리기는 "안경"이다
+
+근시인 사람에게 글자가 흐리게 보이는 것이 $\kappa$ 가 큰 문제와 같다. 글자 자체를 키워 쓰게(문제 재구성) 하는 대신 안경(preconditioner)을 씌워 눈에 들어오는 상(像)을 선명하게 만든다. 안경 설계 비용(transformation 비용)이 글자 다시 쓰는 비용(직접법)보다 훨씬 싸다면 안경이 이긴다. 적절한 안경 도수는 시력(문제 스펙트럼)에 맞춰야 하므로 전처리기 선택이 문제 구조에 의존한다.
+:::
+
+### 전처리 효과 수치 감각
+
+Strang $-1, 2, -1$ 격자($n = 1000$)에서 $\kappa(\mathbf{A}) \approx 4n^2/\pi^2 \approx 4 \times 10^5$. 각 방법의 반복 수:
+
+| 방법 | 반복 수 (잔차 $10^{-6}$) |
+|---|---|
+| Jacobi | $\sim 10^7$ |
+| Gauss-Seidel | $\sim 5 \times 10^6$ |
+| SOR (최적 $\omega$) | $\sim 3000$ |
+| CG | $\sim 1000$ (= $\sqrt{\kappa}$) |
+| PCG (ILU 전처리) | $\sim 100$ |
+| PCG (Multigrid 전처리) | $\sim 10$ |
+
+5~7 자리 차이가 실무에서 나타나는 전형적 격차다.
+
+---
+
+## 실무 의사결정 트리
+
+```
+선형 시스템 A x = b 를 풀어야 한다
+    │
+    ├─ n ≤ 10^4 이고 dense?
+    │     → 직접법 (LU, Cholesky, QR): scipy.linalg.solve
+    │
+    ├─ 희소 (nnz ≪ n^2) 이고 n ≤ 10^5?
+    │     → 희소 직접법 (SuperLU, UMFPACK): scipy.sparse.linalg.spsolve
+    │
+    └─ 대규모 희소 (n ≥ 10^5)?
+          ├─ A 가 SPD?
+          │     → PCG + ILU(0) 또는 Multigrid
+          │       scipy.sparse.linalg.cg(A, b, M=...)
+          │
+          ├─ A 가 대칭 (부정치)?
+          │     → MINRES + ILU
+          │
+          └─ A 가 일반 (비대칭)?
+                → GMRES(m) + ILU(0) 또는 ILUT
+                  scipy.sparse.linalg.gmres(A, b, M=..., restart=30)
+```
+
+## 코드 예시
+
+### Step 1: Jacobi·Gauss-Seidel·SOR 비교 구현
+
+```{python}
+import numpy as np
+
+def build_K(n):
+    """-1, 2, -1 tridiagonal (1D Poisson)"""
+    return 2*np.eye(n) - np.eye(n, k=1) - np.eye(n, k=-1)
+
+def jacobi(A, b, tol=1e-8, max_iter=100000):
+    n = len(b)
+    D = np.diag(A); R = A - np.diag(D)
+    x = np.zeros(n)
+    for k in range(max_iter):
+        x_new = (b - R @ x) / D
+        if np.linalg.norm(x_new - x) < tol:
+            return x_new, k+1
+        x = x_new
+    return x, max_iter
+
+def gauss_seidel(A, b, tol=1e-8, max_iter=100000):
+    n = len(b); x = np.zeros(n)
+    for k in range(max_iter):
+        x_old = x.copy()
+        for i in range(n):
+            x[i] = (b[i] - A[i, :i] @ x[:i] - A[i, i+1:] @ x[i+1:]) / A[i, i]
+        if np.linalg.norm(x - x_old) < tol:
+            return x, k+1
+    return x, max_iter
+
+def sor(A, b, omega, tol=1e-8, max_iter=100000):
+    n = len(b); x = np.zeros(n)
+    for k in range(max_iter):
+        x_old = x.copy()
+        for i in range(n):
+            sigma = A[i, :i] @ x[:i] + A[i, i+1:] @ x[i+1:]
+            x[i] = (1-omega)*x[i] + omega*(b[i] - sigma) / A[i, i]
+        if np.linalg.norm(x - x_old) < tol:
+            return x, k+1
+    return x, max_iter
+
+n = 50
+A = build_K(n); b = np.ones(n)
+omega_opt = 2.0 / (1 + np.sin(np.pi/(n+1)))
+
+_, it_J  = jacobi(A, b)
+_, it_GS = gauss_seidel(A, b)
+_, it_SOR = sor(A, b, omega_opt)
+
+print(f"Jacobi:       {it_J} iterations")
+print(f"Gauss-Seidel: {it_GS} iterations  (≈ Jacobi/2 예상)")
+print(f"SOR (ω*={omega_opt:.3f}): {it_SOR} iterations  (차수 한 단계 빠름)")
+```
+
+이 코드의 핵심: $n = 50$ 에서 Jacobi $\sim 5000$, Gauss-Seidel $\sim 2500$, SOR $\sim 100$ 수준이다. 격자 $n$ 을 늘리면 Jacobi·GS는 $n^2$ 로 증가하지만 SOR은 $n$ 로 증가한다.
+
+### Step 2: Conjugate Gradient 직접 구현
+
+```{python}
+import numpy as np
+
+def cg(A, b, x0=None, tol=1e-10, max_iter=None):
+    """CG for SPD A. Returns (x, iterations, residual_history)."""
+    n = len(b); x = np.zeros(n) if x0 is None else x0.copy()
+    r = b - A @ x; d = r.copy()
+    rs_old = r @ r
+    max_iter = max_iter or n
+    hist = [np.sqrt(rs_old)]
+
+    for k in range(max_iter):
+        Ad = A @ d
+        alpha = rs_old / (d @ Ad)
+        x = x + alpha * d
+        r = r - alpha * Ad
+        rs_new = r @ r
+        hist.append(np.sqrt(rs_new))
+        if np.sqrt(rs_new) < tol:
+            return x, k+1, hist
+        beta = rs_new / rs_old
+        d = r + beta * d
+        rs_old = rs_new
+    return x, max_iter, hist
+
+# 비교: 같은 문제를 직접법 + CG + Jacobi로 풀어 본다
+n = 200
+A = build_K(n); b = np.random.randn(n)
+x_direct = np.linalg.solve(A, b)
+
+x_cg, it_cg, _ = cg(A, b)
+print(f"CG 반복수: {it_cg}   (이론 상한 n={n})")
+print(f"CG 오차 ||x_cg - x_direct||: {np.linalg.norm(x_cg - x_direct):.2e}")
+
+# 예측: sqrt(kappa) ~ 반복수
+kappa = np.linalg.cond(A)
+print(f"κ(A) = {kappa:.1f},  √κ ≈ {np.sqrt(kappa):.1f}  (CG 반복수 상한 감각)")
+```
+
+### Step 3: 전처리 효과 관찰 (PCG vs CG)
+
+```{python}
+import numpy as np
+from scipy.sparse import diags, csr_matrix
+from scipy.sparse.linalg import cg, spilu, LinearOperator
+
+# 2D Poisson 격자 (nxn) → N = n*n
+def build_poisson_2d(n):
+    e = np.ones(n)
+    T = diags([-e, 2*e, -e], [-1, 0, 1])
+    I = diags([np.ones(n)], [0])
+    A = (np.kron(I.toarray(), T.toarray())
+         + np.kron(T.toarray(), I.toarray()))
+    return csr_matrix(A)
+
+n = 30
+A = build_poisson_2d(n); N = A.shape[0]
+b = np.random.randn(N)
+
+# CG without preconditioner
+counter = [0]
+def cb(xk): counter[0] += 1
+x_cg, info = cg(A, b, tol=1e-8, maxiter=5000, callback=cb)
+iters_cg = counter[0]
+
+# PCG with ILU preconditioner
+ilu = spilu(A, drop_tol=1e-3, fill_factor=10)
+M = LinearOperator(A.shape, matvec=ilu.solve)
+counter = [0]
+x_pcg, info = cg(A, b, M=M, tol=1e-8, maxiter=5000, callback=cb)
+iters_pcg = counter[0]
+
+print(f"2D Poisson N = {N}")
+print(f"CG 반복수:  {iters_cg}")
+print(f"PCG(ILU):   {iters_pcg}")
+print(f"가속비:     {iters_cg/iters_pcg:.1f}x")
+```
+
+이 코드의 핵심: 전처리기는 수렴 자체를 바꾸는 것이 아니라 **같은 CG 알고리즘의 유효 조건수**를 낮춰 반복 수를 줄인다. 실무 PDE 해법은 거의 항상 전처리와 함께 쓰인다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [수치 선형대수 개요](./mit-09-1-gilbert-strang-numerical-linear-algebra-overview.qmd) — 직접법·반복법 지도
+- [실전 가우스 소거법](./mit-09-2-gilbert-strang-gaussian-elimination-in-practice.qmd) — 직접법의 $\frac{2}{3}n^3$ 한계
+- [노름과 조건수](./mit-09-3-gilbert-strang-norms-condition-numbers.qmd) — $\kappa(\mathbf{A})$ 와 CG 수렴 속도
+- [고유값과 고유벡터](./mit-06-1-gilbert-strang-eigenvalue-overview.qmd) — 스펙트럼 반경의 의미
+- [대칭 양정치 행렬](./mit-06-5-gilbert-strang-positive-definite-matrices.qmd) — CG의 전제 조건
+
+**후속 주제**
+
+- Multigrid 상세 (placeholder, 교재 외)
+- GMRES와 Arnoldi 반복 (placeholder, 교재 외)
+- 영역 분할 전처리기 (Additive Schwarz, placeholder)
+- Krylov 고유값: Lanczos, Arnoldi 방법 (placeholder)
+
+**다른 카테고리 연결**
+
+- [Hessian-free 최적화](../../Machine_Learning/index.qmd) — CG로 Newton 방향 계산 (placeholder)
+- [PageRank와 Power iteration](../../Agent/index.qmd) — 고유벡터 반복 (placeholder)
+- [희소 그래프 라플라시안](../../Deep_Learning/index.qmd) — GNN 메시지 전달의 수치 기반 (placeholder)
+
+**참고 교재**
+
+- Strang (2009) *Introduction to Linear Algebra* Ch.9 §9.3 — 본 포스트의 논리 뼈대
+- Trefethen & Bau (1997) *Numerical Linear Algebra* Lect.32–40 — Krylov 방법의 정석
+- Saad (2003) *Iterative Methods for Sparse Linear Systems* — 반복법의 포괄적 레퍼런스
+- Briggs, Henson, McCormick (2000) *A Multigrid Tutorial* — Multigrid 입문

@@ -639,6 +639,7 @@
 <li>2026-04-13, <a href="../../../../docs/blog/posts/Math/linear_algebra/mit-09-1-gilbert-strang-numerical-linear-algebra-overview.html">Ch.9 Overview — 수치 선형대수 개요: 부동소수점·조건수·직접법·반복법</a></li>
 <li>2026-04-13, <a href="../../../../docs/blog/posts/Math/linear_algebra/mit-09-2-gilbert-strang-gaussian-elimination-in-practice.html">Ch.9 §9.1 — 실전 가우스 소거법: 부분 피벗팅·PA=LU·연산량·성장 인자·희소 전략</a></li>
 <li>2026-04-13, <a href="../../../../docs/blog/posts/Math/linear_algebra/mit-09-3-gilbert-strang-norms-condition-numbers.html">Ch.9 §9.2 — 노름과 조건수: 연산자 노름·Rayleigh 몫·조건수·log κ 자리수 손실</a></li>
+<li>2026-04-13, <a href="../../../../docs/blog/posts/Math/linear_algebra/mit-09-4-gilbert-strang-iterative-methods-preconditioners.html">Ch.9 §9.3 — 반복법과 전처리기: 분할·스펙트럼 반경·Jacobi·GS·SOR·ILU·CG·Multigrid</a></li>
 </ul>
 </section>
 <section id="ch.7-symmetric-matrices-and-positive-definiteness-legacy-notes" class="level4" data-number="1.2.2.9">
@@ -6139,6 +6140,1369 @@ font-style: inherit;">"</span>)</span></code></pre></div>
   <category>Mathematics</category>
   <category>Machine Learning</category>
   <guid>kk3225.netlify.app/docs/blog/posts/Math/linear_algebra/mit-09-3-gilbert-strang-norms-condition-numbers.html</guid>
+  <pubDate>Sun, 12 Apr 2026 15:00:00 GMT</pubDate>
+</item>
+<item>
+  <title>반복법과 전처리기 (Iterative Methods and Preconditioners)</title>
+  <dc:creator>Kwangmin Kim</dc:creator>
+  <link>kk3225.netlify.app/docs/blog/posts/Math/linear_algebra/mit-09-4-gilbert-strang-iterative-methods-preconditioners.html</link>
+  <description><![CDATA[ 
+
+
+
+
+
+<section id="개요" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="개요"><span class="header-section-number">1</span> 개요</h2>
+<p>지금까지의 선형 시스템 풀이는 <strong>직접법(direct method)</strong> 이었다. LU, QR, Cholesky 분해로 유한 단계 안에 정확한 해를 얻는다. 이들은 작은 조밀 행렬(<img src="https://latex.codecogs.com/png.latex?n%20%5Cleq%2010%5E4">)에서는 최적이지만, <img src="https://latex.codecogs.com/png.latex?n"> 이 <img src="https://latex.codecogs.com/png.latex?10%5E6"> 을 넘는 희소(sparse) 시스템에서는 <strong>메모리와 시간 모두 한계</strong>에 부딪힌다. PDE 이산화, 그래프 라플라시안, 대규모 최적화의 Hessian이 이 영역이다.</p>
+<p><strong>반복법(iterative method)</strong> 은 다른 철학이다. 초기 추정 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bx%7D_0"> 에서 출발해 매 단계 단순한 연산만 수행하여 참해에 점근적으로 접근한다. 각 단계는 저렴하지만 <strong>많이 반복</strong>한다. 경쟁 요소 두 개는 다음과 같다.</p>
+<ol type="1">
+<li><strong>단계당 비용</strong>이 작아야 한다 — 행렬-벡터 곱 수준이면 이상적.</li>
+<li><strong>빠르게 수렴</strong>해야 한다 — 스펙트럼 반경이 작아야 한다.</li>
+</ol>
+<p>이 둘은 서로 상충한다. 단계가 단순할수록 수렴이 느리고, 수렴을 빠르게 하려면 단계가 무거워진다. 이 <strong>속도-수렴 균형</strong>이 반복법 설계의 중심 주제이며, 균형을 깨뜨리는 무기가 <strong>전처리기(preconditioner)</strong> 다.</p>
+<p>이 포스트는 Strang (2009) <em>Introduction to Linear Algebra</em> Ch.9 §9.3 “Iterative Methods and Preconditioners” 의 흐름을 따르되, 현대 수치해석의 표준인 Krylov 방법(CG, GMRES)과 Multigrid, preconditioned CG까지 확장해 다룬다. 세부 증명은 Trefethen &amp; Bau (1997) Lect.32–40, Saad (2003) <em>Iterative Methods for Sparse Linear Systems</em> 를 보완 참고한다.</p>
+<hr>
+</section>
+<section id="분할splitting-프레임워크" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="분할splitting-프레임워크"><span class="header-section-number">2</span> 분할(Splitting) 프레임워크</h2>
+<section id="기본-아이디어" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="기본-아이디어"><span class="header-section-number">2.1</span> 기본 아이디어</h3>
+<p><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%5Cmathbf%7Bx%7D%20=%20%5Cmathbf%7Bb%7D"> 에서 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 를 두 조각으로 쪼갠다.</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BA%7D%20=%20%5Cmathbf%7BS%7D%20-%20%5Cmathbf%7BT%7D%0A"></p>
+<p>여기서 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D"> 는 <strong>역연산이 쉬운</strong> 행렬이고 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BT%7D%20=%20%5Cmathbf%7BS%7D%20-%20%5Cmathbf%7BA%7D"> 는 나머지다. 원식을 옮겨 쓰면 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D%5Cmathbf%7Bx%7D%20=%20%5Cmathbf%7BT%7D%5Cmathbf%7Bx%7D%20+%20%5Cmathbf%7Bb%7D"> 이다. 이를 반복 공식으로 바꾼다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+정의: 분할 기반 반복법 (Stationary Iteration)
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>분할 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%20=%20%5Cmathbf%7BS%7D%20-%20%5Cmathbf%7BT%7D"> 에 대해</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BS%7D%5Cmathbf%7Bx%7D_%7Bk+1%7D%20=%20%5Cmathbf%7BT%7D%5Cmathbf%7Bx%7D_k%20+%20%5Cmathbf%7Bb%7D%0A"></p>
+<p>로 반복한다 (Strang 식 (2)). 등가적으로</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7Bx%7D_%7Bk+1%7D%20=%20%5Cmathbf%7BS%7D%5E%7B-1%7D%5Cmathbf%7BT%7D%5Cmathbf%7Bx%7D_k%20+%20%5Cmathbf%7BS%7D%5E%7B-1%7D%5Cmathbf%7Bb%7D%20=%20%5Cmathbf%7BB%7D%5Cmathbf%7Bx%7D_k%20+%20%5Cmathbf%7Bc%7D%0A"></p>
+<p>이며 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%20=%20%5Cmathbf%7BS%7D%5E%7B-1%7D%5Cmathbf%7BT%7D"> 를 <strong>반복 행렬(iteration matrix)</strong> 이라 한다.</p>
+</div>
+</div>
+<p>이것이 왜 의미 있는가. 참해 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bx%7D%5E*"> 는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D%5Cmathbf%7Bx%7D%5E*%20=%20%5Cmathbf%7BT%7D%5Cmathbf%7Bx%7D%5E*%20+%20%5Cmathbf%7Bb%7D"> 를 만족한다. 양변에서 <img src="https://latex.codecogs.com/png.latex?k+1"> 번째 식을 빼면 <strong>오차 방정식</strong>이 나온다.</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BS%7D%5Cmathbf%7Be%7D_%7Bk+1%7D%20=%20%5Cmathbf%7BT%7D%5Cmathbf%7Be%7D_k%20%5Cquad%20%5CLongleftrightarrow%20%5Cquad%20%5Cmathbf%7Be%7D_%7Bk+1%7D%20=%20%5Cmathbf%7BB%7D%5Cmathbf%7Be%7D_k%20=%20%5Cmathbf%7BB%7D%5E%7Bk+1%7D%5Cmathbf%7Be%7D_0%0A"></p>
+<p>오차는 매 단계 <strong>같은 행렬 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D"></strong> 에 곱해진다. 따라서 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%5Ek%20%5Cto%200"> 이면 수렴, 그렇지 않으면 발산한다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관: 분할의 두 극단
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>분할은 “<strong>얼마나 단순화할 것인가</strong>”의 선택이다.</p>
+<ul>
+<li>극단 1: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D%20=%20%5Cmathbf%7BA%7D,%20%5Cmathbf%7BT%7D%20=%20%5Cmathbf%7B0%7D">. 한 번의 반복이 원문제 자체라 수렴은 완벽하지만 단계가 직접법만큼 비싸다.</li>
+<li>극단 2: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D%20=%20%5Cmathbf%7BI%7D,%20%5Cmathbf%7BT%7D%20=%20%5Cmathbf%7BI%7D%20-%20%5Cmathbf%7BA%7D">. 단계는 단순하나 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%20=%20%5Cmathbf%7BI%7D%20-%20%5Cmathbf%7BA%7D"> 의 스펙트럼 반경이 1 이상이면 발산한다.</li>
+</ul>
+<p>좋은 분할은 “<img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D"> 를 풀기는 쉽고 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D%5E%7B-1%7D%5Cmathbf%7BT%7D"> 의 고유값은 0에 가깝게” 라는 두 목표를 함께 추구한다.</p>
+</div>
+</div>
+<hr>
+</section>
+</section>
+<section id="수렴-조건-스펙트럼-반경" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="수렴-조건-스펙트럼-반경"><span class="header-section-number">3</span> 수렴 조건: 스펙트럼 반경</h2>
+<section id="정의와-정리" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="정의와-정리"><span class="header-section-number">3.1</span> 정의와 정리</h3>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+정의: 스펙트럼 반경 (Spectral Radius)
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>정방 행렬 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D"> 의 스펙트럼 반경은</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Crho(%5Cmathbf%7BB%7D)%20=%20%5Cmax_i%20%7C%5Clambda_i(%5Cmathbf%7BB%7D)%7C%0A"></p>
+<p>즉 복소평면 원점에서 고유값까지 최대 거리다.</p>
+</div>
+</div>
+<p><strong>정리 (수렴 조건)</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%5Ek%20%5Cto%200"> 필요충분조건은 <img src="https://latex.codecogs.com/png.latex?%5Crho(%5Cmathbf%7BB%7D)%20%3C%201">. 따라서 분할법의 수렴은 반복 행렬 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%20=%20%5Cmathbf%7BS%7D%5E%7B-1%7D%5Cmathbf%7BT%7D"> 의 고유값이 전부 단위원 내부에 있을 때만 보장된다 (Strang §9.3 “Spectral Radius Controls Convergence”).</p>
+</section>
+<section id="유도" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="유도"><span class="header-section-number">3.2</span> 유도</h3>
+<p><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D"> 가 대각화 가능하면 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%20=%20%5Cmathbf%7BM%7D%5Cboldsymbol%7B%5CLambda%7D%5Cmathbf%7BM%7D%5E%7B-1%7D"> 이고 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%5Ek%20=%20%5Cmathbf%7BM%7D%5Cboldsymbol%7B%5CLambda%7D%5Ek%20%5Cmathbf%7BM%7D%5E%7B-1%7D">. 대각 원소는 <img src="https://latex.codecogs.com/png.latex?%5Clambda_i%5Ek"> 이며, 모두가 0으로 가려면 <img src="https://latex.codecogs.com/png.latex?%7C%5Clambda_i%7C%20%3C%201"> 이 전 <img src="https://latex.codecogs.com/png.latex?i"> 에 대해 성립해야 한다.</p>
+<p>고유벡터 기저에서 오차를 전개하면 직관이 더 선명해진다. <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_0%20=%20%5Csum%20c_i%20%5Cmathbf%7Bv%7D_i"> 이면</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7Be%7D_k%20=%20%5Cmathbf%7BB%7D%5Ek%20%5Cmathbf%7Be%7D_0%20=%20%5Csum_i%20c_i%20%5Clambda_i%5Ek%20%5Cmathbf%7Bv%7D_i%0A"></p>
+<p>각 고유성분이 <img src="https://latex.codecogs.com/png.latex?%5Clambda_i%5Ek"> 배로 감쇠·증폭된다. 가장 큰 <img src="https://latex.codecogs.com/png.latex?%7C%5Clambda_i%7C"> 가 장기 수렴을 지배한다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관: 스펙트럼 반경은 “가장 느린 성분의 감쇠율”
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>오차는 여러 고유방향으로 분해되어 각 방향이 독립적으로 진화한다. 어떤 방향은 <img src="https://latex.codecogs.com/png.latex?%7C%5Clambda_i%7C%20=%200.01"> 로 즉시 사라지지만, 다른 방향은 <img src="https://latex.codecogs.com/png.latex?%7C%5Clambda_i%7C%20=%200.999"> 로 거의 감쇠하지 않는다. 수렴 속도는 <strong>가장 끈질긴 방향</strong> — <img src="https://latex.codecogs.com/png.latex?%5Crho(%5Cmathbf%7BB%7D)"> — 에 의해 결정된다. 평균이 아니라 최댓값이 중요하다.</p>
+<p>두 예의 비교 (Strang §9.3 Example 1):</p>
+<ul>
+<li><img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200.5">: 10번 반복 → 오차 <img src="https://latex.codecogs.com/png.latex?2%5E%7B-10%7D%20%5Capprox%2010%5E%7B-3%7D"> 배 (3자리 감소)</li>
+<li><img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200.99">: 10번 반복 → 오차 <img src="https://latex.codecogs.com/png.latex?0.99%5E%7B10%7D%20%5Capprox%200.90"> 배 (거의 그대로)</li>
+</ul>
+<p>1에 가까운 <img src="https://latex.codecogs.com/png.latex?%5Crho"> 는 “수렴하긴 하지만 실질적으로 쓸모없이 느리다”를 의미한다. 실무 PDE 이산화에서 Jacobi의 <img src="https://latex.codecogs.com/png.latex?%5Crho"> 가 전형적으로 <img src="https://latex.codecogs.com/png.latex?1%20-%20O(h%5E2)"> (<img src="https://latex.codecogs.com/png.latex?h"> 는 격자 간격)여서 Jacobi 단독으로는 느리다.</p>
+</div>
+</div>
+</section>
+<section id="감쇠율과-자리수-감소" class="level3" data-number="3.3">
+<h3 data-number="3.3" class="anchored" data-anchor-id="감쇠율과-자리수-감소"><span class="header-section-number">3.3</span> 감쇠율과 자리수 감소</h3>
+<p>10진 자리수 관점에서: 반복 1회당 평균 자리수 감소는 <img src="https://latex.codecogs.com/png.latex?-%5Clog_%7B10%7D%20%5Crho">. 즉 <img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200.9"> 는 한 자리 감소에 약 22 반복, <img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200.99"> 는 약 230 반복이 필요하다. 실무 종료 조건(잔차 <img src="https://latex.codecogs.com/png.latex?10%5E%7B-6%7D">)에 도달하려면 각각 $$130, $$1400 반복이다.</p>
+<hr>
+</section>
+</section>
+<section id="jacobi-방법" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="jacobi-방법"><span class="header-section-number">4</span> Jacobi 방법</h2>
+<section id="분할-선택" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="분할-선택"><span class="header-section-number">4.1</span> 분할 선택</h3>
+<p><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%20=%20%5Cmathbf%7BD%7D%20+%20%5Cmathbf%7BL%7D%20+%20%5Cmathbf%7BU%7D"> (<img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BD%7D"> 대각, <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BL%7D"> 엄밀 하삼각, <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BU%7D"> 엄밀 상삼각) 에서</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BS%7D%20=%20%5Cmathbf%7BD%7D,%20%5Cqquad%20%5Cmathbf%7BT%7D%20=%20-(%5Cmathbf%7BL%7D%20+%20%5Cmathbf%7BU%7D)%0A"></p>
+<p>반복 공식은</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0Ax_i%5E%7B(k+1)%7D%20=%20%5Cfrac%7B1%7D%7Ba_%7Bii%7D%7D%20%5Cleft(%20b_i%20-%20%5Csum_%7Bj%20%5Cneq%20i%7D%20a_%7Bij%7D%20x_j%5E%7B(k)%7D%20%5Cright)%0A"></p>
+<p>즉 각 미지수를 “다른 미지수들의 <strong>이전 값</strong>을 대입해 해당 방정식을 풀어” 업데이트한다. 각 단계가 벡터 연산만 요구하므로 <strong>완전 병렬화 가능</strong>하다.</p>
+</section>
+<section id="예시-strang-9.3-모델-문제" class="level3" data-number="4.2">
+<h3 data-number="4.2" class="anchored" data-anchor-id="예시-strang-9.3-모델-문제"><span class="header-section-number">4.2</span> 예시: Strang §9.3 모델 문제</h3>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BA%7D%20=%20%5Cbegin%7Bpmatrix%7D%202%20&amp;%20-1%20%5C%5C%20-1%20&amp;%202%20%5Cend%7Bpmatrix%7D,%20%5Cquad%20%5Cmathbf%7Bb%7D%20=%20%5Cbegin%7Bpmatrix%7D%204%20%5C%5C%20-2%20%5Cend%7Bpmatrix%7D,%20%5Cquad%20%5Cmathbf%7Bx%7D%5E*%20=%20%5Cbegin%7Bpmatrix%7D%202%20%5C%5C%200%20%5Cend%7Bpmatrix%7D%0A"></p>
+<p><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D%20=%202%5Cmathbf%7BI%7D,%20%5Cmathbf%7BT%7D%20=%20%5Cbegin%7Bpmatrix%7D0%20&amp;%201%5C%5C%201%20&amp;%200%5Cend%7Bpmatrix%7D"> 이므로 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%20=%20%5Cmathbf%7BS%7D%5E%7B-1%7D%5Cmathbf%7BT%7D%20=%20%5Cbegin%7Bpmatrix%7D0%20&amp;%201/2%20%5C%5C%201/2%20&amp;%200%5Cend%7Bpmatrix%7D">. 고유값 <img src="https://latex.codecogs.com/png.latex?%5Cpm%201/2">, <img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200.5">. <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bx%7D_0%20=%20%5Cmathbf%7B0%7D"> 에서 반복한 결과:</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7Bx%7D_0%20=%20%5Cbinom%7B0%7D%7B0%7D,%5Cquad%20%5Cmathbf%7Bx%7D_1%20=%20%5Cbinom%7B2%7D%7B-1%7D,%5Cquad%20%5Cmathbf%7Bx%7D_2%20=%20%5Cbinom%7B3/2%7D%7B0%7D,%5Cquad%20%5Cmathbf%7Bx%7D_3%20=%20%5Cbinom%7B2%7D%7B-1/4%7D,%5Cquad%20%5Cmathbf%7Bx%7D_4%20=%20%5Cbinom%7B15/8%7D%7B0%7D,%20%5Cdots%0A"></p>
+<p>두 단계마다 오차가 정확히 <img src="https://latex.codecogs.com/png.latex?1/4"> 배로 줄어든다 (<img src="https://latex.codecogs.com/png.latex?%5Crho%5E2%20=%201/4">).</p>
+</section>
+<section id="수렴-조건" class="level3" data-number="4.3">
+<h3 data-number="4.3" class="anchored" data-anchor-id="수렴-조건"><span class="header-section-number">4.3</span> 수렴 조건</h3>
+<p>충분 조건: <strong>대각 우세 (strict diagonal dominance)</strong></p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%7Ca_%7Bii%7D%7C%20%3E%20%5Csum_%7Bj%20%5Cneq%20i%7D%20%7Ca_%7Bij%7D%7C%20%5Cquad%20%5Cforall%20i%0A"></p>
+<p>이 성립하면 <img src="https://latex.codecogs.com/png.latex?%5Crho(%5Cmathbf%7BB%7D_J)%20%3C%201"> 이 보장된다. 직관: 각 변수가 자기 방정식에서 “주된 기여”를 하면 이웃 변수들의 오차가 들어와도 자기 변수는 여전히 잘 복원된다.</p>
+<hr>
+</section>
+</section>
+<section id="gauss-seidel-방법" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="gauss-seidel-방법"><span class="header-section-number">5</span> Gauss-Seidel 방법</h2>
+<section id="분할-선택-1" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="분할-선택-1"><span class="header-section-number">5.1</span> 분할 선택</h3>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BS%7D%20=%20%5Cmathbf%7BD%7D%20+%20%5Cmathbf%7BL%7D,%20%5Cqquad%20%5Cmathbf%7BT%7D%20=%20-%5Cmathbf%7BU%7D%0A"></p>
+<p>반복 공식은</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0Ax_i%5E%7B(k+1)%7D%20=%20%5Cfrac%7B1%7D%7Ba_%7Bii%7D%7D%20%5Cleft(%20b_i%20-%20%5Csum_%7Bj%20%3C%20i%7D%20a_%7Bij%7D%20x_j%5E%7B(k+1)%7D%20-%20%5Csum_%7Bj%20%3E%20i%7D%20a_%7Bij%7D%20x_j%5E%7B(k)%7D%20%5Cright)%0A"></p>
+<p>핵심 차이: <strong>방금 계산한 새 값 <img src="https://latex.codecogs.com/png.latex?x_j%5E%7B(k+1)%7D"> (<img src="https://latex.codecogs.com/png.latex?j%20%3C%20i">) 을 바로 사용</strong>한다. Jacobi는 이전 전체 벡터를 저장했다가 한꺼번에 업데이트하지만, Gauss-Seidel은 “즉시 반영”. 결과적으로</p>
+<ul>
+<li>메모리 사용이 절반 (이전 벡터 불필요)</li>
+<li>정보 전달이 빨라 수렴도 빠름 (일반적으로)</li>
+<li>대신 순차적이라 병렬화가 어려움 (Red-Black 순서 등 기법으로 완화)</li>
+</ul>
+</section>
+<section id="스펙트럼-반경-비교" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="스펙트럼-반경-비교"><span class="header-section-number">5.2</span> 스펙트럼 반경 비교</h3>
+<p>Strang 모델 문제에서 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D%20=%20%5Cbegin%7Bpmatrix%7D2%20&amp;%200%5C%5C%20-1%20&amp;%202%5Cend%7Bpmatrix%7D,%20%5Cmathbf%7BS%7D%5E%7B-1%7D%5Cmathbf%7BT%7D%20=%20%5Cbegin%7Bpmatrix%7D0%20&amp;%201/2%5C%5C%200%20&amp;%201/4%5Cend%7Bpmatrix%7D">, 고유값 <img src="https://latex.codecogs.com/png.latex?0,%201/4">, 따라서 <img src="https://latex.codecogs.com/png.latex?%5Crho_%7BGS%7D%20=%201/4%20=%20(%5Crho_J)%5E2">.</p>
+<p><strong>정리 (Young 1954)</strong>: 대칭 양정치 <strong>삼중대각</strong> 행렬(또는 일관성 있게 정렬된 행렬)에서</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Crho(%5Cmathbf%7BB%7D_%7BGS%7D)%20=%20%5Crho(%5Cmathbf%7BB%7D_J)%5E2%0A"></p>
+<p>즉 Gauss-Seidel은 Jacobi의 <strong>두 배 빠르다</strong> (같은 정확도에 도달하는 반복 수가 절반). 비삼중대각이면 이 관계가 깨지고 역전될 수도 있으므로 보편 규칙은 아니다.</p>
+<hr>
+</section>
+</section>
+<section id="sor-successive-over-relaxation" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="sor-successive-over-relaxation"><span class="header-section-number">6</span> SOR: Successive Over-Relaxation</h2>
+<section id="아이디어" class="level3" data-number="6.1">
+<h3 data-number="6.1" class="anchored" data-anchor-id="아이디어"><span class="header-section-number">6.1</span> 아이디어</h3>
+<p>Gauss-Seidel이 “매 단계 조금씩” 개선한다면, SOR은 “예상 방향으로 <strong>과감히 더 나아간다</strong>”. 매개변수 <img src="https://latex.codecogs.com/png.latex?%5Comega%20%3E%201"> 을 도입하여</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0Ax_i%5E%7B(k+1)%7D%20=%20(1%20-%20%5Comega)%20x_i%5E%7B(k)%7D%20+%20%5Cfrac%7B%5Comega%7D%7Ba_%7Bii%7D%7D%20%5Cleft(%20b_i%20-%20%5Csum_%7Bj%3Ci%7D%20a_%7Bij%7D%20x_j%5E%7B(k+1)%7D%20-%20%5Csum_%7Bj%3Ei%7D%20a_%7Bij%7D%20x_j%5E%7B(k)%7D%20%5Cright)%0A"></p>
+<p><img src="https://latex.codecogs.com/png.latex?%5Comega%20=%201"> 이면 Gauss-Seidel, <img src="https://latex.codecogs.com/png.latex?%5Comega%20%3E%201"> 이면 “과도 완화(over-relax)” — 새 값 방향으로 추가 이동.</p>
+</section>
+<section id="최적-omega" class="level3" data-number="6.2">
+<h3 data-number="6.2" class="anchored" data-anchor-id="최적-omega"><span class="header-section-number">6.2</span> 최적 <img src="https://latex.codecogs.com/png.latex?%5Comega"></h3>
+<p>Strang <img src="https://latex.codecogs.com/png.latex?-1,%202,%20-1"> 테스트 행렬(1D Poisson 이산화) 의 크기 <img src="https://latex.codecogs.com/png.latex?n"> 에서 Jacobi 스펙트럼 반경은 <img src="https://latex.codecogs.com/png.latex?%5Crho_J%20=%20%5Ccos%5Cfrac%7B%5Cpi%7D%7Bn+1%7D"> 이고 (고유값은 <img src="https://latex.codecogs.com/png.latex?2%20-%202%5Ccos%5Cfrac%7Bk%5Cpi%7D%7Bn+1%7D">, <img src="https://latex.codecogs.com/png.latex?k%20=%201,%20%5Cdots,%20n">), 각 방법의 스펙트럼 반경은:</p>
+<table class="table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>방법</th>
+<th><img src="https://latex.codecogs.com/png.latex?%5Crho"></th>
+<th>점근 (<img src="https://latex.codecogs.com/png.latex?n%20%5Cto%20%5Cinfty">)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Jacobi</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Ccos%5Cfrac%7B%5Cpi%7D%7Bn+1%7D"></td>
+<td><img src="https://latex.codecogs.com/png.latex?1%20-%20%5Cfrac%7B%5Cpi%5E2%7D%7B2(n+1)%5E2%7D"></td>
+</tr>
+<tr class="even">
+<td>Gauss-Seidel</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Ccos%5E2%20%5Cfrac%7B%5Cpi%7D%7Bn+1%7D"></td>
+<td><img src="https://latex.codecogs.com/png.latex?1%20-%20%5Cfrac%7B%5Cpi%5E2%7D%7B(n+1)%5E2%7D"></td>
+</tr>
+<tr class="odd">
+<td>SOR (최적 <img src="https://latex.codecogs.com/png.latex?%5Comega%5E*">)</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Ccos%5E2%20%5Cfrac%7B%5Cpi%7D%7Bn+1%7D%20/%20(1%20+%20%5Csin%5Cfrac%7B%5Cpi%7D%7Bn+1%7D)%5E2"></td>
+<td><img src="https://latex.codecogs.com/png.latex?1%20-%20%5Cfrac%7B2%5Cpi%7D%7Bn+1%7D"></td>
+</tr>
+</tbody>
+</table>
+<p>(Strang §9.3)</p>
+<p>최적 매개변수는</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Comega%5E*%20=%20%5Cfrac%7B2%7D%7B1%20+%20%5Csin%5Cfrac%7B%5Cpi%7D%7Bn+1%7D%7D%0A"></p>
+<p>이다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관: 왜 SOR이 차수를 한 단계 높이는가
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><img src="https://latex.codecogs.com/png.latex?n"> 이 커질 때 Jacobi·Gauss-Seidel의 <img src="https://latex.codecogs.com/png.latex?1%20-%20%5Crho"> 는 <img src="https://latex.codecogs.com/png.latex?1/n%5E2"> 수준이므로 반복 수가 <img src="https://latex.codecogs.com/png.latex?n%5E2"> 에 비례한다. SOR 최적 <img src="https://latex.codecogs.com/png.latex?%5Comega%5E*"> 는 <img src="https://latex.codecogs.com/png.latex?1%20-%20%5Crho"> 를 <img src="https://latex.codecogs.com/png.latex?1/n"> 수준으로 끌어올려 반복 수가 <img src="https://latex.codecogs.com/png.latex?n"> 에 비례한다. 즉 <img src="https://latex.codecogs.com/png.latex?n%20=%201000"> 격자에서 Gauss-Seidel은 <img src="https://latex.codecogs.com/png.latex?%5Csim%2010%5E6"> 반복, SOR은 <img src="https://latex.codecogs.com/png.latex?%5Csim%2010%5E3"> 반복이다 — <strong>천 배 차이</strong>.</p>
+<p>과도 완화가 왜 도움이 되는가. Jacobi·Gauss-Seidel은 “저주파(low-frequency) 오차 성분”을 거의 감쇠시키지 못한다 (이 성분의 고유값이 1에 매우 가깝다). <img src="https://latex.codecogs.com/png.latex?%5Comega%20%3E%201"> 은 각 단계에서 더 큰 걸음을 내디뎌 저주파 감쇠율을 인위적으로 키운다. 단 너무 크면 고주파 성분이 발산하므로 정확한 최적값이 존재한다.</p>
+</div>
+</div>
+</section>
+<section id="문제-omega-를-모른다" class="level3" data-number="6.3">
+<h3 data-number="6.3" class="anchored" data-anchor-id="문제-omega-를-모른다"><span class="header-section-number">6.3</span> 문제: <img src="https://latex.codecogs.com/png.latex?%5Comega%5E*"> 를 모른다</h3>
+<p>실무에서 <img src="https://latex.codecogs.com/png.latex?%5Comega%5E*"> 는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 의 스펙트럼에 의존하므로 <strong>선험적으로 알 수 없다</strong>. 대안:</p>
+<ol type="1">
+<li>샘플 반복으로 <img src="https://latex.codecogs.com/png.latex?%5Crho"> 를 추정해 <img src="https://latex.codecogs.com/png.latex?%5Comega"> 를 수치적으로 탐색</li>
+<li>특정 문제군(Poisson, 등)에서 해석적 <img src="https://latex.codecogs.com/png.latex?%5Comega%5E*"> 를 사용</li>
+<li>SOR을 포기하고 Multigrid 또는 PCG로 이동</li>
+</ol>
+<p>현대 실무에서 SOR은 단독 해법보다 <strong>전처리기 내부 구성 요소</strong>로 쓰인다.</p>
+<hr>
+</section>
+</section>
+<section id="ilu-불완전-lu-전처리" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="ilu-불완전-lu-전처리"><span class="header-section-number">7</span> ILU: 불완전 LU 전처리</h2>
+<section id="아이디어-1" class="level3" data-number="7.1">
+<h3 data-number="7.1" class="anchored" data-anchor-id="아이디어-1"><span class="header-section-number">7.1</span> 아이디어</h3>
+<p><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 의 정확한 LU 분해는 fill-in 때문에 희소성을 파괴한다. <strong>불완전 LU (Incomplete LU)</strong> 는 LU 분해 과정에서 원래 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 에서 0이었던 자리의 fill-in을 <strong>인위적으로 버린다</strong>.</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BA%7D%20%5Capprox%20%5Cmathbf%7BL%7D_0%20%5Cmathbf%7BU%7D_0,%20%5Cqquad%20%5Cmathbf%7BL%7D_0,%20%5Cmathbf%7BU%7D_0%20%5Ctext%7B%20%EB%8A%94%20%7D%20%5Cmathbf%7BA%7D%20%5Ctext%7B%20%EC%99%80%20%EA%B0%99%EC%9D%80%20%ED%9D%AC%EC%86%8C%20%ED%8C%A8%ED%84%B4%7D%0A"></p>
+<p><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BS%7D%20=%20%5Cmathbf%7BL%7D_0%20%5Cmathbf%7BU%7D_0"> 로 분할하면 반복은 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BL%7D_0%5Cmathbf%7BU%7D_0%20%5Cmathbf%7Bx%7D_%7Bk+1%7D%20=%20(%5Cmathbf%7BL%7D_0%5Cmathbf%7BU%7D_0%20-%20%5Cmathbf%7BA%7D)%5Cmathbf%7Bx%7D_k%20+%20%5Cmathbf%7Bb%7D">. 왼쪽은 삼각 대입 <img src="https://latex.codecogs.com/png.latex?O(%5Ctext%7Bnnz%7D)">, 오른쪽은 희소 행렬-벡터 곱.</p>
+</section>
+<section id="변종" class="level3" data-number="7.2">
+<h3 data-number="7.2" class="anchored" data-anchor-id="변종"><span class="header-section-number">7.2</span> 변종</h3>
+<ul>
+<li><strong>ILU(0)</strong>: fill-in 전부 버림. 가장 싸다</li>
+<li><strong>ILU(<img src="https://latex.codecogs.com/png.latex?p">)</strong>: <img src="https://latex.codecogs.com/png.latex?p"> 레벨까지 fill-in 허용. 정확도 vs 비용 타협</li>
+<li><strong>ILUT</strong>: 임계값 기반 drop — 작은 원소만 버림 (보다 적응적)</li>
+</ul>
+<p>ILU는 단독 해법보다 <strong>Krylov 방법의 전처리기</strong>로 주로 쓰인다. GMRES + ILU(0) 조합은 비대칭 희소 시스템의 사실상 표준이다.</p>
+<hr>
+</section>
+</section>
+<section id="multigrid-다중-격자-방법" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="multigrid-다중-격자-방법"><span class="header-section-number">8</span> Multigrid: 다중 격자 방법</h2>
+<section id="저주파-오차-문제" class="level3" data-number="8.1">
+<h3 data-number="8.1" class="anchored" data-anchor-id="저주파-오차-문제"><span class="header-section-number">8.1</span> 저주파 오차 문제</h3>
+<p>Jacobi·Gauss-Seidel의 치명적 약점: <strong>저주파(low-frequency) 오차 성분이 느리게 감쇠</strong>한다. 격자 한 점에서 이웃으로 정보가 퍼지려면 여러 반복이 필요하므로, 큰 규모(낮은 주파수) 오차는 전파 속도에 지배된다.</p>
+</section>
+<section id="해법-여러-해상도를-오간다" class="level3" data-number="8.2">
+<h3 data-number="8.2" class="anchored" data-anchor-id="해법-여러-해상도를-오간다"><span class="header-section-number">8.2</span> 해법: 여러 해상도를 오간다</h3>
+<p><strong>Multigrid</strong>의 통찰: “세밀한 격자에서 저주파는 거친 격자에서는 고주파로 보인다”. 거친 격자에서는 Jacobi가 그 성분을 빨리 감쇠시킨다.</p>
+<p>V-cycle 한 단계:</p>
+<ol type="1">
+<li>세밀한 격자에서 Jacobi 몇 번 (<strong>pre-smoothing</strong>) — 고주파 성분 제거</li>
+<li>잔차를 거친 격자로 제한 (<strong>restriction</strong>)</li>
+<li>거친 격자에서 재귀적으로 해결 (<strong>coarse-grid correction</strong>) — 저주파 성분 처리</li>
+<li>해를 세밀한 격자로 보간 (<strong>prolongation</strong>)</li>
+<li>Jacobi 몇 번 (<strong>post-smoothing</strong>) — 보간 오차 정돈</li>
+</ol>
+</section>
+<section id="성능" class="level3" data-number="8.3">
+<h3 data-number="8.3" class="anchored" data-anchor-id="성능"><span class="header-section-number">8.3</span> 성능</h3>
+<p>타원형 PDE에서 Multigrid는 <strong><img src="https://latex.codecogs.com/png.latex?O(n)"> 에 기계 정밀도</strong> 에 도달한다. 즉 반복 수가 격자 크기에 <strong>의존하지 않는다</strong>. 이는 모든 반복법 중 이 종류 문제에서 최적 성능이다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관: Multigrid는 “여러 망원경을 번갈아 쓴다”
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>고배율 망원경으로 별의 세부를 보지만 전체 은하 구조는 안 보인다. 저배율 망원경으로 은하 구조를 보지만 세부는 안 보인다. 두 망원경을 번갈아 쓰면 세부와 전체를 모두 파악할 수 있다. Multigrid가 바로 이 전략이다 — 세밀한 격자(고주파 망원경)와 거친 격자(저주파 망원경)를 V자로 왕복한다.</p>
+</div>
+</div>
+<hr>
+</section>
+</section>
+<section id="krylov-부분공간-방법" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="krylov-부분공간-방법"><span class="header-section-number">9</span> Krylov 부분공간 방법</h2>
+<section id="krylov-공간" class="level3" data-number="9.1">
+<h3 data-number="9.1" class="anchored" data-anchor-id="krylov-공간"><span class="header-section-number">9.1</span> Krylov 공간</h3>
+<p>정상 반복법은 단계마다 <strong>같은 행렬 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D"></strong> 를 곱하지만, 단계 <img src="https://latex.codecogs.com/png.latex?k"> 의 근사 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bx%7D_k"> 는 이전 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bx%7D_%7Bk-1%7D"> 의 단순 변환이라 “이전에 수집한 정보를 다 쓰지 않는다”. Krylov 방법은 <img src="https://latex.codecogs.com/png.latex?k"> 단계까지 생성된 전 벡터 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bb%7D,%20%5Cmathbf%7BA%7D%5Cmathbf%7Bb%7D,%20%5Cmathbf%7BA%7D%5E2%5Cmathbf%7Bb%7D,%20%5Cdots,%20%5Cmathbf%7BA%7D%5E%7Bk-1%7D%5Cmathbf%7Bb%7D"> 가 생성하는 부분공간에서 <strong>최적</strong> <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bx%7D_k"> 를 고른다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+정의: Krylov 부분공간
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%20%5Cin%20%5Cmathbb%7BR%7D%5E%7Bn%20%5Ctimes%20n%7D">, <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bb%7D%20%5Cin%20%5Cmathbb%7BR%7D%5En"> 에 대해 <img src="https://latex.codecogs.com/png.latex?k">-차 Krylov 부분공간은</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathcal%7BK%7D_k(%5Cmathbf%7BA%7D,%20%5Cmathbf%7Bb%7D)%20=%20%5Ctext%7Bspan%7D%5C%7B%5Cmathbf%7Bb%7D,%20%5Cmathbf%7BA%7D%5Cmathbf%7Bb%7D,%20%5Cmathbf%7BA%7D%5E2%5Cmathbf%7Bb%7D,%20%5Cdots,%20%5Cmathbf%7BA%7D%5E%7Bk-1%7D%5Cmathbf%7Bb%7D%5C%7D%0A"></p>
+<p>이다. Krylov 방법은 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bx%7D_k%20%5Cin%20%5Cmathcal%7BK%7D_k"> 을 어떤 의미에서 최적으로 선택한다.</p>
+</div>
+</div>
+</section>
+<section id="cg-conjugate-gradient" class="level3" data-number="9.2">
+<h3 data-number="9.2" class="anchored" data-anchor-id="cg-conjugate-gradient"><span class="header-section-number">9.2</span> CG: Conjugate Gradient</h3>
+<p><strong>전제</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 가 대칭 양정치 (SPD). 최적성 기준: 에너지 노름 <img src="https://latex.codecogs.com/png.latex?%5C%7C%5Cmathbf%7Be%7D%5C%7C_%5Cmathbf%7BA%7D%5E2%20=%20%5Cmathbf%7Be%7D%5E%5Ctop%20%5Cmathbf%7BA%7D%20%5Cmathbf%7Be%7D"> 를 Krylov 공간 내에서 최소화.</p>
+<p><strong>알고리즘</strong> (Strang Problem Set 9.3 p.491):</p>
+<pre><code>x_0 = 0, r_0 = b, d_0 = r_0
+for n = 1, 2, …
+    α_n = (r_{n-1}^T r_{n-1}) / (d_{n-1}^T A d_{n-1})   # 걸음 길이
+    x_n = x_{n-1} + α_n d_{n-1}                        # 해 업데이트
+    r_n = r_{n-1} - α_n A d_{n-1}                      # 잔차 업데이트
+    β_n = (r_n^T r_n) / (r_{n-1}^T r_{n-1})            # 이번 단계 개선도
+    d_n = r_n + β_n d_{n-1}                            # 새 탐색 방향</code></pre>
+<p>각 단계는 <strong>행렬-벡터 곱 1번</strong>(<code>A d_{n-1}</code>)과 내적 몇 번이 전부다. 행렬 자체를 저장할 필요 없이 “곱해 주는 함수”만 있으면 된다 (<strong>matrix-free</strong> 구현 가능).</p>
+</section>
+<section id="cg의-두-보물" class="level3" data-number="9.3">
+<h3 data-number="9.3" class="anchored" data-anchor-id="cg의-두-보물"><span class="header-section-number">9.3</span> CG의 두 보물</h3>
+<ol type="1">
+<li><strong>유한 수렴</strong>: 이론적으로 <img src="https://latex.codecogs.com/png.latex?n"> 번 안에 정확한 해 (실제는 반올림으로 퇴화, 실무에서는 훨씬 일찍 멈춤).</li>
+<li><strong>조건수 기반 수렴 속도</strong>:</li>
+</ol>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5C%7C%5Cmathbf%7Be%7D_k%5C%7C_%5Cmathbf%7BA%7D%20%5Cleq%202%20%5Cleft(%20%5Cfrac%7B%5Csqrt%7B%5Ckappa%7D%20-%201%7D%7B%5Csqrt%7B%5Ckappa%7D%20+%201%7D%20%5Cright)%5Ek%20%5C%7C%5Cmathbf%7Be%7D_0%5C%7C_%5Cmathbf%7BA%7D%0A"></p>
+<p>반복 수는 <img src="https://latex.codecogs.com/png.latex?O(%5Csqrt%7B%5Ckappa%7D)"> 으로 목표 정확도에 도달한다. 정상 반복법의 <img src="https://latex.codecogs.com/png.latex?O(%5Ckappa)"> 보다 <strong>제곱근만큼</strong> 빠르다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관: CG는 왜 빠른가
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Jacobi·GS는 매 단계 “현재 잔차 방향”으로만 움직인다. 같은 방향으로 반복 이동하다 보니 이미 처리한 방향을 <strong>또 건드려</strong> 자기 작업을 되돌리는 일이 생긴다. CG는 <strong><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D">-직교(conjugate)</strong> 방향들을 생성하여 “한 방향에서 한 것은 다시 건드리지 않는다”를 보장한다. <img src="https://latex.codecogs.com/png.latex?n"> 차원 공간에서 서로 conjugate한 방향은 최대 <img src="https://latex.codecogs.com/png.latex?n"> 개이므로 최대 <img src="https://latex.codecogs.com/png.latex?n"> 번에 모든 방향이 처리된다. 그래서 유한 수렴이 가능하다.</p>
+<p>일상 비유: 쇼핑 목록의 물건을 한 번씩만 사러 가는 것(CG) vs 같은 물건을 여러 번 사러 왕복하는 것(Jacobi).</p>
+</div>
+</div>
+</section>
+<section id="gmres-minres-bicgstab" class="level3" data-number="9.4">
+<h3 data-number="9.4" class="anchored" data-anchor-id="gmres-minres-bicgstab"><span class="header-section-number">9.4</span> GMRES, MINRES, BiCGSTAB</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th>방법</th>
+<th>적용</th>
+<th>기준</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>CG</td>
+<td>SPD</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5C%7C%5Cmathbf%7Be%7D%5C%7C_%5Cmathbf%7BA%7D"> 최소화</td>
+</tr>
+<tr class="even">
+<td>MINRES</td>
+<td>대칭 (부정치 허용)</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5C%7C%5Cmathbf%7Br%7D%5C%7C_2"> 최소화</td>
+</tr>
+<tr class="odd">
+<td>GMRES</td>
+<td>일반 (비대칭)</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5C%7C%5Cmathbf%7Br%7D%5C%7C_2"> 최소화, Arnoldi 기반</td>
+</tr>
+<tr class="even">
+<td>BiCGSTAB</td>
+<td>일반</td>
+<td>양측 Krylov, 메모리 <img src="https://latex.codecogs.com/png.latex?O(n)"></td>
+</tr>
+</tbody>
+</table>
+<p>GMRES의 비용은 단계마다 Arnoldi 재직교화로 <img src="https://latex.codecogs.com/png.latex?O(kn)"> 누적(최대 <img src="https://latex.codecogs.com/png.latex?k"> 단계), 메모리 <img src="https://latex.codecogs.com/png.latex?O(kn)">. 이 때문에 <strong>재시작(restart)</strong> GMRES(m)이 실무 표준이다.</p>
+<hr>
+</section>
+</section>
+<section id="전처리기-preconditioner" class="level2" data-number="10">
+<h2 data-number="10" class="anchored" data-anchor-id="전처리기-preconditioner"><span class="header-section-number">10</span> 전처리기 (Preconditioner)</h2>
+<section id="핵심-아이디어" class="level3" data-number="10.1">
+<h3 data-number="10.1" class="anchored" data-anchor-id="핵심-아이디어"><span class="header-section-number">10.1</span> 핵심 아이디어</h3>
+<p>조건수 <img src="https://latex.codecogs.com/png.latex?%5Ckappa"> 가 크면 Krylov 방법의 수렴이 느리다. <strong>전처리(preconditioning)</strong> 는 원 시스템을 <strong>스펙트럼이 좋은 등가 시스템</strong>으로 변환한다.</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BM%7D%5E%7B-1%7D%20%5Cmathbf%7BA%7D%20%5Cmathbf%7Bx%7D%20=%20%5Cmathbf%7BM%7D%5E%7B-1%7D%20%5Cmathbf%7Bb%7D%0A"></p>
+<p>여기서 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D"> 은 전처리기. 목표는 (1) <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D%5E%7B-1%7D%5Cmathbf%7BA%7D"> 가 “항등에 가깝다” — 조건수 작음, (2) <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D%5Cmathbf%7By%7D%20=%20%5Cmathbf%7Bz%7D"> 를 싸게 풀 수 있다.</p>
+</section>
+<section id="전처리기-선택" class="level3" data-number="10.2">
+<h3 data-number="10.2" class="anchored" data-anchor-id="전처리기-선택"><span class="header-section-number">10.2</span> 전처리기 선택</h3>
+<table class="table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>전처리기</th>
+<th><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D"></th>
+<th>비용</th>
+<th>효과</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Jacobi</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Ctext%7Bdiag%7D(%5Cmathbf%7BA%7D)"></td>
+<td>매우 싸</td>
+<td>스케일 불균형만 해소</td>
+</tr>
+<tr class="even">
+<td>대칭 Gauss-Seidel</td>
+<td><img src="https://latex.codecogs.com/png.latex?(%5Cmathbf%7BD%7D+%5Cmathbf%7BL%7D)%5Cmathbf%7BD%7D%5E%7B-1%7D(%5Cmathbf%7BD%7D+%5Cmathbf%7BU%7D)"></td>
+<td>싸</td>
+<td>중간</td>
+</tr>
+<tr class="odd">
+<td>ILU(0) / ILUT</td>
+<td>불완전 LU</td>
+<td>중</td>
+<td>넓은 범위에서 유효</td>
+</tr>
+<tr class="even">
+<td>Multigrid (AMG)</td>
+<td>다중 격자 V-cycle</td>
+<td>비교적 비쌈</td>
+<td>타원형 PDE에 최적</td>
+</tr>
+<tr class="odd">
+<td>블록 Jacobi / Schwarz</td>
+<td>영역 분할</td>
+<td>병렬</td>
+<td>HPC 표준</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Preconditioned CG (PCG)</strong>: CG 알고리즘에서 내적을 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D%5E%7B-1%7D"> 기반으로 수정하여 효과적으로 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D%5E%7B-1%7D%5Cmathbf%7BA%7D"> 의 스펙트럼으로 수렴시킨다. 각 단계에 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D%5Cmathbf%7By%7D%20=%20%5Cmathbf%7Bz%7D"> 풀이 한 번만 추가된다.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관: 전처리기는 “안경”이다
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>근시인 사람에게 글자가 흐리게 보이는 것이 <img src="https://latex.codecogs.com/png.latex?%5Ckappa"> 가 큰 문제와 같다. 글자 자체를 키워 쓰게(문제 재구성) 하는 대신 안경(preconditioner)을 씌워 눈에 들어오는 상(像)을 선명하게 만든다. 안경 설계 비용(transformation 비용)이 글자 다시 쓰는 비용(직접법)보다 훨씬 싸다면 안경이 이긴다. 적절한 안경 도수는 시력(문제 스펙트럼)에 맞춰야 하므로 전처리기 선택이 문제 구조에 의존한다.</p>
+</div>
+</div>
+</section>
+<section id="전처리-효과-수치-감각" class="level3" data-number="10.3">
+<h3 data-number="10.3" class="anchored" data-anchor-id="전처리-효과-수치-감각"><span class="header-section-number">10.3</span> 전처리 효과 수치 감각</h3>
+<p>Strang <img src="https://latex.codecogs.com/png.latex?-1,%202,%20-1"> 격자(<img src="https://latex.codecogs.com/png.latex?n%20=%201000">)에서 <img src="https://latex.codecogs.com/png.latex?%5Ckappa(%5Cmathbf%7BA%7D)%20%5Capprox%204n%5E2/%5Cpi%5E2%20%5Capprox%204%20%5Ctimes%2010%5E5">. 각 방법의 반복 수:</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>방법</th>
+<th>반복 수 (잔차 <img src="https://latex.codecogs.com/png.latex?10%5E%7B-6%7D">)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Jacobi</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Csim%2010%5E7"></td>
+</tr>
+<tr class="even">
+<td>Gauss-Seidel</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Csim%205%20%5Ctimes%2010%5E6"></td>
+</tr>
+<tr class="odd">
+<td>SOR (최적 <img src="https://latex.codecogs.com/png.latex?%5Comega">)</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Csim%203000"></td>
+</tr>
+<tr class="even">
+<td>CG</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Csim%201000"> (= <img src="https://latex.codecogs.com/png.latex?%5Csqrt%7B%5Ckappa%7D">)</td>
+</tr>
+<tr class="odd">
+<td>PCG (ILU 전처리)</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Csim%20100"></td>
+</tr>
+<tr class="even">
+<td>PCG (Multigrid 전처리)</td>
+<td><img src="https://latex.codecogs.com/png.latex?%5Csim%2010"></td>
+</tr>
+</tbody>
+</table>
+<p>5~7 자리 차이가 실무에서 나타나는 전형적 격차다.</p>
+<hr>
+</section>
+</section>
+<section id="실무-의사결정-트리" class="level2" data-number="11">
+<h2 data-number="11" class="anchored" data-anchor-id="실무-의사결정-트리"><span class="header-section-number">11</span> 실무 의사결정 트리</h2>
+<pre><code>선형 시스템 A x = b 를 풀어야 한다
+    │
+    ├─ n ≤ 10^4 이고 dense?
+    │     → 직접법 (LU, Cholesky, QR): scipy.linalg.solve
+    │
+    ├─ 희소 (nnz ≪ n^2) 이고 n ≤ 10^5?
+    │     → 희소 직접법 (SuperLU, UMFPACK): scipy.sparse.linalg.spsolve
+    │
+    └─ 대규모 희소 (n ≥ 10^5)?
+          ├─ A 가 SPD?
+          │     → PCG + ILU(0) 또는 Multigrid
+          │       scipy.sparse.linalg.cg(A, b, M=...)
+          │
+          ├─ A 가 대칭 (부정치)?
+          │     → MINRES + ILU
+          │
+          └─ A 가 일반 (비대칭)?
+                → GMRES(m) + ILU(0) 또는 ILUT
+                  scipy.sparse.linalg.gmres(A, b, M=..., restart=30)</code></pre>
+</section>
+<section id="코드-예시" class="level2" data-number="12">
+<h2 data-number="12" class="anchored" data-anchor-id="코드-예시"><span class="header-section-number">12</span> 코드 예시</h2>
+<section id="step-1-jacobigauss-seidelsor-비교-구현" class="level3" data-number="12.1">
+<h3 data-number="12.1" class="anchored" data-anchor-id="step-1-jacobigauss-seidelsor-비교-구현"><span class="header-section-number">12.1</span> Step 1: Jacobi·Gauss-Seidel·SOR 비교 구현</h3>
+<div id="e683f97b" class="cell" data-execution_count="1">
+<details class="code-fold">
+<summary>코드</summary>
+<div class="sourceCode cell-code" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb3-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> np</span>
+<span id="cb3-2"></span>
+<span id="cb3-3"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> build_K(n):</span>
+<span id="cb3-4">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">"""-1, 2, -1 tridiagonal (1D Poisson)"""</span></span>
+<span id="cb3-5">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">2</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span>np.eye(n) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> np.eye(n, k<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> np.eye(n, k<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=-</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>)</span>
+<span id="cb3-6"></span>
+<span id="cb3-7"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> jacobi(A, b, tol<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1e-8</span>, max_iter<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">100000</span>):</span>
+<span id="cb3-8">    n <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(b)</span>
+<span id="cb3-9">    D <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.diag(A)<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> R <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> np.diag(D)</span>
+<span id="cb3-10">    x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.zeros(n)</span>
+<span id="cb3-11">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">range</span>(max_iter):</span>
+<span id="cb3-12">        x_new <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> (b <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> R <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> x) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> D</span>
+<span id="cb3-13">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">if</span> np.linalg.norm(x_new <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> x) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> tol:</span>
+<span id="cb3-14">            <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> x_new, k<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span></span>
+<span id="cb3-15">        x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> x_new</span>
+<span id="cb3-16">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> x, max_iter</span>
+<span id="cb3-17"></span>
+<span id="cb3-18"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> gauss_seidel(A, b, tol<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1e-8</span>, max_iter<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">100000</span>):</span>
+<span id="cb3-19">    n <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(b)<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.zeros(n)</span>
+<span id="cb3-20">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">range</span>(max_iter):</span>
+<span id="cb3-21">        x_old <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> x.copy()</span>
+<span id="cb3-22">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">range</span>(n):</span>
+<span id="cb3-23">            x[i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> (b[i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> A[i, :i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> x[:i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> A[i, i<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>:] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> x[i<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>:]) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> A[i, i]</span>
+<span id="cb3-24">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">if</span> np.linalg.norm(x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> x_old) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> tol:</span>
+<span id="cb3-25">            <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> x, k<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span></span>
+<span id="cb3-26">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> x, max_iter</span>
+<span id="cb3-27"></span>
+<span id="cb3-28"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> sor(A, b, omega, tol<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1e-8</span>, max_iter<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">100000</span>):</span>
+<span id="cb3-29">    n <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(b)<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.zeros(n)</span>
+<span id="cb3-30">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">range</span>(max_iter):</span>
+<span id="cb3-31">        x_old <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> x.copy()</span>
+<span id="cb3-32">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">range</span>(n):</span>
+<span id="cb3-33">            sigma <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> A[i, :i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> x[:i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> A[i, i<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>:] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> x[i<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>:]</span>
+<span id="cb3-34">            x[i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> (<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span>omega)<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span>x[i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> omega<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span>(b[i] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> sigma) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> A[i, i]</span>
+<span id="cb3-35">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">if</span> np.linalg.norm(x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> x_old) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> tol:</span>
+<span id="cb3-36">            <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> x, k<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span></span>
+<span id="cb3-37">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> x, max_iter</span>
+<span id="cb3-38"></span>
+<span id="cb3-39">n <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">50</span></span>
+<span id="cb3-40">A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> build_K(n)<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> b <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.ones(n)</span>
+<span id="cb3-41">omega_opt <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">2.0</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> (<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> np.sin(np.pi<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span>(n<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>)))</span>
+<span id="cb3-42"></span>
+<span id="cb3-43">_, it_J  <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> jacobi(A, b)</span>
+<span id="cb3-44">_, it_GS <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> gauss_seidel(A, b)</span>
+<span id="cb3-45">_, it_SOR <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> sor(A, b, omega_opt)</span>
+<span id="cb3-46"></span>
+<span id="cb3-47"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"Jacobi:       </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>it_J<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;"> iterations"</span>)</span>
+<span id="cb3-48"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"Gauss-Seidel: </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>it_GS<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;"> iterations  (≈ Jacobi/2 예상)"</span>)</span>
+<span id="cb3-49"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"SOR (ω*=</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>omega_opt<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">): </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>it_SOR<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;"> iterations  (차수 한 단계 빠름)"</span>)</span></code></pre></div>
+</details>
+</div>
+<p>이 코드의 핵심: <img src="https://latex.codecogs.com/png.latex?n%20=%2050"> 에서 Jacobi <img src="https://latex.codecogs.com/png.latex?%5Csim%205000">, Gauss-Seidel <img src="https://latex.codecogs.com/png.latex?%5Csim%202500">, SOR <img src="https://latex.codecogs.com/png.latex?%5Csim%20100"> 수준이다. 격자 <img src="https://latex.codecogs.com/png.latex?n"> 을 늘리면 Jacobi·GS는 <img src="https://latex.codecogs.com/png.latex?n%5E2"> 로 증가하지만 SOR은 <img src="https://latex.codecogs.com/png.latex?n"> 로 증가한다.</p>
+</section>
+<section id="step-2-conjugate-gradient-직접-구현" class="level3" data-number="12.2">
+<h3 data-number="12.2" class="anchored" data-anchor-id="step-2-conjugate-gradient-직접-구현"><span class="header-section-number">12.2</span> Step 2: Conjugate Gradient 직접 구현</h3>
+<div id="f989c196" class="cell" data-execution_count="2">
+<details class="code-fold">
+<summary>코드</summary>
+<div class="sourceCode cell-code" id="cb4" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb4-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> np</span>
+<span id="cb4-2"></span>
+<span id="cb4-3"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> cg(A, b, x0<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">None</span>, tol<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1e-10</span>, max_iter<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">None</span>):</span>
+<span id="cb4-4">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">"""CG for SPD A. Returns (x, iterations, residual_history)."""</span></span>
+<span id="cb4-5">    n <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(b)<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.zeros(n) <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">if</span> x0 <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">is</span> <span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">None</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">else</span> x0.copy()</span>
+<span id="cb4-6">    r <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> b <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> x<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> d <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> r.copy()</span>
+<span id="cb4-7">    rs_old <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> r <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> r</span>
+<span id="cb4-8">    max_iter <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> max_iter <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">or</span> n</span>
+<span id="cb4-9">    hist <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [np.sqrt(rs_old)]</span>
+<span id="cb4-10"></span>
+<span id="cb4-11">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">range</span>(max_iter):</span>
+<span id="cb4-12">        Ad <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> d</span>
+<span id="cb4-13">        alpha <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> rs_old <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> (d <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> Ad)</span>
+<span id="cb4-14">        x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> x <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> alpha <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span> d</span>
+<span id="cb4-15">        r <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> r <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> alpha <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span> Ad</span>
+<span id="cb4-16">        rs_new <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> r <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">@</span> r</span>
+<span id="cb4-17">        hist.append(np.sqrt(rs_new))</span>
+<span id="cb4-18">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">if</span> np.sqrt(rs_new) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> tol:</span>
+<span id="cb4-19">            <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> x, k<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>, hist</span>
+<span id="cb4-20">        beta <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> rs_new <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> rs_old</span>
+<span id="cb4-21">        d <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> r <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> beta <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span> d</span>
+<span id="cb4-22">        rs_old <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> rs_new</span>
+<span id="cb4-23">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> x, max_iter, hist</span>
+<span id="cb4-24"></span>
+<span id="cb4-25"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 비교: 같은 문제를 직접법 + CG + Jacobi로 풀어 본다</span></span>
+<span id="cb4-26">n <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">200</span></span>
+<span id="cb4-27">A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> build_K(n)<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> b <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.random.randn(n)</span>
+<span id="cb4-28">x_direct <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.linalg.solve(A, b)</span>
+<span id="cb4-29"></span>
+<span id="cb4-30">x_cg, it_cg, _ <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> cg(A, b)</span>
+<span id="cb4-31"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"CG 반복수: </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>it_cg<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">   (이론 상한 n=</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>n<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">)"</span>)</span>
+<span id="cb4-32"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"CG 오차 ||x_cg - x_direct||: </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>np<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">.</span>linalg<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">.</span>norm(x_cg <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> x_direct)<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.2e}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>)</span>
+<span id="cb4-33"></span>
+<span id="cb4-34"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 예측: sqrt(kappa) ~ 반복수</span></span>
+<span id="cb4-35">kappa <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.linalg.cond(A)</span>
+<span id="cb4-36"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"κ(A) = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>kappa<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.1f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">,  √κ ≈ </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>np<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">.</span>sqrt(kappa)<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.1f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">  (CG 반복수 상한 감각)"</span>)</span></code></pre></div>
+</details>
+</div>
+</section>
+<section id="step-3-전처리-효과-관찰-pcg-vs-cg" class="level3" data-number="12.3">
+<h3 data-number="12.3" class="anchored" data-anchor-id="step-3-전처리-효과-관찰-pcg-vs-cg"><span class="header-section-number">12.3</span> Step 3: 전처리 효과 관찰 (PCG vs CG)</h3>
+<div id="1d2da40b" class="cell" data-execution_count="3">
+<details class="code-fold">
+<summary>코드</summary>
+<div class="sourceCode cell-code" id="cb5" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb5-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> np</span>
+<span id="cb5-2"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">from</span> scipy.sparse <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> diags, csr_matrix</span>
+<span id="cb5-3"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">from</span> scipy.sparse.linalg <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> cg, spilu, LinearOperator</span>
+<span id="cb5-4"></span>
+<span id="cb5-5"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># 2D Poisson 격자 (nxn) → N = n*n</span></span>
+<span id="cb5-6"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> build_poisson_2d(n):</span>
+<span id="cb5-7">    e <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.ones(n)</span>
+<span id="cb5-8">    T <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> diags([<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span>e, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">2</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span>e, <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span>e], [<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>])</span>
+<span id="cb5-9">    I <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> diags([np.ones(n)], [<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>])</span>
+<span id="cb5-10">    A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> (np.kron(I.toarray(), T.toarray())</span>
+<span id="cb5-11">         <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> np.kron(T.toarray(), I.toarray()))</span>
+<span id="cb5-12">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">return</span> csr_matrix(A)</span>
+<span id="cb5-13"></span>
+<span id="cb5-14">n <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">30</span></span>
+<span id="cb5-15">A <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> build_poisson_2d(n)<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> N <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> A.shape[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]</span>
+<span id="cb5-16">b <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.random.randn(N)</span>
+<span id="cb5-17"></span>
+<span id="cb5-18"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># CG without preconditioner</span></span>
+<span id="cb5-19">counter <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]</span>
+<span id="cb5-20"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">def</span> cb(xk): counter[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+=</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span></span>
+<span id="cb5-21">x_cg, info <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> cg(A, b, tol<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1e-8</span>, maxiter<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5000</span>, callback<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>cb)</span>
+<span id="cb5-22">iters_cg <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> counter[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]</span>
+<span id="cb5-23"></span>
+<span id="cb5-24"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># PCG with ILU preconditioner</span></span>
+<span id="cb5-25">ilu <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> spilu(A, drop_tol<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1e-3</span>, fill_factor<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">10</span>)</span>
+<span id="cb5-26">M <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> LinearOperator(A.shape, matvec<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>ilu.solve)</span>
+<span id="cb5-27">counter <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]</span>
+<span id="cb5-28">x_pcg, info <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> cg(A, b, M<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>M, tol<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1e-8</span>, maxiter<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">5000</span>, callback<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>cb)</span>
+<span id="cb5-29">iters_pcg <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> counter[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]</span>
+<span id="cb5-30"></span>
+<span id="cb5-31"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"2D Poisson N = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>N<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>)</span>
+<span id="cb5-32"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"CG 반복수:  </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>iters_cg<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>)</span>
+<span id="cb5-33"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"PCG(ILU):   </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>iters_pcg<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>)</span>
+<span id="cb5-34"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"가속비:     </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>iters_cg<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span>iters_pcg<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.1f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">x"</span>)</span></code></pre></div>
+</details>
+</div>
+<p>이 코드의 핵심: 전처리기는 수렴 자체를 바꾸는 것이 아니라 <strong>같은 CG 알고리즘의 유효 조건수</strong>를 낮춰 반복 수를 줄인다. 실무 PDE 해법은 거의 항상 전처리와 함께 쓰인다.</p>
+<hr>
+</section>
+</section>
+<section id="관련-주제" class="level2" data-number="13">
+<h2 data-number="13" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">13</span> 관련 주제</h2>
+<p><strong>선행 지식</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-09-1-gilbert-strang-numerical-linear-algebra-overview.html">수치 선형대수 개요</a> — 직접법·반복법 지도</li>
+<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-09-2-gilbert-strang-gaussian-elimination-in-practice.html">실전 가우스 소거법</a> — 직접법의 <img src="https://latex.codecogs.com/png.latex?%5Cfrac%7B2%7D%7B3%7Dn%5E3"> 한계</li>
+<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-09-3-gilbert-strang-norms-condition-numbers.html">노름과 조건수</a> — <img src="https://latex.codecogs.com/png.latex?%5Ckappa(%5Cmathbf%7BA%7D)"> 와 CG 수렴 속도</li>
+<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-06-1-gilbert-strang-eigenvalue-overview.html">고유값과 고유벡터</a> — 스펙트럼 반경의 의미</li>
+<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-06-5-gilbert-strang-positive-definite-matrices.html">대칭 양정치 행렬</a> — CG의 전제 조건</li>
+</ul>
+<p><strong>후속 주제</strong></p>
+<ul>
+<li>Multigrid 상세 (placeholder, 교재 외)</li>
+<li>GMRES와 Arnoldi 반복 (placeholder, 교재 외)</li>
+<li>영역 분할 전처리기 (Additive Schwarz, placeholder)</li>
+<li>Krylov 고유값: Lanczos, Arnoldi 방법 (placeholder)</li>
+</ul>
+<p><strong>다른 카테고리 연결</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Machine_Learning/index.html">Hessian-free 최적화</a> — CG로 Newton 방향 계산 (placeholder)</li>
+<li><a href="../../../../../docs/blog/posts/Agent/index.html">PageRank와 Power iteration</a> — 고유벡터 반복 (placeholder)</li>
+<li><a href="../../../../../docs/blog/posts/Deep_Learning/index.html">희소 그래프 라플라시안</a> — GNN 메시지 전달의 수치 기반 (placeholder)</li>
+</ul>
+<p><strong>참고 교재</strong></p>
+<ul>
+<li>Strang (2009) <em>Introduction to Linear Algebra</em> Ch.9 §9.3 — 본 포스트의 논리 뼈대</li>
+<li>Trefethen &amp; Bau (1997) <em>Numerical Linear Algebra</em> Lect.32–40 — Krylov 방법의 정석</li>
+<li>Saad (2003) <em>Iterative Methods for Sparse Linear Systems</em> — 반복법의 포괄적 레퍼런스</li>
+<li>Briggs, Henson, McCormick (2000) <em>A Multigrid Tutorial</em> — Multigrid 입문</li>
+</ul>
+
+
+</section>
+
+ ]]></description>
+  <category>Mathematics</category>
+  <category>Machine Learning</category>
+  <guid>kk3225.netlify.app/docs/blog/posts/Math/linear_algebra/mit-09-4-gilbert-strang-iterative-methods-preconditioners.html</guid>
   <pubDate>Sun, 12 Apr 2026 15:00:00 GMT</pubDate>
 </item>
 <item>
@@ -21196,921 +22560,6 @@ font-style: inherit;">theme_bw</span>()</span></code></pre></div>
   <category>Math</category>
   <category>Linear Algebra</category>
   <guid>kk3225.netlify.app/docs/blog/posts/Math/linear_algebra/mit-06-7-gilbert-strang-svd.html</guid>
-  <pubDate>Fri, 10 Apr 2026 15:00:00 GMT</pubDate>
-</item>
-<item>
-  <title>Ch.7 Overview — 선형 변환 (Linear Transformations)</title>
-  <dc:creator>Kwangmin Kim</dc:creator>
-  <link>kk3225.netlify.app/docs/blog/posts/Math/linear_algebra/mit-07-1-gilbert-strang-linear-transformations-overview.html</link>
-  <description><![CDATA[ 
-
-
-
-
-
-<section id="왜-선형-변환인가-관점의-전환" class="level2" data-number="1">
-<h2 data-number="1" class="anchored" data-anchor-id="왜-선형-변환인가-관점의-전환"><span class="header-section-number">1</span> 왜 선형 변환인가 — 관점의 전환</h2>
-<p>지금까지 행렬을 다룬 방식은 크게 두 가지였다.</p>
-<ul>
-<li><strong>행 관점 (row picture)</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%5Cmathbf%7Bx%7D%20=%20%5Cmathbf%7Bb%7D"> 를 “여러 선(또는 초평면)의 교점을 구하는 문제”로 본다.</li>
-<li><strong>열 관점 (column picture)</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%5Cmathbf%7Bx%7D"> 를 “<img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 의 열들의 선형결합”으로 본다.</li>
-</ul>
-<p>두 관점 모두 행렬을 <strong>정적(static)</strong> 대상, 즉 “계수들의 묶음”으로 본다. Ch.7 에서는 세 번째 관점을 도입한다. 행렬을 <strong>함수(function)</strong> 로, 즉 <strong>벡터를 입력받아 벡터를 출력하는 변환</strong>으로 읽는다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AT%20:%20%5Cmathbb%7BR%7D%5En%20%5Cto%20%5Cmathbb%7BR%7D%5Em,%20%5Cqquad%20T(%5Cmathbf%7Bx%7D)%20=%20%5Cmathbf%7BA%7D%5Cmathbf%7Bx%7D%0A"></p>
-<p>이 관점이 왜 중요한가. 행렬을 계수표로 보는 한, 우리는 “계산 규칙”에 머무른다. 함수로 보면 질문이 달라진다.</p>
-<ul>
-<li>입력 공간 전체가 출력 공간의 어디로 옮겨지는가 (<strong>치역·이미지</strong>).</li>
-<li>입력 공간의 어떤 부분이 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7B0%7D"> 으로 뭉개지는가 (<strong>커널·영공간</strong>).</li>
-<li>같은 변환을 <strong>다른 언어(기저)</strong> 로 쓰면 행렬의 모양이 어떻게 바뀌는가 (<strong>유사 변환</strong>).</li>
-<li>어떤 기저를 고르면 변환이 <strong>가장 단순한 형태</strong>(대각행렬, 조르당 형)가 되는가.</li>
-</ul>
-<p>이 질문들은 대각화(Ch.6), 최소제곱(Ch.4), SVD(§6.7), 딥러닝의 선형 레이어, 컴퓨터 그래픽스의 아핀 변환을 <strong>하나의 언어</strong>로 묶는다 (Strang, 2009, Ch.7).</p>
-<div class="callout callout-style-default callout-tip callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-핵심 직관 — 격자를 늘리고 회전시키기
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>종이 위에 균일한 격자를 그렸다고 상상한다. 선형 변환은 이 격자를 다음 세 가지 규칙 아래에서 마음대로 주무르는 것이다.</p>
-<ol type="1">
-<li>원점은 원점 그대로 둔다.</li>
-<li>직선은 직선으로 유지한다 (꺾거나 구부리지 않는다).</li>
-<li>등간격은 등간격으로 유지한다 (한쪽 끝만 늘어나는 것은 허용하지 않는다).</li>
-</ol>
-<p>이 세 조건을 지키면서 격자를 회전·확대·전단(shear)·사영하는 모든 조작이 선형 변환이다.</p>
-</div>
-</div>
-<hr>
-</section>
-<section id="정의-definition" class="level2" data-number="2">
-<h2 data-number="2" class="anchored" data-anchor-id="정의-definition"><span class="header-section-number">2</span> 정의 (Definition)</h2>
-<div class="callout callout-style-default callout-note callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-정의: 선형 변환 (Linear Transformation)
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>벡터 공간 <img src="https://latex.codecogs.com/png.latex?V"> 에서 벡터 공간 <img src="https://latex.codecogs.com/png.latex?W"> 로 가는 함수 <img src="https://latex.codecogs.com/png.latex?T%20:%20V%20%5Cto%20W"> 가 모든 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bv%7D,%20%5Cmathbf%7Bw%7D%20%5Cin%20V"> 와 모든 스칼라 <img src="https://latex.codecogs.com/png.latex?c%20%5Cin%20%5Cmathbb%7BR%7D"> 에 대해 다음 두 조건을 만족하면 <img src="https://latex.codecogs.com/png.latex?T"> 를 <strong>선형 변환</strong>이라 한다.</p>
-<ol type="1">
-<li><strong>가법성 (Additivity)</strong>: <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bv%7D%20+%20%5Cmathbf%7Bw%7D)%20=%20T(%5Cmathbf%7Bv%7D)%20+%20T(%5Cmathbf%7Bw%7D)"></li>
-<li><strong>동차성 (Homogeneity)</strong>: <img src="https://latex.codecogs.com/png.latex?T(c%5Cmathbf%7Bv%7D)%20=%20c%5C,%20T(%5Cmathbf%7Bv%7D)"></li>
-</ol>
-<p>이 두 조건은 하나로 묶을 수 있다. 임의의 스칼라 <img src="https://latex.codecogs.com/png.latex?a,%20b"> 와 벡터 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bv%7D,%20%5Cmathbf%7Bw%7D"> 에 대해 <img src="https://latex.codecogs.com/png.latex?T(a%5Cmathbf%7Bv%7D%20+%20b%5Cmathbf%7Bw%7D)%20=%20a%5C,%20T(%5Cmathbf%7Bv%7D)%20+%20b%5C,%20T(%5Cmathbf%7Bw%7D)"> 가 성립한다.</p>
-</div>
-</div>
-<p><strong>표기 정리</strong></p>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 50%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>기호</th>
-<th>의미</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><img src="https://latex.codecogs.com/png.latex?V,%20W"></td>
-<td>벡터 공간 (정의역·공역)</td>
-</tr>
-<tr class="even">
-<td><img src="https://latex.codecogs.com/png.latex?T%20:%20V%20%5Cto%20W"></td>
-<td>선형 변환</td>
-</tr>
-<tr class="odd">
-<td><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bv%7D,%20%5Cmathbf%7Bw%7D"></td>
-<td>입력 벡터</td>
-</tr>
-<tr class="even">
-<td><img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bv%7D)"></td>
-<td>출력 벡터</td>
-</tr>
-<tr class="odd">
-<td><img src="https://latex.codecogs.com/png.latex?%5Cker%20T"></td>
-<td>커널: <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bv%7D)%20=%20%5Cmathbf%7B0%7D"> 을 만족하는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bv%7D"> 들의 집합</td>
-</tr>
-<tr class="even">
-<td><img src="https://latex.codecogs.com/png.latex?%5Ctext%7BIm%7D%5C,%20T"></td>
-<td>치역(상): <img src="https://latex.codecogs.com/png.latex?T(V)%20=%20%5C%7BT(%5Cmathbf%7Bv%7D)%20:%20%5Cmathbf%7Bv%7D%20%5Cin%20V%5C%7D"></td>
-</tr>
-</tbody>
-</table>
-<p><strong>두 공리가 주는 즉각적 귀결</strong></p>
-<ul>
-<li><img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7B0%7D)%20=%20%5Cmathbf%7B0%7D">: 동차성에서 <img src="https://latex.codecogs.com/png.latex?c%20=%200"> 을 대입하면 곧장 나온다.</li>
-<li><strong>원점 보존</strong>: 선형 변환은 반드시 원점을 원점으로 보낸다. 평행이동 <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bx%7D)%20=%20%5Cmathbf%7Bx%7D%20+%20%5Cmathbf%7Bb%7D"> 는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bb%7D%20%5Cneq%20%5Cmathbf%7B0%7D"> 이면 선형 변환이 <strong>아니다</strong>. 이를 피하기 위해 컴퓨터 그래픽스는 동차좌표(homogeneous coordinates)를 도입해 평행이동을 선형 변환으로 “위장”한다.</li>
-<li><strong>직선 보존</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bu%7D%20+%20t%5Cmathbf%7Bv%7D"> 꼴의 직선은 <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bu%7D)%20+%20t%5C,%20T(%5Cmathbf%7Bv%7D)"> 로 옮겨져 여전히 직선이다.</li>
-<li><strong>비율 보존</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bv%7D"> 와 <img src="https://latex.codecogs.com/png.latex?2%5Cmathbf%7Bv%7D"> 의 길이비는 <img src="https://latex.codecogs.com/png.latex?T"> 통과 후에도 <img src="https://latex.codecogs.com/png.latex?1%20:%202"> 로 유지된다.</li>
-</ul>
-<div class="callout callout-style-default callout-warning callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-선형 변환이 아닌 함수의 전형 두 가지
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<ol type="1">
-<li><strong>평행이동</strong>: <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bx%7D)%20=%20%5Cmathbf%7Bx%7D%20+%20%5Cmathbf%7Bb%7D">, <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bb%7D%20%5Cneq%20%5Cmathbf%7B0%7D">. → 원점 보존 실패.</li>
-<li><strong>비선형 함수</strong>: <img src="https://latex.codecogs.com/png.latex?T(x)%20=%20x%5E2">. → <img src="https://latex.codecogs.com/png.latex?T(x%20+%20y)%20=%20(x+y)%5E2%20%5Cneq%20x%5E2%20+%20y%5E2%20=%20T(x)%20+%20T(y)"> 이므로 가법성 실패.</li>
-</ol>
-<p>딥러닝에서 ReLU, Sigmoid 같은 활성화 함수는 모두 비선형이다. 덕분에 층을 쌓을수록 표현력이 폭발적으로 늘어난다. 반면 활성화 없이 선형 층만 쌓으면 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D_2%20%5Cmathbf%7BA%7D_1%20%5Cmathbf%7Bx%7D"> 꼴이 되어 결국 <strong>하나의 선형 변환과 동등</strong>해지므로 깊이가 무의미해진다.</p>
-</div>
-</div>
-<hr>
-</section>
-<section id="기하학적-직관-geometric-intuition" class="level2" data-number="3">
-<h2 data-number="3" class="anchored" data-anchor-id="기하학적-직관-geometric-intuition"><span class="header-section-number">3</span> 기하학적 직관 (Geometric Intuition)</h2>
-<p>정의만 보면 선형 변환은 추상적이다. 그러나 2차원에서 시각화하면 선형 변환의 전체 종류가 몇 개의 기본형으로 분류된다. <img src="https://latex.codecogs.com/png.latex?2%20%5Ctimes%202"> 행렬은 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_1%20=%20(1,%200)"> 과 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_2%20=%20(0,%201)"> 이 어디로 가는지만 정하면 <strong>모든 다른 벡터</strong>의 상이 자동으로 정해진다. 이것이 기하 직관의 출발점이다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7Bv%7D%20=%20v_1%20%5Cmathbf%7Be%7D_1%20+%20v_2%20%5Cmathbf%7Be%7D_2%20%5C;%5CLongrightarrow%5C;%20T(%5Cmathbf%7Bv%7D)%20=%20v_1%20T(%5Cmathbf%7Be%7D_1)%20+%20v_2%20T(%5Cmathbf%7Be%7D_2)%0A"></p>
-<p>즉 <strong>기저 벡터의 이동만 추적하면 선형 변환 전체가 결정된다</strong>. 이 사실이 뒤에 “선형 변환 = 행렬” 이라는 대응을 낳는다.</p>
-<section id="대표적인-2d-선형-변환" class="level3" data-number="3.1">
-<h3 data-number="3.1" class="anchored" data-anchor-id="대표적인-2d-선형-변환"><span class="header-section-number">3.1</span> 대표적인 2D 선형 변환</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 20%">
-<col style="width: 20%">
-<col style="width: 20%">
-<col style="width: 20%">
-<col style="width: 20%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>변환</th>
-<th><img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Be%7D_1)"></th>
-<th><img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Be%7D_2)"></th>
-<th>행렬</th>
-<th>기하 효과</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>항등</td>
-<td><img src="https://latex.codecogs.com/png.latex?(1,0)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?(0,1)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BI%7D"></td>
-<td>아무것도 안 함</td>
-</tr>
-<tr class="even">
-<td>스케일 (<img src="https://latex.codecogs.com/png.latex?k">배 확대)</td>
-<td><img src="https://latex.codecogs.com/png.latex?(k,0)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?(0,k)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?k%5Cmathbf%7BI%7D"></td>
-<td>중심 기준 등방 확대</td>
-</tr>
-<tr class="odd">
-<td>회전 <img src="https://latex.codecogs.com/png.latex?%5Ctheta"></td>
-<td><img src="https://latex.codecogs.com/png.latex?(%5Ccos%5Ctheta,%20%5Csin%5Ctheta)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?(-%5Csin%5Ctheta,%20%5Ccos%5Ctheta)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BR%7D_%5Ctheta"></td>
-<td>원점 기준 회전</td>
-</tr>
-<tr class="even">
-<td><img src="https://latex.codecogs.com/png.latex?x">축 반사</td>
-<td><img src="https://latex.codecogs.com/png.latex?(1,0)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?(0,-1)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Ctext%7Bdiag%7D(1,-1)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?y"> 좌표 부호 뒤집기</td>
-</tr>
-<tr class="odd">
-<td>수평 전단 (shear)</td>
-<td><img src="https://latex.codecogs.com/png.latex?(1,0)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?(k,1)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Cbegin%7Bbmatrix%7D1%20&amp;%20k%5C%5C%200%20&amp;%201%5Cend%7Bbmatrix%7D"></td>
-<td><img src="https://latex.codecogs.com/png.latex?x">축은 고정, 위로 갈수록 오른쪽 기울기</td>
-</tr>
-<tr class="even">
-<td><img src="https://latex.codecogs.com/png.latex?y=x"> 선 위로의 사영</td>
-<td><img src="https://latex.codecogs.com/png.latex?(0.5,%200.5)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?(0.5,%200.5)"></td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Ctfrac%7B1%7D%7B2%7D%5Cbegin%7Bbmatrix%7D1%20&amp;%201%5C%5C%201%20&amp;%201%5Cend%7Bbmatrix%7D"></td>
-<td>2차원을 1차원으로 찌그러뜨림</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="회전-행렬의-유도-기하-직관을-수식으로" class="level3" data-number="3.2">
-<h3 data-number="3.2" class="anchored" data-anchor-id="회전-행렬의-유도-기하-직관을-수식으로"><span class="header-section-number">3.2</span> 회전 행렬의 유도 — 기하 직관을 수식으로</h3>
-<p>각도 <img src="https://latex.codecogs.com/png.latex?%5Ctheta"> 만큼 반시계 방향 회전을 시키는 변환 <img src="https://latex.codecogs.com/png.latex?R_%5Ctheta"> 를 생각한다. 단위벡터 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_1%20=%20(1,%200)"> 을 원 위에서 각도 <img src="https://latex.codecogs.com/png.latex?%5Ctheta"> 만큼 돌리면 <img src="https://latex.codecogs.com/png.latex?(%5Ccos%5Ctheta,%20%5Csin%5Ctheta)"> 가 된다. <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_2%20=%20(0,%201)"> 은 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_1"> 보다 이미 <img src="https://latex.codecogs.com/png.latex?90%5E%5Ccirc"> 앞서 있으므로 <img src="https://latex.codecogs.com/png.latex?%5Ctheta"> 만큼 더 돌리면 각도 <img src="https://latex.codecogs.com/png.latex?%5Ctheta%20+%2090%5E%5Ccirc"> 지점에 놓인다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AR_%5Ctheta(%5Cmathbf%7Be%7D_2)%20=%20(%5Ccos(%5Ctheta%20+%2090%5E%5Ccirc),%20%5Csin(%5Ctheta%20+%2090%5E%5Ccirc))%20=%20(-%5Csin%5Ctheta,%20%5Ccos%5Ctheta)%0A"></p>
-<p>두 상을 열로 나란히 세우면 회전 행렬이 얻어진다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BR%7D_%5Ctheta%20=%20%5Cbegin%7Bbmatrix%7D%20%5Ccos%5Ctheta%20&amp;%20-%5Csin%5Ctheta%20%5C%5C%20%5Csin%5Ctheta%20&amp;%20%5Ccos%5Ctheta%20%5Cend%7Bbmatrix%7D%0A"></p>
-<p><strong>왜 이 유도가 중요한가</strong>. 회전 행렬의 성분을 외우는 사람은 많지만, 그것이 “기저 벡터를 어디로 보내는가”를 기록한 표에 불과하다는 사실을 잊기 쉽다. 이 관점이 체화되면 새로운 변환을 마주쳤을 때 “<img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_1,%20%5Cmathbf%7Be%7D_2"> 를 먼저 보자” 라는 반사가 생긴다.</p>
-</section>
-<section id="비행렬-예시-선형-변환은-행렬보다-더-넓은-개념이다" class="level3" data-number="3.3">
-<h3 data-number="3.3" class="anchored" data-anchor-id="비행렬-예시-선형-변환은-행렬보다-더-넓은-개념이다"><span class="header-section-number">3.3</span> 비행렬 예시 — 선형 변환은 행렬보다 더 넓은 개념이다</h3>
-<p>선형 변환의 정의는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbb%7BR%7D%5En"> 에 국한되지 않는다. 벡터 공간이기만 하면 된다. 그러면 우리가 행렬로 인식하지 않던 연산들이 모두 선형 변환의 예가 된다.</p>
-<ol type="1">
-<li><strong>미분 연산자</strong> <img src="https://latex.codecogs.com/png.latex?D%20:%20%5Cmathcal%7BP%7D_n%20%5Cto%20%5Cmathcal%7BP%7D_%7Bn-1%7D">, <img src="https://latex.codecogs.com/png.latex?D(p)%20=%20p'">
-<ul>
-<li><img src="https://latex.codecogs.com/png.latex?(p%20+%20q)'%20=%20p'%20+%20q'">, <img src="https://latex.codecogs.com/png.latex?(cp)'%20=%20cp'"> 이므로 선형 변환이다.</li>
-</ul></li>
-<li><strong>적분 연산자</strong> <img src="https://latex.codecogs.com/png.latex?I%20:%20C%5Ba,%20b%5D%20%5Cto%20%5Cmathbb%7BR%7D">, <img src="https://latex.codecogs.com/png.latex?I(f)%20=%20%5Cint_a%5Eb%20f(x)%5C,%20dx">
-<ul>
-<li>적분의 선형성 그대로 두 공리를 만족한다.</li>
-</ul></li>
-<li><strong>푸리에 변환</strong> <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BF%7D%20:%20L%5E2%20%5Cto%20L%5E2">
-<ul>
-<li>주파수 성분으로의 분해도 선형 변환이다. 이 덕분에 “기저 변환”으로 해석할 수 있다.</li>
-</ul></li>
-<li><strong>시프트 연산자</strong> <img src="https://latex.codecogs.com/png.latex?S%20:%20%5Cmathbb%7BR%7D%5E%5Cinfty%20%5Cto%20%5Cmathbb%7BR%7D%5E%5Cinfty">, <img src="https://latex.codecogs.com/png.latex?S(x_1,%20x_2,%20%5Cldots)%20=%20(0,%20x_1,%20x_2,%20%5Cldots)"></li>
-</ol>
-<p>이들은 무한차원에서 정의되거나 기저가 자명하지 않은 공간에 작용한다. 그러나 <strong>기저를 선택하는 순간</strong> 이들도 모두 (무한차원) 행렬로 표현된다. 다음 절에서 이 대응을 명확히 한다.</p>
-<hr>
-</section>
-</section>
-<section id="행렬-표현-matrix-representation" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="행렬-표현-matrix-representation"><span class="header-section-number">4</span> 행렬 표현 (Matrix Representation)</h2>
-<section id="핵심-정리-기저가-있으면-모든-선형-변환은-행렬이다" class="level3" data-number="4.1">
-<h3 data-number="4.1" class="anchored" data-anchor-id="핵심-정리-기저가-있으면-모든-선형-변환은-행렬이다"><span class="header-section-number">4.1</span> 핵심 정리 — 기저가 있으면 모든 선형 변환은 행렬이다</h3>
-<div class="callout callout-style-default callout-important callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-정리: 선형 변환과 행렬의 대응
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p><img src="https://latex.codecogs.com/png.latex?V"> 가 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D%20=%20%5C%7B%5Cmathbf%7Bv%7D_1,%20%5Cldots,%20%5Cmathbf%7Bv%7D_n%5C%7D"> 을 갖는 <img src="https://latex.codecogs.com/png.latex?n"> 차원 공간이고, <img src="https://latex.codecogs.com/png.latex?W"> 가 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BC%7D%20=%20%5C%7B%5Cmathbf%7Bw%7D_1,%20%5Cldots,%20%5Cmathbf%7Bw%7D_m%5C%7D"> 을 갖는 <img src="https://latex.codecogs.com/png.latex?m"> 차원 공간이라 하자. 그러면 모든 선형 변환 <img src="https://latex.codecogs.com/png.latex?T%20:%20V%20%5Cto%20W"> 에 대응하는 유일한 <img src="https://latex.codecogs.com/png.latex?m%20%5Ctimes%20n"> 행렬 <img src="https://latex.codecogs.com/png.latex?%5BT%5D_%7B%5Cmathcal%7BC%7D%20%5Cleftarrow%20%5Cmathcal%7BB%7D%7D"> 가 존재한다. 이 행렬의 <strong><img src="https://latex.codecogs.com/png.latex?j"> 번째 열</strong>은 <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bv%7D_j)"> 를 출력 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BC%7D"> 로 표현한 좌표이다.</p>
-</div>
-</div>
-<p>이 정리는 “행렬이 무엇인가” 에 대한 가장 깊은 답을 준다. <strong>행렬은 원래 존재하는 추상적 대상이 아니라, 선형 변환을 특정 기저 아래에서 표현한 좌표표이다.</strong></p>
-</section>
-<section id="왜-기저-벡터의-상만-알면-충분한가" class="level3" data-number="4.2">
-<h3 data-number="4.2" class="anchored" data-anchor-id="왜-기저-벡터의-상만-알면-충분한가"><span class="header-section-number">4.2</span> 왜 기저 벡터의 상만 알면 충분한가</h3>
-<p>임의의 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bv%7D%20%5Cin%20V"> 는 기저로 유일하게 분해된다. <img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7Bv%7D%20=%20c_1%20%5Cmathbf%7Bv%7D_1%20+%20c_2%20%5Cmathbf%7Bv%7D_2%20+%20%5Ccdots%20+%20c_n%20%5Cmathbf%7Bv%7D_n%0A"></p>
-<p>선형성을 차례로 적용하면</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AT(%5Cmathbf%7Bv%7D)%20=%20c_1%20T(%5Cmathbf%7Bv%7D_1)%20+%20c_2%20T(%5Cmathbf%7Bv%7D_2)%20+%20%5Ccdots%20+%20c_n%20T(%5Cmathbf%7Bv%7D_n)%0A"></p>
-<p>따라서 <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bv%7D_1),%20%5Cldots,%20T(%5Cmathbf%7Bv%7D_n)"> <strong><img src="https://latex.codecogs.com/png.latex?n"> 개의 출력만 알면</strong> 변환 <img src="https://latex.codecogs.com/png.latex?T"> 전체가 결정된다. 이 <img src="https://latex.codecogs.com/png.latex?n"> 개의 출력을 열로 나열한 것이 바로 <img src="https://latex.codecogs.com/png.latex?T"> 의 행렬이다.</p>
-<p>이 관점은 “무한히 많은 벡터를 어떻게 유한한 정보로 담는가” 라는 당혹감을 해소한다. 답: 기저 벡터 <img src="https://latex.codecogs.com/png.latex?n"> 개의 상만 저장하면 된다.</p>
-</section>
-<section id="직관-행렬-곱은-좌표로-번역한-변환" class="level3" data-number="4.3">
-<h3 data-number="4.3" class="anchored" data-anchor-id="직관-행렬-곱은-좌표로-번역한-변환"><span class="header-section-number">4.3</span> 직관 — 행렬 곱은 “좌표로 번역한 변환”</h3>
-<p>벡터 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bv%7D"> 를 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D"> 좌표로 쓰면 열벡터 <img src="https://latex.codecogs.com/png.latex?%5B%5Cmathbf%7Bv%7D%5D_%7B%5Cmathcal%7BB%7D%7D%20%5Cin%20%5Cmathbb%7BR%7D%5En"> 이다. 그러면 다음 다이어그램이 성립한다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AV%20%5Cxrightarrow%7B%5C;T%5C;%7D%20W%20%5Cquad%5CLongleftrightarrow%5Cquad%20%5Cmathbb%7BR%7D%5En%20%5Cxrightarrow%7B%5C;%5BT%5D_%7B%5Cmathcal%7BC%7D%20%5Cleftarrow%20%5Cmathcal%7BB%7D%7D%5C;%7D%20%5Cmathbb%7BR%7D%5Em%0A"></p>
-<p>즉 “추상 공간에서의 선형 변환” 을 “좌표 공간에서의 행렬 곱” 으로 번역할 수 있고, 이 번역은 기저 선택만 고정되면 일대일 대응이다. 행렬 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 와 선형 변환 <img src="https://latex.codecogs.com/png.latex?T"> 는 본질적으로 같은 대상의 두 얼굴이다.</p>
-</section>
-<section id="합성과-행렬-곱-왜-행렬-곱은-바로-그렇게-정의되었는가" class="level3" data-number="4.4">
-<h3 data-number="4.4" class="anchored" data-anchor-id="합성과-행렬-곱-왜-행렬-곱은-바로-그렇게-정의되었는가"><span class="header-section-number">4.4</span> 합성과 행렬 곱 — 왜 행렬 곱은 바로 “그렇게” 정의되었는가</h3>
-<p>두 선형 변환 <img src="https://latex.codecogs.com/png.latex?S%20:%20U%20%5Cto%20V"> 와 <img src="https://latex.codecogs.com/png.latex?T%20:%20V%20%5Cto%20W"> 를 합성한 <img src="https://latex.codecogs.com/png.latex?T%20%5Ccirc%20S%20:%20U%20%5Cto%20W"> 도 선형 변환이다. 기저를 모두 고정하면 합성의 행렬은 각 변환의 행렬의 곱으로 표현된다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5BT%20%5Ccirc%20S%5D%20=%20%5BT%5D%5C,%20%5BS%5D%0A"></p>
-<p>행렬 곱이 그렇게 이상한 순서(앞 행렬의 <strong>열</strong>과 뒤 행렬의 <strong>행</strong>을 내적)로 정의된 이유가 여기에 있다. <strong>합성 순서가 정확히 행렬 곱으로 번역되도록</strong> 정의한 것이다. 이 해석 없이 행렬 곱을 외우면 영원히 “왜 이렇게 생겼지?” 라는 물음이 남는다.</p>
-<hr>
-</section>
-</section>
-<section id="기저-변환과-유사-변환-change-of-basis-similarity" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="기저-변환과-유사-변환-change-of-basis-similarity"><span class="header-section-number">5</span> 기저 변환과 유사 변환 (Change of Basis &amp; Similarity)</h2>
-<section id="같은-변환-다른-옷" class="level3" data-number="5.1">
-<h3 data-number="5.1" class="anchored" data-anchor-id="같은-변환-다른-옷"><span class="header-section-number">5.1</span> 같은 변환, 다른 옷</h3>
-<p>동일한 선형 변환 <img src="https://latex.codecogs.com/png.latex?T%20:%20V%20%5Cto%20V"> 을 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D"> 에서 보면 행렬 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D">, 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D'"> 에서 보면 행렬 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D"> 로 나타난다. 두 행렬은 같은 변환의 <strong>서로 다른 좌표 표현</strong>일 뿐이다. 이 둘이 어떻게 관계되는지가 기저 변환(change of basis)의 핵심이다.</p>
-<div class="callout callout-style-default callout-note callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-정리: 기저 변환 공식
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D"> 을 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D'"> 의 벡터들을 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D"> 좌표로 적은 <strong>전이행렬(change-of-basis matrix)</strong> 이라 하자. 같은 선형 변환 <img src="https://latex.codecogs.com/png.latex?T"> 의 두 행렬 표현은 다음과 같이 연결된다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BB%7D%20=%20%5Cmathbf%7BM%7D%5E%7B-1%7D%20%5Cmathbf%7BA%7D%20%5Cmathbf%7BM%7D%0A"></p>
-<p>이 관계를 <strong>유사 변환(similarity transformation)</strong> 이라 하고, <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 와 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D"> 는 <strong>닮음 행렬(similar matrices)</strong> 이라 부른다.</p>
-</div>
-</div>
-</section>
-<section id="읽는-법-세-단계-번역" class="level3" data-number="5.2">
-<h3 data-number="5.2" class="anchored" data-anchor-id="읽는-법-세-단계-번역"><span class="header-section-number">5.2</span> 읽는 법 — 세 단계 번역</h3>
-<p>공식 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D%20=%20%5Cmathbf%7BM%7D%5E%7B-1%7D%20%5Cmathbf%7BA%7D%20%5Cmathbf%7BM%7D"> 을 오른쪽에서 왼쪽으로 읽으면 세 단계가 된다. 입력 벡터 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bx%7D"> 가 새로운 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D'"> 좌표로 주어졌다고 하자.</p>
-<ol type="1">
-<li><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D%5Cmathbf%7Bx%7D">: <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D'"> 좌표를 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D"> 좌표로 <strong>번역</strong>.</li>
-<li><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D(%5Cmathbf%7BM%7D%5Cmathbf%7Bx%7D)">: <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D"> 좌표에서 원래 변환 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 적용.</li>
-<li><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BM%7D%5E%7B-1%7D(%5Cmathbf%7BA%7D%5Cmathbf%7BM%7D%5Cmathbf%7Bx%7D)">: 결과를 다시 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D'"> 좌표로 <strong>역번역</strong>.</li>
-</ol>
-<p>즉 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D"> 는 “잠시 원어(기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D">)로 돌아가서 일을 처리한 뒤 현지 언어(<img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D'">)로 돌려받는” 절차를 하나의 행렬로 표현한 것이다.</p>
-</section>
-<section id="왜-중요한가-대각화와-svd의-공통-언어" class="level3" data-number="5.3">
-<h3 data-number="5.3" class="anchored" data-anchor-id="왜-중요한가-대각화와-svd의-공통-언어"><span class="header-section-number">5.3</span> 왜 중요한가 — 대각화와 SVD의 공통 언어</h3>
-<ul>
-<li><strong>대각화 (§6.2)</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%20=%20%5Cmathbf%7BS%7D%5Cmathbf%7B%5CLambda%7D%5Cmathbf%7BS%7D%5E%7B-1%7D"> 은 정확히 기저 변환이다. 고유벡터를 기저로 선택하면 같은 변환이 대각행렬 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7B%5CLambda%7D"> 로 단순해진다. “행렬을 대각화한다” 는 말은 결국 “변환이 가장 단순해지는 기저를 찾는다” 는 뜻이다.</li>
-<li><strong>SVD (§6.7)</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%20=%20%5Cmathbf%7BU%7D%5Cmathbf%7B%5CSigma%7D%5Cmathbf%7BV%7D%5E%5Ctop"> 은 두 개의 서로 다른 기저(입력·출력 각각의 직교 기저) 아래에서 변환이 단순한 스케일링 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7B%5CSigma%7D"> 로 보인다는 사실의 선언이다.</li>
-<li><strong>조르당 표준형</strong>: 대각화가 불가능할 때 최대한 단순한 꼴로 보여주는 기저를 찾은 결과이다.</li>
-</ul>
-<p>이 세 분해 모두 공통 질문의 답이다. “이 변환이 가장 단순해지는 좌표계는 무엇인가?” 선형 변환 관점이 체화되어야 이 질문이 자연스럽게 보인다.</p>
-<hr>
-</section>
-</section>
-<section id="커널과-치역-계수-영차원-정리" class="level2" data-number="6">
-<h2 data-number="6" class="anchored" data-anchor-id="커널과-치역-계수-영차원-정리"><span class="header-section-number">6</span> 커널과 치역, 계수-영차원 정리</h2>
-<p>선형 변환은 두 개의 근본 부분공간을 낳는다. 하나는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7B0%7D"> 으로 뭉개지는 입력들, 다른 하나는 실제로 도달되는 출력들이다.</p>
-<div class="callout callout-style-default callout-note callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-정의: 커널과 치역
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<ul>
-<li><strong>커널 (Kernel, Null Space)</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cker%20T%20=%20%5C%7B%5Cmathbf%7Bv%7D%20%5Cin%20V%20:%20T(%5Cmathbf%7Bv%7D)%20=%20%5Cmathbf%7B0%7D%5C%7D"></li>
-<li><strong>치역 (Image, Range)</strong>: <img src="https://latex.codecogs.com/png.latex?%5Ctext%7BIm%7D%5C,%20T%20=%20%5C%7BT(%5Cmathbf%7Bv%7D)%20:%20%5Cmathbf%7Bv%7D%20%5Cin%20V%5C%7D%20%5Csubseteq%20W"></li>
-</ul>
-</div>
-</div>
-<p><strong>의미 번역</strong></p>
-<ul>
-<li><img src="https://latex.codecogs.com/png.latex?%5Cker%20T"> 는 <img src="https://latex.codecogs.com/png.latex?T"> 가 <strong>정보를 잃는 방향</strong>이다. 사영 행렬의 커널은 “사영 면에 수직인 방향” 이다. 그 방향의 정보는 변환 후 복구 불가능하다.</li>
-<li><img src="https://latex.codecogs.com/png.latex?%5Ctext%7BIm%7D%5C,%20T"> 는 <img src="https://latex.codecogs.com/png.latex?T"> 가 <strong>도달할 수 있는 출력</strong> 전체이다. 열공간과 같은 것이고, 행렬 관점에서는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 의 열들이 생성하는 부분공간이다.</li>
-</ul>
-<div class="callout callout-style-default callout-important callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-정리: 계수-영차원 정리 (Rank-Nullity Theorem)
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>유한차원 벡터 공간 <img src="https://latex.codecogs.com/png.latex?V"> 에서 정의된 선형 변환 <img src="https://latex.codecogs.com/png.latex?T%20:%20V%20%5Cto%20W"> 에 대해 <img src="https://latex.codecogs.com/png.latex?%0A%5Cdim(%5Cker%20T)%20+%20%5Cdim(%5Ctext%7BIm%7D%5C,%20T)%20=%20%5Cdim%20V%0A"></p>
-</div>
-</div>
-<p><strong>직관적 해석</strong>: <img src="https://latex.codecogs.com/png.latex?V"> 가 가진 <img src="https://latex.codecogs.com/png.latex?n"> 차원의 “정보 예산”을 <img src="https://latex.codecogs.com/png.latex?T"> 는 두 곳에 나눠 쓴다. 일부는 <img src="https://latex.codecogs.com/png.latex?%5Cker%20T"> 로 빠져 사라지고, 나머지는 <img src="https://latex.codecogs.com/png.latex?%5Ctext%7BIm%7D%5C,%20T"> 에 남는다. 사영 행렬처럼 차원을 줄이는 변환은 커널에 예산을 많이 할당하고, 가역 변환은 커널이 <img src="https://latex.codecogs.com/png.latex?%5C%7B%5Cmathbf%7B0%7D%5C%7D"> 이라 모든 예산이 치역에 그대로 들어간다.</p>
-<p>이 정리는 행렬 관점의 “열공간 차원 + 영공간 차원 = 열의 개수” (Ch.3 §3.6 네 개의 근본 부분공간) 와 정확히 같은 진술이다. 선형 변환 언어로 쓰면 <strong>공간 자체의 성질</strong>로 읽힌다.</p>
-<hr>
-</section>
-<section id="단사전사동형-injective-surjective-isomorphism" class="level2" data-number="7">
-<h2 data-number="7" class="anchored" data-anchor-id="단사전사동형-injective-surjective-isomorphism"><span class="header-section-number">7</span> 단사·전사·동형 (Injective, Surjective, Isomorphism)</h2>
-<p>선형 변환은 일반 함수이기도 하므로 <strong>일대일</strong>과 <strong>위로</strong>의 개념이 적용된다.</p>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 33%">
-<col style="width: 33%">
-<col style="width: 33%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>성질</th>
-<th>정의</th>
-<th>선형 변환에서의 조건</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>단사 (Injective, one-to-one)</td>
-<td>서로 다른 입력은 서로 다른 출력</td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Cker%20T%20=%20%5C%7B%5Cmathbf%7B0%7D%5C%7D"></td>
-</tr>
-<tr class="even">
-<td>전사 (Surjective, onto)</td>
-<td>모든 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bw%7D%20%5Cin%20W"> 가 어떤 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Bv%7D"> 의 상</td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Ctext%7BIm%7D%5C,%20T%20=%20W"></td>
-</tr>
-<tr class="odd">
-<td>동형 (Isomorphism)</td>
-<td>단사이면서 전사</td>
-<td>역변환 <img src="https://latex.codecogs.com/png.latex?T%5E%7B-1%7D"> 존재</td>
-</tr>
-</tbody>
-</table>
-<p><strong>왜 이 분류가 실무에 중요한가</strong></p>
-<ul>
-<li>단사가 아닌 선형 레이어는 “다른 입력을 같은 출력으로 압축” 한다. Autoencoder 의 인코더가 이렇다. 원본 복구는 근사적으로만 가능하다.</li>
-<li>전사가 아닌 선형 레이어는 “출력 공간의 일부 방향에는 절대 도달할 수 없다”. 임베딩 차원이 충분하지 않을 때 이런 일이 일어난다.</li>
-<li><img src="https://latex.codecogs.com/png.latex?%5Cdim%20V%20=%20%5Cdim%20W"> 이고 <img src="https://latex.codecogs.com/png.latex?T"> 가 단사이면 자동으로 전사가 되며 (계수-영차원 정리), 이때 <img src="https://latex.codecogs.com/png.latex?T"> 는 동형이다. 정방행렬의 “가역” 은 이 동형과 같은 개념이다.</li>
-</ul>
-<hr>
-</section>
-<section id="응용-분야" class="level2" data-number="8">
-<h2 data-number="8" class="anchored" data-anchor-id="응용-분야"><span class="header-section-number">8</span> 응용 분야</h2>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 33%">
-<col style="width: 33%">
-<col style="width: 33%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>분야</th>
-<th>선형 변환의 역할</th>
-<th>구체적 예</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>딥러닝</td>
-<td>Fully connected 층 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7By%7D%20=%20%5Cmathbf%7BW%7D%5Cmathbf%7Bx%7D%20+%20%5Cmathbf%7Bb%7D"> 의 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BW%7D%5Cmathbf%7Bx%7D"> 부분</td>
-<td><img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BW%7D"> 가 특징을 새로운 축으로 재배치</td>
-</tr>
-<tr class="even">
-<td>컴퓨터 그래픽스</td>
-<td>회전·확대·전단 변환</td>
-<td>3D 모델을 화면 좌표로 투영</td>
-</tr>
-<tr class="odd">
-<td>신호처리</td>
-<td>푸리에 변환</td>
-<td>시간 기저 → 주파수 기저로의 기저 변환</td>
-</tr>
-<tr class="even">
-<td>PCA (통계/ML)</td>
-<td>공분산 행렬의 고유 기저로 회전</td>
-<td>분산이 가장 큰 방향을 축으로 선택</td>
-</tr>
-<tr class="odd">
-<td>컴퓨터 비전</td>
-<td>카메라 투영 행렬</td>
-<td>3차원 세계 좌표를 2차원 이미지 평면으로</td>
-</tr>
-<tr class="even">
-<td>수치해석</td>
-<td>이산 미분·적분 연산자</td>
-<td>유한차분 행렬이 미분 연산자의 이산 표현</td>
-</tr>
-<tr class="odd">
-<td>양자역학</td>
-<td>관측 가능량 연산자</td>
-<td>에르미트 행렬이 물리량을 기저로 표현</td>
-</tr>
-</tbody>
-</table>
-<p><strong>딥러닝 관점에서의 재조명</strong>. 선형층 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BW%7D%5Cmathbf%7Bx%7D"> 는 “입력 특징 공간을 다른 좌표계로 회전/확대/사영하는” 변환이다. 이어지는 비선형 활성화(ReLU 등)는 “그 좌표계에서 특정 방향만 살리는” 선택이다. 다시 말해 딥러닝의 층 구조는 <strong>기저 변환과 비선형 선택을 반복해 특징을 점진적으로 재정렬</strong>하는 과정으로 해석할 수 있다. 이 해석은 Ch.7 의 선형 변환 관점 없이는 성립하지 않는다.</p>
-<hr>
-</section>
-<section id="예시-손계산" class="level2" data-number="9">
-<h2 data-number="9" class="anchored" data-anchor-id="예시-손계산"><span class="header-section-number">9</span> 예시 (손계산)</h2>
-<section id="예시-1-회전-행렬의-합성" class="level3" data-number="9.1">
-<h3 data-number="9.1" class="anchored" data-anchor-id="예시-1-회전-행렬의-합성"><span class="header-section-number">9.1</span> 예시 1 — 회전 행렬의 합성</h3>
-<p><img src="https://latex.codecogs.com/png.latex?60%5E%5Ccirc"> 회전 후 <img src="https://latex.codecogs.com/png.latex?30%5E%5Ccirc"> 회전을 합성하면 기하적으로 <img src="https://latex.codecogs.com/png.latex?90%5E%5Ccirc"> 회전이어야 한다. 행렬로 직접 확인한다.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BR%7D_%7B30%5E%5Ccirc%7D%20%5Cmathbf%7BR%7D_%7B60%5E%5Ccirc%7D%0A=%20%5Cbegin%7Bbmatrix%7D%20%5Ctfrac%7B%5Csqrt%7B3%7D%7D%7B2%7D%20&amp;%20-%5Ctfrac%7B1%7D%7B2%7D%20%5C%5C%20%5Ctfrac%7B1%7D%7B2%7D%20&amp;%20%5Ctfrac%7B%5Csqrt%7B3%7D%7D%7B2%7D%20%5Cend%7Bbmatrix%7D%0A%20%20%5Cbegin%7Bbmatrix%7D%20%5Ctfrac%7B1%7D%7B2%7D%20&amp;%20-%5Ctfrac%7B%5Csqrt%7B3%7D%7D%7B2%7D%20%5C%5C%20%5Ctfrac%7B%5Csqrt%7B3%7D%7D%7B2%7D%20&amp;%20%5Ctfrac%7B1%7D%7B2%7D%20%5Cend%7Bbmatrix%7D%0A=%20%5Cbegin%7Bbmatrix%7D%200%20&amp;%20-1%20%5C%5C%201%20&amp;%200%20%5Cend%7Bbmatrix%7D%0A=%20%5Cmathbf%7BR%7D_%7B90%5E%5Ccirc%7D%0A"></p>
-<p><strong>직관 확인</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BR%7D_%7B90%5E%5Ccirc%7D"> 는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_1%20%5Cmapsto%20%5Cmathbf%7Be%7D_2">, <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7Be%7D_2%20%5Cmapsto%20-%5Cmathbf%7Be%7D_1"> 이다. 종이에 그려보면 정확히 반시계 <img src="https://latex.codecogs.com/png.latex?90%5E%5Ccirc"> 이다. 합성 공식 <img src="https://latex.codecogs.com/png.latex?T%20%5Ccirc%20S"> 의 행렬이 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BR%7D_%7B30%5E%5Ccirc%7D%5Cmathbf%7BR%7D_%7B60%5E%5Ccirc%7D"> 라는 점, 그리고 행렬 곱 순서가 “나중 변환이 왼쪽” 이라는 점이 자연스럽게 확인된다.</p>
-</section>
-<section id="예시-2-전단-변환의-기저-표현과-유사-변환" class="level3" data-number="9.2">
-<h3 data-number="9.2" class="anchored" data-anchor-id="예시-2-전단-변환의-기저-표현과-유사-변환"><span class="header-section-number">9.2</span> 예시 2 — 전단 변환의 기저 표현과 유사 변환</h3>
-<p>전단 행렬 <img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BA%7D%20=%20%5Cbegin%7Bbmatrix%7D%201%20&amp;%201%20%5C%5C%200%20&amp;%201%20%5Cend%7Bbmatrix%7D%0A"> 은 표준 기저에서는 “위로 갈수록 오른쪽으로 <img src="https://latex.codecogs.com/png.latex?1"> 만큼 밀리는” 변환이다. 이제 새로운 기저 <img src="https://latex.codecogs.com/png.latex?%5Cmathcal%7BB%7D'%20=%20%5C%7B(1,%200),%20(1,%201)%5C%7D"> 를 선택한다. 전이행렬은 <img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BM%7D%20=%20%5Cbegin%7Bbmatrix%7D%201%20&amp;%201%20%5C%5C%200%20&amp;%201%20%5Cend%7Bbmatrix%7D,%20%5Cqquad%20%5Cmathbf%7BM%7D%5E%7B-1%7D%20=%20%5Cbegin%7Bbmatrix%7D%201%20&amp;%20-1%20%5C%5C%200%20&amp;%201%20%5Cend%7Bbmatrix%7D%0A"> 따라서 새 좌표에서 같은 변환은 <img src="https://latex.codecogs.com/png.latex?%0A%5Cmathbf%7BB%7D%20=%20%5Cmathbf%7BM%7D%5E%7B-1%7D%20%5Cmathbf%7BA%7D%20%5Cmathbf%7BM%7D%0A=%20%5Cbegin%7Bbmatrix%7D%201%20&amp;%20-1%20%5C%5C%200%20&amp;%201%20%5Cend%7Bbmatrix%7D%0A%20%20%5Cbegin%7Bbmatrix%7D%201%20&amp;%201%20%5C%5C%200%20&amp;%201%20%5Cend%7Bbmatrix%7D%0A%20%20%5Cbegin%7Bbmatrix%7D%201%20&amp;%201%20%5C%5C%200%20&amp;%201%20%5Cend%7Bbmatrix%7D%0A=%20%5Cbegin%7Bbmatrix%7D%201%20&amp;%201%20%5C%5C%200%20&amp;%201%20%5Cend%7Bbmatrix%7D%0A"> 의 계산 과정을 거친다. 이 예에서는 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D"> 와 <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BB%7D"> 가 같은 모양이지만, 일반적으로는 행렬 모양이 달라진다. <strong>핵심은 “같은 변환이라도 기저를 바꾸면 행렬이 달라진다”</strong> 는 사실 자체이다.</p>
-<hr>
-</section>
-</section>
-<section id="코드-예시" class="level2" data-number="10">
-<h2 data-number="10" class="anchored" data-anchor-id="코드-예시"><span class="header-section-number">10</span> 코드 예시</h2>
-<section id="step-1-순수-python으로-선형성-확인" class="level3" data-number="10.1">
-<h3 data-number="10.1" class="anchored" data-anchor-id="step-1-순수-python으로-선형성-확인"><span class="header-section-number">10.1</span> Step 1 — 순수 Python으로 선형성 확인</h3>
-<div class="sourceCode" id="cb1" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb1-1"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 선형 변환인지 두 공리로 직접 확인한다</span></span>
-<span id="cb1-2"></span>
-<span id="cb1-3"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">def</span> apply_T(v):</span>
-<span id="cb1-4">    <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">"""T(x, y) = (2x + y, x - y) — 선형인지 확인해볼 대상"""</span></span>
-<span id="cb1-5">    x, y <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> v</span>
-<span id="cb1-6">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">return</span> (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> x <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> y, x <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> y)</span>
-<span id="cb1-7"></span>
-<span id="cb1-8"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">def</span> apply_NonLinear(v):</span>
-<span id="cb1-9">    <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">"""비선형 예: (x^2, y) — 가법성이 깨짐"""</span></span>
-<span id="cb1-10">    x, y <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> v</span>
-<span id="cb1-11">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">return</span> (x <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">**</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>, y)</span>
-<span id="cb1-12"></span>
-<span id="cb1-13"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">def</span> check_linearity(T, trials<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>):</span>
-<span id="cb1-14">    <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> random</span>
-<span id="cb1-15">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">for</span> _ <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(trials):</span>
-<span id="cb1-16">        u <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (random.uniform(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>), random.uniform(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>))</span>
-<span id="cb1-17">        v <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (random.uniform(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>), random.uniform(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>))</span>
-<span id="cb1-18">        c <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> random.uniform(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>)</span>
-<span id="cb1-19"></span>
-<span id="cb1-20">        <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 가법성: T(u + v) ?= T(u) + T(v)</span></span>
-<span id="cb1-21">        lhs <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> T((u[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> v[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>], u[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> v[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]))</span>
-<span id="cb1-22">        rhs_a <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> T(u)</span>
-<span id="cb1-23">        rhs_b <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> T(v)</span>
-<span id="cb1-24">        add_ok <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">all</span>(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">abs</span>(lhs[i] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> (rhs_a[i] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> rhs_b[i])) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&lt;</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-9</span> <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>))</span>
-<span id="cb1-25"></span>
-<span id="cb1-26">        <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 동차성: T(cu) ?= c T(u)</span></span>
-<span id="cb1-27">        lhs2 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> T((c <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> u[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>], c <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> u[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]))</span>
-<span id="cb1-28">        rhs2 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">tuple</span>(c <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> x <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">for</span> x <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">in</span> T(u))</span>
-<span id="cb1-29">        hom_ok <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">all</span>(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">abs</span>(lhs2[i] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> rhs2[i]) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&lt;</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-9</span> <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>))</span>
-<span id="cb1-30"></span>
-<span id="cb1-31">        <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">if</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">not</span> (add_ok <span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">and</span> hom_ok):</span>
-<span id="cb1-32">            <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">return</span> <span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span></span>
-<span id="cb1-33">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">return</span> <span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">True</span></span>
-<span id="cb1-34"></span>
-<span id="cb1-35"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"T is linear?     "</span>, check_linearity(apply_T))</span>
-<span id="cb1-36"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"NonLinear linear?"</span>, check_linearity(apply_NonLinear))</span></code></pre></div>
-<p><strong>해석</strong>: 두 공리를 랜덤 입력으로 검증한다. 가법성이나 동차성 중 하나라도 깨지면 선형 변환이 아니다. 정리를 외우는 것보다 코드로 한 번 확인하는 편이 체화에 훨씬 효과적이다.</p>
-</section>
-<section id="step-2-numpy로-기저-이미지에서-행렬-복원" class="level3" data-number="10.2">
-<h3 data-number="10.2" class="anchored" data-anchor-id="step-2-numpy로-기저-이미지에서-행렬-복원"><span class="header-section-number">10.2</span> Step 2 — NumPy로 기저 이미지에서 행렬 복원</h3>
-<div class="sourceCode" id="cb2" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb2-1"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">as</span> np</span>
-<span id="cb2-2"></span>
-<span id="cb2-3"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 미지의 선형 변환 (블랙박스)</span></span>
-<span id="cb2-4"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">def</span> T(v):</span>
-<span id="cb2-5">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-style: inherit;">return</span> np.array([<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> v[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> v[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>], v[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> v[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]])</span>
-<span id="cb2-6"></span>
-<span id="cb2-7"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 표준 기저 벡터의 상을 모으면 행렬이 된다</span></span>
-<span id="cb2-8">e1 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array([<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.0</span>])</span>
-<span id="cb2-9">e2 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array([<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.0</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>])</span>
-<span id="cb2-10"></span>
-<span id="cb2-11">A <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.column_stack([T(e1), T(e2)])</span>
-<span id="cb2-12"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"복원된 행렬 A ="</span>)</span>
-<span id="cb2-13"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(A)</span>
-<span id="cb2-14"></span>
-<span id="cb2-15"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 임의의 벡터에 대해 T(v) 와 A @ v 가 일치하는지 확인</span></span>
-<span id="cb2-16">v <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array([<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3.0</span>, <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2.0</span>])</span>
-<span id="cb2-17"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"T(v)   ="</span>, T(v))</span>
-<span id="cb2-18"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"A @ v  ="</span>, A <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">@</span> v)</span></code></pre></div>
-<p><strong>해석</strong>: “행렬은 기저 벡터의 상을 열로 모은 것” 이라는 이론을 코드로 <strong>그대로</strong> 구현한다. 복잡한 내부 구현을 몰라도 <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Be%7D_1)"> 과 <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Be%7D_2)"> 만 관측하면 변환 전체를 복원할 수 있다는 사실이 눈으로 확인된다.</p>
-</section>
-<section id="step-3-기저-변환-similarity-transformation-검증" class="level3" data-number="10.3">
-<h3 data-number="10.3" class="anchored" data-anchor-id="step-3-기저-변환-similarity-transformation-검증"><span class="header-section-number">10.3</span> Step 3 — 기저 변환 (Similarity Transformation) 검증</h3>
-<div class="sourceCode" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb3-1"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">as</span> np</span>
-<span id="cb3-2"></span>
-<span id="cb3-3"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 원래 변환 (표준 기저에서)</span></span>
-<span id="cb3-4">A <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array([[<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3.0</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>],</span>
-<span id="cb3-5">              [<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.0</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2.0</span>]])</span>
-<span id="cb3-6"></span>
-<span id="cb3-7"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 새 기저 B' = {(1, 1), (1, -1)}</span></span>
-<span id="cb3-8">M <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array([[<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>],</span>
-<span id="cb3-9">              [<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>, <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>]])</span>
-<span id="cb3-10"></span>
-<span id="cb3-11"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 같은 변환을 새 기저에서 본 행렬</span></span>
-<span id="cb3-12">B <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.linalg.inv(M) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">@</span> A <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">@</span> M</span>
-<span id="cb3-13"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"새 기저에서의 행렬 B ="</span>)</span>
-<span id="cb3-14"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(B)</span>
-<span id="cb3-15"></span>
-<span id="cb3-16"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 핵심 확인: 고유값은 기저 변환 아래에서 보존된다</span></span>
-<span id="cb3-17"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"A의 고유값:"</span>, np.linalg.eigvals(A))</span>
-<span id="cb3-18"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"B의 고유값:"</span>, np.linalg.eigvals(B))</span></code></pre></div>
-<p><strong>해석</strong>: 기저가 바뀌어도 <strong>고유값 같은 불변량(invariant)</strong> 은 보존된다. 이것이 “닮음 행렬은 같은 변환의 다른 옷” 이라는 주장의 수치적 증거이다. 행렬식, 트레이스, 랭크도 같은 이유로 불변이다.</p>
-<hr>
-</section>
-</section>
-<section id="정리" class="level2" data-number="11">
-<h2 data-number="11" class="anchored" data-anchor-id="정리"><span class="header-section-number">11</span> 정리</h2>
-<p>이번 개요에서 다룬 핵심을 한 문장으로 요약하면 다음과 같다.</p>
-<blockquote class="blockquote">
-<p><strong>선형 변환은 “원점·직선·등간격을 보존하는 벡터 함수” 이고, 행렬은 그것을 특정 기저로 번역한 좌표표이다.</strong></p>
-</blockquote>
-<p>세 가지 관점 전환이 이 장의 모든 결과를 낳는다.</p>
-<ol type="1">
-<li><strong>행렬 <img src="https://latex.codecogs.com/png.latex?%5Cto"> 함수</strong>: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%5Cmathbf%7Bx%7D"> 를 <img src="https://latex.codecogs.com/png.latex?T(%5Cmathbf%7Bx%7D)"> 로 읽는다.</li>
-<li><strong>기저 벡터의 상 <img src="https://latex.codecogs.com/png.latex?%5Cto"> 행렬의 열</strong>: 변환 전체를 <img src="https://latex.codecogs.com/png.latex?n"> 개의 관측으로 복원한다.</li>
-<li><strong>기저 변환 <img src="https://latex.codecogs.com/png.latex?%5Cto"> 유사 변환</strong>: 같은 변환의 가장 단순한 표현을 찾는 행위가 대각화·SVD이다.</li>
-</ol>
-<p>이 관점은 Ch.6 의 고유값 분해, Ch.4 의 최소제곱, §6.7 의 SVD 를 하나의 언어로 묶고, 딥러닝과 컴퓨터 그래픽스에서의 선형 레이어를 “추상적 연산” 이 아니라 <strong>좌표계를 다시 짜는 작업</strong> 으로 이해하게 한다.</p>
-<hr>
-</section>
-<section id="관련-주제" class="level2" data-number="12">
-<h2 data-number="12" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">12</span> 관련 주제</h2>
-<p><strong>선행 지식</strong></p>
-<ul>
-<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-03-6-gilbert-strang-independence-basis-dimension.html">Ch.3 §3.5 — Independence, Basis and Dimension</a></li>
-<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-03-7-gilbert-strang-four-subspaces.html">Ch.3 §3.6 — Dimensions of the Four Subspaces</a></li>
-<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-06-2-gilbert-strang-diagonalization.html">Ch.6 §6.2 — 대각화: <img src="https://latex.codecogs.com/png.latex?%5Cmathbf%7BA%7D%20=%20%5Cmathbf%7BS%7D%5Cmathbf%7B%5CLambda%7D%5Cmathbf%7BS%7D%5E%7B-1%7D"></a></li>
-<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-06-6-gilbert-strang-similar-matrices.html">Ch.6 §6.6 — 닮음 행렬과 기저 변환</a></li>
-</ul>
-<p><strong>후속 주제</strong></p>
-<ul>
-<li>Ch.7 §7.2 — The Matrix of a Linear Transformation (심화)</li>
-<li>Ch.7 §7.3 — Diagonalization and the Pseudoinverse (선형 변환 관점의 재해석)</li>
-<li><a href="../../../../../docs/blog/posts/Math/linear_algebra/mit-06-7-gilbert-strang-svd.html">Ch.6 §6.7 — SVD: 두 직교 기저 아래에서의 선형 변환</a></li>
-</ul>
-<p><strong>다른 카테고리 연결</strong></p>
-<ul>
-<li><a href="../../Statistics/pca.qmd">PCA 와 주성분 분석</a> — 공분산의 고유 기저 변환</li>
-<li><a href="../../Deep_Learning/NLP/attention.qmd">Attention 메커니즘</a> — Query/Key 선형 투영의 기하 해석</li>
-<li><a href="../../Deep_Learning/CNN/convolution.qmd">Convolution 과 선형성</a> — 합성곱을 선형 변환으로 재해석</li>
-</ul>
-<p><strong>교재 참조</strong></p>
-<ul>
-<li>Strang, <em>Introduction to Linear Algebra</em>, 4th Ed., Ch.7 §7.1–§7.3 (pp.&nbsp;376–409)</li>
-</ul>
-
-
-</section>
-
- ]]></description>
-  <category>Math</category>
-  <category>Linear Algebra</category>
-  <guid>kk3225.netlify.app/docs/blog/posts/Math/linear_algebra/mit-07-1-gilbert-strang-linear-transformations-overview.html</guid>
   <pubDate>Fri, 10 Apr 2026 15:00:00 GMT</pubDate>
 </item>
 </channel>
