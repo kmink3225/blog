@@ -4,3 +4,113 @@ description: |
   임시 메모 보관. 주제별 정식 블로그 포스트로 전환 후 내용을 비운다.
 draft: true
 ---
+
+## git pull 충돌 사건 정리 (2026-04-13)
+
+### 발생한 문제
+
+사용자가 "git에서 충돌이 난다"고 인식한 상황이지만, 실제로는 **머지 충돌(merge conflict)이 아니었다**. 증상은 다음과 같다.
+
+- 로컬 `main` 브랜치가 `origin/main`보다 **80커밋 뒤처져(behind)** 있었다.
+- `git pull` 실행 시 아래 에러가 발생한다.
+
+```
+error: Your local changes to the following files would be overwritten by merge:
+    .quarto/xref/INDEX
+    _site/docs/blog/index.html
+    _site/docs/blog/posts/Math/linear_algebra/mit-08-*.html
+    _site/search.json
+    _site/sitemap.xml
+    ...
+Please commit your changes or stash them before you merge.
+Aborting
+```
+
+이 에러는 **"로컬 워킹트리에 수정된(커밋되지 않은) 파일이 있는데, 원격에서 받아올 커밋이 같은 파일을 수정하고 있어서 그대로 당기면 로컬 변경분이 덮어쓰여진다"** 는 의미이다.
+
+즉, 두 가지가 섞여 있었다.
+
+- 사용자가 이미 커밋한 `mit-05-* ~ mit-29-*` 삭제 → 이건 이미 `04e79925` 커밋에 반영되어 문제 없음.
+- 빌드 산출물(`_site/`, `.quarto/xref/INDEX`)의 **로컬 수정분**이 커밋되지 않은 채 워킹트리에 남아 있음 → 이게 pull을 막은 진짜 원인.
+
+### 원인 분석 과정
+
+#### Step 1. `git status`로 실제 상태 확인
+
+가장 먼저 한 일은 "충돌"이라는 단어를 그대로 믿지 않고 `git status`를 실행해 실제 상태를 확인한 것이다.
+
+```
+Your branch is behind 'origin/main' by 80 commits, and can be fast-forwarded.
+
+Changes not staged for commit:
+    modified:   .quarto/xref/INDEX
+    modified:   _site/docs/blog/index.html
+    ...
+```
+
+이 출력에서 두 가지 사실을 읽어냈다.
+
+- **`can be fast-forwarded`** → 머지 충돌 없음. 단순히 앞으로 당기기만 하면 되는 상태.
+- **`Changes not staged for commit`** → 커밋되지 않은 로컬 수정분이 존재.
+
+즉, 진짜 충돌이 아니라 "로컬 변경분이 pull을 막고 있다"는 것이 확인됐다.
+
+#### Step 2. 수정된 파일의 성격 파악
+
+수정된 파일 목록을 보면 모두 두 디렉터리에 속한다.
+
+- `_site/` → Quarto가 렌더링한 **빌드 산출물**(정적 HTML, JSON, sitemap 등).
+- `.quarto/xref/INDEX` → Quarto의 **내부 캐시**.
+
+두 디렉터리 모두 **소스가 아니라 생성물**이다. 사용자가 직접 손으로 고친 파일이 아니라, 과거 `quarto render` 실행 결과가 남아 있는 것뿐이다. 따라서 **버려도 데이터 손실이 없다**.
+
+### 해결 과정
+
+#### 시도 1. stash로 임시 보관 후 pull (실패)
+
+처음엔 안전하게 로컬 변경분을 stash로 치워두고 pull을 시도했다.
+
+```bash
+git stash push -u -m "local build artifacts before ff-pull" -- .quarto/xref/INDEX _site/
+git pull --ff-only
+```
+
+결과: stash는 됐지만, 어떤 이유로 인덱스에 같은 변경분이 다시 staged 상태로 남아 pull이 여전히 막혔다. `.gitignore`에 `.quarto`가 포함돼 있어 pathspec + `-u` 조합이 꼬인 것으로 추정된다.
+
+#### 시도 2. HEAD 기준으로 강제 되돌리기 후 pull (성공)
+
+빌드 산출물이라 버려도 되는 파일이므로, **HEAD 커밋 기준으로 강제로 되돌린 뒤** pull 하는 방식으로 전환했다.
+
+```bash
+git checkout HEAD -- .quarto _site
+```
+
+이 명령은 "현재 커밋(`HEAD`)에 저장된 버전으로 `.quarto`, `_site` 디렉터리의 모든 파일을 덮어쓰라"는 뜻이다. 로컬 수정분이 사라지고 워킹트리가 커밋된 상태와 일치하게 된다.
+
+삭제된 파일 중 일부(`_site/docs/blog/index-listing.json` 등)는 `checkout`만으론 복구가 안 돼서, `restore`로 인덱스와 워킹트리를 동시에 복원했다.
+
+```bash
+git restore --source=HEAD --staged --worktree -- _site/docs/blog/index-listing.json _site/docs/blog/index.html
+```
+
+이후 `git status`에서 "nothing to commit, working tree clean"을 확인한 뒤 pull을 실행했다.
+
+```bash
+git pull --ff-only
+```
+
+결과: `c8ca05fd..f015a038` 로 fast-forward 완료. 80커밋이 로컬에 반영됐다.
+
+### 사후 정리
+
+- 혹시 모를 상황을 대비해 시도 1의 stash는 `stash@{0}`에 그대로 남겨뒀다. 불필요 확인 후 `git stash drop`으로 삭제하면 된다.
+- `_site/`는 `quarto render`로 언제든 재생성되므로 버려도 무방하다.
+
+### 핵심 교훈
+
+- **"충돌"이라는 에러 메시지를 곧이곧대로 머지 충돌로 해석하지 않는다.** `git status`로 실제 상태를 먼저 확인한다.
+- pull을 막는 원인은 크게 두 가지다.
+  - **실제 머지 충돌**: 같은 줄을 양쪽에서 다르게 수정한 경우. 수동으로 해결해야 함.
+  - **로컬 변경분이 덮어쓰일 위험**: 커밋되지 않은 수정분이 있는 상태. 이번 경우.
+- 빌드 산출물(`_site/`, `.quarto/`)은 소스가 아니므로, 충돌을 일으킬 땐 `git checkout HEAD -- <path>`로 버리고 재생성하는 것이 안전하다.
+- 빌드 산출물을 애초에 추적하지 않는 것이 근본 해결책이다. 현재 `.quarto`는 무시되지만 `_site/`는 일부가 커밋돼 있어서 같은 문제가 재발할 수 있다. `.gitignore` 정비를 검토할 필요가 있다.
