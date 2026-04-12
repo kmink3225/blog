@@ -1,0 +1,368 @@
+---
+title: "실전 가우스 소거법 (Gaussian Elimination in Practice)"
+subtitle: "부분 피벗팅, PA=LU, 연산량, 안정성, 희소 행렬 전략"
+description: |
+  교과서의 가우스 소거는 "왼쪽 위부터 내려가면서 0을 만든다"로 끝나지만,
+  실전에서는 피벗 선택, 부동소수점 오차, 연산량, 희소성 보존까지 고려한다.
+  이 포스트는 부분 피벗팅(Partial Pivoting), PA=LU 분해, 전방·후방 대입,
+  연산량 $\frac{2}{3}n^3$ 의 유도, 성장 인자(growth factor), 블록 알고리즘,
+  희소 행렬 전략을 수식·코드·기하 직관으로 정리한다.
+categories:
+  - Mathematics
+  - Machine Learning
+author: Kwangmin Kim
+date: 04/13/2026
+execute:
+  eval: false
+---
+
+## 개요
+
+교과서의 가우스 소거법은 "위에서 아래로 0을 만들어 상삼각 행렬로 바꾼다"는 한 문장으로 요약된다. 하지만 이 문장은 실전에서 세 가지를 숨긴다.
+
+1. **어떤 행을 피벗(pivot)으로 고를 것인가** — 0이 아니기만 하면 되는가?
+2. **얼마나 많은 연산이 드는가** — $n = 10^6$ 이면 실행 가능한가?
+3. **부동소수점 오차는 얼마나 커지는가** — 이론적으로 가능한 해가 수치적으로는 쓰레기가 되는가?
+
+이 세 질문의 답이 **부분 피벗팅(partial pivoting)**, **$\frac{2}{3}n^3$ 연산량**, **성장 인자(growth factor)** 이다. 이 포스트는 이들을 순서대로 다룬다.
+
+선행 포스트 [수치 선형대수 개요](./13.numerical-linear-algebra-overview.qmd)에서 "직접법"으로 가우스 소거를 언급했는데, 여기서는 그 속을 열어본다.
+
+## 기본 알고리즘 복습
+
+행렬 $A \in \mathbb{R}^{n \times n}$ 과 $\mathbf{b} \in \mathbb{R}^n$ 에 대해 $A\mathbf{x} = \mathbf{b}$ 를 푸는 가우스 소거는 다음 두 단계로 나뉜다.
+
+**전방 소거 (Forward Elimination)**. $k = 1, 2, \dots, n-1$ 에 대해 $i = k+1, \dots, n$ 에 대해
+
+$$
+\ell_{ik} = \frac{a_{ik}^{(k)}}{a_{kk}^{(k)}}, \qquad
+a_{ij}^{(k+1)} = a_{ij}^{(k)} - \ell_{ik} a_{kj}^{(k)}, \quad j = k, \dots, n
+$$
+
+를 수행하여 $A$ 를 상삼각 행렬 $U$ 로 바꾼다. 동시에 $\mathbf{b}$ 도 같은 행 연산을 받아 $\mathbf{c}$ 가 된다.
+
+**후방 대입 (Back Substitution)**. $U\mathbf{x} = \mathbf{c}$ 를
+
+$$
+x_i = \frac{1}{u_{ii}} \left( c_i - \sum_{j = i+1}^{n} u_{ij} x_j \right), \quad i = n, n-1, \dots, 1
+$$
+
+로 푼다.
+
+::: {.callout-note}
+## 직관: 왜 "전방 소거 → 후방 대입"인가
+
+행렬을 계단 모양으로 만들면 맨 아래 식은 변수 하나짜리가 된다 ($u_{nn} x_n = c_n$). 이걸 풀어서 위로 대입하면 한 칸씩 올라갈 때마다 변수 하나씩만 더해진다. 즉, "가장 쉬운 식부터 푼다"는 그리디 전략이 모양을 만들어내는 것이 전방 소거, 푸는 것이 후방 대입이다.
+:::
+
+## 피벗 선택이 왜 문제가 되는가
+
+### 수치적 재앙: 작은 피벗
+
+다음 2×2 시스템을 생각하자.
+
+$$
+\begin{pmatrix} 10^{-20} & 1 \\ 1 & 1 \end{pmatrix}
+\begin{pmatrix} x_1 \\ x_2 \end{pmatrix}
+= \begin{pmatrix} 1 \\ 2 \end{pmatrix}
+$$
+
+참해는 $x_2 \approx 1$, $x_1 \approx 1$ 이다. 그런데 피벗으로 $a_{11} = 10^{-20}$ 을 그대로 쓰면
+
+$$
+\ell_{21} = \frac{1}{10^{-20}} = 10^{20}, \qquad
+a_{22}^{(2)} = 1 - 10^{20} \cdot 1 = -10^{20} + 1
+$$
+
+이 된다. 부동소수점 64비트에서 $-10^{20} + 1$ 은 그냥 $-10^{20}$ 으로 저장된다 (유효숫자 16자리가 넘어서 1이 묻힌다). 그 결과 $c_2^{(2)} = 2 - 10^{20} \cdot 1 = -10^{20}$, $x_2 = 1$, $x_1 = (1 - 1) / 10^{-20} = 0$ 으로 전혀 다른 해가 나온다.
+
+원인은 **작은 피벗으로 나눠 곱셈자 $\ell_{ik}$ 가 폭발**했고, 이후 뺄셈에서 **catastrophic cancellation**이 일어났기 때문이다. 행렬 $A$ 자체는 잘 조건화(well-conditioned, $\kappa(A) \approx 2.6$)되어 있음에도 알고리즘이 불안정하다.
+
+### 부분 피벗팅 (Partial Pivoting)
+
+해결책은 간단하다. $k$ 번째 열에서 **절댓값이 최대인 원소가 있는 행을 피벗으로 선택**한다.
+
+$$
+p = \arg\max_{i \geq k} \, |a_{ik}^{(k)}|, \qquad \text{rows } k \leftrightarrow p \text{ swap}
+$$
+
+이 전략의 효과는 곱셈자의 절댓값을 **항상 1 이하**로 제한한다는 것이다.
+
+$$
+|\ell_{ik}| = \frac{|a_{ik}^{(k)}|}{|a_{kk}^{(k)}|} \leq 1
+$$
+
+위 2×2 예시에 적용하면 첫 단계에서 행을 바꿔 $a_{11} = 1$ 이 되고, $\ell_{21} = 10^{-20}$ 이 되어 수치 오차가 발생하지 않는다.
+
+::: {.callout-note}
+## 직관: 부분 피벗팅은 "큰 조각을 기준으로 쪼갠다"
+
+작은 수로 큰 수를 나누면 비율이 커지고, 그 비율을 다른 수와 곱·뺄셈하면 원래 정보가 묻힌다. 반대로 큰 수로 나누면 비율이 1 이하가 되고, 원래 정보가 보존된다. 부분 피벗팅은 "매 단계에서 가장 신뢰할 수 있는 숫자를 기준으로 삼는다"는 원칙이다.
+:::
+
+### 완전 피벗팅과 루크 피벗팅
+
+- **완전 피벗팅 (Complete Pivoting)**: $k$ 번째 단계에서 남은 $(n-k+1) \times (n-k+1)$ 부분행렬 전체에서 절댓값 최대 원소를 찾아 행과 **열** 모두 교환한다. 이론적으로 더 안정적이지만 탐색 비용이 $O(n^3)$ 추가된다.
+- **루크 피벗팅 (Rook Pivoting)**: 행·열을 번갈아 가며 최대를 찾는다. 완전 피벗팅과 부분 피벗팅 사이의 타협안이다.
+
+실무에서는 **부분 피벗팅이 표준**이다. LAPACK의 `dgesv`, NumPy의 `numpy.linalg.solve`, MATLAB의 `\` 연산자 모두 부분 피벗팅을 쓴다.
+
+## PA = LU 분해
+
+부분 피벗팅을 적용한 가우스 소거는 다음을 만든다.
+
+$$
+PA = LU
+$$
+
+여기서
+
+- $P$: 행 교환을 기록하는 **순열 행렬(permutation matrix)**
+- $L$: 대각이 1이고 비대각 원소 $|\ell_{ik}| \leq 1$ 인 **하삼각 행렬**
+- $U$: **상삼각 행렬**
+
+### 왜 $PA = LU$ 로 쓰는가
+
+피벗팅 없는 세계에서는 $A = LU$ 가 성립한다. 하지만 피벗팅을 하면 매 단계에서 행이 바뀌므로 최종적으로 얻는 $L, U$ 는 원래 $A$ 의 분해가 아니라 **행이 재배열된 $A$ 의 분해**다. 순열 행렬 $P$ 가 이 재배열을 기록한다.
+
+실전 LAPACK 구현은 $P$ 를 행렬로 저장하지 않고 **피벗 벡터 `ipiv[1..n]`** 로 저장한다. 메모리는 $O(n)$ 이면 충분하다.
+
+### PA=LU 를 이용한 풀이
+
+$A\mathbf{x} = \mathbf{b}$ 는 다음 3단계로 풀린다.
+
+$$
+PA\mathbf{x} = P\mathbf{b} \;\Rightarrow\; LU\mathbf{x} = P\mathbf{b} \;\Rightarrow\;
+\begin{cases}
+L\mathbf{y} = P\mathbf{b} & \text{전방 대입} \\
+U\mathbf{x} = \mathbf{y} & \text{후방 대입}
+\end{cases}
+$$
+
+분해 자체는 $O(n^3)$ 이지만, 같은 $A$ 에 대해 여러 $\mathbf{b}$ 를 풀 때 각 해법은 $O(n^2)$ 에 끝난다. 이것이 LU 분해를 "한 번 만들어 두고 계속 재사용"하는 이유다.
+
+## 연산량 분석
+
+가우스 소거의 연산량을 정확히 세어 보자.
+
+### 전방 소거
+
+$k$ 번째 단계에서 $i = k+1, \dots, n$ (총 $n-k$ 개 행)에 대해, 각 행은 곱셈 1번($\ell_{ik}$ 계산) + $(n - k)$ 번의 곱셈+뺄셈(원소 업데이트)을 수행한다. 대략
+
+$$
+\sum_{k=1}^{n-1} (n-k)(n-k+1) \approx \sum_{k=1}^{n-1} (n-k)^2 \approx \frac{n^3}{3}
+$$
+
+곱셈이 약 $n^3/3$, 뺄셈이 약 $n^3/3$, 합계 약 $\frac{2}{3}n^3$ **flops**이다 (flop = floating-point operation).
+
+### 후방 대입
+
+$i$ 번째 단계에서 $(n - i)$ 번 곱셈+뺄셈 → 총 $\sum_{i=1}^n (n-i) \approx n^2/2$. $O(n^2)$ 이므로 $O(n^3)$ 소거에 비해 무시된다.
+
+### 규모 감각
+
+| $n$ | flops $\approx \frac{2}{3}n^3$ | 1 GFLOP/s 기준 시간 |
+|---|---|---|
+| $10^2$ | $6.7 \times 10^5$ | $< 1$ ms |
+| $10^3$ | $6.7 \times 10^8$ | $\approx 0.7$ s |
+| $10^4$ | $6.7 \times 10^{11}$ | $\approx 11$ min |
+| $10^5$ | $6.7 \times 10^{14}$ | $\approx 7.7$ days |
+| $10^6$ | $6.7 \times 10^{17}$ | $\approx 21$ years |
+
+현대 BLAS-3 구현은 메모리 대역폭을 거의 한계까지 쓰고 캐시 블로킹으로 100+ GFLOP/s 를 낸다. 그래서 $n = 10^4$ 는 실용적이지만, $n = 10^6$ 는 직접법으로 풀 수 없다 — **반복법(CG, GMRES)이 필요**하다.
+
+::: {.callout-note}
+## 직관: 왜 $n^3$ 인가
+
+$n$ 개 미지수를 없애려면 $n$ 번의 단계가 필요하고, 각 단계에서 $n \times n$ 행렬 크기의 업데이트가 일어나므로 $n \cdot n^2 = n^3$. 계수 $\frac{2}{3}$ 는 "삼각형 부분만 쓴다(상하 대칭으로 절반씩)"에서 나온다.
+:::
+
+## 안정성: 성장 인자 (Growth Factor)
+
+부분 피벗팅은 $|\ell_{ik}| \leq 1$ 을 보장하지만 $|u_{ij}|$ 가 커지는 것은 막지 못한다. **성장 인자(growth factor)** 를 다음으로 정의한다.
+
+$$
+\rho_n = \frac{\max_{i, j, k} |a_{ij}^{(k)}|}{\max_{i, j} |a_{ij}^{(1)}|}
+$$
+
+즉 소거 과정에서 원소가 얼마나 커지는지의 비율이다.
+
+### Wilkinson 상한
+
+부분 피벗팅 하에서 $\rho_n \leq 2^{n-1}$. 이는 매우 느슨한 상한으로, 실제로 달성되는 경우는 **Kahan 행렬** 같은 인위적 예시뿐이다. 일반적인 문제에서 $\rho_n$ 은 $\sqrt{n}$ 정도로 성장하는 것이 관측된다 (Trefethen & Bau, 1997, Ch.22).
+
+### Backward Error 보장
+
+부분 피벗팅을 쓰는 가우스 소거는 다음 backward stability 를 만족한다.
+
+$$
+(A + \Delta A)\hat{\mathbf{x}} = \mathbf{b}, \qquad
+\frac{\|\Delta A\|}{\|A\|} \leq O(\rho_n \cdot n \cdot u)
+$$
+
+여기서 $u$ 는 기계 엡실론(약 $10^{-16}$). 즉, 계산된 해 $\hat{\mathbf{x}}$ 는 "조금 섭동된 $A + \Delta A$" 의 정확한 해이며, 그 섭동의 크기는 $\rho_n n u$ 수준이다. 실무적으로 안정적이다.
+
+## 블록 알고리즘
+
+현대 CPU는 메모리 접근이 연산보다 느리다. 스칼라 하나씩 업데이트하는 교과서 알고리즘은 캐시를 전혀 활용하지 못한다. **블록 LU 분해**는 $n$ 을 크기 $b$ (보통 32~128)의 블록들로 나눠서 처리한다.
+
+$$
+A = \begin{pmatrix} A_{11} & A_{12} \\ A_{21} & A_{22} \end{pmatrix}
+= \begin{pmatrix} L_{11} & 0 \\ L_{21} & L_{22} \end{pmatrix}
+\begin{pmatrix} U_{11} & U_{12} \\ 0 & U_{22} \end{pmatrix}
+$$
+
+단계는 다음과 같다.
+
+1. $A_{11} = L_{11} U_{11}$ 을 표준 가우스 소거로 분해 ($O(b^3)$)
+2. $L_{21} = A_{21} U_{11}^{-1}$, $U_{12} = L_{11}^{-1} A_{12}$ (**삼각 방정식**, BLAS-3)
+3. $A_{22} \leftarrow A_{22} - L_{21} U_{12}$ (**일반 행렬 곱**, BLAS-3 — `dgemm`)
+4. $A_{22}$ 에 대해 재귀적으로 반복
+
+핵심은 3단계 GEMM이다. $O(n^3)$ 연산을 행렬 곱 한 번으로 처리하면 캐시 히트율이 극대화되어 peak FLOPS에 근접한다. LAPACK의 `dgetrf` 가 이 전략을 쓴다.
+
+## 희소 행렬 (Sparse Matrices)
+
+ML/과학계산에서 나오는 행렬은 대부분 **희소**하다 — 전체 원소 중 0이 아닌 것의 비율(density)이 1% 미만인 경우가 흔하다.
+
+### Fill-in 문제
+
+희소 행렬에 가우스 소거를 그대로 적용하면 소거 과정에서 원래 0이었던 자리에 0이 아닌 값이 생긴다. 이를 **fill-in** 이라 한다. 최악의 경우 밀집 행렬로 변해 메모리 $O(n^2)$ 와 시간 $O(n^3)$ 이 다시 필요하다.
+
+### 재배열 (Reordering)
+
+행과 열을 적절히 재배열하면 fill-in을 크게 줄일 수 있다. $PAQ = LU$ 형태로 **두 개의 순열 행렬** $P, Q$ 를 쓴다.
+
+- **AMD (Approximate Minimum Degree)**: 각 단계에서 "차수(non-zero 개수)가 최소인 노드"를 먼저 소거 — fill-in을 지역적으로 최소화
+- **Nested Dissection (METIS)**: 그래프를 재귀적으로 분할 — 대규모 문제에서 AMD보다 우수
+- **Cuthill-McKee**: 밴드 폭을 줄임 — 유한요소 해석에서 전통적으로 사용
+
+재배열 + 희소 LU는 PDE 수치해법, 전력계통 해석, 최적화의 KKT 시스템에서 표준이다.
+
+::: {.callout-note}
+## 직관: 재배열이 왜 중요한가
+
+그래프로 보면 소거 순서는 "어떤 노드부터 지울 것인가"다. 연결이 많은 노드를 먼저 지우면 이웃들 사이에 새 간선이 대량 생겨 그래프가 밀집해진다. 연결이 적은 노드부터 지우면 새 간선이 거의 생기지 않는다. AMD는 이 원칙의 탐욕 알고리즘이다.
+:::
+
+## 특수 구조 활용
+
+| 행렬 구조 | 알고리즘 | 연산량 | 비고 |
+|---|---|---|---|
+| 일반 | PA=LU with 부분 피벗팅 | $\frac{2}{3}n^3$ | LAPACK `dgesv` |
+| 대칭 양정치 | Cholesky $A = LL^\top$ | $\frac{1}{3}n^3$ | 피벗팅 불필요, 안정성 자동 보장 |
+| 대칭 부정부정 | Bunch-Kaufman $PAP^\top = LDL^\top$ | $\frac{1}{3}n^3$ | 2×2 블록 피벗팅 |
+| 대각 우세 | 피벗팅 없이 LU | $\frac{2}{3}n^3$ | 안정성 이론적으로 보장 |
+| 삼중대각 (Tridiagonal) | Thomas 알고리즘 | $O(n)$ | 1D PDE, 스플라인 |
+| 밴드 ($k$ 폭) | 밴드 LU | $O(nk^2)$ | 2D PDE 재배열 후 |
+| 희소 | 재배열 + 희소 LU | 데이터 의존 | UMFPACK, SuperLU |
+
+"행렬이 특별한 성질을 가지면 알고리즘도 특별해진다"는 원칙의 구체적 예시들이다.
+
+## 코드 예시
+
+### Step 1: 부분 피벗팅 LU 직접 구현
+
+```python
+import numpy as np
+
+def lu_partial_pivot(A):
+    """PA = LU 분해 — 부분 피벗팅을 적용한 가우스 소거."""
+    n = A.shape[0]
+    A = A.astype(float).copy()
+    P = np.eye(n)
+    L = np.eye(n)
+
+    for k in range(n - 1):
+        # 피벗 선택: k열에서 |a_ik| 최대 행
+        pivot = k + np.argmax(np.abs(A[k:, k]))
+        if pivot != k:
+            A[[k, pivot]] = A[[pivot, k]]
+            P[[k, pivot]] = P[[pivot, k]]
+            if k > 0:
+                L[[k, pivot], :k] = L[[pivot, k], :k]
+
+        # 소거
+        for i in range(k + 1, n):
+            L[i, k] = A[i, k] / A[k, k]
+            A[i, k:] -= L[i, k] * A[k, k:]
+
+    U = np.triu(A)
+    return P, L, U
+
+# 검증
+A = np.array([[1e-20, 1.0], [1.0, 1.0]])
+P, L, U = lu_partial_pivot(A)
+print("P @ A:\n", P @ A)
+print("L @ U:\n", L @ U)
+print("잔차 노름:", np.linalg.norm(P @ A - L @ U))
+```
+
+### Step 2: NumPy/SciPy 실무 사용
+
+```python
+from scipy.linalg import lu, lu_factor, lu_solve
+
+A = np.random.randn(1000, 1000)
+b = np.random.randn(1000)
+
+# 방법 1: P, L, U를 얻기
+P, L, U = lu(A)
+
+# 방법 2: 해 구하기 (권장) — 한 번 분해해서 여러 b에 재사용
+lu_piv = lu_factor(A)            # 분해 O(n^3)
+x1 = lu_solve(lu_piv, b)          # 해 1 O(n^2)
+x2 = lu_solve(lu_piv, np.random.randn(1000))  # 해 2 O(n^2)
+
+# 방법 3: 단일 풀이 — 내부적으로 LU를 씀
+x = np.linalg.solve(A, b)
+```
+
+### Step 3: 성장 인자 관찰
+
+```python
+# Kahan 행렬 — 부분 피벗팅에서도 성장 인자가 지수적으로 커지는 병리적 예시
+def kahan_matrix(n):
+    A = -np.tril(np.ones((n, n)), -1) + np.eye(n)
+    A[:, -1] = 1.0
+    return A
+
+for n in [10, 20, 40]:
+    A = kahan_matrix(n)
+    _, _, U = lu_partial_pivot(A)
+    rho = np.max(np.abs(U)) / np.max(np.abs(A))
+    print(f"n={n:3d}, growth factor ρ = {rho:.2e}")
+# 결과: ρ가 2^(n-1) 수준으로 성장 — 이론적 최악의 경우
+```
+
+실무 행렬에서는 이런 성장이 거의 나타나지 않지만, 이 예시는 "최악의 경우가 이론적으로 존재한다"는 사실을 확인시킨다.
+
+## ML/DL에서의 위치
+
+- **선형 회귀의 정규 방정식** $X^\top X \boldsymbol{\beta} = X^\top \mathbf{y}$: $X^\top X$ 가 대칭 양정치이면 Cholesky, 아니면 LU. 하지만 조건수가 제곱되므로 QR이나 SVD 기반이 권장된다
+- **가우시안 프로세스**의 $K + \sigma^2 I$ 역산: $n = $ 데이터 포인트 수, $O(n^3)$ 이 병목. $n > 10^4$ 부터는 반복법·저랭크 근사 필수
+- **2차 최적화 (Newton, IRLS)**: Hessian 풀이에 LU 또는 CG. 배치 GLM, logistic regression의 Fisher scoring이 전형적 사례
+- **KKT 시스템 (제약 최적화)**: 부정부정 대칭 행렬 → Bunch-Kaufman
+
+즉, 소규모 문제에서는 여전히 LU가 1차 선택지이고, 대규모에서는 반복법으로 넘어간다. 규모를 가늠하는 감각이 설계의 시작이다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [수치 선형대수 개요](./13.numerical-linear-algebra-overview.qmd)
+- [Ch.2 §2.2 소거의 아이디어](./mit-02-3-gilbert-strang-elimination-idea.qmd)
+- [Ch.2 §2.3 행렬을 이용한 소거](./mit-02-4-gilbert-strang-matrix-elimination.qmd)
+- [Ch.2 §2.6 A=LU 분해](./mit-02-6-gilbert-strang-factorization.qmd)
+
+**후속 주제**
+
+- [QR 분해와 최소제곱](./qr-decomposition-least-squares.qmd)
+- [Cholesky 분해와 대칭 양정치](./cholesky-decomposition.qmd)
+- [반복법: CG와 GMRES](./iterative-methods-cg-gmres.qmd)
+- [조건수와 민감도 분석](./condition-number-sensitivity.qmd)
+
+**다른 카테고리 연결**
+
+- [정규 방정식 vs QR vs SVD](../../Statistics/regression-normal-equations-vs-qr.qmd) — 선형 회귀 수치 구현
+- [Newton 방법과 Hessian 풀이](../../Machine_Learning/second-order-optimization.qmd)
