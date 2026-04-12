@@ -3,7 +3,7 @@ name: AGENT_GUIDE
 type: router
 version: 8.0
 last_updated: 2026-04-13
-changelog: "v8.0 (2026-04-13): tutoring_topic_picker.py 도입 — sql-topics.md·algo-topics.md 기반 uniform random 주제 선정. 유형 직접 지정 시에도 스크립트로 토픽 선정. /writing 라우팅 오류 수정(weakness·rubric 파일명). 커맨드별 로드 비교 보강."
+changelog: "v8.0 (2026-04-13): tutoring_topic_picker.py 도입 — sql-topics.md·algo-topics.md 기반 uniform random 주제 선정. 유형 직접 지정 시에도 스크립트로 토픽 선정. /writing 라우팅 수정(weakness→{이름}, rubric→lv{N}). random 트리거 설명에 tutor/track 인수 명시. 커맨드별 로드 비교에 Mode B sub-guide 및 /writing 예시 추가."
 description: >
   슬래시 커맨드 라우터. 사용자가 명령어를 입력하면 해당 태스크에 필요한 가이드만 로드한다.
   공통 규칙은 guides/AGENT_GUIDE_CORE.md에 있다 — 모든 태스크에서 반드시 먼저 로드한다.
@@ -57,7 +57,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 | `/reindex [category]` | **index.qmd 재편성** — 카테고리 내 모든 .qmd 메타데이터를 읽고 논리적 그룹핑·순서로 index.qmd를 재작성 | `guides/reorganize-index.md` + `docs/blog/posts/{category}/GUIDE.md` |
 | `/algo [track] [problem]` | **Python 알고리즘 튜터** — AIE/DS 트랙 Level 1~5 문제를 대화식으로 풀이 → 세션을 .qmd 포스트로 저장 | `guides/algo-tutor.md` + `docs/blog/posts/Code_Test/GUIDE.md` |
 | `/sql [problem]` | **SQL 코딩 테스트 튜터** — Programmers Level 1~5 문제를 평가·교정·해설 → 세션을 .qmd 포스트로 저장 | `guides/sql-tutor.md` + `docs/blog/posts/Code_Test/GUIDE.md` |
-| `/writing [level] [lang] [topic]` | **논리적 글쓰기 튜터** — Lv.1~7 × 한국어/영어 글쓰기 채점·피드백 → 세션을 .qmd 포스트로 저장 | `guides/writing-tutor.md` + `guides/writing-rubric.md` + `guides/writing-weakness.md` + `docs/blog/posts/Writing/GUIDE.md` |
+| `/writing [level] [lang] [topic]` | **논리적 글쓰기 튜터** — Lv.1~7 × 한국어/영어 글쓰기 채점·피드백 → 세션을 .qmd 포스트로 저장 | `guides/writing-tutor.md` + `guides/writing-rubric-lv{N}.md` (레벨 확인 후) + `guides/writing-weakness-{이름}.md` (사용자 확인 후) + `docs/blog/posts/Writing/GUIDE.md` |
 | `/publish` | **배포** — 변경된 .qmd를 HTML 렌더링 → git add (.qmd + _site/ + _freeze/) → commit → push → 충돌 해결 | `guides/publish.md` |
 
 ### 커맨드별 사용 예시
@@ -91,7 +91,7 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 
 | 트리거 | 효과 |
 |--------|------|
-| `random` | 그룹·토픽 모두 random. 스크립트 `--level N` 으로 호출 |
+| `random` | 그룹·토픽 모두 random. algo: `--tutor algo --track {T} --level N`, sql: `--tutor sql --level N`, writing: `--tutor writing --level N` 으로 호출 |
 | `go` 또는 `!` | 모든 확인 단계 건너뛰고 Step 1부터 시작. Self-Check·푸시 확인은 세션 종료 시 일괄 처리 |
 | 유형명 직접 지정 | `문자열`, `Hash`, `DFS`, `JOIN`, `NULL처리` 등 — **그룹을 고정하고** 스크립트 `--group {키워드}` 로 토픽 random 선정 |
 | `Programmers {문제명}` / URL | Mode A 실전 문제 튜터링 |
@@ -151,11 +151,17 @@ guides/AGENT_GUIDE_CORE.md 로드 (항상)
 
 /algo AIE Level 3 DFS
   → CORE + algo-tutor + Code_Test/GUIDE.md
+  → Mode B (출제) 시 추가: algo-flow-b-rules.md
   → 로드 안 함: write-post, info-search, sql-tutor, ...
 
 /sql Programmers JOIN Level 2
   → CORE + sql-tutor + Code_Test/GUIDE.md
+  → Mode B (출제) 시 추가: sql-flow-b-rules.md
   → 로드 안 함: write-post, info-search, algo-tutor, ...
+
+/writing Lv5 en random go
+  → CORE + writing-tutor + writing-rubric-lv5.md + writing-weakness-{이름}.md + Writing/GUIDE.md
+  → 로드 안 함: write-post, info-search, algo-tutor, sql-tutor, ...
 
 /publish
   → CORE + publish.md
