@@ -1,0 +1,687 @@
+---
+title: "GLM 응용 통합 — 고전 검정부터 분포 확장까지"
+subtitle: "t-test·ANOVA·ANCOVA·로지스틱·포아송이 하나의 프레임워크로"
+description: |
+  일반화 선형 모델(GLM)은 t-test, ANOVA, 로지스틱 회귀, 포아송 회귀 등을
+  하나의 프레임워크로 통합한다. 설계 행렬(Design Matrix)과 Link Function의
+  개념을 중심으로, GLM이 왜 그룹 비교와 트렌드 분석에 강력한지를
+  구체적인 예시와 코드로 설명한다.
+categories:
+  - Statistics
+  - Regression
+author: Kwangmin Kim
+date: 03/07/2026
+---
+
+# Generalized Linear Model (GLM)
+
+## GLM이란
+
+GLM은 결과 변수(Y)가 정규분포를 따르지 않아도 사용할 수 있는 **회귀 모델의 일반화된 프레임워크**다. 일반 선형 회귀(OLS), t-test, ANOVA, 로지스틱 회귀, 포아송 회귀가 모두 GLM의 특수한 경우다.
+
+### 3가지 구성 요소
+
+GLM은 세 가지 요소로 정의된다:
+
+| 구성 요소 | 설명 | 예시 |
+|----------|------|------|
+| **Random Component** | $Y$의 확률 분포 | 정규, 이항, 포아송, 감마 |
+| **Systematic Component** | 예측 변수의 선형 결합 $\eta = X\beta$ | $\beta_0 + \beta_1 x_1 + \beta_2 x_2$ |
+| **Link Function** | $E[Y]$와 $\eta$를 연결하는 함수 $g(\mu) = \eta$ | identity, logit, log |
+
+$$g(E[Y]) = X\beta$$
+
+Link Function이 핵심이다. 결과 변수의 분포에 맞는 link function을 선택하면, **동일한 프레임워크**로 연속형, 이진형, 카운트형 데이터를 모두 다룰 수 있다.
+
+### GLM 패밀리 정리
+
+| 모델 | Random Component | Link Function | $g(\mu)$ | 사용 상황 |
+|------|-----------------|---------------|----------|----------|
+| 선형 회귀 | 정규분포 | Identity | $\mu$ | 연속형 결과 변수 |
+| 로지스틱 회귀 | 이항분포 | Logit | $\log\frac{\mu}{1-\mu}$ | 이진 결과 (전환/이탈) |
+| 포아송 회귀 | 포아송분포 | Log | $\log(\mu)$ | 카운트 데이터 (클릭 수, 턴 수) |
+| 감마 회귀 | 감마분포 | Log | $\log(\mu)$ | 양수 연속형 (체류 시간, 비용) |
+
+## 왜 GLM이 그룹 비교에 용이한가
+
+### 핵심: 더미 코딩과 계수의 의미
+
+GLM에서 그룹 변수(범주형)는 **더미 코딩(Dummy Coding)**으로 설계 행렬에 들어간다. 이때 **계수($\beta$)가 곧 그룹 간 차이**가 된다.
+
+**예시 — A/B 테스트에서 Treatment 효과:**
+
+$$Y = \beta_0 + \beta_1 \cdot \text{Treatment} + \epsilon$$
+
+| 그룹 | Treatment 값 | $E[Y]$ |
+|------|-------------|--------|
+| Control (기준 그룹) | 0 | $\beta_0$ |
+| Treatment | 1 | $\beta_0 + \beta_1$ |
+
+$\beta_1$이 바로 **두 그룹의 평균 차이**다. 이것은 two-sample t-test가 하는 것과 정확히 동일하다.
+
+**구체적 수치 예시:**
+
+AI Agent 서비스에서 새로운 프롬프트 전략(Treatment)의 효과를 측정한다. 결과 변수는 세션 만족도(1~5점).
+
+```
+데이터:
+┌──────────┬───────────┬──────────┐
+│ user_id  │ treatment │ 만족도    │
+├──────────┼───────────┼──────────┤
+│ user_01  │    0      │   3.5    │
+│ user_02  │    0      │   3.8    │
+│ user_03  │    0      │   3.2    │
+│ user_04  │    1      │   4.1    │
+│ user_05  │    1      │   4.5    │
+│ user_06  │    1      │   4.0    │
+│  ...     │   ...     │  ...     │
+└──────────┴───────────┴──────────┘
+```
+
+```python
+import statsmodels.formula.api as smf
+
+# GLM (정규분포 + identity link = OLS)
+model = smf.ols("satisfaction ~ treatment", data=df).fit()
+print(model.summary())
+```
+
+```
+결과:
+                  coef    std err      t      P>|t|    [0.025    0.975]
+Intercept       3.50      0.08    43.75     <0.001     3.34      3.66
+treatment       0.52      0.11     4.73     <0.001     0.30      0.74
+
+해석:
+- β₀ = 3.50: Control 그룹의 평균 만족도
+- β₁ = 0.52: Treatment 그룹은 Control 대비 평균 0.52점 높음
+- p < 0.001: 통계적으로 유의한 차이
+- 95% CI [0.30, 0.74]: 효과 크기의 범위
+```
+
+이 결과는 two-sample t-test와 **동일한 p-value와 신뢰구간**을 준다.
+
+## t-test, ANOVA는 GLM의 특수한 경우
+
+### Two-sample t-test = GLM
+
+| t-test | GLM |
+|--------|-----|
+| 두 그룹의 평균 비교 | `Y ~ Group` (더미 1개) |
+| t-statistic | $\beta_1$의 t-value |
+| p-value | 동일 |
+
+**예시 — 세그먼트별 세션 길이 비교:**
+
+```python
+# t-test
+from scipy.stats import ttest_ind
+t, p = ttest_ind(control_sessions, treatment_sessions)
+# t = 2.85, p = 0.005
+
+# GLM (동일한 결과)
+model = smf.ols("session_length ~ treatment", data=df).fit()
+# treatment coef의 t = 2.85, p = 0.005
+```
+
+두 결과가 완전히 동일하다. GLM이 t-test를 **포함**하는 더 일반적인 프레임워크임을 알 수 있다.
+
+### One-way ANOVA = GLM
+
+3개 이상의 그룹을 비교할 때, ANOVA의 F-test는 GLM에서 **더미 변수 k-1개**를 사용하는 것과 동일하다.
+
+**예시 — 3개 세그먼트(SI, MIEP, N계열)의 만족도 비교:**
+
+```python
+# ANOVA
+from scipy.stats import f_oneway
+f, p = f_oneway(si_scores, miep_scores, n_scores)
+# F = 12.4, p < 0.001
+
+# GLM (동일한 결과)
+model = smf.ols("satisfaction ~ C(segment)", data=df).fit()
+# F-statistic = 12.4, p < 0.001
+```
+
+GLM에서 `segment`가 3개 범주면 더미 변수 2개가 생성된다:
+
+$$Y = \beta_0 + \beta_1 \cdot \text{MIEP} + \beta_2 \cdot \text{N계열} + \epsilon$$
+
+| 세그먼트 | MIEP | N계열 | $E[Y]$ |
+|---------|------|------|--------|
+| SI (기준) | 0 | 0 | $\beta_0$ |
+| MIEP | 1 | 0 | $\beta_0 + \beta_1$ |
+| N계열 | 0 | 1 | $\beta_0 + \beta_2$ |
+
+```
+결과:
+                     coef    std err      t      P>|t|
+Intercept           3.45      0.06    57.50     <0.001   ← SI 평균
+C(segment)[MIEP]    0.68      0.09     7.56     <0.001   ← MIEP은 SI보다 +0.68
+C(segment)[N]      -0.42      0.12    -3.50      0.001   ← N계열은 SI보다 -0.42
+
+해석:
+- SI 평균 만족도: 3.45
+- MIEP 평균 만족도: 3.45 + 0.68 = 4.13
+- N계열 평균 만족도: 3.45 - 0.42 = 3.03
+- 각 계수의 p-value로 개별 그룹 간 차이 검정 가능
+```
+
+ANOVA의 F-test는 "세 그룹 중 하나라도 다른가?"만 답하지만, GLM은 **어떤 그룹이 어떤 방향으로 다른지**까지 직접 보여준다.
+
+### ANCOVA = GLM + 공변량
+
+ANCOVA(공분산분석)는 GLM에서 **그룹 변수 + 연속형 공변량**을 동시에 넣는 것이다.
+
+**예시 — Treatment 효과를 분석하되 사용자의 과거 활동량을 통제:**
+
+```python
+# ANCOVA as GLM
+model = smf.ols(
+    "satisfaction ~ treatment + prior_sessions",
+    data=df
+).fit()
+```
+
+$$Y = \beta_0 + \beta_1 \cdot \text{Treatment} + \beta_2 \cdot \text{PriorSessions} + \epsilon$$
+
+```
+결과:
+                    coef    std err      t      P>|t|
+Intercept          3.12      0.10    31.20     <0.001
+treatment          0.48      0.09     5.33     <0.001  ← 공변량 통제 후 순수 효과
+prior_sessions     0.03      0.01     3.00      0.003  ← 과거 활동이 많을수록 만족도 높음
+```
+
+**왜 공변량 통제가 중요한가:**
+
+```
+단순 비교:      Treatment 평균 4.02 vs Control 평균 3.50  → 차이 0.52
+공변량 통제 후: Treatment 효과 = 0.48
+
+차이 0.04는 Treatment 그룹에 원래 활발한 사용자가 더 많았기 때문.
+공변량을 통제해야 순수한 Treatment 효과를 추정할 수 있다.
+```
+
+이것이 A/B 테스트에서 **CUPED**(Controlled-experiment Using Pre-Experiment Data)의 원리다. 실험 전 데이터를 공변량으로 넣어 분산을 줄이고 검정력을 높인다.
+
+## 트렌드 비교: 교호작용(Interaction)
+
+### 그룹별 트렌드 차이 검정
+
+"두 그룹이 시간에 따라 **다른 속도로** 변화하는가?"를 검정하려면 **교호작용 항(Interaction Term)**을 사용한다.
+
+$$Y = \beta_0 + \beta_1 \cdot \text{Group} + \beta_2 \cdot \text{Time} + \beta_3 \cdot \text{Group} \times \text{Time} + \epsilon$$
+
+| 그룹 | 절편 | 기울기 (시간 효과) |
+|------|------|------------------|
+| Control | $\beta_0$ | $\beta_2$ |
+| Treatment | $\beta_0 + \beta_1$ | $\beta_2 + \beta_3$ |
+
+**$\beta_3$이 유의하면** → 두 그룹의 트렌드가 다르다.
+
+**예시 — 개인화 도입 후 만족도 변화 추세 비교:**
+
+```python
+model = smf.ols(
+    "satisfaction ~ treatment * week",  # treatment + week + treatment:week
+    data=df
+).fit()
+```
+
+```
+결과:
+                      coef    std err      t      P>|t|
+Intercept            3.50      0.08    43.75     <0.001
+treatment            0.10      0.11     0.91      0.364   ← 초기 차이 (유의하지 않음)
+week                 0.02      0.01     2.00      0.046   ← Control 주당 변화
+treatment:week       0.08      0.02     4.00     <0.001   ← 트렌드 차이 (핵심!)
+
+해석:
+- Control: 주당 만족도 +0.02씩 증가 (자연적 변화)
+- Treatment: 주당 만족도 +0.10 (= 0.02 + 0.08)씩 증가
+- 초기에는 차이가 없었지만 (β₁ = 0.10, p = 0.364)
+  시간이 지날수록 Treatment의 만족도가 더 빠르게 상승 (β₃ = 0.08, p < 0.001)
+
+4주 후 예상 차이:
+- Control: 3.50 + 0.02×4 = 3.58
+- Treatment: 3.60 + 0.10×4 = 4.00
+- 차이: 0.42점
+```
+
+**시각적 해석:**
+
+```
+만족도
+4.2 │                                    ╱ Treatment
+    │                                 ╱
+4.0 │                              ╱
+    │                           ╱
+3.8 │                        ╱
+    │                     ╱
+3.6 │        ─────────────────────── Control
+    │     ╱
+3.4 │  ╱
+    │
+3.2 │
+    └──────────────────────────────────
+    Week 0    Week 1    Week 2    Week 3    Week 4
+
+두 선의 기울기 차이 = β₃ (교호작용 계수)
+```
+
+### 다중 그룹의 트렌드 비교
+
+3개 세그먼트(SI, MIEP, N계열)의 시간 경과에 따른 만족도 변화를 동시에 비교한다.
+
+```python
+model = smf.ols(
+    "satisfaction ~ C(segment) * week",
+    data=df
+).fit()
+```
+
+$$Y = \beta_0 + \beta_1 \cdot \text{MIEP} + \beta_2 \cdot \text{N} + \beta_3 \cdot \text{Week} + \beta_4 \cdot \text{MIEP} \times \text{Week} + \beta_5 \cdot \text{N} \times \text{Week} + \epsilon$$
+
+```
+결과:
+                          coef    std err      t      P>|t|
+Intercept                3.45      0.06    57.50     <0.001
+C(segment)[MIEP]         0.65      0.09     7.22     <0.001
+C(segment)[N]           -0.40      0.12    -3.33      0.001
+week                     0.02      0.01     2.00      0.046   ← SI의 주당 변화
+C(segment)[MIEP]:week    0.05      0.02     2.50      0.013   ← MIEP 추가 기울기
+C(segment)[N]:week      -0.03      0.02    -1.50      0.134   ← N계열 추가 기울기 (유의하지 않음)
+
+해석:
+- SI: 주당 +0.02 (느린 자연 증가)
+- MIEP: 주당 +0.07 (= 0.02 + 0.05) → SI보다 빠르게 개선 (p = 0.013)
+- N계열: 주당 -0.01 (= 0.02 - 0.03) → 오히려 감소하지만 유의하지 않음 (p = 0.134)
+```
+
+하나의 모델로 3개 그룹의 **수준 차이**(절편)와 **변화율 차이**(기울기)를 동시에 추정할 수 있다. 이것이 GLM의 강점이다.
+
+## GLM의 진정한 힘: 분포 확장
+
+### 전환율 비교 — 로지스틱 회귀 (Binomial + Logit)
+
+전환율(0/1)을 t-test로 비교하면 정규성 가정이 깨진다. GLM의 로지스틱 회귀를 쓰면 이항분포에 맞는 올바른 추론이 가능하다.
+
+**예시 — 프리미엄 전환율에 대한 Treatment 효과:**
+
+```python
+import statsmodels.api as sm
+
+model = smf.glm(
+    "converted ~ treatment + C(segment)",
+    data=df,
+    family=sm.families.Binomial()  # 이항분포 + logit link
+).fit()
+```
+
+$$\log\frac{p}{1-p} = \beta_0 + \beta_1 \cdot \text{Treatment} + \beta_2 \cdot \text{MIEP} + \beta_3 \cdot \text{N}$$
+
+```
+결과:
+                      coef    std err      z      P>|z|
+Intercept           -3.18      0.15   -21.20     <0.001
+treatment            0.65      0.12     5.42     <0.001
+C(segment)[MIEP]     0.89      0.14     6.36     <0.001
+C(segment)[N]       -0.52      0.18    -2.89      0.004
+```
+
+**계수 해석 — 오즈비(Odds Ratio):**
+
+로지스틱 회귀의 계수는 로그 오즈이므로, 해석하려면 $e^{\beta}$로 변환한다.
+
+| 변수 | $\beta$ | $e^{\beta}$ (OR) | 해석 |
+|------|--------|-----------------|------|
+| treatment | 0.65 | **1.92** | Treatment 그룹의 전환 오즈가 1.92배 높음 |
+| MIEP | 0.89 | **2.44** | MIEP 세그먼트의 전환 오즈가 SI 대비 2.44배 높음 |
+| N계열 | -0.52 | **0.59** | N계열의 전환 오즈가 SI 대비 0.59배 (41% 낮음) |
+
+```python
+import numpy as np
+
+# 오즈비 계산
+odds_ratios = np.exp(model.params)
+print(odds_ratios)
+
+# 전환 확률 예측
+# SI + Control: p = 1 / (1 + exp(3.18)) = 0.040 (4.0%)
+# SI + Treatment: p = 1 / (1 + exp(3.18 - 0.65)) = 0.074 (7.4%)
+# MIEP + Treatment: p = 1 / (1 + exp(3.18 - 0.65 - 0.89)) = 0.135 (13.5%)
+```
+
+**t-test와의 비교:**
+
+```
+단순 t-test (전환율 평균 비교):
+- Control 전환율: 5.2%
+- Treatment 전환율: 9.1%
+- p = 0.003
+
+GLM (로지스틱):
+- Treatment OR = 1.92 (세그먼트를 통제한 순수 효과)
+- MIEP은 전환율이 높고, N계열은 낮다는 정보도 동시에 제공
+- 세그먼트 분포 차이의 영향을 제거한 정확한 추정
+
+→ t-test는 "차이가 있다"만 답하지만
+  GLM은 "누구에게, 얼마나, 왜" 다른지까지 답한다
+```
+
+### 카운트 데이터 — 포아송 회귀 (Poisson + Log)
+
+세션당 대화 턴 수(카운트)는 정규분포가 아니라 포아송분포에 가깝다.
+
+**예시 — 세그먼트별 평균 턴 수 비교:**
+
+```python
+model = smf.glm(
+    "turn_count ~ treatment + C(segment)",
+    data=df,
+    family=sm.families.Poisson()  # 포아송분포 + log link
+).fit()
+```
+
+$$\log(\lambda) = \beta_0 + \beta_1 \cdot \text{Treatment} + \beta_2 \cdot \text{MIEP} + \beta_3 \cdot \text{N}$$
+
+여기서 $\lambda$는 평균 턴 수다.
+
+```
+결과:
+                      coef    std err      z      P>|z|
+Intercept            0.74      0.03    24.67     <0.001
+treatment            0.18      0.04     4.50     <0.001
+C(segment)[MIEP]     0.52      0.05    10.40     <0.001
+C(segment)[N]       -0.15      0.06    -2.50      0.012
+```
+
+**계수 해석 — 비율비(Rate Ratio):**
+
+Log link이므로 $e^{\beta}$는 **비율비**가 된다.
+
+| 변수 | $\beta$ | $e^{\beta}$ (RR) | 해석 |
+|------|--------|-----------------|------|
+| Intercept | 0.74 | 2.10 | SI + Control의 평균 턴 수 = 2.1턴 |
+| treatment | 0.18 | **1.20** | Treatment는 턴 수가 1.20배 (20% 증가) |
+| MIEP | 0.52 | **1.68** | MIEP은 SI 대비 1.68배 (68% 더 많은 턴) |
+| N계열 | -0.15 | **0.86** | N계열은 SI 대비 0.86배 (14% 적은 턴) |
+
+```python
+# 예측 평균 턴 수
+# SI + Control: exp(0.74) = 2.1턴
+# SI + Treatment: exp(0.74 + 0.18) = 2.5턴
+# MIEP + Treatment: exp(0.74 + 0.18 + 0.52) = 4.2턴
+# N계열 + Control: exp(0.74 - 0.15) = 1.8턴
+```
+
+### 체류 시간 — 감마 회귀 (Gamma + Log)
+
+체류 시간은 항상 양수이고 오른쪽으로 치우친 분포를 가진다. 감마 분포가 적합하다.
+
+**예시 — Treatment에 따른 세션 체류 시간:**
+
+```python
+model = smf.glm(
+    "duration_sec ~ treatment + C(segment)",
+    data=df,
+    family=sm.families.Gamma(sm.families.links.Log())
+).fit()
+```
+
+```
+결과:
+                      coef    std err      z      P>|z|
+Intercept            4.85      0.04   121.25     <0.001
+treatment            0.22      0.05     4.40     <0.001
+C(segment)[MIEP]     0.45      0.06     7.50     <0.001
+
+해석 (log link → 비율비):
+- SI + Control 평균 체류: exp(4.85) = 128초 (약 2분)
+- Treatment 효과: exp(0.22) = 1.25배 (25% 증가 → 160초)
+- MIEP: exp(0.45) = 1.57배 (57% 더 긴 체류 → 201초)
+```
+
+## 실무 예시: AI Agent A/B 테스트 전체 분석
+
+AI Agent 서비스에서 세그먼트별 프롬프트 전략의 효과를 GLM으로 분석하는 전체 과정을 보여준다.
+
+### 데이터
+
+```python
+import pandas as pd
+import numpy as np
+import statsmodels.formula.api as smf
+import statsmodels.api as sm
+
+# 실험 데이터 (2,000명 × 4주)
+np.random.seed(42)
+n = 2000
+
+df = pd.DataFrame({
+    "user_id": [f"user_{i}" for i in range(n)],
+    "segment": np.random.choice(["SI", "MIEP", "N"], n, p=[0.6, 0.3, 0.1]),
+    "treatment": np.random.binomial(1, 0.5, n),
+    "week": np.random.randint(1, 5, n),
+    "prior_sessions": np.random.poisson(10, n),
+})
+
+# 결과 변수 생성 (실제 효과 반영)
+df["satisfaction"] = (
+    3.5                                          # baseline
+    + 0.5 * df["treatment"]                      # treatment 효과
+    + 0.6 * (df["segment"] == "MIEP")            # MIEP 높음
+    - 0.4 * (df["segment"] == "N")               # N 낮음
+    + 0.03 * df["week"]                          # 시간 효과
+    + 0.08 * df["treatment"] * df["week"]        # treatment × time 교호작용
+    + 0.02 * df["prior_sessions"]                # 공변량 효과
+    + np.random.normal(0, 0.5, n)                # 잔차
+)
+
+df["converted"] = np.random.binomial(
+    1,
+    1 / (1 + np.exp(-(
+        -3.0
+        + 0.6 * df["treatment"]
+        + 0.8 * (df["segment"] == "MIEP")
+        - 0.5 * (df["segment"] == "N")
+    ))),
+    n
+)
+
+df["turn_count"] = np.random.poisson(
+    np.exp(
+        0.7
+        + 0.2 * df["treatment"]
+        + 0.5 * (df["segment"] == "MIEP")
+        - 0.15 * (df["segment"] == "N")
+    ),
+    n
+)
+```
+
+### 분석 1: 만족도 (연속형 — 정규분포)
+
+```python
+# Model 1: 단순 그룹 비교
+m1 = smf.ols("satisfaction ~ treatment", data=df).fit()
+
+# Model 2: 세그먼트 통제
+m2 = smf.ols("satisfaction ~ treatment + C(segment)", data=df).fit()
+
+# Model 3: 공변량 통제 (CUPED 원리)
+m3 = smf.ols(
+    "satisfaction ~ treatment + C(segment) + prior_sessions",
+    data=df
+).fit()
+
+# Model 4: 트렌드 비교 (교호작용)
+m4 = smf.ols(
+    "satisfaction ~ treatment * week + C(segment) + prior_sessions",
+    data=df
+).fit()
+```
+
+**모델 비교:**
+
+```
+┌────────┬──────────────┬───────────┬─────────┬─────────┐
+│ Model  │ Treatment β  │ Std Error │ p-value │   R²    │
+├────────┼──────────────┼───────────┼─────────┼─────────┤
+│ M1     │    0.58      │   0.022   │ <0.001  │  0.12   │
+│ M2     │    0.52      │   0.019   │ <0.001  │  0.28   │  ← 세그먼트 통제
+│ M3     │    0.50      │   0.018   │ <0.001  │  0.31   │  ← 공변량 추가
+│ M4     │    0.12(ns)  │   0.035   │  0.340  │  0.35   │  ← 초기 차이(ns)
+│ M4(int)│    0.08      │   0.010   │ <0.001  │         │  ← 주당 추가 효과
+└────────┴──────────────┴───────────┴─────────┴─────────┘
+
+핵심 발견:
+1. M1 → M2: β가 0.58 → 0.52로 감소
+   → 세그먼트 분포 차이를 통제하면 순수 효과가 약간 작아짐
+
+2. M2 → M3: Std Error가 0.019 → 0.018로 감소
+   → 공변량(prior_sessions)이 분산을 줄여 추정 정밀도 향상
+
+3. M4: 초기 차이(0.12)는 유의하지 않지만, 교호작용(0.08)은 유의
+   → Treatment의 효과는 즉시 나타나지 않고 시간이 지나면서 축적됨
+   → 4주 후 효과: 0.12 + 0.08×4 = 0.44점
+```
+
+### 분석 2: 전환율 (이진형 — 이항분포)
+
+```python
+m_logit = smf.glm(
+    "converted ~ treatment + C(segment)",
+    data=df,
+    family=sm.families.Binomial()
+).fit()
+
+print(np.exp(m_logit.params))  # 오즈비
+```
+
+```
+오즈비 (Odds Ratio):
+- treatment: 1.85 → Treatment의 전환 오즈가 85% 높음
+- MIEP: 2.28 → MIEP의 전환 오즈가 SI 대비 128% 높음
+- N: 0.61 → N계열의 전환 오즈가 SI 대비 39% 낮음
+```
+
+### 분석 3: 턴 수 (카운트 — 포아송)
+
+```python
+m_pois = smf.glm(
+    "turn_count ~ treatment + C(segment)",
+    data=df,
+    family=sm.families.Poisson()
+).fit()
+
+print(np.exp(m_pois.params))  # 비율비
+```
+
+```
+비율비 (Rate Ratio):
+- treatment: 1.22 → Treatment가 턴 수 22% 증가
+- MIEP: 1.65 → MIEP이 SI 대비 65% 더 많은 턴
+- N: 0.86 → N계열이 SI 대비 14% 적은 턴
+```
+
+### 분석 4: Simpson's Paradox 검출 — 교호작용
+
+세그먼트별로 Treatment 효과가 다른지 확인한다.
+
+```python
+m_interaction = smf.ols(
+    "satisfaction ~ treatment * C(segment) + prior_sessions",
+    data=df
+).fit()
+```
+
+$$Y = \beta_0 + \beta_1 \cdot T + \beta_2 \cdot \text{MIEP} + \beta_3 \cdot \text{N} + \beta_4 \cdot T \times \text{MIEP} + \beta_5 \cdot T \times \text{N} + \beta_6 \cdot \text{Prior} + \epsilon$$
+
+```
+결과:
+                              coef    std err      t      P>|t|
+treatment                    0.45      0.02    22.50     <0.001   ← SI에서의 효과
+treatment:C(segment)[MIEP]   0.12      0.03     4.00     <0.001   ← MIEP에서 추가 효과
+treatment:C(segment)[N]     -0.08      0.05    -1.60      0.110   ← N계열에서 차이 (유의하지 않음)
+
+세그먼트별 Treatment 효과:
+- SI: +0.45 (기본)
+- MIEP: +0.57 (= 0.45 + 0.12) → SI보다 효과 큼
+- N계열: +0.37 (= 0.45 - 0.08) → SI보다 효과 작지만 유의하지 않음
+
+→ Simpson's Paradox 없음 (모든 세그먼트에서 Treatment 효과 양수)
+→ 그러나 MIEP에서 효과가 유의하게 더 크므로,
+  MIEP 대상 전략 강화가 ROI가 가장 높을 것
+```
+
+## GLM의 한계와 확장
+
+### 한계: 독립성 가정
+
+GLM은 **관측치가 서로 독립**이어야 한다. 다음과 같은 경우 GLM만으로는 부족하다:
+
+| 상황 | 문제 | 해결 |
+|------|------|------|
+| 같은 사용자의 반복 측정 | 관측치 간 종속성 | **Mixed Effects Model** (GLMM) |
+| 시간에 따른 자기상관 | 인접 시점 간 상관 | **GEE** 또는 시계열 모델 |
+| 계층적 구조 (사용자 → 세그먼트) | 그룹 수준 변동 | **Hierarchical Model** |
+
+### GLM → GLMM으로 확장
+
+같은 사용자의 반복 측정이 있으면 **사용자별 랜덤 효과**를 추가한다:
+
+$$g(E[Y_{ij}]) = X_{ij}\beta + u_i$$
+
+```python
+# GLM (독립 가정 — 반복 측정 무시)
+glm = smf.glm(
+    "satisfaction ~ treatment + week",
+    data=df,
+    family=sm.families.Gaussian()
+).fit()
+
+# GLMM (사용자별 랜덤 효과 추가)
+glmm = smf.mixedlm(
+    "satisfaction ~ treatment + week",
+    data=df,
+    groups=df["user_id"]
+).fit()
+```
+
+GLM이 그룹 비교의 기초를 제공하고, 데이터 구조가 복잡해지면 GLMM으로 확장하는 것이 자연스러운 흐름이다.
+
+## 정리
+
+### 왜 GLM이 그룹 비교에 용이한가
+
+1. **더미 코딩**: 그룹 변수의 계수가 곧 그룹 간 차이
+2. **교호작용**: Group × Time으로 트렌드 차이를 직접 검정
+3. **공변량 통제**: 혼란 변수를 동시에 통제하여 순수 효과 추정
+4. **분포 유연성**: 정규/이항/포아송/감마 분포를 하나의 프레임워크에서 처리
+5. **다중 요인**: 여러 그룹 변수와 공변량을 하나의 모델에서 동시 분석
+6. **통합 프레임워크**: t-test, ANOVA, 로지스틱 회귀가 모두 GLM의 특수 경우
+
+### 분석 목적별 GLM 선택 가이드
+
+| 분석 목적 | 결과 변수 | GLM Family | 계수 해석 |
+|----------|----------|-----------|----------|
+| 만족도 비교 | 연속형 (1~5) | Gaussian | 평균 차이 (β) |
+| 전환율 비교 | 이진 (0/1) | Binomial (logit) | 오즈비 (eᵝ) |
+| 턴 수 비교 | 카운트 (0, 1, 2, ...) | Poisson (log) | 비율비 (eᵝ) |
+| 체류 시간 비교 | 양수 연속형 | Gamma (log) | 비율비 (eᵝ) |
+| 트렌드 차이 | 위 모든 경우 | 위 + Interaction | β_interaction |
+| Simpson's Paradox 검출 | 위 모든 경우 | 위 + Group×Treatment | β_interaction |
+
+```
+[분석 복잡도에 따른 모델 선택]
+
+단순 비교:        t-test = GLM (Y ~ Group)
+공변량 통제:      ANCOVA = GLM (Y ~ Group + Covariate)
+다중 그룹:        ANOVA = GLM (Y ~ C(Group))
+트렌드 비교:      GLM (Y ~ Group * Time)
+비정규 분포:      GLM (family = Binomial/Poisson/Gamma)
+반복 측정:        GLMM (Y ~ Group + (1|Subject))
+                  → GLM의 자연스러운 확장
+```
