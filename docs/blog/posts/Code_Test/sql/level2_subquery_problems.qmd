@@ -1,0 +1,137 @@
+---
+title: "SQL 코딩 테스트: 기본 서브쿼리 문제 모음"
+subtitle: "WHERE + 스칼라 서브쿼리 (MAX · MIN 참조) — Level 2"
+description: |
+  Level 2 기본 서브쿼리 유형 풀이 모음.
+  WHERE 절에서 MAX·MIN을 참조하는 비상관 스칼라 서브쿼리, 공동 1위(tie) 처리, 서브쿼리 내부 필터 조건 일치 패턴 등.
+categories:
+  - Code Test
+  - SQL
+author: Kwangmin Kim
+date: 04/13/2026
+---
+
+<!-- 이 파일에 추가할 유형: 스칼라 서브쿼리 (MAX·MIN), EXISTS, IN 서브쿼리, 단일 행 서브쿼리 -->
+
+## 문제 1: 완료 주문 중 최고 결제 금액 조회
+
+### 문제 정보
+
+| 항목 | 내용 |
+|---|---|
+| 출처 | 튜터 생성 (앵커: Programmers "가격이 제일 비싼 식품의 정보 출력하기" Lv.2, 정답률 ~65%) |
+| 난이도 | Level 2 |
+| SQL 유형 | WHERE + 스칼라 서브쿼리 (MAX 참조) |
+
+### 문제 설명
+
+어느 온라인 쇼핑몰의 주문 이력과 고객 정보를 관리하는 데이터베이스가 있다. 운영팀에서 `completed` 상태로 처리된 주문 중 **가장 높은 결제 금액과 동일한 결제 금액**을 가진 주문들의 고객명, 주문 번호, 결제 금액, 주문 일자를 조회해 달라고 요청했다.
+
+```sql
+CREATE TABLE customers (
+    customer_id   INT         PRIMARY KEY,
+    customer_name VARCHAR(50),
+    email         VARCHAR(100)
+);
+
+CREATE TABLE orders (
+    order_id     INT  PRIMARY KEY,
+    customer_id  INT,
+    total_amount INT,
+    order_date   DATE,
+    status       VARCHAR(20)
+);
+```
+
+**샘플 데이터 (공개)**
+
+```sql
+INSERT INTO customers VALUES
+(101, '김민준', 'kim@example.com'),
+(102, '이서연', 'lee@example.com'),
+(103, '박지호', 'park@example.com'),
+(104, '최수아', 'choi@example.com'),
+(105, '정우진', 'jung@example.com');
+
+INSERT INTO orders VALUES
+(1, 101, 50000, '2026-01-05', 'completed'),
+(2, 102, 80000, '2026-01-10', 'completed'),
+(3, 103, 30000, '2026-01-15', 'cancelled'),
+(4, 101, 80000, '2026-01-20', 'completed'),
+(5, 104, 60000, '2026-01-25', 'completed'),
+(6, 105, 45000, '2026-01-30', 'completed');
+```
+
+**제한사항**
+
+- `status`가 `completed`인 주문만 대상으로 한다
+- 결과는 주문 일자 오름차순, 동일 일자이면 주문 번호 오름차순으로 정렬한다
+- 결과 컬럼 순서: `customer_name`, `order_id`, `total_amount`, `order_date`
+
+**기대 결과 (공개 샘플 기준)**
+
+| customer_name | order_id | total_amount | order_date |
+|---|---|---|---|
+| 이서연 | 2 | 80000 | 2026-01-10 |
+| 김민준 | 4 | 80000 | 2026-01-20 |
+
+**숨김 채점 데이터에 이식한 함정**
+
+- NULL `status` — 외부 WHERE `status='completed'`로 자동 제외
+- NULL `total_amount` — MAX()는 NULL을 무시하고, WHERE 비교에서도 NULL은 제외
+- `cancelled` 상태의 80000원 주문 — status 필터로 제외
+- **`cancelled` 상태의 90000원 주문 (핵심 함정)** — 서브쿼리에 `WHERE status='completed'`를 누락하면 MAX=90000이 되어 결과가 빈 집합이 된다
+
+### 최종 풀이
+
+```sql
+SELECT c.customer_name,
+       o.order_id,
+       o.total_amount,
+       o.order_date
+FROM   customers c
+       INNER JOIN orders o
+               ON c.customer_id = o.customer_id
+WHERE  o.status = 'completed'
+  AND  o.total_amount = (SELECT MAX(total_amount)
+                         FROM   orders
+                         WHERE  status = 'completed')
+ORDER BY o.order_date ASC, o.order_id ASC;
+```
+
+각 절의 역할:
+
+- `INNER JOIN ... ON c.customer_id = o.customer_id` — 주문과 고객을 `customer_id`로 결합한다. `customer_id`가 양쪽에 존재하는 행만 포함한다
+- `WHERE o.status = 'completed'` — 완료 주문만 필터링한다. NULL `status`도 이 단계에서 제외된다
+- `AND o.total_amount = (SELECT MAX(total_amount) FROM orders WHERE status = 'completed')` — **서브쿼리 내부에도 동일한 status 조건을 넣어** 완료 주문 범위 내 최댓값을 구한다. 비상관(non-correlated) 서브쿼리이므로 한 번만 실행된다
+- `ORDER BY o.order_date ASC, o.order_id ASC` — 다중 정렬 조건은 **쉼표(`,`)로 구분**한다
+
+### Tips
+
+- **서브쿼리 내부 조건 일치 패턴**: 외부 WHERE가 특정 조건(예: `status='completed'`)으로 제한할 때, MAX/MIN을 구하는 서브쿼리도 **반드시 같은 조건으로 범위를 제한**해야 한다. 그렇지 않으면 제외되어야 할 데이터가 MAX에 포함되어 외부 쿼리 결과가 왜곡되거나 빈 집합이 된다
+- **공동 1위(tie) 처리**: `ORDER BY ... DESC LIMIT 1`은 동점 행을 놓친다. `WHERE col = (SELECT MAX(col)...)` 패턴을 쓰면 동일 최댓값을 가진 모든 행을 포착한다
+- **비상관 스칼라 서브쿼리**: 외부 쿼리의 컬럼을 참조하지 않는 서브쿼리는 옵티마이저가 한 번만 실행하여 상수로 치환한다 (`Using const`). 상관 서브쿼리 대비 비용이 현저히 낮다
+- **NULL과 MAX**: MAX(), MIN() 등 집계 함수는 NULL을 자동으로 무시한다. 별도의 `WHERE col IS NOT NULL` 필터가 필요 없다
+- **NULL과 비교 연산**: `WHERE col = 값` 비교에서 col이 NULL이면 결과는 UNKNOWN이므로 해당 행은 자동 제외된다. 별도 NULL 처리 코드가 불필요하다
+
+### 면접 방어 포인트
+
+- **실행 계획 분석**: 비상관 스칼라 서브쿼리는 한 번만 실행되어 상수로 치환된다 (`Using const`). `status` 컬럼에 인덱스가 있으면 서브쿼리와 외부 WHERE 모두 `Index Range Scan`으로 최적화된다. 대용량 테이블에서는 `(status, total_amount)` 복합 인덱스가 서브쿼리·외부 WHERE를 동시에 최적화하는 핵심 전략이다. JOIN 순서는 옵티마이저가 결정하며, 보통 `orders`를 스캔한 후 `customers`를 PK로 조회하는 Nested Loop이 선택된다
+- **대안 비교**:
+    - **Window Function (`RANK()` OVER)**: 동점 처리는 명시적이나 Lv.2 범위를 초과하며, 전체 행을 스캔 후 순위를 매기므로 연산 비용이 높다
+    - **Self JOIN** (`o1.total_amount = o2.total_amount` + `o2`가 MAX): 서브쿼리를 회피할 수 있으나 가독성이 떨어지고 Cartesian Product 위험이 있다
+    - **`ORDER BY DESC LIMIT 1`**: 본 문제에 치명적 — 공동 최고 금액이 여러 건일 때 tie를 놓쳐 오답이 된다. 스칼라 서브쿼리 방식이 tie-safe하다
+- **공학적 확장**:
+    - **대용량**: `orders` 수천만 건 이상이면 `(status, total_amount)` 복합 인덱스 필수. 서브쿼리가 한 번 실행되므로 비용은 `O(log n)` (인덱스 있을 때)
+    - **동시성**: 서브쿼리와 외부 쿼리 사이 INSERT가 들어오면 **팬텀 리드(phantom read)** 가능 — `REPEATABLE READ` 이상 격리 수준 권장
+    - **방언 호환**: MySQL/PostgreSQL/Oracle 모두 동일하게 동작. 스칼라 서브쿼리는 SQL 표준
+    - **NULL 비율이 높은 경우**: `status`에 NULL이 많으면 인덱스 선택도가 떨어진다. 비즈니스상 `status`를 NOT NULL로 설계하는 것이 이상적
+
+---
+
+## 관련 문제
+
+- [GROUP BY · HAVING (Level 2)](./level2_group_by_problems.qmd)
+- [JOIN (Level 2)](./level2_join_problems.qmd)
+- [CASE WHEN (Level 2)](./level2_case_when_problems.qmd)
+- [SQL 필수 구문 레퍼런스 (Level 2)](./sql_builtins_level2_reference.qmd)
