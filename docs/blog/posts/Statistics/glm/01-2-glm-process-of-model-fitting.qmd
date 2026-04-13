@@ -1,0 +1,331 @@
+---
+title: "GLM Process of Model Fitting — 모델 선택·추정·예측의 통합 워크플로우"
+subtitle: "McCullagh & Nelder §2.1 — Model Selection, Estimation, Prediction"
+description: |
+  McCullagh & Nelder (1989) §2.1 "The process of model fitting" 를 전개한다.
+  통계 모델링이 단일 단계가 아닌 모델 선택(model selection) — 추정(estimation)
+  — 예측(prediction) 의 순환 워크플로우임을 설명하고, 각 단계에서 GLM 사용자가
+  내려야 할 판단(공변량 선택, 척도 결정, link·variance function 선택, 점추정과
+  불확실성 동반, 예측 척도 선택)을 직관과 수식을 병행해 정리한다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/14/2026
+---
+
+## 왜 "프로세스" 인가
+
+통계 모델링을 처음 배울 때는 흔히 "모델을 정하고 추정한다" 라는 두 단계로 본다. 그러나 McCullagh & Nelder 는 §2.1 에서 모델링을 **하나의 절차(single algorithm)** 가 아닌 **순환적 과정(iterative process)** 으로 제시한다.
+
+```
+[데이터 + 도메인 지식]
+        ↓
+   모델 선택 (Model Selection)
+        ↓
+   추정 (Estimation)
+        ↓
+   진단·검증 (Diagnostics)
+        ↓
+   ┌───── 수정 필요? ────────→ 모델 선택으로 회귀
+   │
+   예측 (Prediction)
+```
+
+이 과정의 핵심 메시지는 두 가지다.
+
+1. **모델 선택과 추정은 분리된 활동**이다. 추정은 알고리즘적이지만, 선택은 판단(judgment) 의 영역이다.
+2. **모델은 옳고 그름이 아니라 유용성으로 평가**된다. George Box 의 "All models are wrong, but some are useful" 이 §2.1 의 정신을 압축한다.
+
+직관: 데이터 분석은 일직선 파이프라인이 아니라 **연구자의 판단이 매 단계에 개입하는 대화**다. 자동화 도구(stepwise, AutoML)가 보조할 수는 있어도 대체할 수는 없다는 입장이 McCullagh-Nelder 의 출발점이다.
+
+---
+
+## 모델 선택 (Model Selection)
+
+### 무엇을 선택하는가
+
+GLM 의 세 구성요소(확률 성분·체계적 성분·연결함수) 는 모두 **선택의 대상**이다. 구체적으로 사용자는 다음 네 가지를 결정해야 한다.
+
+| 선택 항목 (Choice) | 결정해야 할 질문 | 영향 |
+|---|---|---|
+| 공변량 (Covariates) | 어떤 $x_j$ 를 포함할까? 변환 ($\log x$, $x^2$, 교호작용) 도 포함되는가 | 평균 구조의 풍부함, 해석 가능성 |
+| 척도 (Scale of measurement) | $Y$ 를 그대로 쓸까, 변환할까? | 분포 가정의 타당성, 선형성 |
+| 연결함수 (Link function) | identity, log, logit, probit 중 무엇? | $\eta$ 와 $\mu$ 의 매핑, 정의역 보장 |
+| 분산함수 (Variance function) | 분포 선택을 통해 $V(\mu)$ 결정 | 표준오차, 가중치, 효율성 |
+
+이 선택들은 서로 **얽혀 있다**. 예컨대 카운트 데이터에 log link 를 쓰기로 했다면, 분포는 거의 자동으로 Poisson 또는 Negative Binomial 로 좁혀진다. Link 결정이 variance 결정을 사실상 동반한다.
+
+### 선택의 원칙: Parsimony vs Adequacy
+
+**Parsimony (간결성)** 와 **Adequacy (충분성)** 의 균형이 모델 선택의 중심 긴장이다.
+
+- **Parsimony**: 모수가 적을수록 해석이 명확하고 추정 분산이 작다 (Occam's Razor)
+- **Adequacy**: 모수가 많을수록 데이터 패턴을 잘 설명한다 (적합도 향상)
+
+::: {.callout-note}
+## 핵심 인용 (McCullagh & Nelder, §2.1.1)
+
+> "Models, of course, are never true, but fortunately it is only necessary that they be useful."
+
+모델은 결코 참(true) 이 아니지만, 유용(useful) 하기만 하면 충분하다. 모델 선택의 목표는 "참인 모델을 찾는 것" 이 아니라 "지금 묻는 질문에 답할 수 있는 모델을 찾는 것" 이다.
+:::
+
+직관: 100 개의 공변량으로 데이터를 거의 완벽히 맞추는 모델은 **포화 모형(saturated model)** 에 가까워 새로운 관측을 예측하지 못한다. 반대로 절편만 있는 모형은 아무것도 설명하지 못한다. 두 극단 사이에서 **목적에 충분한 가장 단순한 모형**이 우리의 목표다.
+
+### 선택의 도구
+
+McCullagh-Nelder 는 §2.1 단계에서 다음 도구들을 모델 선택의 입력으로 제시한다 (구체 공식은 §2.4 deviance, §2.5 residuals 에서 다룸).
+
+- **이탈도 (Deviance) 비교**: 중첩 모형 사이의 적합도 차이를 $\chi^2$ 분포로 검정
+- **잔차 진단 (Residual diagnostics)**: Pearson·Deviance 잔차의 패턴 점검
+- **정보 기준 (Information criteria)**: AIC = $-2\ell + 2p$, BIC = $-2\ell + p\log n$ — 적합도 + 모수 패널티
+- **교차 검증 (Cross-validation)**: 외부 예측 성능 직접 측정
+- **도메인 지식 (Subject-matter knowledge)**: 통계 지표만으로는 결정 불가, 분야 전문가 판단 필수
+
+직관: 통계량은 "이 모형이 데이터와 얼마나 합치하는가"를 답할 뿐이다. "이 모형이 옳은 질문을 묻고 있는가"는 도메인 전문가의 영역이다. §2.1 이 강조하는 "judgment" 는 이 부분이다.
+
+### 척도 선택의 미묘함
+
+$Y$ 자체를 변환할지 ($Y' = \log Y$), 아니면 모형 안의 $\mu$ 를 변환할지 ($g(\mu) = \log \mu$) 의 결정은 표면적으로 비슷해 보이지만 본질이 다르다.
+
+| 접근 | 가정 | 분산 구조 |
+|---|---|---|
+| **Y 변환** ($Y' = \log Y$) | $\log Y \sim N(\mu', \sigma^2)$ | $\mathrm{Var}(\log Y) = \sigma^2$ (등분산) → $\mathrm{Var}(Y) = \mu^2 \sigma^2$ 근사 |
+| **연결함수** ($\log \mu = \eta$) | $Y \sim$ Gamma 또는 Poisson | $\mathrm{Var}(Y) = V(\mu) \phi$ — 분포가 직접 결정 |
+
+두 모델의 적합값이 비슷할 수 있어도 잔차 분석·예측 구간·계수 해석은 달라진다. **Y 변환은 평균과 분산을 동시에 손대는 결정**이고, **연결함수는 평균만 변환하고 분산은 분포 선택으로 분리하는 결정**이다. McCullagh-Nelder 가 후자를 선호하는 이유다.
+
+직관: $Y$ 변환은 "데이터를 자르고 다시 맞추는" 것이고, 연결함수는 "원본을 그대로 두고 모델이 알아서 척도를 처리하는" 것이다. 후자가 더 깔끔한 분리다.
+
+---
+
+## 추정 (Estimation)
+
+### 추정의 위치
+
+모델이 선택되면 — 즉 분포·연결·공변량이 정해지면 — 남은 작업은 **모수 $\boldsymbol{\beta}$ (그리고 필요시 $\phi$)** 를 데이터로부터 추정하는 것이다. McCullagh-Nelder 는 추정을 "모델 선택과 분리된, 좀 더 알고리즘적인 단계" 로 본다.
+
+### 추정 패러다임
+
+GLM 추정은 단일 방법이 아닌 **여러 패러다임의 선택지**를 가진다.
+
+| 방법 (Method) | 가정 (Assumption) | 출력 | 사용 시점 |
+|---|---|---|---|
+| **MLE** (Maximum Likelihood Estimation) | 분포 완전 지정 | $\hat{\boldsymbol{\beta}}_{MLE}$, asymptotic SE | GLM 표준, 분포 가정이 합리적일 때 |
+| **Quasi-likelihood** | 평균·분산 구조만 지정 | $\hat{\boldsymbol{\beta}}_{QL}$, robust SE | 분포가 불확실하지만 mean-variance 관계는 신뢰할 때 |
+| **Method of Moments** | $E[Y] = \mu(\boldsymbol{\beta})$ | 적률 일치 해 | 단순 추정, 출발점 |
+| **Bayesian** | 사전분포 + 가능도 | 사후분포 | 사전 정보 통합, 작은 표본 |
+| **Penalized Likelihood** | MLE + 정칙화 항 | $\hat{\boldsymbol{\beta}}_{ridge/lasso}$ | 고차원, 변수 선택 동반 |
+
+GLM 의 표준은 **MLE** 다. §2.1 은 "왜 MLE 인가" 에 대해 세 가지 이유를 든다.
+
+1. **점근 효율성 (Asymptotic efficiency)**: 정확한 분포 가정 하에서 MLE 는 점근적으로 분산이 가장 작다 (Cramér-Rao bound 달성)
+2. **불변성 (Invariance)**: $\hat\theta_{MLE}$ 가 있으면 $g(\hat\theta)$ 가 $g(\theta)$ 의 MLE — 척도 변환에 일관성
+3. **점근 정규성 (Asymptotic normality)**: $\hat{\boldsymbol{\beta}} \overset{a}{\sim} N(\boldsymbol{\beta}, \mathcal{I}^{-1})$ — Wald 검정·신뢰구간이 자동으로 따라옴
+
+### 점추정과 불확실성의 동반
+
+§2.1 의 강조점 중 하나: **추정은 점추정만으로 끝나지 않는다**. $\hat{\boldsymbol{\beta}}$ 와 함께 다음 셋이 보고되어야 한다.
+
+1. **표준오차 (Standard error)**: $\mathrm{SE}(\hat\beta_j) = \sqrt{[\mathcal{I}^{-1}]_{jj}}$
+2. **신뢰구간 (Confidence interval)**: Wald $\hat\beta_j \pm 1.96 \cdot \mathrm{SE}$, 또는 profile likelihood
+3. **검정 (Hypothesis test)**: Wald, Score (Rao), Likelihood Ratio Test (LRT) — 셋 모두 점근 동치이지만 유한 표본에서는 차이
+
+직관: 점추정만 보고하는 것은 "내 측정값은 5.3 이다" 라고 말하는 것과 같다. "5.3 ± 0.2" 라고 말해야 의사결정에 쓸 수 있다. GLM 추정의 출력은 항상 **추정값 + 정밀도** 의 쌍이다.
+
+### Nuisance Parameter 처리
+
+GLM 에는 관심 모수 $\boldsymbol{\beta}$ 외에 **분산 모수 (dispersion parameter) $\phi$** 가 있다. 분포에 따라 처리가 다르다.
+
+| 분포 (Distribution) | $\phi$ | 처리 |
+|---|---|---|
+| Normal | $\sigma^2$ — 미지 | $\hat\sigma^2 = \mathrm{RSS}/(n-p)$ 별도 추정 |
+| Poisson | $1$ — 고정 | 추정 불필요 (단, 과산포 시 확장) |
+| Binomial | $1$ — 고정 | 추정 불필요 (단, 과산포 시 확장) |
+| Gamma | $\nu^{-1}$ — 미지 | Pearson 또는 deviance 기반 추정 |
+| Inverse Gaussian | $\sigma^2$ — 미지 | 별도 추정 |
+
+$\phi$ 를 미지로 놓고도 $\hat{\boldsymbol{\beta}}$ 추정 자체는 영향을 받지 않는다 ($\phi$ 가 score 의 비례 상수에만 등장). 하지만 **표준오차 계산**에는 $\hat\phi$ 가 필요하다.
+
+직관: $\phi$ 는 "데이터가 모델 평균에서 평균적으로 얼마나 흩어져 있는가" 의 척도다. $\phi$ 가 1 이상으로 추정되면 (Poisson·Binomial 에서) **과산포(overdispersion)** 의 신호이고, 이는 모델이 데이터의 변동을 다 잡지 못했다는 진단이다.
+
+### 추정의 한계 인식
+
+§2.1 은 추정 결과를 해석할 때의 주의도 명시한다.
+
+- **유한 표본 편향 (Finite-sample bias)**: MLE 가 점근적으로 불편이지만 유한 표본에서는 편향. 로지스틱 회귀에서 분리(separation) 가 발생하면 추정값이 무한대로 발산하는 극단도 가능
+- **모형 오지정 (Model misspecification)**: 분포 또는 link 가 틀리면 SE 가 왜곡 → sandwich estimator 또는 quasi-likelihood 로 보정
+- **수렴 실패**: 비정준 link, 나쁜 초기값, 다중공선성에서 알고리즘이 수렴하지 않을 수 있음
+
+직관: 추정값을 출력 받았다고 분석이 끝난 게 아니다. **잔차 진단 + 수렴 점검** 을 통해 추정 결과의 신뢰성을 확인하는 것이 §2.1 의 사이클이 모델 선택으로 되돌아가는 이유다.
+
+---
+
+## 예측 (Prediction)
+
+### 예측의 두 가지 의미
+
+GLM 에서 "예측" 은 두 가지 다른 양을 가리킬 수 있다.
+
+| 예측 대상 | 표기 | 의미 |
+|---|---|---|
+| **Mean prediction** | $\hat\mu(\mathbf{x}_0) = g^{-1}(\mathbf{x}_0^\top \hat{\boldsymbol{\beta}})$ | 새 공변량 $\mathbf{x}_0$ 에서의 기댓값 추정 |
+| **Observation prediction** | $\hat Y(\mathbf{x}_0)$ | 새 관측 자체의 예측 (확률변수) |
+
+이 둘은 **불확실성의 출처가 다르다**.
+
+- 평균 예측의 불확실성: $\hat{\boldsymbol{\beta}}$ 추정 오차에서만 비롯됨
+- 관측 예측의 불확실성: 추정 오차 **+** 관측 자체의 무작위성 ($\mathrm{Var}(Y|\mathbf{x}_0) = V(\mu_0)\phi$)
+
+### 예측 분산 분해
+
+$$
+\mathrm{Var}\big[\hat Y(\mathbf{x}_0)\big] \;=\; \underbrace{\mathrm{Var}\big[\hat\mu(\mathbf{x}_0)\big]}_{\text{추정 분산 (reducible)}} \;+\; \underbrace{V(\mu_0)\phi}_{\text{고유 분산 (irreducible)}}
+$$
+
+데이터를 더 모으면 첫째 항(추정 오차)은 줄지만, 둘째 항(관측 노이즈)은 줄지 않는다. 이것이 **prediction interval 이 confidence interval 보다 항상 넓은** 이유다.
+
+직관: 평균 예측은 "다음 100 명의 클릭률 평균이 얼마일까?" 에 답하고, 관측 예측은 "다음 한 명이 클릭할까?" 에 답한다. 후자가 본질적으로 더 어렵다 — 추정을 아무리 정확히 해도 개별 관측의 무작위성은 남는다.
+
+### 예측 척도 선택 (Scale of Prediction)
+
+GLM 의 예측은 **선형예측자 척도 ($\eta$)** 또는 **반응 척도 ($\mu$)** 에서 할 수 있다. 척도 선택이 신뢰구간의 형태에 영향을 미친다.
+
+**$\eta$ 척도에서 신뢰구간 → 변환 → $\mu$ 척도** 가 표준 권장 방법이다.
+
+$$
+\hat\eta_0 = \mathbf{x}_0^\top \hat{\boldsymbol{\beta}}, \quad
+\mathrm{SE}(\hat\eta_0) = \sqrt{\mathbf{x}_0^\top \widehat{\mathrm{Cov}}(\hat{\boldsymbol{\beta}}) \mathbf{x}_0}
+$$
+
+$\eta$ 척도 95% CI: $\hat\eta_0 \pm 1.96 \cdot \mathrm{SE}(\hat\eta_0)$
+
+이 구간을 $g^{-1}$ 로 변환하면 $\mu$ 척도 CI 가 된다. **$\mu$ 척도에서 직접 정규 근사하면 문제**가 생긴다 — 이항에서 $\hat\mu \pm 1.96 \cdot \mathrm{SE}$ 가 0 미만이거나 1 초과로 나올 수 있다.
+
+직관: 정규 근사는 척도에 의존한다. $\eta$ 척도는 $\mathbb{R}$ 전체이므로 정규 근사가 자연스럽지만, $\mu$ 는 분포에 따라 제한된 구간 ($(0,1)$, $(0,\infty)$) 이라 경계 근처에서 정규성이 깨진다. **$\eta$ 척도에서 통계적 작업을 하고, 마지막에 $\mu$ 로 변환** 하는 것이 황금 규칙이다.
+
+### 외삽 (Extrapolation) 의 위험
+
+$\mathbf{x}_0$ 가 원 데이터의 공변량 범위 안에 있으면 **내삽(interpolation)**, 밖에 있으면 **외삽(extrapolation)** 이다.
+
+GLM 의 외삽은 OLS 의 외삽보다 **연결함수 모양에 의해 추가로 왜곡된다**.
+
+- Log link: $\hat\mu = e^\eta$ — $\eta$ 가 조금만 증가해도 $\hat\mu$ 가 폭발적으로 증가
+- Logit link: $\hat\mu = e^\eta / (1+e^\eta)$ — $\eta$ 가 크면 $\hat\mu \to 1$ 로 수렴 (포화)
+- Inverse link: $\hat\mu = 1/\eta$ — $\eta = 0$ 근처에서 발산
+
+직관: OLS 의 외삽은 직선을 연장하는 위험이고, GLM 의 외삽은 곡선을 연장하는 위험이다. 곡선의 모양을 link 가 결정하므로, **외삽 영역에서 link 의 적절성 검증이 더 중요해진다**. McCullagh-Nelder 는 외삽 시 항상 불확실성 구간을 동반 보고하라고 명시한다.
+
+### 예측 진단
+
+좋은 예측 모델인지 평가하는 도구:
+
+| 지표 (Metric) | 정의 | 용도 |
+|---|---|---|
+| RMSE / MAE | $\sqrt{\frac{1}{n}\sum(y - \hat\mu)^2}$, $\frac{1}{n}\sum|y - \hat\mu|$ | 평균 예측 정확도 |
+| Brier score | $\frac{1}{n}\sum(y - \hat\mu)^2$ — 이진 결과에서 | 이항 예측 calibration |
+| Log-loss | $-\frac{1}{n}\sum\{y\log\hat\mu + (1-y)\log(1-\hat\mu)\}$ | 확률 예측의 likelihood |
+| Calibration plot | 예측 확률 vs 실제 빈도 | $\hat\mu$ 가 잘 보정되었는가 |
+| ROC / AUC | 임계값별 TPR-FPR | 이진 분류 성능 |
+
+직관: 예측 평가는 학습 데이터가 아닌 **별도 검증 데이터(holdout, cross-validation)** 에서 측정해야 한다. 학습 데이터 적합도(deviance) 만 보면 과적합을 발견할 수 없다. 이 점이 §2.1 사이클의 마지막 단계가 모델 선택으로 되돌아가는 또 다른 이유다.
+
+---
+
+## 세 단계의 통합: 예시 시나리오
+
+### 시나리오: 광고 캠페인 클릭 수 모델링
+
+**상황**: 마케팅팀이 100 개 광고의 클릭 수($Y$) 를 광고 노출 수($n$), 광고 카테고리, 게재 시간대로 모델링하려 한다.
+
+**Step 1 — Model Selection**
+
+- $Y$ 가 카운트 → Poisson 후보
+- 노출 수 $n$ 을 offset 으로 처리: $\log E[Y] = \log n + \mathbf{x}^\top \boldsymbol{\beta}$
+- 카테고리는 더미 변수, 시간대는 cyclic spline
+- Link = log (정준), Variance = $\mu$ (Poisson 기본)
+- **판단 지점**: 주말 효과를 separate dummy 로 넣을지, 시간대 spline 에 흡수시킬지
+
+**Step 2 — Estimation**
+
+- IRLS 로 $\hat{\boldsymbol{\beta}}$ 추정
+- Pearson $\hat\phi = \mathrm{Pearson}/(n-p) = 1.8$ 로 측정 → **과산포 발견**
+- 대응: Negative Binomial 로 재추정, 또는 quasi-Poisson 으로 SE 보정
+- 계수와 95% CI 동반 보고
+
+**Step 3 — Diagnostics**
+
+- Deviance residual Q-Q plot 에서 꼬리 이탈 → 일부 outlier 광고
+- 진단 결과를 가지고 **Step 1 으로 회귀**: outlier 광고는 별도 모델 또는 제외 결정
+
+**Step 4 — Prediction**
+
+- 새 광고의 기대 클릭률 $\hat\mu_0/n_0$ 예측
+- $\eta$ 척도에서 95% CI 계산 후 $\exp$ 로 변환해 보고
+- 새 광고의 노출 수가 학습 데이터 범위 밖이면 외삽 경고
+
+직관: §2.1 의 가르침은 "이 워크플로우를 한 번에 완수하는 모델은 거의 없다" 이다. 진단 결과가 모델 선택으로 되돌아가는 화살표가 **여러 번 발화되는 것이 정상**이다.
+
+---
+
+## 자동화의 한계
+
+stepwise selection, AutoML, AIC/BIC 기반 자동 변수 선택 등이 §2.1 의 일부를 자동화한다. 그러나 McCullagh-Nelder 는 자동화의 한계를 명시한다.
+
+**자동화가 잘하는 것**
+
+- 미리 정의된 후보 모델 집합에서의 선택 (forward/backward stepwise)
+- 정량적 적합도 비교 (AIC, BIC, CV error)
+- 반복적 최적화 (IRLS 자체가 자동화됨)
+
+**자동화가 못하는 것**
+
+- 어떤 공변량을 후보에 넣을지의 **prior judgment**
+- 데이터 수집의 한계·편향 인식 (selection bias, missing-not-at-random)
+- 모델의 정책적·윤리적 함의 평가 (불공정성, prediction-action gap)
+- 결과를 도메인 지식과 통합하는 **해석 (interpretation)**
+
+직관: 자동화 도구는 "후보 중 어느 것이 가장 좋은지" 를 답한다. "후보를 어떻게 정할지" 와 "이 결과가 무엇을 의미하는지" 는 여전히 사람의 영역이다. §2.1 의 process 는 이 인간 판단의 자리를 명시적으로 만든 청사진이다.
+
+---
+
+## 요약 정리
+
+- GLM 모델링은 **모델 선택 → 추정 → 예측** 의 순환 워크플로우이며, 진단 결과에 따라 모델 선택으로 되돌아가는 사이클이다
+- **모델 선택**은 공변량·척도·link·variance function 의 결합 선택이며, parsimony 와 adequacy 의 균형이 핵심 — 통계적 도구(AIC, deviance, residual) 와 도메인 지식의 통합이 필요
+- **추정**의 표준은 MLE 이며, 점추정값과 함께 SE·CI·검정이 항상 동반되어야 함. Nuisance parameter $\phi$ 는 분포에 따라 별도 추정
+- **예측**은 평균($\hat\mu$) 과 관측($\hat Y$) 두 가지를 구분해야 하며, 후자의 분산은 추정 오차 + 고유 노이즈로 분해됨. $\eta$ 척도에서 통계 작업 후 $\mu$ 로 변환하는 것이 표준
+- **외삽** 은 link 의 비선형성 때문에 OLS 보다 위험이 크고, **자동화** 는 모델 비교는 잘하지만 모델 후보 정의·결과 해석은 여전히 사람의 영역
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [GLM 이론 기초 — 지수족·정준연결·이탈도·IRLS](./01-1-glm-theory-foundation.qmd) — Ch.2 전체 overview, 본 포스트의 모(母) 포스트
+- [최대우도추정 (MLE)](../101-maximum-likelihood-estimators.qmd) — 추정 단계의 이론적 기반
+- [지수족 (Exponential Family)](../76-exponential-family.qmd) — 분포 선택의 수학적 기반
+
+**관련 포스트**
+
+- [GLM 응용 통합 — t-test·ANOVA·로지스틱·포아송](./02-glm-applied-unification.qmd) — 모델 선택의 실무 사례
+- [Logistic Regression: The Model](./logistic-regression-model.qmd) — 이항 GLM 의 워크플로우 적용
+- [Logistic Regression: Estimation](./logistic-regression-estimation.qmd) — 추정 단계의 구체 알고리즘
+
+**후속 주제**
+
+- Sufficient Statistics & Information Matrix (McCullagh §2.2) — 추정의 수학적 기초 심화
+- Quasi-likelihood (McCullagh Ch.9) — 분포 미지정 추정 패러다임
+- Model Diagnostics & Residual Analysis — 진단 단계의 도구 상세
+- Cross-validation & Information Criteria — 모델 선택 자동화 도구
+
+---
+
+## 참고문헌
+
+- McCullagh, P., & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.). Chapman & Hall/CRC. §2.1 The process of model fitting.
+- Box, G. E. P. (1979). "Robustness in the strategy of scientific model building." In *Robustness in Statistics*.
+- Faraway, J. J. (2016). *Extending the Linear Model with R* (2nd ed.). Chapman & Hall/CRC. Ch. 8.
