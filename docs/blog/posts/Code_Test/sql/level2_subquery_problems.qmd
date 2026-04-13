@@ -3,7 +3,7 @@ title: "SQL 코딩 테스트: 기본 서브쿼리 문제 모음"
 subtitle: "WHERE + 스칼라 서브쿼리 (MAX · MIN 참조) — Level 2"
 description: |
   Level 2 기본 서브쿼리 유형 풀이 모음.
-  WHERE 절의 MAX·MIN 스칼라 서브쿼리와 공동 1위(tie) 처리, SELECT 절 AVG 스칼라 서브쿼리와 각 행에 집계값 부착, 서브쿼리 내부 필터 조건 일치, INNER JOIN의 자동 NULL 제거 등.
+  WHERE 절의 MAX·MIN 스칼라 서브쿼리와 공동 1위(tie) 처리, SELECT 절 AVG 스칼라 서브쿼리와 각 행에 집계값 부착, FROM 절 인라인 뷰(derived table)로 그룹별 평균 부착 후 카테고리 평균 비교, 별칭 스코프 규칙(인라인 뷰 컬럼 vs SELECT 별칭) 등.
 categories:
   - Code Test
   - SQL
@@ -247,6 +247,139 @@ ORDER BY b.price DESC, b.book_id ASC;
     - **동시성**: 두 서브쿼리가 각각 실행되는 사이 INSERT/UPDATE가 들어오면 평균값이 달라질 수 있다 (Non-repeatable Read). 정합성이 중요한 리포트라면 **`REPEATABLE READ` 이상 격리 수준** 또는 트랜잭션 내에서 한 번만 평균을 세션 변수로 저장해 재사용
     - **정밀도**: `price`가 정수여도 `AVG()`는 `DECIMAL`/`DOUBLE`을 반환한다. 비교(`>=`)는 자동 형 변환되나, 화면 출력 시 소수점이 붙어 보이므로 `ROUND()`로 정수화 필수
     - **방언 호환**: `ROUND(x)` 기본값은 MySQL/PostgreSQL 동일. Oracle도 동일하게 동작. 표준 SQL
+
+---
+
+## 문제 3: 카테고리 평균보다 비싼 상품 조회
+
+### 문제 정보
+
+| 항목 | 내용 |
+|---|---|
+| 출처 | 튜터 생성 (앵커: Programmers "식품분류별 가장 비싼 식품의 정보 조회하기" Lv.4 단순화 변형 — MAX → AVG, Lv.2로 하향) |
+| 난이도 | Level 2 |
+| SQL 유형 | FROM 절 인라인 뷰 (Derived Table) — 그룹별 집계를 파생 테이블로 |
+
+### 문제 설명
+
+어느 온라인 쇼핑몰의 상품·카테고리 데이터베이스가 있다. 마케팅팀에서 **각 상품이 자기 카테고리의 평균 가격보다 얼마나 비싼지** 확인하려 한다. 이를 위해 카테고리 평균보다 비싼 상품만 뽑고, 해당 상품의 카테고리 평균과 그 차액을 함께 조회해 달라고 요청했다.
+
+```sql
+CREATE TABLE categories (
+    category_id   INT PRIMARY KEY,
+    category_name VARCHAR(50)
+);
+
+CREATE TABLE products (
+    product_id   INT PRIMARY KEY,
+    product_name VARCHAR(100),
+    category_id  INT,
+    price        INT
+);
+```
+
+**샘플 데이터 (공개)**
+
+```sql
+INSERT INTO categories VALUES
+(1, 'Electronics'),
+(2, 'Clothing'),
+(3, 'Books');
+
+INSERT INTO products VALUES
+(1, '무선 이어폰',  1, 80000),
+(2, '스마트폰',    1, 900000),
+(3, '티셔츠',      2, 25000),
+(4, '자켓',        2, 150000),
+(5, '소설책',      3, 12000),
+(6, '전공 서적',   3, 45000);
+```
+
+**제한사항**
+
+- 평균 가격은 **같은 카테고리 내** 상품 기준으로 계산한다
+- "평균보다 비싼"은 `>` (경계값 제외)
+- 평균 가격과 차액은 정수로 반올림한다
+- 카테고리가 지정되지 않은 상품은 결과에서 제외
+- 결과 컬럼 순서: `product_name`, `category_name`, `price`, `avg_price`, `diff`
+- 결과는 차액 내림차순, 동일 차액이면 상품 번호 오름차순으로 정렬
+
+**기대 결과 (공개 샘플 기준)**
+
+| product_name | category_name | price | avg_price | diff |
+|---|---|---|---|---|
+| 스마트폰 | Electronics | 900000 | 490000 | 410000 |
+| 자켓 | Clothing | 150000 | 87500 | 62500 |
+| 전공 서적 | Books | 45000 | 28500 | 16500 |
+
+**숨김 채점 데이터에 이식한 함정**
+
+- NULL `category_id` — INNER JOIN으로 자동 제외
+- 경계값 (`>` 사용) — 평균과 정확히 일치하는 행은 제외
+- 추가 데이터로 카테고리 평균이 변동 — 인라인 뷰가 전체 데이터 기준으로 재계산되는지 확인
+- NULL `price` — `AVG()`가 자동으로 무시
+
+### 최종 풀이
+
+```sql
+SELECT
+    p.product_name,
+    c.category_name,
+    p.price,
+    ROUND(ca.cat_avg) AS avg_price,
+    ROUND(p.price - ca.cat_avg) AS diff
+FROM products p
+INNER JOIN (
+    SELECT category_id, AVG(price) AS cat_avg
+    FROM products
+    GROUP BY category_id
+) ca ON p.category_id = ca.category_id
+INNER JOIN categories c ON p.category_id = c.category_id
+WHERE p.price > ca.cat_avg
+ORDER BY diff DESC, p.product_id ASC;
+```
+
+각 절의 역할:
+
+- **인라인 뷰 `ca`**: `(SELECT category_id, AVG(price) AS cat_avg FROM products GROUP BY category_id) ca` — 카테고리별 평균을 미리 계산한 가상 테이블. 카테고리 수만큼의 행을 가진다 (Electronics·Clothing·Books → 3행)
+- `INNER JOIN ca ON p.category_id = ca.category_id` — 각 상품 행에 자기 카테고리의 평균 가격을 부착한다. JOIN 후에는 `ca.cat_avg`가 행마다 적절한 평균값을 가진다
+- `INNER JOIN categories c ON p.category_id = c.category_id` — 카테고리명 부착. NULL `category_id`인 상품은 자동 제외
+- `WHERE p.price > ca.cat_avg` — 행 단위 비교. 경계값(`=`) 제외
+- `ROUND(p.price - ca.cat_avg) AS diff` — 정수 차액. WHERE에서 양수만 통과하므로 `ABS()` 불필요
+- `ORDER BY diff DESC, p.product_id ASC` — 차액 내림차순, 동일 시 상품 번호 오름차순
+
+### Tips
+
+- **FROM 인라인 뷰 = 가상 테이블**: `(서브쿼리) 별칭` 형태로 작성하면 그 뒤로 일반 테이블처럼 다룰 수 있다. JOIN, WHERE, ORDER BY 모두에서 컬럼 참조 가능
+- **인라인 뷰 별칭은 필수**: MySQL/PostgreSQL 모두 별칭 없으면 syntax error
+- **별칭 스코프 차이 (핵심)**:
+
+| 종류 | 외부 참조 가능? | 이유 |
+|------|---------------|------|
+| 인라인 뷰 컬럼 (`ca.cat_avg`) | YES — 모든 절 | 가상 테이블의 진짜 컬럼, FROM에서 평가됨 |
+| SELECT 별칭 (`AS avg_price`) | NO (대부분), ORDER BY만 OK | SELECT 평가 후 부여, 같은 단계의 다른 식·WHERE에선 아직 존재하지 않음 |
+
+- **상관 서브쿼리 vs FROM 인라인 뷰**: 같은 결과지만 비용 차이가 극단적이다. 상관 서브쿼리는 외부 N행마다 서브쿼리를 N번 재실행, 인라인 뷰는 한 번 계산 후 JOIN
+- **GROUP BY 컬럼 ↔ SELECT 컬럼 일치**: 인라인 뷰의 SELECT 컬럼과 GROUP BY 컬럼은 일치해야 한다 (집계 함수 제외)
+- **WHERE vs HAVING**:
+    - **WHERE**: 행 단위 필터 (GROUP BY 이전, 모든 행에 대해)
+    - **HAVING**: 그룹 단위 필터 (GROUP BY 이후, 집계 결과에 대해)
+    - 본 문제는 행 단위 비교(`p.price > ca.cat_avg`)이므로 WHERE가 맞다
+
+### 면접 방어 포인트
+
+- **실행 계획 분석**: MySQL 옵티마이저는 인라인 뷰를 (a) **Materialized**(임시 테이블로 한 번 계산 후 저장) 또는 (b) **Merged**(외부 쿼리에 풀어 통합) 방식으로 처리한다. 본 쿼리는 GROUP BY 포함이라 보통 Materialized — `EXPLAIN`에서 `<derived2>`로 표시. JOIN 순서는 옵티마이저가 결정하나, 카테고리 수가 적으므로 `ca` (소수 행) → `categories` → `products` 순서가 일반적. `products(category_id)` 인덱스가 인라인 뷰의 GROUP BY와 외부 JOIN 모두 최적화한다
+- **대안 비교**:
+    - **상관 서브쿼리** `WHERE p.price > (SELECT AVG(price) FROM products p2 WHERE p2.category_id = p.category_id)`: 코드가 짧지만 **각 행마다 서브쿼리 재실행**. N행 × O(M) 비용 — 대용량에서 치명적
+    - **Window Function** `AVG(price) OVER (PARTITION BY category_id)`: 한 번 스캔으로 처리 가능하나 **Lv.4 기능**, 본 범위 초과
+    - **Self JOIN + GROUP BY**: 가독성·성능 모두 열세
+    - **FROM 인라인 뷰 (채택)**: Lv.2 범위 표준 해법. 그룹 평균이 SELECT/WHERE 양쪽에서 필요할 때 최적
+- **공학적 확장**:
+    - **대용량**: `products` 수천만 건이면 인라인 뷰의 GROUP BY 비용이 핵심. `(category_id)` 인덱스 + `(category_id, price)` 복합 인덱스로 정렬·집계 동시 최적화
+    - **카디널리티 비대칭**: 카테고리 수(M) ≪ 상품 수(N)일수록 인라인 뷰가 효율적. M개의 평균 행을 N행에 JOIN
+    - **NULL 트리플 안전망**: (1) `AVG()`의 NULL price 무시, (2) INNER JOIN의 NULL category_id 자동 제외, (3) `GROUP BY category_id`의 NULL 그룹 분리 후 외부 JOIN에서 자동 탈락
+    - **방언 호환**: PostgreSQL/Oracle 모두 동일. PostgreSQL은 인라인 뷰를 적극적으로 inline-merge하는 경향
+    - **CTE 리팩토링**: Lv.4 이상에서는 동일 로직을 `WITH ca AS (...)`로 표현 가능. 동일 뷰를 여러 번 참조해야 하면 CTE가 가독성·재사용성 우수
 
 ---
 
