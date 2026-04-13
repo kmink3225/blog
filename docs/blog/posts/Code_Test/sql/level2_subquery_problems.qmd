@@ -3,7 +3,7 @@ title: "SQL 코딩 테스트: 기본 서브쿼리 문제 모음"
 subtitle: "WHERE + 스칼라 서브쿼리 (MAX · MIN 참조) — Level 2"
 description: |
   Level 2 기본 서브쿼리 유형 풀이 모음.
-  WHERE 절에서 MAX·MIN을 참조하는 비상관 스칼라 서브쿼리, 공동 1위(tie) 처리, 서브쿼리 내부 필터 조건 일치 패턴 등.
+  WHERE 절의 MAX·MIN 스칼라 서브쿼리와 공동 1위(tie) 처리, SELECT 절 AVG 스칼라 서브쿼리와 각 행에 집계값 부착, 서브쿼리 내부 필터 조건 일치, INNER JOIN의 자동 NULL 제거 등.
 categories:
   - Code Test
   - SQL
@@ -129,6 +129,124 @@ ORDER BY o.order_date ASC, o.order_id ASC;
     - **동시성**: 서브쿼리와 외부 쿼리 사이 INSERT가 들어오면 **팬텀 리드(phantom read)** 가능 — `REPEATABLE READ` 이상 격리 수준 권장
     - **방언 호환**: MySQL/PostgreSQL/Oracle 모두 동일하게 동작. 스칼라 서브쿼리는 SQL 표준
     - **NULL 비율이 높은 경우**: `status`에 NULL이 많으면 인덱스 선택도가 떨어진다. 비즈니스상 `status`를 NOT NULL로 설계하는 것이 이상적
+
+---
+
+## 문제 2: 평균 가격 이상인 도서 조회
+
+### 문제 정보
+
+| 항목 | 내용 |
+|---|---|
+| 출처 | 튜터 생성 (앵커: Programmers "가격이 제일 비싼 식품의 정보 출력하기" Lv.2 변형 — MAX → AVG, WHERE 단독 → SELECT+WHERE 결합) |
+| 난이도 | Level 2 |
+| SQL 유형 | SELECT 절 스칼라 서브쿼리 (AVG 참조) + WHERE 조건 결합 |
+
+### 문제 설명
+
+어느 온라인 서점의 도서·카테고리 데이터베이스가 있다. MD팀에서 **전체 도서의 평균 가격 이상**인 도서 목록을 조회하되, 각 도서의 가격이 평균과 얼마나 차이 나는지 한눈에 볼 수 있도록 **평균 가격 자체도 함께 결과에 포함**해 달라고 요청했다.
+
+```sql
+CREATE TABLE categories (
+    category_id   INT PRIMARY KEY,
+    category_name VARCHAR(50)
+);
+
+CREATE TABLE books (
+    book_id     INT PRIMARY KEY,
+    title       VARCHAR(100),
+    author      VARCHAR(50),
+    category_id INT,
+    price       INT
+);
+```
+
+**샘플 데이터 (공개)**
+
+```sql
+INSERT INTO categories VALUES
+(1, 'Programming'),
+(2, 'Algorithm'),
+(3, 'System');
+
+INSERT INTO books VALUES
+(1, '파이썬 입문',       '김저자', 1, 15000),
+(2, '알고리즘 정복',     '이저자', 2, 28000),
+(3, '데이터베이스 기초', '박저자', 1, 22000),
+(4, '네트워크 이론',     '최저자', 3, 32000),
+(5, '자료구조',         '정저자', 2, 18000),
+(6, '운영체제',         '강저자', 3, 25000);
+```
+
+**제한사항**
+
+- 평균 가격은 **전체 도서** 기준으로 계산한다 (카테고리가 지정되지 않은 도서 포함)
+- 결과에는 카테고리가 지정된 도서만 포함한다
+- 평균 가격은 정수로 반올림한다 (`ROUND()`)
+- 결과는 가격 내림차순, 동일 가격이면 도서 번호 오름차순으로 정렬한다
+- 결과 컬럼 순서: `book_id`, `title`, `author`, `category_name`, `price`, `avg_price`
+
+**기대 결과 (공개 샘플 기준)**
+
+| book_id | title | author | category_name | price | avg_price |
+|---|---|---|---|---|---|
+| 4 | 네트워크 이론 | 최저자 | System | 32000 | 23333 |
+| 2 | 알고리즘 정복 | 이저자 | Algorithm | 28000 | 23333 |
+| 6 | 운영체제 | 강저자 | System | 25000 | 23333 |
+
+**숨김 채점 데이터에 이식한 함정**
+
+- NULL `price` — `AVG()`가 자동으로 무시
+- NULL `category_id` — INNER JOIN이 자동으로 제외
+- 경계값 (`>=` vs `>`) — "이상"은 `>=`, "초과"는 `>`
+- 동일 가격 다중 행 — 2차 정렬 기준(`book_id ASC`) 필수
+
+### 최종 풀이
+
+```sql
+SELECT
+    b.book_id,
+    b.title,
+    b.author,
+    c.category_name,
+    b.price,
+    (SELECT ROUND(AVG(price)) FROM books) AS avg_price
+FROM books b
+INNER JOIN categories c
+    ON b.category_id = c.category_id
+WHERE b.price >= (SELECT AVG(price) FROM books)
+ORDER BY b.price DESC, b.book_id ASC;
+```
+
+각 절의 역할:
+
+- `SELECT ... (SELECT ROUND(AVG(price)) FROM books) AS avg_price` — **SELECT 절 스칼라 서브쿼리**. 모든 결과 행에 동일한 평균 가격을 부착한다. 비상관 서브쿼리이므로 한 번만 실행된 후 상수로 치환된다
+- `INNER JOIN categories c ON b.category_id = c.category_id` — `category_id`가 NULL인 도서는 매칭 실패로 자동 제외된다. 별도 `IS NOT NULL` 필터가 불필요하다
+- `WHERE b.price >= (SELECT AVG(price) FROM books)` — "이상"은 `>=`, 경계값을 포함한다. 서브쿼리에 NULL인 `price`는 AVG 계산에서 자동 제외된다
+- `ROUND(AVG(price))` — 두 번째 인자 생략 시 **정수 반올림**이 기본값이다. `ROUND(x, 0)`과 동치다
+- `ORDER BY b.price DESC, b.book_id ASC` — 다중 정렬 조건은 쉼표로 구분, 각 컬럼마다 정렬 방향을 명시한다. `DESC` 철자 주의
+
+### Tips
+
+- **경계값 조사 읽기**: "이상/이하/최소/최대"는 `>=`/`<=` (경계 포함), "초과/미만"은 `>`/`<` (경계 제외). 문제 독해 시 조사에 표시하며 읽는 습관을 들인다
+- **`ROUND()` 두 번째 인자**: 생략 또는 `0` → 정수 반올림, `1` → 소수 첫째 자리, `-1` → 십의 자리. 정수 반올림에 `1`을 쓰는 실수 주의
+- **INNER JOIN의 자동 NULL 제거**: JOIN 조건의 양쪽 컬럼 중 어느 쪽이 NULL이어도 UNKNOWN이 되어 매칭 실패 → 결과에서 자동 제외. "JOIN 컬럼 `IS NOT NULL`" 필터를 추가하는 것은 중복
+- **`AVG()`의 NULL-safe 성질**: `AVG(price)` = `SUM(price) / COUNT(price)` (non-NULL 개수로 나눔). `SUM(price) / COUNT(*)`과 다르다 — 후자는 NULL을 포함해 개수를 세므로 결과가 달라진다
+- **SELECT 절 스칼라 서브쿼리 패턴**: 각 행에 전역 집계값(평균·최댓값·전체 건수 등)을 상수로 부착할 때 사용. Window Function 없이 Lv.2 범위에서 동일 효과를 낸다
+
+### 면접 방어 포인트
+
+- **실행 계획 분석**: SELECT 절의 `(SELECT ROUND(AVG(price)) FROM books)`와 WHERE 절의 `(SELECT AVG(price) FROM books)`는 **둘 다 비상관 스칼라 서브쿼리**다. MySQL 옵티마이저는 각각 한 번씩만 실행하여 상수로 치환한다 (`Using const`). 외부 쿼리 행 수가 N이어도 서브쿼리 실행 비용은 상수(2회)다. `EXPLAIN`에서 `DEPENDENT SUBQUERY`가 아닌 `SUBQUERY` 또는 `Using const`로 나타난다. `price` 인덱스가 있으면 외부 WHERE는 `Index Range Scan`으로, `category_id` PK 조회는 `Eq_ref`로 최적화된다
+- **대안 비교**:
+    - **CTE로 평균을 한 번만 정의**: DRY 측면에서 우수하나 **Lv.4 기능**이라 본 범위 초과. 대규모 리팩토링이 필요할 때 고려
+    - **Window Function `AVG() OVER()`**: 한 번 스캔으로 모든 행에 평균 부착 가능하나 **Lv.4 기능** + 전체 윈도우 연산으로 불필요한 정렬 비용 발생
+    - **Self JOIN + 집계 서브쿼리**: 서브쿼리를 회피할 수 있으나 가독성·성능 모두 열세
+    - **SELECT 절 스칼라 서브쿼리 2회 (채택)**: Lv.2 범위의 표준 해법. 코드가 명료하고 옵티마이저가 자동 캐시
+- **공학적 확장**:
+    - **대용량**: `books` 수천만 건 이상이면 AVG 계산 비용이 상당하다. `price` 인덱스는 전역 평균 계산에 직접 도움이 되지 않는다(전체 합계 필요). 프로덕션에서는 **집계 뷰(summary table) 또는 물질화 뷰(materialized view)**로 평균을 사전 계산하는 패턴이 표준
+    - **동시성**: 두 서브쿼리가 각각 실행되는 사이 INSERT/UPDATE가 들어오면 평균값이 달라질 수 있다 (Non-repeatable Read). 정합성이 중요한 리포트라면 **`REPEATABLE READ` 이상 격리 수준** 또는 트랜잭션 내에서 한 번만 평균을 세션 변수로 저장해 재사용
+    - **정밀도**: `price`가 정수여도 `AVG()`는 `DECIMAL`/`DOUBLE`을 반환한다. 비교(`>=`)는 자동 형 변환되나, 화면 출력 시 소수점이 붙어 보이므로 `ROUND()`로 정수화 필수
+    - **방언 호환**: `ROUND(x)` 기본값은 MySQL/PostgreSQL 동일. Oracle도 동일하게 동작. 표준 SQL
 
 ---
 
