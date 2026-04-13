@@ -3,7 +3,7 @@ title: "SQL 코딩 테스트: 기본 서브쿼리 문제 모음"
 subtitle: "WHERE + 스칼라 서브쿼리 (MAX · MIN 참조) — Level 2"
 description: |
   Level 2 기본 서브쿼리 유형 풀이 모음.
-  WHERE 절의 MAX·MIN 스칼라 서브쿼리와 공동 1위(tie) 처리, SELECT 절 AVG 스칼라 서브쿼리와 각 행에 집계값 부착, FROM 절 인라인 뷰(derived table)로 그룹별 평균 부착 후 카테고리 평균 비교, 별칭 스코프 규칙(인라인 뷰 컬럼 vs SELECT 별칭) 등.
+  WHERE 절의 MAX·MIN 스칼라 서브쿼리와 공동 1위(tie) 처리, SELECT 절 AVG 스칼라 서브쿼리와 각 행에 집계값 부착, FROM 절 인라인 뷰(derived table)로 그룹별 평균 부착 후 카테고리 평균 비교, 별칭 스코프 규칙(인라인 뷰 컬럼 vs SELECT 별칭), NOT IN의 3값 논리 NULL 함정과 NOT EXISTS·LEFT JOIN 대안, IN 패턴의 NULL-safe 동작과 NOT IN과의 비대칭성 등.
 categories:
   - Code Test
   - SQL
@@ -380,6 +380,274 @@ ORDER BY diff DESC, p.product_id ASC;
     - **NULL 트리플 안전망**: (1) `AVG()`의 NULL price 무시, (2) INNER JOIN의 NULL category_id 자동 제외, (3) `GROUP BY category_id`의 NULL 그룹 분리 후 외부 JOIN에서 자동 탈락
     - **방언 호환**: PostgreSQL/Oracle 모두 동일. PostgreSQL은 인라인 뷰를 적극적으로 inline-merge하는 경향
     - **CTE 리팩토링**: Lv.4 이상에서는 동일 로직을 `WITH ca AS (...)`로 표현 가능. 동일 뷰를 여러 번 참조해야 하면 CTE가 가독성·재사용성 우수
+
+---
+
+## 문제 4: 한 번도 대출되지 않은 도서 조회
+
+### 문제 정보
+
+| 항목 | 내용 |
+|---|---|
+| 출처 | 튜터 생성 (앵커: Programmers "보호소에서 중성화한 동물" Lv.4 NOT IN 패턴 단순화 — Lv.2로 하향) |
+| 난이도 | Level 2 |
+| SQL 유형 | NOT IN + 서브쿼리 (제외 패턴 / Anti-Join) — NULL 함정 포함 |
+
+### 문제 설명
+
+어느 도서관 시스템의 도서·대출 데이터베이스가 있다. 사서팀에서 **단 한 번도 대출된 적이 없는 도서** 목록을 조회해 달라고 요청했다. 폐기 또는 홍보 대상을 선정하는 기초 자료로 쓸 예정이다.
+
+```sql
+CREATE TABLE books (
+    book_id        INT PRIMARY KEY,
+    title          VARCHAR(100),
+    author         VARCHAR(50),
+    genre          VARCHAR(50),
+    published_year INT
+);
+
+CREATE TABLE loans (
+    loan_id     INT PRIMARY KEY,
+    book_id     INT,
+    member_id   INT,
+    loan_date   DATE
+);
+```
+
+**샘플 데이터 (공개)**
+
+```sql
+INSERT INTO books VALUES
+(1, '파이썬 입문',       '김저자', 'Programming', 2020),
+(2, '알고리즘 정복',     '이저자', 'Programming', 2021),
+(3, '데이터베이스 기초', '박저자', 'Database',    2019),
+(4, '자료구조',         '정저자', 'Programming', 2022),
+(5, '운영체제',         '강저자', 'System',      2018),
+(6, '네트워크 이론',     '최저자', 'System',      2023);
+
+INSERT INTO loans VALUES
+(1, 2, 101, '2026-01-05'),
+(2, 3, 102, '2026-01-10'),
+(3, 5, 103, '2026-01-15'),
+(4, 2, 104, '2026-02-01');
+```
+
+**제한사항**
+
+- 결과 컬럼 순서: `book_id`, `title`, `author`, `published_year`
+- 대출 기록이 단 한 건이라도 있으면 결과에서 제외
+- 결과는 출간 연도 내림차순, 동일 시 도서 번호 오름차순 정렬
+- 채점 데이터에는 `loans.book_id`에 NULL 행이 의도적으로 포함됨 (NOT IN NULL 함정)
+
+**기대 결과 (공개 샘플 기준)**
+
+| book_id | title | author | published_year |
+|---|---|---|---|
+| 6 | 네트워크 이론 | 최저자 | 2023 |
+| 4 | 자료구조 | 정저자 | 2022 |
+| 1 | 파이썬 입문 | 김저자 | 2020 |
+
+### 최종 풀이
+
+```sql
+SELECT
+    book_id,
+    title,
+    author,
+    published_year
+FROM books
+WHERE book_id NOT IN (
+    SELECT book_id
+    FROM loans
+    WHERE book_id IS NOT NULL
+)
+ORDER BY published_year DESC, book_id ASC;
+```
+
+각 절의 역할:
+
+- **서브쿼리 `(SELECT book_id FROM loans WHERE book_id IS NOT NULL)`** — 대출 이력이 있는 도서 ID 집합을 반환. **`WHERE book_id IS NOT NULL`이 핵심** — NOT IN의 NULL 함정 차단
+- `WHERE book_id NOT IN (...)` — 대출 이력 집합에 속하지 **않는** 도서만 외부에서 선택 (anti-join 효과)
+- DISTINCT는 정확성에 영향 없으므로 생략 — NOT IN은 중복에 무관
+
+### Tips
+
+- **NOT IN의 3값 논리 NULL 함정 (악명 높음)**:
+    - `x NOT IN (1, 2, NULL)`은 `x != 1 AND x != 2 AND x != NULL`로 전개
+    - `x != NULL`은 항상 UNKNOWN
+    - AND에 UNKNOWN이 섞이면 전체 UNKNOWN → FALSE 처리
+    - **결과: 서브쿼리에 NULL이 단 하나라도 있으면 외부 모든 행이 탈락 → 빈 결과**
+- **방어 전략 3가지**:
+    1. 서브쿼리에서 명시적 NULL 제외: `WHERE col IS NOT NULL` (이번 채택)
+    2. NOT EXISTS로 대체: 자동 NULL-safe, 의도 명확
+    3. LEFT JOIN + IS NULL: anti-join 표준 패턴, 대용량에서 가장 빠른 경향
+- **NOT EXISTS가 실전 표준**: 운영 코드에서는 NOT IN보다 NOT EXISTS가 권장 (NULL-safe + 옵티마이저 친화)
+- **방언 차이**: `UNIQUE`는 Oracle의 DISTINCT 동의어. MySQL은 `UNIQUE`를 인덱스 제약 키워드로만 인식 → SELECT에서 사용 시 syntax error
+- **DISTINCT(col) 표기**: 함수가 아니라 `DISTINCT (col)` — 괄호는 식 그룹화. 표기상 혼란만 주므로 괄호 없이 권장
+
+### 면접 방어 포인트
+
+- **실행 계획 분석**: MySQL은 NOT IN을 일반적으로 **Materialized Subquery**로 처리한다 — 서브쿼리 결과를 임시 테이블/해시로 만든 후 외부 행마다 lookup. `EXPLAIN`에서 `<subquery>` 또는 `MATERIALIZED`로 표시. 옵티마이저는 NOT IN의 NULL 가능성을 알고 있어, 컬럼이 NOT NULL 선언이면 NULL 검사를 생략하여 더 효율적. NULLable 컬럼이면 추가 NULL 분기 비용 발생. `loans(book_id)` 인덱스로 서브쿼리 비용 감소
+- **대안 비교**:
+
+    | 접근 | 성능 | NULL-safe | 가독성 |
+    |------|------|-----------|--------|
+    | NOT IN + IS NOT NULL (채택) | 중 | 명시적 처리 필요 | 명료 |
+    | NOT EXISTS | 중~상 | 자동 NULL-safe | SQL 표준, 의도 명확 |
+    | LEFT JOIN + IS NULL | 상 (대용량) | NULL-safe | 다소 우회적 |
+    | EXCEPT/MINUS | 상 | NULL-safe | 가장 명료 (MySQL 미지원) |
+
+    NOT EXISTS 예시:
+
+    ```sql
+    SELECT b.book_id, b.title, b.author, b.published_year
+    FROM books b
+    WHERE NOT EXISTS (
+        SELECT 1 FROM loans l
+        WHERE l.book_id = b.book_id
+    );
+    ```
+
+    LEFT JOIN 예시:
+
+    ```sql
+    SELECT b.book_id, b.title, b.author, b.published_year
+    FROM books b
+    LEFT JOIN loans l ON b.book_id = l.book_id
+    WHERE l.book_id IS NULL;
+    ```
+
+- **공학적 확장**:
+    - **대용량**: `books` 100만 + `loans` 1억 규모면 NOT IN/NOT EXISTS는 인덱스 lookup, LEFT JOIN은 hash join이 일반적. 옵티마이저 통계가 정확하면 비슷한 성능
+    - **방언 호환**: NOT IN/NOT EXISTS는 모든 주요 DBMS 표준. EXCEPT/MINUS는 MySQL 8.0 미지원
+    - **운영 패턴**: "한 번도 사용/주문/방문하지 않은 X" 유형은 마케팅·재고 관리에서 빈번. 매번 쿼리하지 말고 **활동 플래그 컬럼** 유지 (`is_ever_used` BOOL) 패턴이 운영상 유리
+    - **인덱스 선택도**: `loans.book_id` 카디널리티가 높을수록 인덱스 효과 큼. 1%만 대출되는 sparse 패턴이면 NOT IN/NOT EXISTS 모두 빠름
+
+---
+
+## 문제 5: 5점 평가를 준 적 있는 회원 조회
+
+### 문제 정보
+
+| 항목 | 내용 |
+|---|---|
+| 출처 | 튜터 생성 (앵커: Programmers "재구매가 일어난 상품과 회원 리스트 구하기" Lv.2 ~50% IN 패턴 변형 — GROUP BY+HAVING 대신 단순 IN 서브쿼리) |
+| 난이도 | Level 2 |
+| SQL 유형 | IN + 서브쿼리 (하위 집합 필터) — NOT IN과의 NULL 비대칭성 학습 |
+
+### 문제 설명
+
+어느 영화 스트리밍 플랫폼의 회원·시청 데이터베이스가 있다. 마케팅팀에서 **5점 만점 평가를 단 한 번이라도 준 적이 있는 회원**들의 정보를 추출해 달라고 요청했다.
+
+```sql
+CREATE TABLE members (
+    member_id   INT PRIMARY KEY,
+    name        VARCHAR(50),
+    signup_date DATE,
+    grade       VARCHAR(20)
+);
+
+CREATE TABLE movie_views (
+    view_id     INT PRIMARY KEY,
+    member_id   INT,
+    movie_title VARCHAR(100),
+    view_date   DATE,
+    rating      INT
+);
+```
+
+**샘플 데이터 (공개)**
+
+```sql
+INSERT INTO members VALUES
+(1, '김민준', '2025-06-01', 'GOLD'),
+(2, '이서연', '2025-08-15', 'SILVER'),
+(3, '박지호', '2025-10-20', 'BRONZE'),
+(4, '최수아', '2026-01-05', 'GOLD'),
+(5, '정우진', '2026-02-10', 'SILVER'),
+(6, '강도윤', '2026-03-15', 'BRONZE');
+
+INSERT INTO movie_views VALUES
+(1, 1, '인터스텔라',   '2025-12-01', 5),
+(2, 2, '매트릭스',     '2025-12-15', 4),
+(3, 3, '인셉션',       '2026-01-10', 3),
+(4, 4, '어벤져스',     '2026-01-20', 5),
+(5, 5, '파이트클럽',   '2026-02-25', 4),
+(6, 1, '쇼생크탈출',   '2026-03-01', 5);
+```
+
+**제한사항**
+
+- 결과 컬럼 순서: `member_id`, `name`, `signup_date`, `grade`
+- 5점 평가가 단 한 건이라도 있으면 결과에 포함 (회원당 한 번만 표시)
+- `members`에 존재하지 않는 `member_id`는 자연 제외
+- 결과는 가입일 내림차순, 동일 시 회원 번호 오름차순 정렬
+
+**기대 결과 (공개 샘플 기준)**
+
+| member_id | name | signup_date | grade |
+|---|---|---|---|
+| 4 | 최수아 | 2026-01-05 | GOLD |
+| 1 | 김민준 | 2025-06-01 | GOLD |
+
+**숨김 채점 데이터에 이식한 함정**
+
+- NULL `member_id` (IN이 자동 무시 — NOT IN과 정반대)
+- NULL `rating` (`rating = 5`에서 자연 제외)
+- `members`에 없는 `member_id` 99 (IN 매칭에서 자연 제외)
+- 추가 5점 평가로 결과 행 증가
+
+### 최종 풀이
+
+```sql
+SELECT
+    member_id,
+    name,
+    signup_date,
+    grade
+FROM members
+WHERE member_id IN (
+    SELECT member_id
+    FROM movie_views
+    WHERE rating = 5
+)
+ORDER BY signup_date DESC, member_id ASC;
+```
+
+각 절의 역할:
+
+- **서브쿼리 `(SELECT member_id FROM movie_views WHERE rating = 5)`** — 5점 평가를 매긴 회원 ID 집합. NULL `rating`은 `rating = 5`에서 자동 제외 (NULL 비교는 UNKNOWN)
+- `WHERE member_id IN (...)` — 그 집합에 속하는 회원만 선택. **IN은 NULL-safe** — 서브쿼리 결과에 NULL이 있어도 다른 값과는 정상 매칭, NULL은 그냥 매치 안 됨
+- 추가 NULL 방어 불필요 — `members.member_id`는 PRIMARY KEY (NOT NULL), 서브쿼리 NULL은 IN이 자동 무시
+- DISTINCT 불필요 — IN/NOT IN 모두 서브쿼리 중복은 정확성에 무관
+
+### Tips
+
+- **NOT IN과 IN의 NULL 처리 비대칭성 (핵심)**:
+
+| 연산자 | 서브쿼리에 NULL 있을 때 | 외부 컬럼이 NULL일 때 |
+|--------|------------------------|---------------------|
+| **NOT IN** | **결과 전체 empty** (3값 논리 함정) | UNKNOWN → 제외 |
+| **IN** | **자동 무시** (NULL은 매칭 안 됨, 다른 값과 정상 비교) | UNKNOWN → 제외 |
+
+- **왜 비대칭인가**: NOT IN은 부등식 AND 전개 → UNKNOWN이 AND를 무너뜨림. IN은 등식 OR 전개 → 다른 등식 중 하나만 TRUE면 전체 TRUE 유지
+- **패턴 일반화 주의**: 한 패턴(NOT IN 방어)을 무조건 다른 곳(IN)에 옮기지 말 것. 각 연산자의 의미론을 정확히 이해하고 필요한 곳에만 적용
+- **PK에 IS NOT NULL은 무의미**: PRIMARY KEY는 NOT NULL 자동 부여 → 추가 검사 항상 TRUE
+- **IN vs INNER JOIN**: 1:N 관계에서 INNER JOIN은 중복 행을 만든다. IN은 외부 행당 매칭 1회 (Semi-Join 효과로 자동 중복 제거). 회원 정보 한 번씩 조회에는 IN이 안전
+
+### 면접 방어 포인트
+
+- **실행 계획 분석**: MySQL 옵티마이저는 IN 서브쿼리를 **Semi-Join**으로 변환하여 처리한다 (`EXPLAIN`에서 `Using semi-join`). INNER JOIN과 비슷하나 외부 행당 매칭 1회로 끝나 중복 제거 효과 자동. `movie_views(member_id, rating)` 복합 인덱스가 있으면 서브쿼리는 `Index Range Scan`. INNER JOIN + DISTINCT 패턴 대비 명료하고 효율적
+- **대안 비교**:
+    - **EXISTS**: 의미 동일. NULL-safe(IN도 자연 safe라 본 문제는 무관). 옵티마이저 친화도 비슷. 서브쿼리에 외부 컬럼 참조가 자연스러움
+    - **INNER JOIN + DISTINCT**: 중복 행 발생 → DISTINCT 필수, 비효율
+    - **INNER JOIN (DISTINCT 없이)**: 회원이 5점 평가 횟수만큼 중복 출현 → **잘못된 결과**
+    - **IN 서브쿼리 (채택)**: Lv.2 표준 해법, 1:N 관계의 안전한 필터링
+- **공학적 확장**:
+    - **대용량**: `movie_views(member_id, rating)` 복합 인덱스 필수. 평점 조건이 자주 바뀌면 부분 인덱스(`WHERE rating = 5`)도 옵션 (PostgreSQL 한정)
+    - **카디널리티 영향**: 5점 평가 비율이 낮을수록 IN 서브쿼리가 빠름 (서브쿼리 결과 작음)
+    - **방언 호환**: IN 서브쿼리는 SQL 표준. 모든 주요 DBMS 동일 동작
+    - **활동 기반 마케팅 패턴**: "특정 행동을 한 적 있는 사용자" 추출은 마케팅·CRM 핵심 패턴. 자주 조회하면 활동 플래그 컬럼이나 매트뷰로 사전 계산
 
 ---
 
