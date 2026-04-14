@@ -1,0 +1,418 @@
+---
+title: "GLM 적합 알고리즘 — IRLS 의 완전한 유도"
+subtitle: "McCullagh & Nelder §2.5 — An algorithm for fitting generalized linear models"
+description: |
+  McCullagh & Nelder (1989) §2.5 의 GLM 적합 알고리즘을 유도한다.
+  MLE 가 닫힌 해를 갖지 않는 일반 GLM 에서 "작업 반응 z 와 가중치 W 를
+  매 반복에 갱신하는 가중 최소제곱" 이 어떻게 Fisher scoring 과 동치가 되는지,
+  스코어 방정식부터 IRLS 업데이트까지 단계별로 전개하고 정준링크의 특례,
+  시작값·수렴·정규방정식 변형을 정리한다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/14/2026
+---
+
+## 왜 GLM 에는 반복 알고리즘이 필요한가
+
+정규 선형모형에서는 MLE 가 **한 번의 행렬 연산**으로 끝난다.
+
+$$
+\hat{\boldsymbol\beta}_{\text{OLS}} \;=\; (\mathbf{X}^\top \mathbf{X})^{-1}\mathbf{X}^\top \mathbf{y}
+$$
+
+닫힌 해(closed-form) 가 존재하는 이유는 두 가지가 맞물린 결과다.
+
+1. 링크 함수가 항등함수 $g(\mu)=\mu$ 이다. 평균 구조가 선형 예측자와 직접 같다.
+2. 분산이 상수 $\sigma^2$ 이다. 가중치를 걸 필요가 없다.
+
+Poisson 회귀로 가는 순간 둘 다 깨진다. 링크가 $\log$ 이고 분산이 $\mu$ 라, 스코어 방정식
+
+$$
+\frac{\partial \ell}{\partial \boldsymbol\beta} \;=\; \mathbf{X}^\top(\mathbf{y}-\boldsymbol\mu) \;=\; \mathbf{0},\qquad \boldsymbol\mu = \exp(\mathbf{X}\boldsymbol\beta)
+$$
+
+은 $\boldsymbol\beta$ 에 대해 비선형이다. 로지스틱·감마·역가우스도 모두 동일한 사정에 놓인다. **닫힌 해가 없으므로 수치 최적화가 필수**다.
+
+단순 Newton-Raphson 도 되긴 하지만 Hessian 계산이 관측마다 달라 구현이 번잡하고 수치적으로 불안정할 수 있다. Nelder & Wedderburn (1972) 의 기여는 "**모든 GLM 의 MLE 를 단 하나의 공통 알고리즘—가중 최소제곱을 반복 수행하는—로 풀 수 있다**" 는 사실을 밝힌 데 있다. 이것이 **IRLS (Iteratively Reweighted Least Squares)** 다.
+
+직관: GLM 의 스코어 방정식은 비선형이지만, **현재 추정치 근방에서 1차 테일러 전개**로 선형화하면 한 스텝은 선형 가중 회귀가 된다. 선형 가중 회귀는 닫힌 해가 있으니 매 스텝이 $O(p^3)$ 으로 저렴하다. 비선형 문제를 "수많은 선형 문제" 로 쪼개 푸는 전형적 전략이다.
+
+---
+
+## 알고리즘의 한 장 요약
+
+::: {.callout-note}
+## IRLS 알고리즘
+
+반복 $t = 0, 1, 2, \dots$ 에 대해 다음을 수행한다.
+
+1. 현재 추정치 $\hat{\boldsymbol\eta}^{(t)} = \mathbf{X}\hat{\boldsymbol\beta}^{(t)}$ 와 $\hat{\boldsymbol\mu}^{(t)} = g^{-1}(\hat{\boldsymbol\eta}^{(t)})$ 를 계산.
+2. **작업 반응 (adjusted dependent variate)** 를 만든다.
+   $$
+   z_i^{(t)} \;=\; \hat\eta_i^{(t)} \;+\; (y_i - \hat\mu_i^{(t)})\left(\frac{d\eta}{d\mu}\right)_{\hat\mu_i^{(t)}}
+   $$
+3. **작업 가중치 (working weight)** 를 계산한다.
+   $$
+   W_i^{(t)} \;=\; \left[\left(\frac{d\eta}{d\mu}\right)_{\hat\mu_i^{(t)}}^{2}\cdot V(\hat\mu_i^{(t)})\right]^{-1}
+   $$
+4. 가중 최소제곱 회귀로 업데이트: $\mathbf{z}^{(t)}$ 를 $\mathbf{X}$ 에 $\mathbf{W}^{(t)}$ 가중 회귀한 해
+   $$
+   \hat{\boldsymbol\beta}^{(t+1)} \;=\; (\mathbf{X}^\top \mathbf{W}^{(t)} \mathbf{X})^{-1}\mathbf{X}^\top \mathbf{W}^{(t)} \mathbf{z}^{(t)}
+   $$
+5. 수렴 기준 (예: 이탈도 변화 $<10^{-8}$) 이 만족될 때까지 1–4 반복.
+:::
+
+외형은 OLS 와 구분이 어려울 정도로 단순하다. 차이는 두 가지다 — **반응 $\mathbf{y}$ 자리에 $\mathbf{z}$**, **등가중 자리에 $\mathbf{W}$**. 이 둘이 반복마다 $\hat{\boldsymbol\mu}$ 에 의존해 재계산되기 때문에 "반복(iterative) 재가중(reweighted) 최소제곱" 이다.
+
+---
+
+## 작업 반응 $z$ 의 직관적 의미
+
+$z$ 는 무엇인가? 공식을 뜯어 보면 **"관측값 $y$ 를 링크 척도 $\eta$ 로 옮긴 값의 1차 테일러 근사"** 다.
+
+$$
+g(y) \;\approx\; g(\mu) + (y-\mu)\,g'(\mu) \;=\; \eta + (y-\mu)\frac{d\eta}{d\mu}
+$$
+
+오른쪽이 바로 $z$ 의 정의다. 즉 $z$ 는 "만약 $y$ 를 링크 척도로 곧바로 가져갈 수 있다면 이 값이 될 것이다" 의 선형 근사다.
+
+### 분포별 해석
+
+| 분포·링크 | $\mu$ 의 함수 | $d\eta/d\mu$ | $z$ |
+|---|---|---|---|
+| Normal, identity | $g(\mu)=\mu$ | $1$ | $y$ |
+| Poisson, log | $g(\mu)=\log\mu$ | $1/\mu$ | $\hat\eta + (y-\hat\mu)/\hat\mu$ |
+| Binomial, logit | $g(\mu)=\log\{\mu/(m-\mu)\}$ | $m/[\mu(m-\mu)]$ | $\hat\eta + (y-\hat\mu)\cdot m/[\hat\mu(m-\hat\mu)]$ |
+| Gamma, inverse | $g(\mu)=1/\mu$ | $-1/\mu^2$ | $\hat\eta - (y-\hat\mu)/\hat\mu^2$ |
+
+Poisson 의 경우 $z_i = \hat\eta_i + (y_i-\hat\mu_i)/\hat\mu_i$ 는 **"로그 척도에서의 상대 편차"** 를 현재 선형 예측자에 더한 양이다. 잔차 $(y-\mu)$ 를 링크의 1차 미분으로 곱해 $\eta$ 척도로 올려 보낸다.
+
+직관: IRLS 가 매 스텝에서 푸는 것은 "**$y$ 대신 $z$ 를 선형 회귀하면 현재 추정치를 Fisher scoring 한 스텝만큼 개선한 새 추정치가 나온다**" 는 등식이다. $z$ 는 "링크 척도의 가짜 반응변수" 라 보면 된다.
+
+---
+
+## 작업 가중치 $W$ 의 직관적 의미
+
+$W$ 는 작업 반응의 **분산 역수**다.
+
+$$
+\mathrm{Var}(z_i) \;=\; \left(\frac{d\eta}{d\mu}\right)^2 \mathrm{Var}(y_i) \;=\; \left(\frac{d\eta}{d\mu}\right)^2 \phi V(\mu_i) \;=\; \frac{\phi}{W_i}
+$$
+
+(중간 단계는 델타 방법. $\phi$ 는 분산 모수.) 즉 $W_i = \mathrm{Var}(z_i)^{-1}$ (상수배 $\phi$ 무시) 이다. **분산이 큰 관측은 가중치가 작다** — 정보가 적으니 회귀에 덜 반영한다.
+
+### 분포별 가중치
+
+| 분포·링크 | $V(\mu)$ | $d\eta/d\mu$ | $W$ |
+|---|---|---|---|
+| Normal, identity | $1$ | $1$ | $1$ (등가중) |
+| Poisson, log (정준) | $\mu$ | $1/\mu$ | $\mu$ |
+| Binomial, logit (정준) | $\mu(1-\mu/m)$ | $m/[\mu(m-\mu)]$ | $\mu(m-\mu)/m$ |
+| Gamma, log | $\mu^2$ | $1/\mu$ | $1$ |
+
+정준링크에서는 $W = V$ 로 단순해진다 (아래 §정준링크 특례 참조). Normal-identity 에서는 $W=1$ 로 등가중이 되어 **IRLS 가 한 번에 수렴**하여 OLS 와 일치한다 — IRLS 가 정규 OLS 의 진정한 일반화임이 드러난다.
+
+직관: $W$ 의 의미는 두 가지다.
+- **분산 표준화**: Poisson 은 큰 $\mu$ 의 관측이 분산도 커서 $z$ 의 오차가 크다. $W=\mu$ 가중을 걸어 그 영향력을 낮춘다.
+- **Fisher 정보의 지역 반영**: $W$ 는 정확히 Fisher 정보 행렬 $\mathbf{A} = \mathbf{X}^\top \mathbf{W} \mathbf{X}$ 의 가중치다. 매 스텝의 가중 OLS 가 자동으로 정보 행렬을 쓰게 된다.
+
+---
+
+## 알고리즘의 정당화 — 왜 가중 OLS 한 번이 Fisher scoring 한 스텝과 같은가
+
+McCullagh §2.5.1 의 유도를 단계별로 따라가 본다. 세 단계로 이루어진다.
+
+### 1단계: 스코어 방정식 유도
+
+지수족 단일 관측의 로그우도는
+
+$$
+\ell_i \;=\; \frac{y_i\theta_i - b(\theta_i)}{a(\phi)} + c(y_i,\phi)
+$$
+
+이다. 체인룰로 $\beta_j$ 편미분을 쓴다.
+
+$$
+\frac{\partial \ell_i}{\partial \beta_j} \;=\; \frac{\partial \ell_i}{\partial \theta_i}\cdot\frac{d\theta_i}{d\mu_i}\cdot\frac{d\mu_i}{d\eta_i}\cdot\frac{\partial \eta_i}{\partial \beta_j}
+$$
+
+각 요소를 평가한다.
+
+- $\partial \ell_i/\partial \theta_i = (y_i-\mu_i)/a(\phi)$ (지수족 성질: $b'(\theta)=\mu$)
+- $d\theta_i/d\mu_i = 1/V(\mu_i)$ (지수족 성질: $b''(\theta)=V$, 즉 $d\mu/d\theta = V$)
+- $d\mu_i/d\eta_i = 1/g'(\mu_i)$ (링크의 역함수 미분)
+- $\partial\eta_i/\partial\beta_j = x_{ij}$
+
+합치면
+
+$$
+\frac{\partial \ell_i}{\partial \beta_j} \;=\; \frac{y_i-\mu_i}{a(\phi)}\cdot\frac{1}{V(\mu_i)}\cdot\frac{1}{g'(\mu_i)}\cdot x_{ij} \;=\; \frac{W_i}{a(\phi)}(y_i-\mu_i)\frac{d\eta_i}{d\mu_i}x_{ij}
+$$
+
+여기서 $W_i = V^{-1}(d\mu/d\eta)^2$ 이 등장한다. 위 식은 **가중치 $W_i$ 가 자연스럽게 출현하는 이유**를 보여 준다 — 스코어의 곱 구조를 정리하면 $W$ 가 드러난다.
+
+관측 전체를 합하고 $\partial\ell/\partial\beta_j = 0$ 으로 놓은 것이 MLE 방정식이다.
+
+$$
+\sum_i W_i(y_i-\mu_i)\frac{d\eta_i}{d\mu_i}x_{ij} \;=\; 0,\quad j=1,\dots,p
+$$
+
+### 2단계: Fisher 정보 행렬 유도
+
+Fisher scoring 은 $\mathbf{A}\boldsymbol{\delta\beta} = \mathbf{u}$ ($\mathbf{u}$=스코어, $\mathbf{A}=-E[\partial^2\ell/\partial\beta\partial\beta^\top]$) 로 업데이트한다. $\mathbf{A}$ 의 $(r,s)$ 성분은
+
+$$
+A_{rs} \;=\; -E\left[\frac{\partial u_r}{\partial\beta_s}\right]
+$$
+
+이다. $u_r = \sum W(y-\mu)(d\eta/d\mu)x_r$ 에서 $\beta_s$ 편미분은 두 부분으로 나뉜다.
+
+- $(y-\mu)$ 가 $\beta_s$ 에 의존하는 부분: $\partial(y-\mu)/\partial\beta_s = -\partial\mu/\partial\beta_s = -x_s\,d\mu/d\eta$.
+- $W\cdot d\eta/d\mu$ 가 $\beta_s$ 에 의존하는 부분: 기대값을 취하면 $E[y-\mu]=0$ 이므로 사라진다.
+
+따라서
+
+$$
+A_{rs} \;=\; \sum_i W_i\frac{d\eta_i}{d\mu_i}x_{r,i}\cdot x_{s,i}\frac{d\mu_i}{d\eta_i} \;=\; \sum_i W_i\,x_{r,i}\,x_{s,i}
+$$
+
+즉 $\mathbf{A} = \mathbf{X}^\top \mathbf{W}\mathbf{X}$. **Fisher 정보 행렬은 단지 가중 공변량 적률 행렬**이다. 여기서 $W$ 의 선택이 단순한 표준화가 아니라 **Fisher 정보를 그대로 체현하기 위한** 설계였음이 드러난다.
+
+### 3단계: 업데이트 방정식 = 가중 정규방정식
+
+새 추정치 $\mathbf{b}^* = \mathbf{b} + \boldsymbol{\delta\beta}$ 는
+
+$$
+\mathbf{A}\mathbf{b}^* \;=\; \mathbf{A}\mathbf{b} + \mathbf{u}
+$$
+
+를 만족한다. 우변의 $\mathbf{A}\mathbf{b}$ 성분은
+
+$$
+(\mathbf{A}\mathbf{b})_r = \sum_s A_{rs}b_s = \sum_i W_i\,x_{r,i}\,\eta_i
+$$
+
+이고 $u_r = \sum W(y-\mu)(d\eta/d\mu)x_r$ 와 합치면
+
+$$
+(\mathbf{A}\mathbf{b}^*)_r \;=\; \sum_i W_i\,x_{r,i}\left\{\eta_i + (y_i-\mu_i)\frac{d\eta_i}{d\mu_i}\right\} \;=\; \sum_i W_i\,x_{r,i}\,z_i
+$$
+
+중괄호 안이 바로 작업 반응 $z_i$ 의 정의. 따라서 업데이트는
+
+$$
+\mathbf{X}^\top \mathbf{W}\mathbf{X}\,\mathbf{b}^* \;=\; \mathbf{X}^\top \mathbf{W}\mathbf{z}
+$$
+
+**이것이 가중 최소제곱의 정규방정식이다.** Fisher scoring 한 스텝이 $\mathbf{z}$ 를 반응, $\mathbf{W}$ 를 가중치로 한 OLS 와 수학적으로 완전히 동치다.
+
+직관: 이 유도의 핵심은 "$u$ 와 $\mathbf{A}$ 를 같은 $W$ 로 다시 쓸 수 있다" 는 대수적 우연의 결과가 아니다. **지수족 + 연결함수** 라는 구조 자체가 스코어 방정식을 "가중 잔차 · 가중 공변량" 형태로 자동으로 정리해 준다. Nelder–Wedderburn 의 통찰은 이 구조를 드러내 하나의 공통 알고리즘으로 모든 GLM 을 구현할 수 있게 했다는 점이다.
+
+---
+
+## 정준 링크의 특례
+
+정준 링크 $g = (b')^{-1}$, 즉 $\eta = \theta$ 인 경우 두 가지 단순화가 일어난다.
+
+### $W = V$
+
+$g(\mu) = \theta(\mu)$ 이면 $d\eta/d\mu = d\theta/d\mu = 1/V(\mu)$ 이므로
+
+$$
+W \;=\; V^{-1}(d\mu/d\eta)^2 \;=\; V^{-1}\cdot V^2 \;=\; V
+$$
+
+즉 가중치가 분산함수 자체와 같아진다. Poisson-log 에서 $W=\mu$, 이항-logit 에서 $W=\mu(1-\mu/m)$. 작업 반응도 $z = \eta + (y-\mu)/V\cdot V = \eta + (y-\mu)/(d\mu/d\eta)$ 의 단순 꼴이 된다.
+
+### Fisher scoring = Newton-Raphson
+
+정준 링크에서는 Hessian 의 관측값과 기대값이 일치한다. 스코어의 $\beta_s$ 편미분에서 "가중치·링크 관련 항의 $\beta$ 편미분" 이 $(y-\mu)$ 를 계수로 갖게 되어, $E[y-\mu]=0$ 으로 **무작위로** 사라지는 게 아니라 **정확히** 사라진다. 따라서 Fisher scoring = Newton-Raphson.
+
+이로부터 두 가지 실무적 이점이 따라온다.
+
+1. **로그우도가 $\boldsymbol\beta$ 에 대해 오목**. 전역 최적해가 존재하며 수렴이 안정적이다.
+2. **스코어 방정식이 $\mathbf{X}^\top(\mathbf{y}-\boldsymbol\mu)=\mathbf{0}$** 의 단순 형태 — OLS 정규방정식의 자연스러운 일반화.
+
+직관: 정준 링크는 수학적으로 "기본 설정" 이다. 도메인 이유가 없다면 정준을 택하는 것이 수렴·해석·구현 모두에서 유리하다.
+
+### 분산 안정화 척도의 특례
+
+$g'(\mu) = V^{-1/2}(\mu)$ 를 만족하는 링크 (variance-stabilizing link) 에서는 $W = V^{-1}(V^{-1/2})^{-2} \cdot V^{-1} \cdot V = 1$ 상수가 된다. 매 반복마다 $W$ 를 재계산할 필요가 없어 계산이 절약된다. Poisson 의 제곱근 변환, 이항의 $\arcsin\sqrt\cdot$ 변환이 고전적 예시다.
+
+---
+
+## 시작값 선택
+
+IRLS 는 반복 알고리즘이므로 $\hat{\boldsymbol\beta}^{(0)}$ (또는 $\hat{\boldsymbol\mu}^{(0)}$) 가 필요하다. McCullagh 의 제안은 매우 실용적이다.
+
+**데이터 자체를 시작 적합값으로 쓴다** — $\hat\mu_i^{(0)} = y_i$ (약간의 조정 가능).
+
+이렇게 하면 $\hat\eta_i^{(0)} = g(y_i)$, $W_i^{(0)} = [g'(y_i)^2 V(y_i)]^{-1}$ 을 바로 계산할 수 있고, 첫 번째 가중 OLS 가 $\hat{\boldsymbol\beta}^{(1)}$ 을 내놓는다.
+
+### 조정이 필요한 경우
+
+- **Poisson-log, $y_i=0$**: $\log(0)$ 이 되므로 $\hat\mu_i^{(0)} = y_i + 0.5$ 또는 별도 처리.
+- **Binomial-logit, $y_i\in\{0,m\}$**: $\log(0)$ 또는 $\log(\infty)$. $\hat\mu_i^{(0)} = (y_i + 0.5)/(m+1)\cdot m$ 과 같은 Haldane 조정.
+- **Gamma-inverse, $y_i<0$**: 부적합 — 데이터 자체가 양수여야 함.
+
+직관: 시작값은 수렴 여부를 가르는 결정적 요소는 아니다. 정준 링크의 오목 우도 아래에서는 어떤 합리적 시작값이든 동일한 전역 최적해로 수렴한다. 시작값 조정은 주로 **수치적 오버플로 회피** 목적이다.
+
+---
+
+## 수렴 판정과 다룰 문제
+
+### 수렴 기준
+
+실무에서 자주 쓰이는 세 가지 기준.
+
+1. **이탈도 변화**: $|D^{(t+1)} - D^{(t)}| < \varepsilon_D$ (예: $10^{-8}$) — 가장 표준적.
+2. **계수 변화**: $\|\hat{\boldsymbol\beta}^{(t+1)} - \hat{\boldsymbol\beta}^{(t)}\|_\infty < \varepsilon_\beta$.
+3. **스코어 크기**: $\|\mathbf{u}(\hat{\boldsymbol\beta}^{(t)})\|_\infty < \varepsilon_u$.
+
+R 의 `glm()` 기본값은 이탈도 상대 변화 $10^{-8}$, 최대 25 반복.
+
+### 수렴하지 않는 경우
+
+1. **완전 분리 (complete separation, 로지스틱)**: 선형 예측자만으로 $y$ 가 완벽히 분리되면 MLE 가 $\pm\infty$ 로 발산. 경고: `fitted probabilities numerically 0 or 1`. 처방 — Firth 벌점(bias-reduced logistic), L2 정규화.
+2. **링크 정의역 이탈**: log-link 에서 $\hat\eta$ 가 음수가 나와 $\hat\mu<0$ 등. step-halving (스텝 크기를 1/2로 축소해 재시도) 으로 완화.
+3. **Hessian 특이성 (X 의 다중공선성)**: $\mathbf{X}^\top\mathbf{W}\mathbf{X}$ 가 특이행렬. QR 분해 기반 구현(R·statsmodels) 이 표준이며, 필요 시 변수 제거·정규화.
+
+### 표준 안정화 기법
+
+| 문제 | 기법 |
+|---|---|
+| 스텝이 너무 커 발산 | **Step-halving**: $\hat{\boldsymbol\beta}^{(t+1)} \leftarrow \hat{\boldsymbol\beta}^{(t)} + 2^{-k}\,\boldsymbol{\delta\beta}$, 이탈도 감소할 때까지 $k$ 증가 |
+| Hessian 특이성 | **QR 분해**: $\mathbf{W}^{1/2}\mathbf{X} = \mathbf{Q}\mathbf{R}$ 로 역행렬 없이 해 |
+| 완전 분리 | **Firth 벌점** $\ell^* = \ell + \tfrac12\log|\mathcal{I}(\boldsymbol\beta)|$ |
+
+---
+
+## 코드 예시
+
+### Step 1: numpy 로 IRLS 직접 구현 (Poisson 회귀)
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(0)
+n = 200
+X = np.column_stack([np.ones(n), rng.normal(size=n)])
+beta_true = np.array([0.5, 0.8])
+y = rng.poisson(np.exp(X @ beta_true))
+
+# IRLS (Poisson, log link, canonical)
+beta = np.zeros(X.shape[1])
+for it in range(50):
+    eta = X @ beta
+    mu  = np.exp(eta)
+    z   = eta + (y - mu) / mu           # 작업 반응 (d eta/d mu = 1/mu)
+    W   = mu                            # 가중치 (정준 log link 에서 W = V = mu)
+
+    # 가중 정규방정식 풀이
+    WX = W[:, None] * X
+    beta_new = np.linalg.solve(X.T @ WX, X.T @ (W * z))
+
+    # 수렴 판정 (이탈도 변화)
+    mu_new = np.exp(X @ beta_new)
+    D_old  = 2 * np.sum(np.where(y > 0, y * np.log(y / mu),  0) - (y - mu))
+    D_new  = 2 * np.sum(np.where(y > 0, y * np.log(y / mu_new), 0) - (y - mu_new))
+    if abs(D_new - D_old) < 1e-10:
+        beta = beta_new
+        print(f"수렴: iter={it+1}")
+        break
+    beta = beta_new
+
+print(f"beta_hat = {beta}")
+print(f"beta_true = {beta_true}")
+
+# 표준오차: Var(beta_hat) = (X' W X)^{-1}
+cov = np.linalg.inv(X.T @ (W[:, None] * X))
+se = np.sqrt(np.diag(cov))
+print(f"SE = {se}")
+```
+
+구현 포인트.
+
+- `z = eta + (y - mu)/mu` — Poisson-log 의 $(d\eta/d\mu) = 1/\mu$ 가 들어간 작업 반응.
+- `W = mu` — 정준 log 링크의 $W=V=\mu$.
+- `np.linalg.solve(X.T @ WX, X.T @ (W * z))` — 한 스텝의 가중 정규방정식 해.
+- 수렴 후 `(X'WX)^{-1}` 이 그대로 공분산 — Fisher 정보 행렬의 역행렬.
+
+### Step 2: 이항 로지스틱 — 같은 뼈대, 다른 $z,W$
+
+```python
+# Binomial-logit (m=1), IRLS
+y_bin = (y > y.mean()).astype(float)   # 예시용 이항 반응
+beta = np.zeros(X.shape[1])
+for _ in range(50):
+    eta = X @ beta
+    mu  = 1 / (1 + np.exp(-eta))                # g^{-1}(eta)
+    # d eta/d mu = 1/[mu(1-mu)]  →  z = eta + (y - mu)/[mu(1-mu)]
+    z   = eta + (y_bin - mu) / (mu * (1 - mu))
+    W   = mu * (1 - mu)                         # 정준 logit 에서 W = V = mu(1-mu)
+
+    WX = W[:, None] * X
+    beta = np.linalg.solve(X.T @ WX, X.T @ (W * z))
+
+print(f"logit beta = {beta}")
+```
+
+IRLS 의 아름다움이 드러난다: **분포·링크만 바꿔서** 정확히 같은 뼈대를 재사용한다. `statsmodels.GLM` 내부가 이 구조로 모든 family 를 처리한다.
+
+### Step 3: statsmodels 로 실무 적합
+
+```python
+import statsmodels.api as sm
+m = sm.GLM(y, X, family=sm.families.Poisson()).fit(method="IRLS", maxiter=50, tol=1e-8)
+print(m.summary())
+print(f"iterations: {m.fit_history['iteration']}")
+```
+
+`method="IRLS"` 는 기본값이며 내부적으로 위의 가중 OLS 반복을 QR 기반으로 수행한다. `fit_history` 로 반복 횟수를 확인할 수 있다.
+
+---
+
+## 흔한 실수
+
+| 실수 | 처방 |
+|---|---|
+| 비정준 링크인데 정준 링크 공식 (`W=V`) 사용 | 비정준이면 $W = V^{-1}(d\mu/d\eta)^2$ 로 재계산. `d\mu/d\eta` 를 링크별로 따로 유도한다 |
+| $y=0, m$ 에서 $\log$ 오버플로 | 시작값 조정 (Haldane 보정) 또는 안전한 `np.clip(mu, eps, 1-eps)` |
+| 수렴 안 함을 "미세 튜닝 부족" 으로 오해 | 먼저 완전 분리·다중공선성·링크 부적합 진단. step-halving 은 증상 완화이지 원인 해결이 아님 |
+| `(X'WX)^{-1}` 로 공분산 직접 계산 | QR 기반 `np.linalg.lstsq(sqrt(W)*X, sqrt(W)*z)` 가 수치적으로 안전 |
+
+---
+
+## 요약
+
+- **MLE 는 닫힌 해 없음** → 반복 최적화 필요. 표준은 IRLS.
+- **IRLS 한 스텝** = $\mathbf{z}$ 를 $\mathbf{W}$ 가중으로 $\mathbf{X}$ 에 OLS 회귀. $\mathbf{z}$ 는 링크 척도의 선형화된 $y$, $\mathbf{W}$ 는 $\mathrm{Var}(z)$ 의 역수.
+- **유도의 핵심**: 지수족 + 연결함수 구조가 스코어와 Fisher 정보 모두를 "$W$ 가중 공변량 행렬" 형태로 정리해 준다. Fisher scoring 한 스텝 = 가중 OLS 한 번.
+- **정준링크 특례**: $W=V$, Fisher scoring = Newton-Raphson, 오목 로그우도로 전역 수렴 보장.
+- **시작값**: $\hat\mu^{(0)} = y$ + 경계 보정. 구현 편의만을 위한 것.
+- **수렴 이슈**: 완전 분리·링크 정의역 이탈·특이 Hessian — step-halving, Firth, QR 분해가 표준 처방.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [GLM 이론 기초 — 지수족·정준연결·이탈도·IRLS](./01-1-glm-theory-foundation.qmd)
+- [The Components of a GLM](./01-3-glm-components.qmd)
+- [GLM 적합도 측정 — Deviance·Pearson·Analysis of Deviance](./01-4-glm-measuring-goodness-of-fit.qmd)
+
+**관련 개념**
+
+- [GLM 잔차 3종 — Pearson·Anscombe·Deviance](./01-5-glm-residuals.qmd) — 적합 후 진단
+- [Logistic Regression: Estimation — Newton-Raphson·IRLS·이탈도](./logistic-regression-estimation.qmd)
+- [점근 가설검정 — Wald·Score·LRT](../123-asymptotic-hypothesis-testing.qmd)
+
+**후속 주제**
+
+- Model Checking for GLM (McCullagh Ch.12) — 적합 결과 진단
+- Quasi-likelihood (McCullagh Ch.9) — 분포 미지정 IRLS 변형
+- Bias-reduced estimation (Firth) — 완전 분리 대응
