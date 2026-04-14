@@ -8,7 +8,7 @@ categories:
   - Code Test
   - SQL
 author: Kwangmin Kim
-date: 04/13/2026
+date: 04/14/2026
 ---
 
 <!-- 이 파일에 추가할 유형: 스칼라 서브쿼리 (MAX·MIN), EXISTS, IN 서브쿼리, 단일 행 서브쿼리 -->
@@ -648,6 +648,117 @@ ORDER BY signup_date DESC, member_id ASC;
     - **카디널리티 영향**: 5점 평가 비율이 낮을수록 IN 서브쿼리가 빠름 (서브쿼리 결과 작음)
     - **방언 호환**: IN 서브쿼리는 SQL 표준. 모든 주요 DBMS 동일 동작
     - **활동 기반 마케팅 패턴**: "특정 행동을 한 적 있는 사용자" 추출은 마케팅·CRM 핵심 패턴. 자주 조회하면 활동 플래그 컬럼이나 매트뷰로 사전 계산
+
+---
+
+## 문제 6: 리뷰가 없는 도서 찾기 (LEFT JOIN + IS NULL)
+
+### 문제 정보
+
+| 항목 | 내용 |
+|---|---|
+| 출처 | 튜터 생성 (앵커: Programmers "없어진 기록 찾기" Lv.3, 정답률 ~72%) |
+| 난이도 | Level 2 |
+| SQL 유형 | LEFT JOIN + IS NULL (Anti Join 변형) — 제외 키 선택 함정 |
+
+### 문제 설명
+
+어느 독립 서점의 관리자가 재고 정리를 앞두고 있다. 지금까지 단 한 건의 고객 리뷰도 받지 못한 도서를 추려 프로모션 대상을 선정하려 한다.
+
+```sql
+CREATE TABLE BOOKS (
+    BOOK_ID        INT PRIMARY KEY,
+    TITLE          VARCHAR(100) NOT NULL,
+    AUTHOR         VARCHAR(50),
+    PUBLISHED_YEAR INT,
+    PRICE          INT
+);
+
+CREATE TABLE REVIEWS (
+    REVIEW_ID   INT PRIMARY KEY,
+    BOOK_ID     INT,
+    RATING      INT,
+    REVIEW_TEXT VARCHAR(200),
+    CREATED_AT  DATE
+);
+```
+
+**샘플 데이터 (공개)**
+
+```sql
+INSERT INTO BOOKS VALUES
+(1, 'The Silent Coder',  'A. Kim',  2021, 18000),
+(2, 'Data Forest',       'B. Lee',  2019, 22000),
+(3, 'SQL in Practice',   'C. Park', 2022, 25000),
+(4, 'Hidden Patterns',   'D. Choi', 2020, 20000),
+(5, 'Null Stories',      'E. Han',  2023, 17000),
+(6, 'Edge Cases',        'F. Jung', 2018, 15000);
+
+INSERT INTO REVIEWS VALUES
+(101, 1, 5, 'Great book',        '2026-01-10'),
+(102, 3, 4, 'Useful',             '2026-02-02'),
+(103, 3, 3, 'Average',            '2026-02-18'),
+(104, 6, 5, 'Loved the examples', '2026-03-01');
+```
+
+**제한사항**
+
+- 리뷰가 한 건도 존재하지 않는 도서의 `BOOK_ID`, `TITLE`, `AUTHOR`를 조회한다.
+- 정렬: `BOOK_ID` 오름차순.
+- `REVIEWS.BOOK_ID`는 NULL 허용 (익명 리뷰 존재 가능).
+- `REVIEWS.REVIEW_TEXT`는 NULL 허용 (별점만 남긴 리뷰 존재 가능).
+
+**기대 결과 (공개 샘플 기준)**
+
+| BOOK_ID | TITLE           | AUTHOR  |
+|---------|-----------------|---------|
+| 2       | Data Forest     | B. Lee  |
+| 4       | Hidden Patterns | D. Choi |
+| 5       | Null Stories    | E. Han  |
+
+### 최종 풀이
+
+```sql
+SELECT b.book_id, b.title, b.author
+FROM books b
+LEFT JOIN reviews r ON b.book_id = r.book_id
+WHERE r.review_id IS NULL
+ORDER BY b.book_id;
+```
+
+- `LEFT JOIN reviews r ON b.book_id = r.book_id`: 리뷰가 없는 책은 모든 `r.*`이 NULL인 행 1건으로 남는다
+- `WHERE r.review_id IS NULL`: 제외 키로 **PK(NOT NULL 보장 컬럼)** 를 선택 — 매칭 실패 행만 정확히 추출
+- `ORDER BY b.book_id`: 조회 안정성을 위한 정렬
+
+### Tips
+
+- **제외 키 선택 원칙 (핵심)**: LEFT JOIN 후 "매칭되지 않은 왼쪽 행"을 추출할 때 WHERE 조건의 키는 **NULL이 될 수 있는 경우가 '매칭 실패' 하나뿐인 컬럼**이어야 한다
+
+| 우선순위 | 컬럼 | 이유 |
+|---------|------|------|
+| 1순위 | 오른쪽 테이블 PK (예: `r.review_id`) | 행 존재 시 절대 NULL 아님 → 매칭 실패만 정확히 식별 |
+| 2순위 | 조인 키 (`r.book_id`) | 매칭 성공 시 NOT NULL 보장 |
+| 회피 | 내용 컬럼 (`r.review_text`, `r.rating` 등 NULL 허용) | 원본 NULL과 매칭 실패 NULL 구분 불가 |
+
+- **내용 컬럼을 제외 키로 쓸 때 생기는 오답**: `WHERE r.review_text IS NULL`로 걸면 "별점만 남긴 리뷰(review_text NULL)"가 있는 책도 "리뷰 없음"으로 잘못 분류된다. 그 책은 실제로 리뷰가 있다
+- **제외 패턴 3가지 비교**:
+    - `LEFT JOIN + IS NULL` (채택): 옵티마이저가 Anti Semi Join으로 변환, 인덱스 활용 가능
+    - `NOT EXISTS`: 대부분 DBMS가 Anti Semi Join, early termination 가능, NULL 안전
+    - `NOT IN`: NULL 방어 누락 시 결과 전체 empty (3값 논리 함정). 방어 가능할 때만 선택
+- **중복 행 주의**: 매칭된 책이 여러 리뷰를 가질 경우 LEFT JOIN 결과는 그만큼 행이 불어나지만, `IS NULL` 필터가 매칭 행을 모두 버리므로 결과 중복은 없음. 반대로 "리뷰가 있는 책"을 찾는 쿼리라면 `DISTINCT` 필요
+
+### 면접 방어 포인트
+
+- **실행 계획 분석**: MySQL 옵티마이저는 `LEFT JOIN ... WHERE 우측PK IS NULL` 패턴을 **Anti Semi Join**으로 인식하여 최적화한다. `reviews(book_id)` 인덱스가 있으면 Index Nested Loop, 없으면 Hash Anti Join 고려. `EXPLAIN`에서 `Using where; Not exists` 표시가 정상 신호
+- **대안 비교**:
+    - **NOT EXISTS**: 동일 결과, 의도 표현 가장 명확, early termination 가능 — 카디널리티가 책보다 리뷰가 훨씬 많을 때 유리
+    - **NOT IN**: NULL 방어(`WHERE sub.col IS NOT NULL`) 필수, 대용량에서 가장 불리
+    - **LEFT JOIN + IS NULL (채택)**: 조인 키 인덱스 + 중복 폭증 없음의 경우 NOT EXISTS와 동등 성능. 선택 이유는 "JOIN 기반 사고 일관성"
+- **공학적 확장**:
+    - **인덱스 전략**: `reviews(book_id)` 비클러스터드 인덱스 필수. `books`는 PK 스캔
+    - **NULL 비율**: `reviews.book_id`에 NULL이 많으면 NOT IN은 위험, LEFT JOIN과 NOT EXISTS는 영향 없음
+    - **방언 호환**: 3가지 모두 표준 SQL. Oracle `MINUS`, PostgreSQL `EXCEPT` 같은 집합 연산으로도 표현 가능하나 컬럼 일치 제약이 있어 가독성 떨어짐
+    - **대용량 확장**: 리뷰 테이블이 수억 건이면 "리뷰 플래그 컬럼" 또는 매트뷰(materialized view)로 사전 계산 고려
 
 ---
 

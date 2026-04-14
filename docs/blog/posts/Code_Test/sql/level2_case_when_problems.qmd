@@ -4,11 +4,12 @@ subtitle: "CASE WHEN / 조건부 분류 / 파생 컬럼 — Level 2"
 description: |
   Level 2 CASE WHEN 유형 풀이 모음.
   조건부 값 분류, END AS 파생 컬럼 생성, CASE 순서와 범위 조건 패턴 등.
+  CASE WHEN + GROUP BY 다중 컬럼 조합, 경계값 처리, NULL 함정 포함.
 categories:
   - Code Test
   - SQL
 author: Kwangmin Kim
-date: 04/07/2026
+date: 04/15/2026
 ---
 
 <!-- 이 파일에 추가할 유형: CASE WHEN 단순 분류, CASE WHEN + 집계, CASE WHEN + JOIN -->
@@ -81,7 +82,116 @@ ORDER BY employee_id ASC;
 
 ---
 
+## 문제 2: 카테고리별 가격대별 상품 수 집계
+
+### 문제 정보
+
+| 항목 | 내용 |
+|---|---|
+| 출처 | 튜터 생성 (앵커: Programmers "가격대 별 상품 개수 구하기" Lv.2, 정답률 ~65%) |
+| 난이도 | Level 2 |
+| SQL 유형 | CASE WHEN + GROUP BY (다중 컬럼) + INNER JOIN |
+
+### 문제 설명
+
+```sql
+CREATE TABLE CATEGORY (
+    CATEGORY_ID   INT PRIMARY KEY,
+    CATEGORY_NAME VARCHAR(50) NOT NULL
+);
+
+CREATE TABLE PRODUCT (
+    PRODUCT_ID    INT PRIMARY KEY,
+    PRODUCT_NAME  VARCHAR(100) NOT NULL,
+    CATEGORY_ID   INT,
+    PRICE         INT
+);
+
+INSERT INTO CATEGORY VALUES
+(1, 'Fiction'), (2, 'Science'), (3, 'History');
+
+INSERT INTO PRODUCT VALUES
+(101, 'Novel A',        1, 8500),
+(102, 'Novel B',        1, 15000),
+(103, 'Physics Guide',  2, 50000),
+(104, 'Biology 101',    2, 9900),
+(105, 'World War II',   3, 120000),
+(106, 'Ancient Rome',   3, 45000);
+```
+
+카테고리별로 상품의 가격을 세 구간으로 나누어 구간별 상품 개수(`PRODUCT_COUNT`)를 집계하는 쿼리를 작성하라.
+
+- `LOW`: 10,000원 미만
+- `MID`: 10,000원 이상 50,000원 미만
+- `HIGH`: 50,000원 이상
+- 가격이 NULL인 상품은 제외
+- 정렬: 카테고리 이름 오름차순, 같은 카테고리 내에서는 LOW → MID → HIGH 순
+
+**기대 결과:**
+
+| CATEGORY_NAME | PRICE_RANGE | PRODUCT_COUNT |
+|---------------|-------------|---------------|
+| Fiction       | LOW         | 1             |
+| Fiction       | MID         | 1             |
+| History       | MID         | 1             |
+| History       | HIGH        | 1             |
+| Science       | LOW         | 1             |
+| Science       | HIGH        | 1             |
+
+### 최종 풀이
+
+```sql
+SELECT
+    c.category_name,
+    CASE
+        WHEN p.price >= 50000 THEN 'HIGH'
+        WHEN p.price >= 10000 AND p.price < 50000 THEN 'MID'
+        WHEN p.price < 10000 THEN 'LOW'
+    END AS price_range,
+    COUNT(*) AS product_count
+FROM product p
+INNER JOIN category c
+    ON c.category_id = p.category_id
+WHERE p.price IS NOT NULL
+GROUP BY
+    c.category_name,
+    CASE
+        WHEN p.price >= 50000 THEN 'HIGH'
+        WHEN p.price >= 10000 AND p.price < 50000 THEN 'MID'
+        WHEN p.price < 10000 THEN 'LOW'
+    END
+ORDER BY
+    c.category_name ASC,
+    FIELD(price_range, 'LOW', 'MID', 'HIGH');
+```
+
+- SELECT에 만든 CASE 표현식을 GROUP BY에도 **그대로 반복**한다. 표준 SQL은 GROUP BY에서 SELECT 별칭 참조를 허용하지 않는다 (MySQL은 예외적으로 허용하지만 이식성 없음)
+- GROUP BY에서는 `AS price_range` 같은 **별칭 부여 불가** — `END`까지만 쓰고 잘라야 한다
+- `WHERE p.price IS NOT NULL`로 NULL을 선필터. `ELSE 'LOW'`로 잔여를 흡수하면 NULL도 LOW 버킷에 포함된다
+- `FIELD(col, v1, v2, v3)`는 MySQL 전용으로 문자열 범주의 논리적 정렬 순서를 강제한다. 알파벳 정렬(HIGH, LOW, MID)을 피하는 핵심 도구
+
+### Tips
+
+- **핵심 개념**: CASE WHEN 결과를 GROUP BY 컬럼으로 사용하는 패턴 + 문자열 범주의 논리적 정렬
+- **함정 1 (GROUP BY 별칭 금지)**: 표준 SQL은 GROUP BY에서 SELECT 별칭 참조 불가. CASE 표현식을 GROUP BY에 반복하거나 인라인 뷰로 감싸야 한다
+- **함정 2 (경계값 `>=` vs `>`)**: "10,000원 이상" = `>= 10000`, "10,000원 미만" = `< 10000`. 경계값 자체가 어느 버킷에 속하는지 매번 조건을 읽어 확인할 것
+- **함정 3 (NULL과 ELSE)**: `ELSE 'LOW'`는 NULL 가격까지 LOW로 흡수한다. NULL 제외 요구 시 `WHERE IS NOT NULL` 또는 NULL 전용 버킷 분리 필요
+- **함정 4 (SQL 절 순서)**: `FROM → JOIN ... ON → WHERE → GROUP BY → HAVING → SELECT → ORDER BY`. WHERE를 JOIN 앞에 끼워 넣으면 syntax error
+- **함정 5 (문자열 범주 정렬)**: `ORDER BY price_range` 만 쓰면 알파벳순(HIGH, LOW, MID). 논리 순서 강제는 `FIELD()` (MySQL) 또는 `ORDER BY CASE price_range WHEN 'LOW' THEN 1 WHEN 'MID' THEN 2 ELSE 3 END` (표준)
+- **대안 (인라인 뷰)**: CASE 중복이 싫으면 서브쿼리로 `price_range`를 먼저 만든 후 바깥에서 집계. 가독성은 좋지만 Lv.2에서는 오버엔지니어링
+
+### 면접 방어 포인트
+
+- **실행 계획 분석**: `category_id`에 인덱스가 있으면 Index Nested Loop JOIN. GROUP BY는 `category_name` + CASE 결과로 Hash Aggregation. 단일 쿼리와 인라인 뷰는 대부분 옵티마이저가 동일하게 펼친다
+- **대안 비교**: (1) CASE 반복 방식 — 표준 SQL 호환, 유지보수 시 양쪽 동기화 부담. (2) 인라인 뷰 — CASE 1회 정의, 추가 스캔 가능성. (3) MySQL 별칭 참조 — 가장 짧지만 방언 종속
+- **통계적 관점**: 버킷 수가 3개로 고정되므로 GROUP BY 결과 행 수는 최대 `카테고리 수 × 3`. 대용량에서도 출력 크기가 예측 가능하다
+- **NULL 의미론**: "가격 미정"을 집계에서 제외할지, 별도 'UNKNOWN' 버킷으로 둘지는 비즈니스 결정. WHERE로 제외하는 선택은 "집계 대상이 아님"을 명시적으로 드러낸다
+- **방언 호환**: `FIELD()`는 MySQL 전용. PostgreSQL·Oracle 이식 시 `ORDER BY CASE ... END`로 전환 필요
+
+---
+
 ## 관련 문제
 
 - [GROUP BY · HAVING 문제 모음 (Level 2)](./level2_group_by_problems.qmd)
 - [JOIN 문제 모음 (Level 2)](./level2_join_problems.qmd)
+- [SQL 필수 구문 레퍼런스 (Level 2)](./sql_builtins_level2_reference.qmd)
