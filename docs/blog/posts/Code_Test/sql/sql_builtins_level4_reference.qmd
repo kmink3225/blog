@@ -161,6 +161,121 @@ FROM daily_sales;
 -- RANGE: 값 범위 기준 (동점 행 모두 포함)
 ```
 
+## FIRST_VALUE / LAST_VALUE / NTH_VALUE
+
+```sql
+-- FIRST_VALUE: 윈도우 내 첫 번째 행의 값
+-- LAST_VALUE: 윈도우 내 마지막 행의 값 (프레임 주의)
+-- NTH_VALUE: N번째 행의 값
+
+SELECT
+    dept, name, salary,
+    FIRST_VALUE(name) OVER (PARTITION BY dept ORDER BY salary DESC) AS top_earner,
+    LAST_VALUE(name) OVER (
+        PARTITION BY dept ORDER BY salary DESC
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS lowest_earner,
+    NTH_VALUE(name, 2) OVER (
+        PARTITION BY dept ORDER BY salary DESC
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS second_earner
+FROM employees;
+```
+
+**LAST_VALUE 함정**: 기본 프레임은 `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` (현재 행까지). 그래서 LAST_VALUE는 "현재 행까지 중 마지막" = 현재 행 자신을 반환한다. 진짜 마지막을 원하면 **프레임을 UNBOUNDED FOLLOWING까지 명시**해야 한다.
+
+## WINDOW 절 — 명명 윈도우 (같은 윈도우 재사용)
+
+```sql
+-- 같은 PARTITION/ORDER를 여러 함수에서 쓸 때 중복 제거
+SELECT
+    dept, name, salary,
+    RANK()       OVER w AS r,
+    DENSE_RANK() OVER w AS dr,
+    ROW_NUMBER() OVER w AS rn,
+    LAG(salary)  OVER w AS prev_sal
+FROM employees
+WINDOW w AS (PARTITION BY dept ORDER BY salary DESC);
+-- 윈도우 정의를 한 번만 쓰고 재사용 — 가독성·유지보수성 향상
+```
+
+## 프레임: ROWS vs RANGE
+
+```sql
+-- ROWS: 물리적 행 수 기준 (동점 무관)
+-- RANGE: 값 범위 기준 (ORDER BY 컬럼 값이 같으면 한 그룹으로 처리)
+
+-- 예시: ORDER BY date, 동일 날짜 2건 있을 때
+-- ROWS BETWEEN 1 PRECEDING AND CURRENT ROW:
+--   → 바로 직전 1행만 포함 (동일 날짜 구분)
+-- RANGE BETWEEN INTERVAL 1 DAY PRECEDING AND CURRENT ROW:
+--   → 날짜 값이 -1일 이상인 모든 행 포함 (동일 날짜 다 포함)
+
+-- 프레임 경계 지시자
+-- UNBOUNDED PRECEDING: 파티션 시작부터
+-- N PRECEDING:         현재 행에서 N행 앞
+-- CURRENT ROW:         현재 행
+-- N FOLLOWING:         현재 행에서 N행 뒤
+-- UNBOUNDED FOLLOWING: 파티션 끝까지
+
+-- 관용 조합
+-- 누적합:     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+-- 이동평균 3: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+-- 중앙 3일:   ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+-- 전체 평균:  ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+```
+
+## 재귀 CTE 기초 (Level 4 도입 수준)
+
+```sql
+-- 1~N 시퀀스 생성 (달력 테이블, 번호표 등)
+WITH RECURSIVE seq AS (
+    SELECT 1 AS n
+    UNION ALL
+    SELECT n + 1 FROM seq WHERE n < 10
+)
+SELECT n FROM seq;
+
+-- 날짜 시퀀스
+WITH RECURSIVE dates AS (
+    SELECT DATE('2024-01-01') AS d
+    UNION ALL
+    SELECT DATE_ADD(d, INTERVAL 1 DAY) FROM dates WHERE d < '2024-01-31'
+)
+SELECT d FROM dates;
+```
+
+- 종료 조건이 없으면 무한 루프. MySQL은 `cte_max_recursion_depth` (기본 1000)로 방어
+- 심화 패턴 (조직도 탐색 등)은 Level 5에서 다룸
+
+## GROUP_CONCAT 심화 (윈도우와 결합)
+
+```sql
+-- 그룹별로 이름 나열 + 순서 지정
+SELECT dept,
+       GROUP_CONCAT(name ORDER BY salary DESC SEPARATOR ' > ') AS ranking
+FROM employees
+GROUP BY dept;
+-- 결과: Sales | Kim > Lee > Park (급여 높은 순)
+```
+
+## JSON 함수 (MySQL 5.7+)
+
+```sql
+-- JSON_EXTRACT 또는 -> 연산자
+SELECT id, JSON_EXTRACT(payload, '$.user.name') AS user_name FROM events;
+SELECT id, payload->'$.user.name' AS user_name FROM events;
+
+-- JSON_UNQUOTE 또는 ->> 연산자 (문자열 따옴표 제거)
+SELECT id, payload->>'$.user.name' AS user_name FROM events;
+
+-- JSON_LENGTH, JSON_CONTAINS
+SELECT * FROM events WHERE JSON_LENGTH(payload, '$.tags') > 0;
+SELECT * FROM events WHERE JSON_CONTAINS(payload, '"premium"', '$.tags');
+```
+
+- Programmers 코딩 테스트에는 드물지만, 현업에서 이벤트 로그 처리에 자주 등장
+
 ## NTILE — N등분
 
 ```sql
@@ -233,6 +348,11 @@ WHERE rn <= 2;    -- 부서별 급여 Top-2 직원
 | 이동 평균 | AVG OVER | `AVG(col) OVER (ORDER BY date ROWS 2 PRECEDING)` |
 | 복잡 쿼리 분해 | CTE | `WITH 이름 AS (쿼리) SELECT ...` |
 | 분위수 분류 | NTILE | `NTILE(4) OVER (ORDER BY col)` |
+| 그룹 최고·최저 | FIRST_VALUE / LAST_VALUE | `FIRST_VALUE(x) OVER (PARTITION BY g ORDER BY y DESC)` |
+| 같은 윈도우 여러 함수 | WINDOW 절 | `... OVER w ... WINDOW w AS (PARTITION BY ...)` |
+| 시퀀스 생성 | 재귀 CTE | `WITH RECURSIVE seq AS (...)` |
+| 이벤트 로그 파싱 | JSON_EXTRACT | `payload->'$.user.id'` |
+| 고정 기간 슬라이딩 | ROWS N PRECEDING | `ROWS BETWEEN 2 PRECEDING AND CURRENT ROW` |
 
 ## 관련 문서
 
