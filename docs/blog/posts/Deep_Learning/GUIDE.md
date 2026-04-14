@@ -188,7 +188,7 @@ class SelfAttention(nn.Module):
 
 **선행 지식**
 
-- [선형대수: 행렬 곱](../../Math/linear_algebra/05.matrix_multiplication.qmd)
+- [선형대수: 행렬 곱](../../Math/linear_algebra/mit-02-5-gilbert-strang-matrix-operation-rules.qmd)
 - [최적화: 경사하강법](../../Math/optimization.qmd) ← 파일 미존재, placeholder
 
 **후속 주제**
