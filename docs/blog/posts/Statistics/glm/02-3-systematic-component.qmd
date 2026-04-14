@@ -1,0 +1,471 @@
+---
+title: "선형 예측자의 구성 — Systematic Component"
+subtitle: "McCullagh & Nelder §3.3 — 연속·범주·더미·혼합 항의 설계"
+description: |
+  McCullagh & Nelder (1989) §3.3 의 체계적 성분(선형 예측자)을 심화한다.
+  "모수에 대한 선형" 의 정확한 의미, 연속 공변량의 다항·변환·교호, 범주형
+  요인의 수준 구조와 더미 변수, 절편과 주효과의 구조적 aliasing, 기울기가
+  범주에 따라 변하는 혼합항까지 — 설계 행렬 $\mathbf{X}$ 가 어떻게 조립되는지를
+  수식과 직관으로 정리한다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/14/2026
+---
+
+## 왜 "체계적 성분" 을 따로 다루는가
+
+GLM 의 세 구성요소 중 **체계적 성분 (systematic component)** 은 외형상 가장 단순하다.
+
+$$
+\eta \;=\; \sum_{j=1}^p x_j \beta_j
+$$
+
+선형 예측자 $\eta$ 는 공변량 $x_j$ 의 선형 결합. 이 한 줄에 무엇을 더 설명할 게 있을까? 하지만 실무의 회귀가 복잡해지는 대부분의 이유가 이 한 줄의 해석에 있다.
+
+1. "선형" 이 무엇을 기준으로의 선형인가? ($x_j$? 모수 $\beta_j$?)
+2. 연속 변수를 어떻게 표현할 것인가? (원 척도? 다항? 변환?)
+3. 범주형 변수는 어떻게 숫자로 바꾸나? (더미? 효과 코딩? 조건부 코딩?)
+4. 절편과 수준 효과가 왜 동시에 들어갈 수 없는가?
+5. 기울기가 범주마다 다를 때 어떻게 표현하나?
+
+이 질문들에 대한 답이 **설계 행렬 $\mathbf{X}$ 의 열을 어떻게 구성하는가** 로 구현된다. §3.3 은 $\mathbf{X}$ 를 조립하는 문법을 정리한 절이다.
+
+직관: 회귀의 "모형" 은 $\mathbf{y}$ 와 $\mathbf{X}$ 의 관계인데, $\mathbf{X}$ 의 구성이 분석가의 **가설을 어떻게 표현하는가** 를 결정한다. "나이가 영향을 준다" 와 "로그 나이가 영향을 준다" 는 전혀 다른 가설이다. 체계적 성분은 이런 가설을 수치적 행렬로 번역하는 규칙서다.
+
+---
+
+## "모수에 대한 선형" 의 정확한 의미
+
+### 선형성의 오해와 정정
+
+$\eta = \beta_0 + \beta_1 x + \beta_2 x^2$ 은 "선형 모형" 인가? 많은 입문자가 "$x^2$ 이 있으니 비선형" 이라 생각한다. 그러나 McCullagh 의 정의는 다르다.
+
+::: {.callout-note}
+## 선형 모형의 정의
+
+선형 모형에서 "선형" 은 **모수 $\beta_j$ 에 대한 선형성** 을 뜻한다. 공변량에 어떤 변환 $g(x)$ 를 가해도 $\eta$ 가 $\beta_j$ 에 대해 선형이기만 하면 선형 모형이다.
+:::
+
+즉 $\eta = \beta_0 + \beta_1 x + \beta_2 x^2$ 는 $\beta_j$ 들을 모아 $(\beta_0, \beta_1, \beta_2)$ 로 보면 $\eta$ 가 선형 결합 — **선형 모형**. 반면
+
+$$
+\eta = \beta_0 + \beta_1 \exp(\beta_2 x)
+$$
+
+은 $\beta_2$ 가 지수의 인수에 들어가 있어 **비선형**. 이 모형은 OLS·IRLS 로 풀 수 없고 Gauss-Newton·Levenberg-Marquardt 등 비선형 최적화가 필요하다.
+
+### 실무 의미
+
+"모수에 대한 선형" 의 중요성은 계산에 있다. 선형이면
+
+- MLE 가 닫힌 해 또는 IRLS 로 풀림.
+- Fisher 정보가 $\mathbf{X}^\top\mathbf{W}\mathbf{X}$ 의 간단한 형태.
+- 다항·변환·교호·스플라인까지 모두 **기저함수 기반 설계 행렬** 로 처리.
+
+비선형이면 이 모든 게 복잡해진다. GLM 은 **"모수에 대해서는 선형, 평균 구조는 링크로 비선형"** 이라는 타협으로 계산 단순성과 표현력을 모두 확보한다.
+
+직관: 선형 모형의 "선형" 은 **최적화 난이도의 한계선**이다. 모수에 선형이면 풀린다. 공변량이 아무리 복잡해도 — 로그·제곱·교호·스플라인 — 이 한계선 안에 머문다.
+
+---
+
+## 연속 공변량 (§3.3.1)
+
+### 기본형
+
+$x$ 가 나이·용량·온도·농도 등 연속 측정값이면 $\eta$ 에 그대로 들어간다. 해석은 직관적이다 — $\beta_j$ 는 $x_j$ 한 단위 증가당 $\eta$ 의 변화량.
+
+GLM 에서는 $\eta$ 와 $\mu$ 가 링크로 이어지므로 해석이 링크에 따라 달라진다.
+
+| 링크 | $\beta_j$ 해석 |
+|---|---|
+| identity | $x_j$ 한 단위 변화당 $\mu$ 의 변화 |
+| log | $x_j$ 한 단위 변화당 $\mu$ 의 배수 $e^{\beta_j}$ |
+| logit | $x_j$ 한 단위 변화당 오즈비 $e^{\beta_j}$ |
+| inverse | $x_j$ 한 단위 변화당 $1/\mu$ 의 변화 |
+
+### 비선형 관계의 선형 모형 표현
+
+데이터의 관계가 곧바로 선형이 아니어도, **공변량 변환**을 통해 선형 모형 틀에 맞출 수 있다.
+
+#### 다항 (Polynomial)
+
+$$
+\eta = \beta_0 + \beta_1 x + \beta_2 x^2 + \beta_3 x^3
+$$
+
+$x, x^2, x^3$ 을 각각 별도의 공변량으로 취급하면 3개의 열을 가진 설계 행렬이 된다. 주의: $x$ 의 단위가 크면 $x^2, x^3$ 이 매우 커져 수치 불안정. **중앙화 (centering)** 나 **직교 다항 (orthogonal polynomial)** 이 표준 처방.
+
+#### 로그·제곱근 (Power Transform)
+
+$\log x$, $\sqrt x$, $1/x$ 등 도메인 지식에 따른 변환. 예: 용량-반응 관계에서 $\log(\text{dose})$ 가 표준.
+
+#### 기저 함수 (Basis Expansion)
+
+스플라인·푸리에·웨이블릿 등 $K$ 개의 기저 함수 $\{\phi_k(x)\}$ 로 확장.
+
+$$
+\eta = \beta_0 + \sum_{k=1}^K \beta_k \phi_k(x)
+$$
+
+이것이 GAM (Generalized Additive Model) 의 기초 아이디어다 (Green 1984). 선형 모형의 표현력을 유지하면서 유연한 곡선을 적합한다.
+
+### 교호작용 (Interaction) — 이선형 (bilinear) 형태
+
+두 연속 변수의 곱을 포함하면
+
+$$
+\eta = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \beta_{12} x_1 x_2
+$$
+
+이를 **이선형 (bilinear)** 관계라 한다. 재배열하면 두 가지 해석이 동시에 성립한다.
+
+$$
+\eta \;=\; (\beta_0 + \beta_2 x_2) + (\beta_1 + \beta_{12} x_2)\,x_1
+$$
+
+즉 $x_1$ 에 대한 선형 관계인데, **절편과 기울기가 모두 $x_2$ 의 선형 함수**. 반대로도 동일하게 해석 가능.
+
+$$
+\eta \;=\; (\beta_0 + \beta_1 x_1) + (\beta_2 + \beta_{12} x_1)\,x_2
+$$
+
+직관: "$x_1$ 의 효과가 $x_2$ 에 따라 다르다" = "$x_2$ 의 효과가 $x_1$ 에 따라 다르다". 교호작용은 대칭적이다. 어느 축을 "주" 로 볼 것인지는 해석자의 선택.
+
+### 비선형성의 경계선
+
+$\exp(\gamma x)$ 같은 형태는 $\gamma$ 가 **사전에 알려져 있지 않으면 비선형**. 예: $\eta = \beta_0 + \beta_1 \exp(\gamma x)$ 에서 $\gamma$ 도 추정해야 하면 선형 모형을 벗어난다.
+
+실용 우회: 몇 개의 $\gamma$ 값에 대해 선형 모형을 적합하고 최적의 $\gamma$ 를 선택 (profile likelihood). 또는 Chapter 11 의 부분 선형 (partially linear) 모형으로 처리.
+
+---
+
+## 범주형 요인 (§3.3.2)
+
+### 수준 (level) 구조
+
+요인 (factor) $A$ 가 $k$ 개 수준을 가지면 관측을 $k$ 개의 disjoint 그룹으로 분할. 수준의 표현은 세 가지.
+
+1. **Numerical ordered (순서·수치)**: 비료량 0/50/100/150. 숫자 자체가 의미 있음.
+2. **Ordinal without magnitude (순서만)**: 사회경제적 지위 (low/mid/high). 순서는 있지만 간격 모름.
+3. **Nominal (비순서)**: 품종 A/B/C. 순서 없음.
+
+각각 다른 모형화 전략이 필요하다.
+
+| 수준 유형 | 모형화 |
+|---|---|
+| Numerical ordered | 연속 변수로 취급 (선형) 또는 다항 (직교 다항이 표준) |
+| Ordinal | 점수 할당 후 연속 처리, 또는 monotonicity 제약 |
+| Nominal | 더미 변수 (factor coding) |
+
+### 주요인 vs 보조요인
+
+연구 설계에서 요인을 역할별로 구분한다.
+
+- **Primary (주)**: 효과 측정이 연구 목적. 처치, 약물, 품종 등.
+- **Secondary (보조)**: 영향은 있지만 관심은 아님. 블록, 센터, 조사구역 등.
+
+구분은 절대적이지 않다. 분석 목적에 따라 같은 요인이 주가 될 수도 보조가 될 수도 있다.
+
+### 주효과 모형 — Additive Structure
+
+세 요인 $A, B, C$ 가 동시 교차분류된 설계에서 가장 단순한 모형은
+
+$$
+\eta_{ijk} \;=\; \alpha_i + \beta_j + \gamma_k
+$$
+
+이를 **주효과 모형 (main-effects model)** 이라 한다. 핵심 가정: 한 요인의 수준별 효과는 **다른 요인의 수준과 무관**하게 같다. 즉 $A$ 의 수준별 단면을 봤을 때 $B, C$ 의 효과가 그 단면 안에서 동일하게 더해진다.
+
+### 교호작용
+
+주효과 모형이 부족하면 교호작용 $(\alpha\beta)_{ij}$ 를 추가.
+
+$$
+\eta_{ijk} \;=\; \alpha_i + \beta_j + \gamma_k + (\alpha\beta)_{ij}
+$$
+
+$(\alpha\beta)_{ij}$ 는 $A=i, B=j$ 의 모든 조합마다 별도 효과. $A$ 가 $k_1$ 수준, $B$ 가 $k_2$ 수준이면 $(\alpha\beta)$ 는 $k_1 k_2$ 개 값을 가지나, 주효과와의 중복 제약으로 **$(k_1-1)(k_2-1)$ 개의 자유 모수**.
+
+직관: 주효과 = "각 요인이 독립적으로 기여", 교호 = "요인 조합 자체에 고유한 효과". 실무에서 흔히 "이 처리가 남자에게는 효과가 있지만 여자에게는 없다" 같은 주장이 교호작용의 존재를 의미한다.
+
+---
+
+## 더미 변수 (§3.3.3) — 요인을 숫자로 번역하기
+
+### 기본 구조
+
+요인 $A$ 가 $k$ 수준이면 **지시 벡터 (incidence vector)** $k$ 개로 표현.
+
+$$
+\mathbf{u}_j[i] \;=\; \begin{cases} 1 & A=j \text{ at obs } i \\ 0 & \text{otherwise}\end{cases}
+$$
+
+$\alpha_i$ 항을 벡터로 쓰면
+
+$$
+\alpha_1\mathbf{u}_1 + \alpha_2\mathbf{u}_2 + \dots + \alpha_k\mathbf{u}_k
+$$
+
+예: 5개 관측, 수준 1/2/2/3/3.
+
+| Unit | $A$ | $\mathbf{u}_1$ | $\mathbf{u}_2$ | $\mathbf{u}_3$ |
+|---|---|---|---|---|
+| 1 | 1 | 1 | 0 | 0 |
+| 2 | 2 | 0 | 1 | 0 |
+| 3 | 2 | 0 | 1 | 0 |
+| 4 | 3 | 0 | 0 | 1 |
+| 5 | 3 | 0 | 0 | 1 |
+
+### 구조적 제약 — Intrinsic Aliasing
+
+더미 벡터들의 합은 항상 상수 벡터.
+
+$$
+\mathbf{u}_1 + \mathbf{u}_2 + \dots + \mathbf{u}_k \;=\; \mathbf{1}
+$$
+
+이것이 **절편의 더미** (상수 1 벡터) 와 같다. 즉 절편과 $k$ 개 수준 더미를 모두 포함하면 $\mathbf{X}$ 가 rank deficient 이 되어 MLE 가 유일하지 않다.
+
+이것이 §3.5 에서 논의할 **intrinsic aliasing** 의 기본 예다. 해결은 $k-1$ 개 더미만 사용 (reference level 제거) 또는 sum-to-zero 제약.
+
+### 교호작용 더미
+
+$A \times B$ 의 교호작용 더미는 $A$ 더미와 $B$ 더미의 **원소별 곱**.
+
+$$
+(\mathbf{u}\mathbf{v})_{ij}[n] \;=\; \mathbf{u}_i[n] \cdot \mathbf{v}_j[n]
+$$
+
+이 곱 더미는 $A=i$ **그리고** $B=j$ 인 관측에서만 1. 자연스러운 제약:
+
+$$
+\sum_i (\mathbf{u}\mathbf{v})_{ij} = \mathbf{v}_j,\qquad \sum_j (\mathbf{u}\mathbf{v})_{ij} = \mathbf{u}_i
+$$
+
+즉 **교호 더미를 모든 $i$ 에 대해 합하면 $B$ 의 주효과 더미**가 나온다. 따라서 주효과 항 $\mathbf{v}_j$ 와 교호 항 $(\mathbf{u}\mathbf{v})_{ij}$ 를 모두 포함하면 또 다른 구조적 중복이 발생한다.
+
+교훈: **교호작용을 포함하면 그 안의 주효과는 이미 일부 포함된 것**. 따라서 "hierarchical principle" — 교호 항을 넣으면 관련 주효과도 함께 포함하는 것이 관행이다.
+
+직관: 더미 변수의 대수는 "수준의 조합을 산술 연산" 으로 표현한다. 합·곱의 자연스러운 제약이 aliasing 을 낳고, 그 제약을 이해하면 설계 행렬의 rank 가 곧바로 보인다.
+
+---
+
+## 혼합 항 (§3.3.4) — 범주에 따라 변하는 기울기
+
+### 동기
+
+주효과 모형 $\eta_i = \alpha_i + \beta x$ 는 "**절편이 수준마다 다르고 기울기는 같다**" 는 가정. 이 가정이 깨지면, 즉 기울기가 수준마다 다르면
+
+$$
+\eta_i \;=\; \alpha_i + \beta_i x
+$$
+
+이를 **혼합 항 (mixed term)** 이라 한다. 연속 공변량과 범주 요인의 **교호작용**이다.
+
+### 설계 행렬 표현
+
+혼합 항의 더미는 1 대신 $x$ 값을 사용한다. 예: 요인 $A=$ 1/2/2/3/3, $x=$ 1/3/5/7/9.
+
+| Unit | $A$ | $x$ | $\mathbf{u}_1 \cdot x$ | $\mathbf{u}_2 \cdot x$ | $\mathbf{u}_3 \cdot x$ |
+|---|---|---|---|---|---|
+| 1 | 1 | 1 | 1 | 0 | 0 |
+| 2 | 2 | 3 | 0 | 3 | 0 |
+| 3 | 2 | 5 | 0 | 5 | 0 |
+| 4 | 3 | 7 | 0 | 0 | 7 |
+| 5 | 3 | 9 | 0 | 0 | 9 |
+
+이 세 열이 합쳐지면
+
+$$
+\mathbf{u}_1 x + \mathbf{u}_2 x + \mathbf{u}_3 x = x
+$$
+
+즉 $x$ 의 주효과 열과 완전히 동일. 따라서 혼합 항과 $x$ 주효과를 모두 포함하면 중복이 생긴다. 해결 — $x$ 주효과 제거하거나 혼합 항 중 하나의 수준을 기준으로 사용.
+
+### 통계적 해석
+
+혼합 항의 존재는 "**요인 수준 간 기울기 차이가 유의한가**" 라는 검정 질문을 만든다.
+
+- 귀무가설 $H_0$: $\beta_1 = \beta_2 = \dots = \beta_k$ (기울기 공통)
+- 대립가설 $H_1$: 적어도 하나의 쌍에서 다름
+
+이 검정은 두 모형의 이탈도 차이로 수행한다.
+
+$$
+\text{F} \;=\; \frac{(D_{H_0} - D_{H_1})/(k-1)}{D_{H_1}/(n-2k)}
+$$
+
+### 실무 예시
+
+- 약물 효과가 연령에 따라 달라짐 → $\eta = \alpha_i + \beta_i \cdot \text{age}$ (요인 = 약물, 연속 = 연령)
+- 온도 반응이 재료마다 다름 → $\eta = \alpha_i + \beta_i \cdot T$
+- 학습 곡선이 학생군에 따라 다름 → $\eta = \alpha_i + \beta_i \cdot \text{session}$
+
+직관: 혼합 항은 "**범주에 따라 회귀선의 기울기 자체가 바뀌는**" 구조다. 회귀선이 평행이 아니라 부채꼴로 퍼진다. 단순히 절편만 평행 이동시키는 주효과 모형과 근본적으로 다른 가설을 표현한다.
+
+---
+
+## 네 종류 항의 비교 요약
+
+| 항 유형 | 형태 | 설계 행렬 열 수 | 예시 |
+|---|---|---|---|
+| 연속 주효과 | $\beta x$ | 1 | 나이 |
+| 연속 교호 | $\beta_{12} x_1 x_2$ | 1 | 나이 × 용량 |
+| 범주 주효과 | $\alpha_i$ | $k-1$ (reference 제외) | 품종 |
+| 범주 교호 | $(\alpha\beta)_{ij}$ | $(k_1-1)(k_2-1)$ | 품종 × 처리 |
+| 혼합 항 | $\beta_i x$ | $k-1$ | 품종별 용량 반응 기울기 |
+| 3-way 교호 | $(\alpha\beta\gamma)_{ijk}$ | $(k_1-1)(k_2-1)(k_3-1)$ | 약물 × 성별 × 연령군 |
+
+**계층 원칙 (Hierarchical Principle)**: 고차 항을 포함하면 그 안의 모든 하위 항을 함께 포함한다. 예: $A:B$ 교호를 넣으면 $A$ 와 $B$ 의 주효과도 넣는다. 이유는 (a) 해석 가능성, (b) 설계 행렬 rank 일관성, (c) 검정의 중첩 구조 유지.
+
+---
+
+## 코드 예시
+
+### Step 1: 연속 공변량의 다항·교호 설계 행렬
+
+```python
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(0)
+n = 50
+df = pd.DataFrame({
+    "x1": rng.uniform(0, 10, size=n),
+    "x2": rng.uniform(0, 5,  size=n),
+})
+
+# 선형
+X1 = np.column_stack([np.ones(n), df["x1"], df["x2"]])
+print(f"선형 (절편+x1+x2):        열 수 {X1.shape[1]}")
+
+# 다항 (3차)
+X2 = np.column_stack([np.ones(n), df["x1"], df["x1"]**2, df["x1"]**3])
+print(f"3차 다항:                  열 수 {X2.shape[1]}")
+
+# 교호
+X3 = np.column_stack([np.ones(n), df["x1"], df["x2"], df["x1"]*df["x2"]])
+print(f"교호 (x1, x2, x1*x2):     열 수 {X3.shape[1]}")
+
+# 다항의 수치 불안정성 — 조건수 비교
+print(f"선형 cond:    {np.linalg.cond(X1):.2e}")
+print(f"다항 cond:    {np.linalg.cond(X2):.2e}  ← 훨씬 큼")
+
+# 중앙화 후 다항
+x1c = df["x1"] - df["x1"].mean()
+X2c = np.column_stack([np.ones(n), x1c, x1c**2, x1c**3])
+print(f"중앙화 다항:  {np.linalg.cond(X2c):.2e}  ← 개선됨")
+```
+
+다항 설계에서 수치 안정성이 중앙화로 극적으로 좋아진다. 실무에서는 `np.polynomial.polynomial.Polynomial` 이나 statsmodels 의 직교 다항을 사용.
+
+### Step 2: 범주형 요인의 더미 변환
+
+```python
+df["group"] = pd.Categorical(rng.choice(["A","B","C"], size=n))
+
+# 방법 1: pandas get_dummies (treatment coding, drop_first)
+dummies_treat = pd.get_dummies(df["group"], prefix="g", drop_first=True).astype(int)
+print("Treatment coding (A 를 reference):")
+print(dummies_treat.head())
+
+# 방법 2: 모든 수준의 더미 (intercept 와 collinear — rank deficient)
+dummies_all = pd.get_dummies(df["group"], prefix="g").astype(int)
+X_full = np.column_stack([np.ones(n), dummies_all.values])
+print(f"\n절편 + 전체 더미 rank = {np.linalg.matrix_rank(X_full)}"
+      f" (열 수 {X_full.shape[1]}) — rank deficient!")
+
+# 방법 3: statsmodels 의 모형식
+import statsmodels.formula.api as smf
+df["y"] = rng.normal(size=n)
+m = smf.ols("y ~ x1 + group", data=df).fit()
+print(f"\n모형식 계수 이름: {list(m.params.index)}")
+# group[T.B], group[T.C] — treatment coding 자동 적용
+```
+
+더미 인코딩의 세 가지 실수 모드 — treatment vs sum-to-zero vs full dummies. statsmodels 의 모형식 엔진은 treatment 를 기본으로 자동 적용.
+
+### Step 3: 혼합 항 — 수준별 기울기 검정
+
+```python
+rng = np.random.default_rng(0)
+n = 150
+group = rng.choice(["A","B","C"], size=n)
+x = rng.uniform(0, 10, size=n)
+# 참 모델: 수준마다 기울기 다름
+slopes = {"A": 0.5, "B": 1.0, "C": -0.3}
+y = np.array([slopes[g] * xi for g, xi in zip(group, x)]) + rng.normal(scale=1, size=n)
+
+df = pd.DataFrame({"y": y, "x": x, "g": pd.Categorical(group)})
+
+# 주효과 모형: y ~ x + g (공통 기울기)
+m_main = smf.ols("y ~ x + g", data=df).fit()
+
+# 혼합 모형: y ~ x * g (수준별 기울기)
+m_mixed = smf.ols("y ~ x * g", data=df).fit()
+
+# F-검정
+from statsmodels.stats.anova import anova_lm
+print(anova_lm(m_main, m_mixed))
+
+print(f"\n주효과 모형 RSS:  {np.sum(m_main.resid**2):.2f}")
+print(f"혼합 모형 RSS:    {np.sum(m_mixed.resid**2):.2f}")
+print(f"기울기 추정 (혼합): ")
+for lvl in ["A","B","C"]:
+    coef = m_mixed.params["x"]
+    if lvl != "A":  # A 가 reference
+        coef += m_mixed.params[f"x:g[T.{lvl}]"]
+    print(f"  {lvl}: {coef:+.3f} (참값 {slopes[lvl]:+.2f})")
+```
+
+`y ~ x * g` 의 교호항 `x:g[T.B]`, `x:g[T.C]` 가 수준별 기울기 차이를 준다. ANOVA 로 혼합 vs 주효과 비교해 기울기 상이 여부 검정.
+
+---
+
+## 흔한 실수
+
+| 실수 | 처방 |
+|---|---|
+| "다항이 있으니 비선형 모형" 이라 분류 | 모수에 대한 선형성이 기준. 다항·로그·스플라인은 모두 선형 모형 |
+| 절편 + 모든 수준 더미 $k$ 개 동시 포함 | rank deficient. reference level 제외 또는 sum-to-zero |
+| 교호작용만 넣고 주효과 뺌 | 계층 원칙 위반. 해석 혼란, 검정 중첩 깨짐 |
+| 순서 범주 (ordinal) 를 nominal 처럼 더미화 | 순서 정보 손실. 정수 점수 또는 직교 다항 |
+| 연속 교호 $x_1 x_2$ 를 넣고 원 변수 빼기 | 이선형 구조 왜곡. $x_1, x_2, x_1x_2$ 모두 포함 |
+| 혼합 항 `x * g` 와 `x + g` 구분 못 함 | 전자는 수준별 기울기, 후자는 공통 기울기·수준별 절편만 |
+
+---
+
+## 요약
+
+- **"선형" 은 모수에 대한 선형성**: 공변량의 변환·다항·교호·기저 확장은 모두 선형 모형 안에 머문다. $\exp(\gamma x)$ 처럼 모수가 비선형 위치에 있으면 진짜 비선형 모형.
+- **연속 공변량**: 직접 사용 또는 변환(log, polynomial, spline). 교호작용은 이선형 구조로 대칭.
+- **범주형 요인**: 수준 유형(numerical/ordinal/nominal)에 맞는 처리. 주효과 $\alpha_i$ + 교호작용 $(\alpha\beta)_{ij}$.
+- **더미 변수**: 지시 벡터의 합은 상수 — 절편과 구조적 aliasing. $k-1$ 개만 사용 또는 sum-to-zero 제약.
+- **혼합 항**: 범주에 따라 기울기가 변함. 설계 행렬은 더미 × $x$, 주효과 $x$ 와 구조적 중복.
+- **계층 원칙**: 고차 항 포함 시 하위 주효과도 함께 포함해야 해석·검정이 일관.
+
+한 줄 요약: §3.3 은 **"분석가의 가설을 설계 행렬로 번역하는 문법"**이다. 연속·범주·더미·혼합의 네 가지 블록을 이해하면, 아무리 복잡한 모형식도 $\mathbf{X}$ 의 열이 어떻게 조립될지 머릿속에서 계산할 수 있다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [정규-항등 GLM 개관](./02-1-normal-models-overview.qmd)
+- [정규 선형모형의 오차 구조](./02-2-normal-error-structure.qmd)
+- [The Components of a GLM](./01-3-glm-components.qmd) — 체계적 성분의 일반 GLM 버전
+
+**관련 개념**
+
+- [다중 선형회귀](../154-multiple-linear-regression.qmd)
+- [분산분석 개요](../126-anova-regression-overview.qmd) — 범주형 요인의 ANOVA 관점
+
+**후속 주제**
+
+- Model formulae (McCullagh §3.4) — `+`, `*`, `:`, `/`, `.` 연산자 대수
+- Aliasing (McCullagh §3.5) — 구조적·외적 식별불가
+- Interactions in GLM — logit·log 링크에서의 교호작용 해석
