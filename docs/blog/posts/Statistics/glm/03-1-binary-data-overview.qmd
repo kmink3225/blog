@@ -1,0 +1,561 @@
+---
+title: "이항 자료 GLM 개관 — Binary Data"
+subtitle: "McCullagh & Nelder Ch.4 — 이진 반응·연결함수·과산포·후향 표본"
+description: |
+  McCullagh & Nelder (1989) Ch.4 의 이항 자료 모형을 개관한다.
+  GLM 지도에서 이항이 "Normal-identity 의 반대편 극단"임을 자리매김하고,
+  covariate class 집계, 분할표 연결, logit·probit·cloglog 링크 비교, 오즈비
+  해석, 후향 샘플링 (case-control), 로그우도·이탈도·과산포, Hauck-Donner 효과
+  까지 — Ch.4 전체 구조를 한 장으로 정리하고 각 절로 들어가는 연결을 놓는다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/14/2026
+---
+
+## Ch.4 가 GLM 지도에서 차지하는 위치
+
+Ch.3 에서 **Normal-identity-등분산** 이라는 "GLM 의 원점" 을 정리했다. Ch.4 는 그 반대편 극단으로 간다.
+
+| 축 | Normal (Ch.3) | Binary (Ch.4) |
+|---|---|---|
+| 반응 지지 | $\mathbb{R}$ (연속, 무계) | $\{0, 1\}$ 또는 $\{0, 1, \dots, m\}$ (이산, 유계) |
+| 분포 | $\mathcal N(\mu, \sigma^2)$ | $\mathrm{Bin}(m, \pi)$ |
+| 분산함수 | 상수 $\sigma^2$ | $V(\mu) = \mu(1-\mu/m)$ (평균 의존, 끝에서 0) |
+| 평균의 정의역 | $(-\infty, \infty)$ | $(0, m)$ |
+| 정준 링크 | identity | logit |
+| IRLS 수렴 | 1 회 | 여러 반복, 완전 분리 시 발산 |
+
+즉 Binary GLM 은 **Normal 의 모든 특성이 반대**다. 연속 → 이산, 무계 → 유계, 등분산 → 평균 의존 분산, 닫힌 해 → 반복 추정. 그러므로 Ch.4 는 Ch.3 에서 "당연하게 여긴 편의" 가 깨질 때 어떻게 작동해야 하는가를 하나하나 재검토한다.
+
+직관: 확률을 모델링할 때 **선형 예측자가 $(-\infty, \infty)$ 인 반면 확률은 $(0, 1)$** 이라는 근본적 불일치를 해결하는 것이 핵심. 링크 함수가 이 간극을 연결하는 다리이며, 링크 선택이 해석·수치·통계적 성질을 모두 결정한다.
+
+---
+
+## 이항 반응 — 두 레벨의 자료 구조 (§4.1.1, §4.1.2)
+
+### 개체별 자료
+
+각 실험 단위 $i$ 에 대해 반응 $Y_i \in \{0, 1\}$ 와 공변량 $\mathbf{x}_i = (x_{i1},\dots,x_{ip})$.
+
+$$
+\mathrm{P}(Y_i = 1) = \pi_i = \pi(\mathbf{x}_i),\qquad \mathrm{P}(Y_i = 0) = 1 - \pi_i
+$$
+
+분석의 목적은 **확률 $\pi(\mathbf{x})$ 와 공변량의 관계** 를 추론하는 것.
+
+### Covariate Class 집계
+
+여러 개체가 **같은 공변량 벡터** 를 공유하면 (예: 같은 용량 받은 피실험자들) 이들은 하나의 **공변량 클래스 (covariate class)** 를 이룬다.
+
+클래스 $i$ 에 $m_i$ 개체, 성공 수 $Y_i^* = \sum_{k\in i}Y_{ik}$. 그러면
+
+$$
+Y_i^* \sim \mathrm{Bin}(m_i, \pi_i)
+$$
+
+**두 자료 표현은 수학적으로 동치**지만 저장·계산 효율은 크게 다르다.
+
+| 표현 | 행 수 | 반응 | 사용 맥락 |
+|---|---|---|---|
+| 개체별 | $N = \sum m_i$ | 0/1 | 연속 공변량, 개체 수준 분석 |
+| 클래스별 | $n$ | $(Y_i^*, m_i)$ | 설계 실험, 요인 공변량, 집계 데이터 |
+
+공변량이 모두 범주형이고 조합 수가 적으면 $n \ll N$. R 의 `glm(cbind(success, fail) ~ ...)` 이 후자 형식.
+
+### 동치성의 수학
+
+이항 로그우도
+
+$$
+\ell_i \;=\; y_i^*\log\pi_i + (m_i - y_i^*)\log(1-\pi_i) + \log\binom{m_i}{y_i^*}
+$$
+
+가 개체별 로그우도 $\sum_k[y_{ik}\log\pi_i + (1-y_{ik})\log(1-\pi_i)]$ 와 **상수 (이항계수 로그) 만 차이**. MLE·이탈도 차이·검정은 모두 동일.
+
+직관: 같은 조건의 0/1 반응들은 "총 성공수" 로 요약하면 충분 — 이항분포의 충분통계량 성질이 이 집계를 정당화한다.
+
+---
+
+## 분할표와의 연결 (§4.1.3)
+
+### 2×2 표
+
+두 범주형 공변량 $A$ (2 수준), $B$ (2 수준) 와 이항 반응 → $2\times 2$ 표.
+
+```
+        B=1    B=2
+A=1    y11    y12
+A=2    y21    y22
+```
+
+전통적 분석은 카이제곱 독립 검정 또는 오즈비 계산. GLM 관점에서는
+
+$$
+Y_{ij} \sim \mathrm{Bin}(m_{ij}, \pi_{ij}),\quad \text{logit}\pi_{ij} = \alpha_i + \beta_j + (\alpha\beta)_{ij}
+$$
+
+의 로그선형 혹은 로지스틱 모형. $(\alpha\beta)_{ij} = 0$ (교호 없음) 이 독립에 대응.
+
+### 3원·4원 분할표
+
+$A\times B\times C$ 분할표에서 이항 반응이면 각 셀이 $\mathrm{Bin}$. 모형 선택 — 주효과만 / 2-way 교호 / 3-way 교호 — 이 각각 다른 과학적 가설. Ch.4 는 이 분류를 GLM 의 모형식 대수 (§3.4) 로 체계화.
+
+### 셀 수 ≤ 개체 수 의 의미
+
+분할표가 충분히 **정보 보존** 되려면 각 셀 $m_{ij}$ 가 충분히 커야 한다. $m_{ij}$ 가 작으면 **희소 표 (sparse table)** — 점근 근사가 무너진다. §4.4.5 가 이 이슈를 별도 다룬다.
+
+직관: 분할표는 이항 자료의 "자연스러운 집계 형태". GLM 은 이 전통 분석을 회귀 프레임워크로 포섭하면서, 공변량 대수·모형 비교·잔차 진단의 전 도구를 가져온다.
+
+---
+
+## 이항분포의 핵심 성질 (§4.2)
+
+### 발생 (Genesis)
+
+$m$ 번의 독립 베르누이 시행에서 성공 수. 충분통계량, 로그가능도 등이 지수족 표준형으로 표현 가능.
+
+$$
+f(y;\pi) = \binom{m}{y}\pi^y(1-\pi)^{m-y} \;=\; \exp\left\{y\log\frac{\pi}{1-\pi} + m\log(1-\pi) + \log\binom{m}{y}\right\}
+$$
+
+정준 모수 $\theta = \log\{\pi/(1-\pi)\}$ (로짓), 정준 통계 $y$.
+
+### 모멘트·cumulant
+
+- 평균: $E[Y] = m\pi$
+- 분산: $\mathrm{Var}(Y) = m\pi(1-\pi)$
+- 분산함수: $V(\mu) = \mu(1-\mu/m)$
+- 왜도: $(1-2\pi)/\sqrt{m\pi(1-\pi)}$ (대칭 $\pi = 1/2$)
+
+분산이 $\pi(1-\pi)$ 에 의존하므로 **평균에 의존하는 이분산**. 이것이 OLS 를 못 쓰는 근본 이유.
+
+### 정규 극한 (§4.2.3)
+
+$m\pi \to \infty, m(1-\pi)\to\infty$ 에서
+
+$$
+\frac{Y - m\pi}{\sqrt{m\pi(1-\pi)}} \;\overset{d}{\to}\; \mathcal N(0, 1)
+$$
+
+중심극한정리의 이항 특수. 실무 기준: $m\pi \ge 10$ 이고 $m(1-\pi) \ge 10$.
+
+### Poisson 극한 (§4.2.4)
+
+$m \to \infty, \pi \to 0$, $m\pi \to \lambda$ 고정 일 때
+
+$$
+\mathrm{Bin}(m, \pi) \;\overset{d}{\to}\; \mathrm{Poi}(\lambda)
+$$
+
+희귀 사건 ($\pi$ 작음)이 많은 시행 ($m$ 큼) 중 드물게 일어나면 Poisson 근사. 보험 청구·교통사고 카운트의 기초.
+
+### 변환 (§4.2.5)
+
+분산 안정화 변환.
+
+- $\arcsin\sqrt{Y/m}$ (Anscombe): $\mathrm{Var}$ 이 $1/(4m)$ 로 근사 상수화.
+- $\text{logit}(Y/m) = \log(Y/(m-Y))$: 양 끝에서 분산 $\approx \{m\pi(1-\pi)\}^{-1}$, $\pi = 0.5$ 근처 작음.
+
+GLM 은 변환 대신 **링크 함수로 원 척도 해석을 유지**.
+
+직관: 이항분포는 "제한된 범위의 이산 분포" 의 원형. 극한에서 Normal 이나 Poisson 으로 가지만 중간 영역 (전형적인 생명과학 실험) 에서는 고유한 이항 분석이 필요.
+
+---
+
+## 링크 함수 선택 — 세 표준 (§4.3.1)
+
+### 세 링크의 정의
+
+$\pi \in (0, 1)$ 을 $\eta \in (-\infty, \infty)$ 로 보내는 단조 증가 함수 $g$.
+
+| 링크 | 공식 | $\pi$ 역함수 |
+|---|---|---|
+| **Logit** (정준) | $\log\{\pi/(1-\pi)\}$ | $e^\eta/(1 + e^\eta)$ |
+| **Probit** | $\Phi^{-1}(\pi)$ | $\Phi(\eta)$ |
+| **Complementary log-log** | $\log\{-\log(1-\pi)\}$ | $1 - \exp(-e^\eta)$ |
+
+$\Phi$ 는 표준정규 CDF.
+
+### 세 링크의 모양 비교
+
+$\pi$ 가 $\eta$ 의 함수로 어떻게 증가하는가.
+
+- **Logit**: 대칭 S 곡선. $\pi = 0.5$ 에서 최대 기울기.
+- **Probit**: 대칭 S 곡선, 로짓과 매우 유사. 양 끝 꼬리가 로짓보다 **얇다**.
+- **Cloglog**: **비대칭** — $\pi \to 1$ 으로 빠르게, $\pi \to 0$ 은 천천히.
+
+실무에서 logit 과 probit 은 $\hat\beta$ 가 약 1.6–1.8 배 스케일 차이. 예측·적합에서 거의 구별 안 됨. Cloglog 은 명확히 다른 양상.
+
+### 왜 logit 이 정준인가
+
+이항분포의 지수족 표현에서 자연스럽게 $\theta = \log\{\pi/(1-\pi)\}$ 가 등장. 따라서
+
+- Fisher scoring = Newton-Raphson.
+- 로그우도가 **$\boldsymbol\beta$ 에 대해 오목** — 전역 수렴 보장.
+- 스코어 방정식이 $\mathbf{X}^\top(\mathbf{y} - \boldsymbol{\mu}) = \mathbf{0}$ 의 단순 형태.
+- 오즈비 해석의 직접성.
+
+### 해석 비교 — $\beta_j$ 의 의미
+
+$x_j$ 가 한 단위 증가할 때:
+
+| 링크 | $\beta_j$ 해석 |
+|---|---|
+| Logit | 로그 오즈가 $\beta_j$ 증가 → 오즈비 $e^{\beta_j}$ 배 |
+| Probit | 정규분포 $z$ 스코어 척도 증가 |
+| Cloglog | 보상적인 위험률 로그 변화 (생존 분석 연결) |
+
+**오즈비 해석** 이 logit 의 실용적 우위. "흡연자의 폐암 오즈가 비흡연자의 $e^{\beta}$ 배" 같은 직접 표현.
+
+### Probit 과 Cloglog 의 맥락
+
+- **Probit**: 잠재 변수 (latent variable) 모형. $Y = 1 \iff Z > 0$, $Z \sim \mathcal N(\mathbf{x}^\top\boldsymbol\beta, 1)$. 경제학·심리학의 선호·효용 모형에서 자연스러움.
+- **Cloglog**: 생존분석의 이산화. "$[0, t)$ 동안 사건 없음 → $[t, t+1)$ 에서 사건 발생" 의 확률이 $1 - \exp(-\lambda)$. 위험률 비례 모형 (Cox) 과 직접 연결.
+
+직관: 세 링크는 **다른 과학적 배경** 에서 왔다. logit 은 수학적 편의, probit 은 잠재 효용, cloglog 은 시간-사건. 선택은 과학 맥락 + 해석 편의가 기준.
+
+---
+
+## 모수 해석의 정확한 의미 (§4.3.2)
+
+### 오즈비의 조건부·비조건부 해석
+
+Logit 모형에서 $\beta_j$ 의 해석은 **"다른 공변량 고정 시" 오즈비**.
+
+$$
+\log\frac{\pi(\mathbf{x}, x_j+1)/[1-\pi(\mathbf{x}, x_j+1)]}{\pi(\mathbf{x}, x_j)/[1-\pi(\mathbf{x}, x_j)]} \;=\; \beta_j
+$$
+
+### 오즈 vs 위험 (risk)
+
+**오즈 (odds)** $= \pi/(1-\pi)$, **위험 (risk)** $= \pi$. 두 값은 $\pi$ 작을 때 근사적으로 같지만 $\pi$ 클 때 크게 다름.
+
+- $\pi = 0.01$: 오즈 $\approx 0.0101$. 오즈비 ≈ 위험비.
+- $\pi = 0.5$: 오즈 $= 1$. 오즈비와 위험비 크게 다름.
+
+오즈비 해석은 **희귀 사건 (rare disease)** 에서 위험비의 근사로 쓰인다. 하지만 일반화 시 주의 필요.
+
+### Collapsibility
+
+오즈비는 **비선형 척도**라 다변량 ↔ 단변량 관계가 단순하지 않다. 층별 오즈비가 모두 2.0 이어도 주변 오즈비는 2.0 이 아닐 수 있다 (Simpson's paradox 의 오즈비 버전).
+
+위험비는 층별 합산이 선형이라 collapsible. 역학에서 "위험비" 가 오즈비보다 해석 안정적인 이유.
+
+### 링크 간 계수 변환 근사
+
+Logit ↔ probit 근사.
+
+$$
+\beta_{\text{logit}} \;\approx\; 1.7 \times \beta_{\text{probit}}
+$$
+
+$\pi = 0.5$ 근방에서. 끝단에서는 오차 증가.
+
+직관: "이항 회귀 계수" 는 항상 **링크 맥락**에서 해석. 숫자만 보고 크기를 비교하면 안 된다.
+
+---
+
+## 후향 샘플링 — Case-Control (§4.3.3)
+
+### 전향 vs 후향
+
+| 설계 | 샘플링 | 전형적 예 |
+|---|---|---|
+| 전향 (prospective) | 공변량 $\mathbf{x}$ 기준, 반응 $Y$ 관찰 | 임상 시험 |
+| 후향 (retrospective) | 반응 $Y$ 기준, 공변량 $\mathbf{x}$ 기록 | Case-control 연구 |
+
+### 후향 설계의 장점·문제
+
+**장점**: 희귀 질환 (예: 특정 암) 연구. 전향으로는 $N = 10^6$ 이 필요한 것이 후향 case-control 로 $N = 1000$ 으로 가능.
+
+**문제**: 공변량의 분포가 샘플링에 의해 왜곡됨. 단순 회귀가 유효한가?
+
+### 핵심 정리 — Logit 의 불변성
+
+::: {.callout-note}
+## 정리 (Prentice-Pyke 1979)
+
+후향 case-control 샘플링 하에서도 **로짓 계수 $\boldsymbol\beta$ 는 동일하게 추정** 가능 (절편 제외).
+
+즉 $\hat\beta_j$ (case-control) = $\hat\beta_j$ (전향). 단 $\hat\beta_0$ 은 샘플링 비율에 따라 편향.
+:::
+
+**증명 개요**: Bayes 정리로 "사례 내 공변량 분포 / 대조 내 공변량 분포" 의 로그비가 전향 로지스틱의 로짓과 일치 (절편만 다름).
+
+**왜 로짓만**: 위험비·위험 차 등은 이 불변성이 없다. Logit 의 정준성이 수학적으로 case-control 과 호환되는 유일한 척도.
+
+### 실무 의의
+
+이 결과가 **역학 연구의 지적 근거**. 암·희귀병·집단 유전 연구가 case-control 설계로 여전히 지배적인 이유.
+
+직관: 오즈비가 "샘플링 설계에 robust" 하다는 성질이 logit 을 유일한 실용적 선택으로 만든다. 위험비·위험차를 쓰려면 전향 설계가 필요.
+
+---
+
+## 로그가능도와 이탈도 (§4.4)
+
+### 이탈도
+
+이항 모형의 이탈도
+
+$$
+D \;=\; 2\sum_i\left\{y_i\log\frac{y_i}{\hat\mu_i} + (m_i - y_i)\log\frac{m_i - y_i}{m_i - \hat\mu_i}\right\}
+$$
+
+($y_i = 0$ 또는 $y_i = m_i$ 인 항은 극한으로 0 처리.) 이는 §2.3 의 일반 이탈도를 이항에 대입한 결과.
+
+$D$ 의 점근 분포는 **$\chi^2_{n-p}$ (class-level)** 이지만 이진 자료 ($m_i = 1$) 에서는 근사가 부정확. Ch.4 가 이 문제를 자세히 다룸.
+
+### 편향과 정밀도 (§4.4.4)
+
+대표본에서 $\hat{\boldsymbol\beta}$ 는 정규·일치 추정량이지만 소표본 편향 존재.
+
+$$
+E[\hat{\boldsymbol\beta}] \;=\; \boldsymbol\beta + \mathbf{b}(\boldsymbol\beta)/n + O(n^{-2})
+$$
+
+Firth (1993) 벌점 우도 $\ell^* = \ell + \tfrac12\log|\mathcal I(\boldsymbol\beta)|$ 로 $O(n^{-1})$ 편향 제거. **완전 분리** 에서도 유한 해 보장. 실무 표준.
+
+### 희소성 문제 (§4.4.5)
+
+$m_i$ 들이 작으면 (희소) $\chi^2_{n-p}$ 근사가 붕괴. Hosmer-Lemeshow 검정은 **적합값을 구간화**해 재집계 후 카이제곱 — 부분적 우회.
+
+### 외삽 (§4.4.6)
+
+공변량 범위 밖 예측의 불확실성. Logit 은 $\eta \to \pm\infty$ 로 무한 외삽 가능하지만 **$\pi \to \{0, 1\}$** 로 붙어 실무적으로 위험.
+
+직관: 이탈도와 $\chi^2$ 근사는 **class-level 집계** 에서 잘 작동하고 **개체-level 이진** 에서 문제가 있다. 실무는 집계해서 분석하거나 Hosmer-Lemeshow 같은 대안 사용.
+
+---
+
+## 과산포 (§4.5) — Binomial 이 예측하는 분산보다 큰 경우
+
+### 현상
+
+$\mathrm{Var}(Y_i) > m_i\hat\pi_i(1-\hat\pi_i)$ 인 상황. Pearson $X^2/(n-p) > 1$ 로 진단.
+
+### 원인
+
+1. **집단 내 이질성**: 같은 공변량 값의 개체들이 실제로는 숨은 변수로 다름.
+2. **집단 내 상관**: 클러스터 구조 (가족·학급) 로 인한 양의 상관.
+3. **측정 오류** 또는 **공변량 누락**.
+
+### 모형화
+
+**Quasi-likelihood**: $\mathrm{Var}(Y) = \phi\,m\pi(1-\pi)$ 로 추가 모수 $\phi > 1$ 도입. $\phi$ 는 Pearson $X^2/(n-p)$ 로 추정.
+
+**Beta-binomial**: $\pi \sim \mathrm{Beta}(\alpha, \beta)$ 인 이항. 추가 모수로 cluster 내 상관 모형화.
+
+**Williams 방법**: 무작위 효과 로지스틱의 특수 경우. 간단한 $\phi$ 추정.
+
+### 영향
+
+과산포를 무시하면 **표준오차 과소평가 → 유의성 과대 판정**. 반드시 진단·교정 필요.
+
+직관: "이항이라 $V = m\pi(1-\pi)$ 이다" 는 이론이며, 실제 데이터는 더 퍼질 수 있다. 과산포는 예외가 아닌 표준으로 가정하고 시작하는 게 안전.
+
+---
+
+## Hauck-Donner 효과 — Wald 검정의 비보수성 (Ch.4 §4.4)
+
+### 현상
+
+**이상한 성질**: $\hat\beta$ 가 크면 클수록 Wald 통계 $\hat\beta/\text{SE}(\hat\beta)$ 가 **작아져** 유의성이 상실. 참 효과가 매우 강한데 "유의하지 않다" 는 결론.
+
+### 원인
+
+$|\hat\beta| \to \infty$ 하면 Fisher 정보 $I(\hat\beta) \to 0$ → $\text{SE}(\hat\beta) \to \infty$. 분자 증가보다 분모 증가가 빨라 비율이 감소.
+
+### 처방
+
+Wald 대신 **Likelihood Ratio Test (LRT)** 또는 **Score test** 사용. LRT 는 이 병리에서 자유. R 의 `anova(model, test="Chisq")` 가 기본.
+
+직관: Wald 는 "근사 2차 포물선" 기반이고, 로그우도가 극단에서 포물선에서 멀어지면 왜곡된다. LRT 는 우도 차이 자체를 보므로 robust.
+
+---
+
+## Ch.4 의 예시 — 도마뱀 서식지 선호 (§4.6)
+
+Schoener 가 수집한 Anolis 도마뱀 자료. 두 종의 도마뱀이 서식지의 특성 (높이·수평 폭·일조) 에 따라 어떻게 분포하는지.
+
+- 반응: 특정 지점에서 종 A vs 종 B.
+- 공변량: 서식지 특성.
+- 모형: 로지스틱 회귀.
+
+Ch.4 는 이 사례로 **전체 분석 파이프라인** — 모형 선택, 적합, 해석, 진단, 외삽 — 을 시연. 과산포 진단·Hauck-Donner 회피·Hosmer-Lemeshow 적용의 실제 예시.
+
+---
+
+## Ch.4 에서 다음으로 — 이진 반응의 확장
+
+| 확장 | 다음 장 | 핵심 |
+|---|---|---|
+| 다범주 반응 | Ch.5 Polytomous | 비례 오즈, 범주 순서 |
+| 카운트 반응 | Ch.6 Log-linear | Poisson, 로그선형 |
+| 조건부 우도 | Ch.7 Conditional | Matched pairs, Cox |
+| Quasi-likelihood | Ch.9 | 분포 미지정 |
+| Model checking | Ch.12 | 잔차·진단 플롯 |
+
+Ch.4 는 GLM 이 이산 반응으로 확장되는 첫 단계. 이후 Ch.5, 6 은 같은 뼈대 (링크 + 지수족) 를 다른 이산 구조에 적용.
+
+---
+
+## 코드 예시
+
+### Step 1: 이항 GLM 기본 — 세 링크 비교
+
+```python
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+
+rng = np.random.default_rng(0)
+n = 500
+x = rng.uniform(-2, 2, size=n)
+true_eta = -0.5 + 1.2 * x
+true_pi = 1 / (1 + np.exp(-true_eta))
+y = rng.binomial(1, true_pi)
+
+df = pd.DataFrame({"x": x, "y": y})
+X = sm.add_constant(df[["x"]])
+
+# 세 링크 비교
+m_logit = sm.GLM(df["y"], X, family=sm.families.Binomial(sm.families.links.Logit())).fit()
+m_probit = sm.GLM(df["y"], X, family=sm.families.Binomial(sm.families.links.Probit())).fit()
+m_cloglog = sm.GLM(df["y"], X, family=sm.families.Binomial(sm.families.links.CLogLog())).fit()
+
+for name, m in [("logit", m_logit), ("probit", m_probit), ("cloglog", m_cloglog)]:
+    print(f"{name:8s}: beta = {m.params['x']:+.3f},  AIC = {m.aic:.2f}")
+# logit ≈ 1.7 × probit 비율 확인
+print(f"\nlogit / probit 비율: {m_logit.params['x'] / m_probit.params['x']:.2f}")
+```
+
+실 데이터 생성 시 logit 가정이었으므로 logit 이 가장 적합. 계수 비율 $\approx 1.7$ 의 관찰.
+
+### Step 2: Covariate class 집계 동치성
+
+```python
+# 개체별 (N=500)
+m_individual = sm.GLM(df["y"], X, family=sm.families.Binomial()).fit()
+
+# 집계: x 를 10 구간으로 범주화 후 covariate class
+df["bin"] = pd.cut(df["x"], bins=10)
+agg = df.groupby("bin", observed=True).agg(
+    succ=("y", "sum"), n=("y", "size"), x_mid=("x", "mean")).reset_index()
+X_agg = sm.add_constant(agg["x_mid"])
+y_agg = np.column_stack([agg["succ"], agg["n"] - agg["succ"]])   # (succ, fail) 형식
+
+m_class = sm.GLM(y_agg, X_agg, family=sm.families.Binomial()).fit()
+print(f"개체별 beta   : {m_individual.params['x']:+.4f}")
+print(f"클래스별 beta : {m_class.params['x_mid']:+.4f}")
+# 점추정은 거의 같음 (x_mid 가 연속 근사)
+```
+
+개체별 vs 클래스별 적합의 점추정 일치 (범주화 오차 내). 집계 효율의 실증.
+
+### Step 3: 오즈비와 Wald 신뢰구간
+
+```python
+beta_hat = m_logit.params["x"]
+se       = m_logit.bse["x"]
+ci       = m_logit.conf_int().loc["x"]
+or_hat   = np.exp(beta_hat)
+or_ci    = np.exp(ci)
+
+print(f"beta     = {beta_hat:+.3f} ± {se:.3f}")
+print(f"95% CI   = [{ci[0]:+.3f}, {ci[1]:+.3f}]")
+print(f"오즈비    = {or_hat:.3f}")
+print(f"오즈비 CI = [{or_ci[0]:.3f}, {or_ci[1]:.3f}]")
+```
+
+로그 오즈 척도에서 대칭 CI → 오즈비 척도로 지수 변환 (비대칭).
+
+### Step 4: 과산포 진단과 Quasi-binomial
+
+```python
+# 과산포 있는 데이터 생성 (beta-binomial)
+m_i = rng.poisson(20, size=50) + 5
+pi_cluster = rng.beta(2, 3, size=50)           # 클러스터별 pi 변동
+y_cluster = rng.binomial(m_i, pi_cluster)
+
+# 공통 pi 모형 (잘못된 모형)
+X_cluster = sm.add_constant(np.ones(50))       # 절편만
+y_binom = np.column_stack([y_cluster, m_i - y_cluster])
+m_null = sm.GLM(y_binom, X_cluster, family=sm.families.Binomial()).fit()
+
+# Pearson X² / df — 1 이면 적합, >> 1 이면 과산포
+phi_hat = m_null.pearson_chi2 / m_null.df_resid
+print(f"phi_hat = {phi_hat:.3f}")
+print(f"과산포 {'있음' if phi_hat > 1.5 else '없음'}")
+
+# Quasi-binomial 로 SE 교정
+m_quasi = sm.GLM(y_binom, X_cluster,
+                  family=sm.families.Binomial()).fit(scale="X2")
+print(f"Binomial SE    : {m_null.bse['const']:.4f}")
+print(f"Quasi-bin. SE  : {m_quasi.bse['const']:.4f}  (phi^{{1/2}} 배)")
+```
+
+$\phi > 1$ 의 수치 확인, quasi-binomial 의 SE 확장. 실무의 표준 과산포 대응.
+
+---
+
+## 흔한 실수
+
+| 실수 | 처방 |
+|---|---|
+| 이항 반응에 OLS 적용 | 링크 필요. GLM(binomial) 사용 |
+| Wald 검정으로 완전 분리 케이스 유의성 판단 | Hauck-Donner 효과. LRT 또는 Firth 사용 |
+| 오즈비를 위험비로 해석 (일반 $\pi$) | $\pi$ 희소 일 때만 근사. 일반 상황에서 혼동 금지 |
+| 세 링크 중 의미 없이 logit 선택 | 과학 맥락 (잠재 효용 → probit, 생존 → cloglog) 고려 |
+| 과산포 점검 생략 | Pearson $X^2$/df 항상 확인. $> 1.5$ 이면 quasi 또는 mixed |
+| 이진 ($m=1$) 데이터에 이탈도 $\chi^2$ 근사 | 집계 후 분석 또는 Hosmer-Lemeshow |
+| Case-control 에서 위험비 계산 시도 | Logit (오즈비) 만 불변. 전향 설계가 아니면 위험비 불가 |
+
+---
+
+## 요약
+
+- **Ch.4 의 위치**: GLM 지도에서 Normal 반대편 극단. 이산·유계·이분산·평균 의존 분산.
+- **두 레벨 자료**: 개체별 0/1 vs 공변량 클래스 $(Y^*, m)$. MLE·이탈도·검정 동치.
+- **분할표**: 전통 카이제곱 분석이 로지스틱 GLM 에 포섭. 모형식 대수 활용.
+- **이항분포**: 정준 모수 logit, $V(\mu) = \mu(1-\mu/m)$. 정규·Poisson 극한.
+- **세 링크**: logit (정준, 오즈비), probit (잠재 효용), cloglog (생존 연결). 맥락에 맞는 선택.
+- **오즈비 해석**: "다른 공변량 고정 시" 조건부, $\pi$ 희소 시 위험비 근사.
+- **후향 설계**: Logit 계수 불변 (Prentice-Pyke). Case-control 역학 연구의 지적 근거.
+- **이탈도와 이슈**: $\chi^2$ 근사가 희소·이진 자료에서 실패. Firth, Hosmer-Lemeshow 대안.
+- **과산포**: $\phi > 1$ 검진 필수. Quasi-binomial, Beta-binomial, Williams.
+- **Hauck-Donner**: Wald 비보수성. LRT 대체.
+
+한 줄 요약: Ch.4 는 "**확률을 어떻게 모델링할 것인가**" 의 GLM 적 답이다. 링크로 $(0,1)$ 을 $(-\infty, \infty)$ 에 매핑해 선형 예측자의 편의를 이항 자료에 이식하되, 오즈비 해석·case-control 호환성·과산포·Wald 병리 등 이항 고유의 이슈를 하나씩 해결한다. 이 overview 는 Ch.4 의 지도이며, 각 절에 대한 심화는 본 시리즈의 logistic-regression-model / logistic-regression-estimation 포스트와 교재 §4.1~§4.6 으로 이어진다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [GLM 이론 기초 — 지수족·정준연결·이탈도·IRLS](./01-1-glm-theory-foundation.qmd)
+- [The Components of a GLM](./01-3-glm-components.qmd)
+- [정규-항등 GLM 개관](./02-1-normal-models-overview.qmd) — Ch.3 의 대응 overview
+
+**심화 (본 시리즈 내)**
+
+- [Logistic Regression: The Model](./logistic-regression-model.qmd) — 로짓 링크·오즈비·MLE 상세
+- [Logistic Regression: Estimation](./logistic-regression-estimation.qmd) — Newton-Raphson·IRLS·이탈도
+- [GLM 잔차 3종 — Pearson·Anscombe·Deviance](./01-5-glm-residuals.qmd)
+- [GLM 적합도 측정](./01-4-glm-measuring-goodness-of-fit.qmd)
+
+**관련 개념**
+
+- [음이항 분포](../63-common-families-discrete-negative-binomial.qmd) — 과산포의 대안
+- [이항 분포](../61-common-families-discrete-binomial.qmd)
+
+**후속 주제**
+
+- Polytomous Data (McCullagh Ch.5) — 다범주 반응, 비례 오즈
+- Log-linear Models (McCullagh Ch.6) — Poisson 회귀, 분할표
+- Conditional Likelihood (McCullagh Ch.7) — Matched pairs, Cox 회귀
+- Firth logistic — 완전 분리 대응
