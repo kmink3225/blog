@@ -1,0 +1,431 @@
+---
+title: "공변량 선택 — Parsimony, 통일 기준, 자동 절차의 함정"
+subtitle: "McCullagh & Nelder §3.9 — Selection of Covariates"
+description: |
+  McCullagh & Nelder (1989) §3.9 의 공변량 선택 이론을 심화한다.
+  Atkinson (1981b) 의 통일 공식 $Q = D + \alpha q \phi$ 가 F-기준·AIC·BIC 를
+  어떻게 하나의 틀로 묶는지, marginality·comparability 원칙, forward·backward·
+  stepwise·GLIMPSE 알고리즘, 그리고 자동 선택의 한계와 실무 지침까지
+  수식과 직관으로 정리한다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/14/2026
+---
+
+## 왜 "공변량 선택" 은 어려운가
+
+회귀 모델링은 세 선택으로 압축된다.
+
+1. **오차 분포** (Normal? Poisson? Gamma?)
+2. **링크 함수** (identity? log? logit?)
+3. **공변량 집합** (어느 $\mathbf{x}_j$ 들을 포함할 것인가)
+
+처음 두 가지는 도메인 특성(반응 유형)으로 좁혀진다. 세 번째는 **조합 폭발 (combinatorial explosion)** 문제다. 후보 공변량이 $k$ 개라면 부분집합은 $2^k$ 개. $k=20$ 이면 백만 개, $k=30$ 이면 십억 개.
+
+설령 모두 시도할 수 있다 해도 의사결정 자체가 어렵다. "좋은 모형" 의 정의가 연구 목적에 따라 다르고, 데이터 우연으로 생긴 **거짓 양성 (false positive)** 이 포함될 위험이 크다.
+
+McCullagh & Nelder §3.9 의 답은 세 가지 축에서 정리된다.
+
+1. **통일 공식**: $Q = D + \alpha q\phi$. 다양한 선택 기준을 하나의 식으로 통합.
+2. **원칙적 제약**: marginality, comparability across studies, 해석 우선.
+3. **알고리즘**: forward·backward·stepwise 와 그 변형, 그리고 한계.
+
+직관: 공변량 선택은 "**과적합과 과소적합 사이의 균형**"이다. 후보가 많으면 반드시 우연으로 유의한 변수가 몇 개 나온다. 자동화는 쉽지만, 결과를 해석 가능한 "한 모형" 으로 수렴시키는 것은 도메인 판단의 몫이다.
+
+---
+
+## 선택의 두 원칙 — 해석 이전에 지켜야 할 것
+
+### 원칙 1: Marginality (§3.5 의 연장)
+
+모형이 **구조적으로 정합** 하려면 다음을 지킨다.
+
+- 교호작용을 포함하면 그 안의 주효과도 포함 (hierarchical principle).
+- 고차 다항 항을 포함하면 저차 항도 포함 (functional marginality).
+
+예: $x^2$ 있으면 $x$ 도. $A.B$ 있으면 $A$, $B$ 도.
+
+이 제약은 **통계 검정 이전의 요구**이다. 척도 변환 (예: $x \to x + c$) 불변성과 해석 일관성을 위해 필요.
+
+### 원칙 2: Comparability (연구 간 비교 가능성)
+
+여러 연구가 같은 현상을 다룰 때, 각 연구가 **자기 데이터 기준 유의한** 변수만 남긴 모형을 보고하면 **연구 간 비교가 불가능** 해진다.
+
+예:
+- 연구 A: 흡연 계수 $\hat\beta = 1.1$, $p = 0.001$ — 유의, 모형 포함.
+- 연구 B: 흡연 계수 $\hat\beta = 1.0$, $p = 0.08$ — 비유의, 모형 제외.
+
+두 연구 결과가 **"충돌한다"** 고 오독될 수 있다. 실제로는 계수가 거의 같고 표본 크기 차이일 뿐인데.
+
+::: {.callout-important}
+## McCullagh 의 권고
+
+여러 연구에서 반복 등장하는 변수는 **유의성과 무관하게 포함**하라. 이는 "Ockham's razor" 가 아니라 "**비교 가능성**" 의 요구다.
+:::
+
+직관: 통계적 유의성은 **표본 크기의 함수**다. 중요한 변수의 포함·제외를 단일 연구의 유의성만으로 결정하면 문헌 전체가 일관성을 잃는다.
+
+### 원칙 3: 사전 필수 항 (prior-necessary terms)
+
+실험 설계의 **블록·처리 효과**, 역학의 **교란변수 (confounders)** 는 유의성과 무관하게 포함. 이유는 두 가지.
+
+- **설계 논리**: 블록화된 무작위 실험에서 블록 효과는 설계의 일부. 생략 시 무작위화 가정 훼손.
+- **혼란 통제**: 나이·성별·기저질환 같은 잘 알려진 교란변수는 통제하지 않으면 주요 계수가 biased.
+
+---
+
+## 통일 공식 — $Q = D + \alpha q \phi$ (Atkinson 1981b)
+
+### 공식의 의미
+
+모든 표준적 모형 선택 기준은 다음 최소화 문제로 환원된다.
+
+$$
+Q \;=\; D \;+\; \alpha\,q\,\phi
+$$
+
+| 기호 | 의미 |
+|---|---|
+| $D$ | 이탈도 (deviance) — 적합도 |
+| $q$ | 모형의 추정가능 모수 수 |
+| $\phi$ | 분산 모수 (Normal 에선 $\sigma^2$) |
+| $\alpha$ | **벌점 계수** (기준마다 다름) |
+
+우변: 데이터 적합도 ($D$) + 복잡도 벌점 ($\alpha q\phi$). **더 많은 모수를 포함할수록 벌점 증가** — parsimony 를 강제.
+
+### $\alpha$ 값이 기준을 결정
+
+| 기준 | $\alpha$ | 해석 |
+|---|---|---|
+| F-검정 5% (one-df) | $\approx 4$ | $t \approx 2$ → 추가 변수가 $t^2 \ge 4$ 인지 |
+| AIC (Akaike 1973) | $2$ | 예측 오차 기대값 최소화 |
+| Mallows $C_p$ (1973) | $2$ | AIC 와 동치 (Normal 모형) |
+| BIC (Schwarz 1978) | $\log n$ | 사후확률 기반, Normal 모형 |
+| Atkinson 권고 | $2 \sim 6$ | 실무 탐색 범위 |
+
+핵심 관찰 — **같은 공식에 $\alpha$ 만 다를 뿐**. $\alpha$ 의 크기가 "얼마나 엄격하게 parsimony 를 추구할 것인가" 를 결정.
+
+### AIC vs BIC — 왜 다른가
+
+**AIC ($\alpha = 2$)**: 예측 오차 최소화가 목적. 표본 크기에 무관한 고정 벌점. **과적합 허용** 하더라도 예측 성능 우선.
+
+**BIC ($\alpha = \log n$)**: 참 모형 식별이 목적. $n$ 이 크면 벌점이 커져 더 보수적. **참 모형이 후보에 있다** 는 가정 하에 일관성 (consistency).
+
+예: $n = 1000$ → BIC 의 $\alpha \approx 6.9$, AIC 의 두 배 이상.
+
+- BIC 는 모형을 더 적게 선택.
+- AIC 는 모형을 더 풍부하게 선택.
+
+어느 쪽을 쓸까? **연구 목적**에 따라:
+
+- 예측 (forecasting, ML) → AIC.
+- 추론·이론적 모형 식별 → BIC.
+- 탐색적 → 둘 다 보고, 결과 유사하면 신뢰.
+
+직관: $Q$ 공식의 우아함은 "**내 기준이 뭐든 같은 틀**"이라는 점이다. 논쟁거리는 $\alpha$ 선택 하나로 축약된다.
+
+### $\phi$ 처리
+
+$\phi$ 는 보통 미지. 실무 접근:
+
+1. **복수 모형 비교** 시: **가장 복잡한 모형에서 추정한 $\hat\phi$** 를 고정하고 $Q$ 계산. 비교 공정성.
+2. 각 모형에서 $\hat\phi_i$ 를 따로 쓰면 "분모가 달라" 비교가 왜곡.
+
+Poisson/Binomial 은 이론적으로 $\phi=1$ 이지만 과산포 (over-dispersion) 가 흔하므로, 실무에서는 Pearson 기반 $\hat\phi = X^2/(n-p)$ 로 추정 후 사용.
+
+---
+
+## 알고리즘 — 후보 탐색의 실용 방법
+
+### 완전 열거 (Complete Enumeration)
+
+$k$ 개 공변량에 대해 $2^k$ 모든 부분집합을 시도. **$k \le 12$** 정도에서 가능. 각 $r$ 개 변수 부분집합 중 최적 모형들을 보고 — "**best subsets regression**".
+
+장점: 전역 최적해 보장. 단점: $k > 15$ 면 계산 폭증.
+
+### Tree-search (Furnival-Wilson 1974)
+
+$k \le 35$ 정도에서 영리한 bound 를 사용해 완전 열거를 가속. 중간 단계에서 최적해가 될 수 없는 가지를 가지치기 (branch-and-bound).
+
+현대 `leaps` (R), `scipy` 의 `linear_model.LassoLars` 등이 이 접근의 계승.
+
+### Forward Selection
+
+1. 빈 모형 (절편만) 에서 시작.
+2. 각 후보 변수를 추가해 $Q$ 를 계산, **가장 많이 감소**시키는 변수 추가.
+3. 감소가 임계값 이하가 될 때까지 반복.
+
+장점: 구현 간단, $O(k \cdot p)$. 단점: 한 번 들어간 변수는 재검토 없음 — 지역 최적.
+
+### Backward Elimination
+
+1. 모든 후보 포함한 full 모형에서 시작.
+2. 각 변수 제거 시 $Q$ 증가를 계산, **가장 적게 증가**시키는 변수 제거.
+3. 제거 후 $Q$ 가 임계 이상 증가할 때까지 반복.
+
+장점: 초기 full 모형에서 혼란변수 통제가 자동. 단점: full 모형 적합 가능해야 ($n > k$).
+
+### Stepwise (Efroymson 1960)
+
+Forward 와 backward 의 교차. 매 스텝에서
+
+- 추가 단계: 포함하지 않은 변수 중 가장 좋은 것 추가.
+- 제거 단계: 포함된 변수 중 쓸모없는 것 제거.
+
+장점: 양 방향 재검토. 단점: 여전히 지역 최적. 유의 수준을 더 엄격히 해야 과적합 방지.
+
+### GLIMPSE (Wolstenholme-O'Brien-Nelder 1988)
+
+knowledge-based stepwise. 핵심 아이디어: 매 스텝에서 각 free 변수에 대해 **forward F** (커널에 추가 시) 와 **backward F** (최대 모형에서 제거 시) 를 **동시에** 계산.
+
+| Forward F | Backward F | 결정 |
+|---|---|---|
+| large | large | **커널에 추가** (robustly 필요함) |
+| large | small | free 로 남김 (다른 변수와의 상호작용 의심) |
+| small | large | free 로 남김 (다른 변수 대체 가능성) |
+| small | small | **폐기** (정말 불필요) |
+
+free 항이 고정되면 가지(branch)를 만들어 여러 최종 모형을 **나무 (tree)** 구조로 생성. 단일 "최적" 이 아닌 **여러 경쟁 모형**을 제시.
+
+직관: 전통 stepwise 의 문제는 "한 길만 간다". GLIMPSE 는 "여러 길을 동시 탐색" 해 경쟁 후보들을 남긴다. McCullagh 의 "**여러 유사 모형을 함께 보고**" 철학의 실행형.
+
+---
+
+## 자동 선택의 한계 — 왜 "무생각한 사용" 이 비판받는가
+
+§3.9 의 마지막 부분은 자동 선택에 대한 경고다. 이유는 다섯 가지.
+
+### 1. 유일 "최적 모형" 의 허상
+
+여러 유사 크기 모형이 **거의 같은 $Q$** 를 낼 수 있다. "0.001 차이로 선택된 모형" 에 큰 과학적 의미를 부여하기 어렵다.
+
+대응: 상위 10 모형을 함께 보고. Fit 차이가 미미하면 해석 편의로 선택.
+
+### 2. 측정 비용 무시
+
+예: 유전자 시퀀싱 한 건 $1000 vs 설문 한 건 $1. 자동 기준은 둘을 동일 비용으로 취급.
+
+- **예측용 모형**: 비용 고려 필수 (forecasting 모형은 저렴하게).
+- **이해용 모형**: 비용 무관 (메커니즘 규명이 목적).
+
+### 3. Marginality 위반
+
+Stepwise 는 수학적 F-통계만 보고 $x^2$ 를 $x$ 없이 포함하거나 $A.B$ 를 $A$ 없이 포함할 수 있다. 사용자가 **marginality 제약을 알고리즘에 강제**해야 함.
+
+### 4. 사전 필수 항 무시
+
+블록 효과·처리 효과·알려진 교란변수는 통계적으로 비유의해도 포함해야 함. 자동 절차는 이를 모름 — 사용자가 "**kernel** (강제 포함)" 을 지정.
+
+### 5. Multiple testing
+
+수천 개 변수에서 5% 기준으로 선택하면 수백 개 false positive. 교정 필요:
+
+- **Bonferroni**: 보수적. 기준을 $0.05/k$ 로.
+- **FDR (Benjamini-Hochberg)**: 발견 비율 통제.
+- **Lasso**: 정규화로 자동 선택 + 편향.
+- **Stability selection**: bootstrap 반복으로 일관 선택.
+
+직관: 자동 선택은 "**가설 생성** (hypothesis generation)" 으로는 좋고 "**가설 확인** (hypothesis testing)" 으로는 나쁘다. 같은 데이터로 변수도 고르고 검정도 하면 유의성이 과장된다.
+
+---
+
+## Iterative Fit 에서의 선택 — 근사 절차
+
+GLM (Poisson, Binomial 등) 에서는 IRLS 가 필요해 모형마다 반복 적합이 필요. 모든 부분집합을 iterative 로 적합하면 계산 폭증.
+
+**실무 근사**:
+
+1. **충분히 큰 모형**을 완전 IRLS 적합.
+2. 해당 모형의 **가중치 $\mathbf{W}$ 와 작업 반응 $\mathbf{z}$ 를 고정**.
+3. 이 고정된 데이터에 대해 **일반 최소제곱** 알고리즘으로 변수 선택.
+4. 최종 선택된 모형을 **재차 iterative 적합** 으로 검증.
+
+근사가 잘 맞으면 ($\mathbf{W}$ 가 모형 간 크게 변하지 않으면) 단일 pass 로 결론. 크게 변하면 중간중간 재계산.
+
+직관: "정확성 vs 속도" 의 타협. 실무에서는 대부분 수용 가능한 근사로 작동.
+
+---
+
+## 현대적 확장 — 정규화 기반 선택
+
+1970-80 년대 §3.9 의 framework 는 forward/backward/stepwise 가 중심이었다. 현대에는 **정규화 (regularization)** 가 주류가 되었다.
+
+### Ridge 회귀
+
+$$
+\hat{\boldsymbol\beta}_{\text{ridge}} \;=\; \arg\min\;\|\mathbf{y}-\mathbf{X}\boldsymbol\beta\|^2 + \lambda\|\boldsymbol\beta\|_2^2
+$$
+
+모든 변수 유지하지만 계수를 0 쪽으로 축소. 변수 선택 아님 (계수 정확히 0 안 됨).
+
+### Lasso (Tibshirani 1996)
+
+$$
+\hat{\boldsymbol\beta}_{\text{lasso}} \;=\; \arg\min\;\|\mathbf{y}-\mathbf{X}\boldsymbol\beta\|^2 + \lambda\|\boldsymbol\beta\|_1
+$$
+
+$\ell_1$ 벌점이 **일부 계수를 정확히 0** 으로. 변수 선택 + 추정 동시. 연속적 $\lambda$ 조정으로 단일 경로 탐색.
+
+### Elastic Net
+
+Ridge + Lasso 조합. 상관 높은 변수 그룹 선택에 유리.
+
+### Atkinson 공식과의 관계
+
+Lasso 는 $\alpha$ 를 연속화한 것으로 해석 가능. 이산 선택 ("넣는다/뺀다") 대신 "얼마만큼 포함하는가" 의 연속 결정. 통계 이론도 $\lambda$ 에 따른 자유도 정의로 AIC/BIC 와 연결 (Zou-Hastie-Tibshirani 2007).
+
+직관: 현대적 접근은 "선택 vs 추정" 의 이분법을 버리고 **연속적 축소** 를 택했다. 계산은 convex 최적화로 효율, 해석은 계수 경로로.
+
+---
+
+## 코드 예시
+
+### Step 1: AIC·BIC 비교
+
+```python
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+
+rng = np.random.default_rng(0)
+n, p = 200, 10
+X = rng.normal(size=(n, p))
+X = np.column_stack([np.ones(n), X])
+beta_true = np.array([1.0, 0.8, 0.5, 0.3, 0, 0, 0, 0, 0, 0, 0])  # 처음 4개만 진짜
+y = X @ beta_true + rng.normal(scale=1.0, size=n)
+
+# 모형 크기별로 AIC/BIC 비교
+results = []
+for k in range(1, 11):
+    X_sub = X[:, :k+1]
+    m = sm.OLS(y, X_sub).fit()
+    results.append({
+        "k": k, "D_min": m.ssr, "AIC": m.aic, "BIC": m.bic,
+    })
+
+df_results = pd.DataFrame(results)
+df_results["dAIC"] = df_results["AIC"] - df_results["AIC"].min()
+df_results["dBIC"] = df_results["BIC"] - df_results["BIC"].min()
+print(df_results.round(2))
+print(f"\nAIC 최소 모형: k = {df_results.loc[df_results['AIC'].idxmin(),'k']}")
+print(f"BIC 최소 모형: k = {df_results.loc[df_results['BIC'].idxmin(),'k']}")
+```
+
+참 모형은 $k=4$. AIC 와 BIC 모두 비슷한 크기를 선호하는지 확인. 일반적으로 BIC 가 더 작은 모형 선택.
+
+### Step 2: Stepwise (forward) 선택
+
+```python
+from itertools import combinations
+
+def aic_of(cols):
+    Xs = np.column_stack([np.ones(n), X[:, cols]]) if cols else np.ones((n,1))
+    return sm.OLS(y, Xs).fit().aic
+
+# Forward selection
+selected = []
+remaining = list(range(1, p+1))       # X 의 1~p 열 (절편 제외)
+while remaining:
+    aics = [(j, aic_of(selected + [j])) for j in remaining]
+    best_j, best_aic = min(aics, key=lambda t: t[1])
+    if selected and aic_of(selected) <= best_aic:
+        break                          # 개선 없음
+    selected.append(best_j)
+    remaining.remove(best_j)
+
+print(f"Forward selected: {sorted(selected)}")
+print(f"참 모형: [1, 2, 3]  (1-indexed)")
+```
+
+Forward stepwise 가 참 모형 ($x_1, x_2, x_3$) 에 수렴하는지 확인.
+
+### Step 3: Lasso 로 연속 선택
+
+```python
+from sklearn.linear_model import LassoCV
+
+X_scaled = (X[:, 1:] - X[:, 1:].mean(axis=0)) / X[:, 1:].std(axis=0)
+lasso = LassoCV(cv=5, random_state=0).fit(X_scaled, y - y.mean())
+
+print(f"최적 alpha: {lasso.alpha_:.4f}")
+print(f"Lasso 계수 (비영만):")
+for j, b in enumerate(lasso.coef_):
+    if abs(b) > 1e-6:
+        print(f"  x{j+1}: {b:+.3f}  (참 {beta_true[j+1]:+.1f})")
+```
+
+Lasso 가 희소성을 유도해 비영 계수만 남긴다. cross-validation 으로 $\lambda$ 자동 선택.
+
+### Step 4: Atkinson 공식으로 AIC/BIC 수동 계산
+
+```python
+def Q_criterion(model, alpha, phi_hat):
+    D = model.ssr                      # Normal 에서 D = RSS
+    q = model.df_model + 1             # 절편 포함
+    return D + alpha * q * phi_hat
+
+# 가장 큰 모형에서 phi 추정
+m_full = sm.OLS(y, X).fit()
+phi_hat = m_full.mse_resid             # 잔차 평균제곱 = sigma^2 추정
+
+for k in [3, 4, 5, 7, 10]:
+    m = sm.OLS(y, X[:, :k+1]).fit()
+    q2 = Q_criterion(m, alpha=2,         phi_hat=phi_hat)   # AIC 계수
+    q4 = Q_criterion(m, alpha=4,         phi_hat=phi_hat)   # F 5%
+    qB = Q_criterion(m, alpha=np.log(n), phi_hat=phi_hat)   # BIC
+    print(f"k={k:2d} | Q(α=2)={q2:7.2f} | Q(α=4)={q4:7.2f} | Q(α=logN)={qB:7.2f}")
+```
+
+$\alpha$ 를 바꾸면 최적 모형 크기가 변하는 현상을 직접 관찰. "같은 데이터, 다른 기준, 다른 결론" 이 $\alpha$ 만의 차이.
+
+---
+
+## 흔한 실수
+
+| 실수 | 처방 |
+|---|---|
+| 단일 stepwise 결과를 "최적 모형" 으로 보고 | 상위 5–10 개 모형 함께 제시. 경쟁 모형이 있을 가능성 언급 |
+| AIC 와 BIC 결과가 다르다고 당황 | 목적에 맞는 기준 선택. 예측이면 AIC, 추론이면 BIC |
+| Stepwise 후 같은 데이터로 유의성 검정 | Post-selection inference 필요. `selectiveInference` 또는 cross-validation |
+| Marginality 위반 ($x^2$ 있고 $x$ 없음) | 선택 후 수동 검토, hierarchical 강제 옵션 사용 |
+| 사전 필수 항을 stepwise 에 맡김 | kernel (강제 포함 변수) 지정 |
+| Lasso 변수 선택만 보고 계수 그대로 해석 | Lasso 계수는 편향됨. 선택된 변수로 OLS 재적합 (debiased lasso) |
+
+---
+
+## 요약
+
+- **선택의 어려움**: $2^k$ 부분집합, 거짓 양성, 목적 의존성.
+- **원칙**: marginality (계층 구조 보존), comparability (연구 간 비교 위해 유의성과 무관한 포함), 사전 필수 항 (블록·교란변수).
+- **통일 공식** $Q = D + \alpha q\phi$: F-검정 (α≈4), AIC (α=2), BIC (α=log n) 모두 $\alpha$ 의 차이.
+- **알고리즘**: 완전 열거 (k≤12), tree-search (k≤35), forward/backward/stepwise (근사, 지역 최적), GLIMPSE (tree of candidates).
+- **자동 선택의 한계**: 유일 최적의 허상, 측정 비용 무시, marginality 무시, 사전 필수 항 무시, multiple testing 과장.
+- **Iterative fit 근사**: 큰 모형의 $\mathbf{W}, \mathbf{z}$ 고정 후 OLS 선택, 최종 검증 재적합.
+- **현대적 확장**: Lasso / Elastic Net 등 연속 정규화가 이산 선택을 대체.
+
+한 줄 요약: 공변량 선택은 "**원칙·기준·알고리즘·검증**" 의 네 단계 문제다. 원칙 (marginality, comparability) 을 지키고, 기준 ($\alpha$) 을 목적에 맞게 정하고, 알고리즘을 실행하고, 결과를 경쟁 모형 대비 검증해야 한다. 단일 stepwise 출력을 "정답" 으로 받아들이는 습관을 §3.9 는 명시적으로 경계한다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Aliasing — 식별불가의 두 얼굴](./02-5-aliasing.qmd) — marginality 의 기원
+- [GLM 적합도 측정 — Deviance·Pearson·Analysis of Deviance](./01-4-glm-measuring-goodness-of-fit.qmd)
+
+**관련 개념**
+
+- [다중 선형회귀](../154-multiple-linear-regression.qmd)
+- [점근 가설검정 — Wald·Score·LRT](../123-asymptotic-hypothesis-testing.qmd)
+- [q-value 와 FDR](../167-q-value.qmd) — multiple testing 교정
+
+**후속 주제**
+
+- Lasso / Elastic Net — 정규화 기반 선택
+- Post-selection inference — 선택 후 유효한 검정
+- Stability selection — bootstrap 기반 일관성
+- Cross-validation — 예측 성능 기반 선택
