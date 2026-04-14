@@ -1,0 +1,580 @@
+---
+title: "최소제곱 알고리즘 — Sweep·Cholesky·QR·Gram-Schmidt"
+subtitle: "McCullagh & Nelder §3.8 — 정보행렬 vs 직접 분해, GLM 으로의 확장"
+description: |
+  McCullagh & Nelder (1989) §3.8 의 최소제곱 수치 알고리즘을 심화한다.
+  정보행렬 기반(Sweep·Cholesky) 과 직접 분해(QR: Householder·Givens·
+  Gram-Schmidt) 의 두 계열, 각각의 통계적 의미와 수치 안정성 비교, condition
+  number 의 제곱 효과, 그리고 IRLS 로 GLM 에 확장하며 드러나는 unbounded
+  추정·pseudo-aliasing·수렴 진단까지 정리한다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/14/2026
+---
+
+## 왜 "어떻게 푸는가" 가 중요한가
+
+회귀의 해는 수학적으로 한 줄이다.
+
+$$
+\hat{\boldsymbol\beta} \;=\; (\mathbf{X}^\top\mathbf{X})^{-1}\mathbf{X}^\top\mathbf{y}
+$$
+
+하지만 이 식을 **컴퓨터에서** 그대로 구현하면 두 가지 문제가 터진다.
+
+1. **수치 안정성**: $\mathbf{X}^\top\mathbf{X}$ 의 condition number 가 $\mathbf{X}$ 의 condition number의 **제곱** 이다. 다중공선성이 조금만 있어도 정밀도가 극적으로 나빠진다.
+2. **계산 효율**: $n\gg p$ 인 big data 에서는 $\mathbf{X}^\top\mathbf{X}$ 를 만드는 것만도 $O(np^2)$ 연산. 역행렬까지 가면 $O(p^3)$ 추가.
+
+McCullagh & Nelder §3.8 은 "같은 해를 구하는 서로 다른 알고리즘" 들을 두 계열로 정리한다.
+
+- **정보행렬 기반**: $\mathbf{X}^\top\mathbf{X}$ 를 먼저 형성하고 이를 다룸. Sweep, Cholesky.
+- **직접 분해**: $\mathbf{X}$ 자체를 분해해 $\mathbf{X}^\top\mathbf{X}$ 를 우회. QR (Householder, Givens, Gram-Schmidt).
+
+그리고 이 알고리즘들이 **IRLS 의 매 반복에서 어떻게 재활용**되어 모든 GLM 을 푸는지 — 이것이 Ch.2 §2.5 와 Ch.3 §3.8 의 연결 지점이다.
+
+직관: "수학적으로 같은 해" 가 "수치적으로 다른 품질" 을 낳는다는 사실은 응용 통계학의 핵심 교훈이다. 한 가지 알고리즘만 알고 있으면 조건 나쁜 데이터에서 잘못된 답을 받는다.
+
+---
+
+## 정규방정식과 rank-deficient 일반해
+
+### 정규방정식
+
+$$
+(\mathbf{X}^\top\mathbf{X})\hat{\boldsymbol\beta} \;=\; \mathbf{X}^\top\mathbf{y}
+$$
+
+이 식이 모든 최소제곱 알고리즘의 출발점.
+
+### $\mathbf{X}$ 가 full rank 인 경우
+
+$\mathbf{X}$ 가 full column rank ($\mathrm{rank}(\mathbf{X})=p$) 이면 $\mathbf{X}^\top\mathbf{X}$ 가 SPD (symmetric positive definite), 역행렬 유일.
+
+$$
+\hat{\boldsymbol\beta} \;=\; (\mathbf{X}^\top\mathbf{X})^{-1}\mathbf{X}^\top\mathbf{y}
+$$
+
+### Rank-deficient 인 경우
+
+Intrinsic aliasing (§3.5) 으로 $\mathrm{rank}(\mathbf{X}) < p$ 이면 $\mathbf{X}^\top\mathbf{X}$ 가 특이 행렬. 일반화 역행렬 (generalized inverse, Moore-Penrose) 로 대체.
+
+$$
+\hat{\boldsymbol\beta} \;=\; (\mathbf{X}^\top\mathbf{X})^+ \mathbf{X}^\top\mathbf{y}
+$$
+
+해는 유일하지 않지만 **추정가능 contrast** 는 일반화 역행렬 선택과 무관 (Pringle & Rayner, 1971).
+
+### 평균 차감 (centering)
+
+실무 알고리즘 모두 $\mathbf{y}$ 와 $\mathbf{X}$ 의 열을 **평균으로 차감한 후 시작**. 이유는 두 가지.
+
+- 절편 처리 단순화. 차감된 데이터는 절편 0 을 자동 만족.
+- 수치 안정성. 값들의 스케일이 평균 주변으로 집중되어 조건수 개선.
+
+### $\mathbf{y}$ 를 $\mathbf{X}$ 에 붙여 함께 처리
+
+관리 편의: $\mathbf{y}$ 를 $\mathbf{X}$ 의 마지막 열로 덧붙이면 $\mathbf{X}$ 에 가한 모든 행 연산이 $\mathbf{y}$ 에도 자동 적용. "확장 정보행렬"
+
+$$
+\begin{pmatrix}\mathbf{X}^\top\mathbf{X} & \mathbf{X}^\top\mathbf{y} \\ \mathbf{y}^\top\mathbf{X} & \mathbf{y}^\top\mathbf{y}\end{pmatrix}
+$$
+
+이 한 번에 적합에 필요한 모든 내적을 담는다.
+
+직관: **한 단계 추가 변수 = 한 열 추가**. 회귀 알고리즘은 이 확장 행렬을 다루는 체계적 절차로 설계된다.
+
+---
+
+## 정보행렬 기반 — Sweep 연산자 (§3.8.1)
+
+### Beaton Sweep (1964)
+
+$p\times p$ 대칭 SPD 행렬 $\mathbf{A}$ 에 대해, $k$-번째 대각 원소를 pivot 으로 하는 **대칭 sweep** $\mathcal S_k$ 를 다음과 같이 정의.
+
+$$
+\begin{aligned}
+a_{ij} &\to a_{ij} - \frac{a_{ik}a_{kj}}{a_{kk}},\quad i\ne k, j\ne k \\
+a_{ik} &\to \frac{a_{ik}}{|a_{kk}|} \\
+a_{kk} &\to -\frac{1}{a_{kk}}
+\end{aligned}
+$$
+
+이 연산은 **자기 역연산** 이라는 놀라운 성질을 가진다.
+
+$$
+\mathcal S_k\,\mathcal S_k\,\mathbf{A} \;=\; \mathbf{A}
+$$
+
+두 번 sweep 하면 원래 상태로 복귀. 이 때문에 변수를 모형에 **추가하거나 제거** 할 때 $\mathcal S_k$ 를 한 번 더 적용하면 간단히 처리 가능 — **모형 갱신이 저렴**.
+
+### 통계적 해석
+
+$\mathbf{A} = \mathbf{X}^\top\mathbf{X}$ 를 생각하자. $\mathcal S_1, \dots, \mathcal S_k$ 를 차례로 적용하면 행렬은 네 블록으로 정리된다.
+
+$$
+\begin{pmatrix} -\mathbf{V} & \mathbf{B}^\top \\ \mathbf{B} & \mathbf{R} \end{pmatrix}
+$$
+
+| 블록 | 의미 |
+|---|---|
+| $-\mathbf{V}$ | 처음 $k$ 변수에 대한 **unscaled 공분산 행렬** (음수 부호) |
+| $\mathbf{B}$ | 나머지 $p-k$ 변수의 **처음 $k$ 변수에 대한 회귀 계수** |
+| $\mathbf{R}$ | 나머지 변수의 **처음 $k$ 변수로 회귀 후 잔차 SS/CP 행렬** |
+
+즉 sweep 은 "**부분 회귀**" 를 자동으로 수행한다. 마지막 열을 $\mathbf{y}$ 로 확장한 뒤 첫 $p$ 행·열을 모두 sweep 하면:
+
+- 마지막 열의 앞부분 = $\hat{\boldsymbol\beta}$
+- 마지막 대각 = 잔차 SS ($D_{\min}$)
+- 윗블록 $-\mathbf{V}$ = $(\mathbf{X}^\top\mathbf{X})^{-1}$ (부호만 반대)
+
+**한 번의 sweep 시퀀스로 $\hat{\boldsymbol\beta}$, $\mathrm{Var}(\hat{\boldsymbol\beta})$, RSS 전부 획득**. Beaton 의 1964 년 기여는 이 단일 연산의 범용성이다.
+
+### Near-singularity 감지
+
+sweep 진행 중 $a_{kk}$ 가 원래 값 대비 **작아지면** 해당 변수가 이전 변수들의 선형 결합에 가깝다는 증거. 정확한 종속이면 $a_{kk} = 0$ → sweep 불가능. 이때 해당 행·열을 "sweep 불가" 로 마크하고 계수 = 0, 분산 = 0 으로 처리.
+
+장점: **aliasing 이 자동 감지되고 우아하게 처리** 됨. 모형을 수정하지 않고도 계산이 진행된다.
+
+직관: sweep 은 "각 변수를 하나씩 모형에 끌어들이는" 절차를 대칭 행렬 연산으로 일반화한 것. 동일 연산의 반복으로 전진·후진 모두 가능하며 부분 회귀의 메모리가 행렬 안에 자연스럽게 담긴다.
+
+---
+
+## 정보행렬 기반 — Cholesky 분해 (§3.8.1)
+
+### 정의
+
+$\mathbf{X}^\top\mathbf{X}$ 가 SPD 면 **하삼각 행렬 $\mathbf{L}$** 로
+
+$$
+\mathbf{X}^\top\mathbf{X} \;=\; \mathbf{L}\mathbf{L}^\top
+$$
+
+이 유일하게 존재. $\mathbf{L}$ 은 "**$\mathbf{X}^\top\mathbf{X}$ 의 제곱근**".
+
+### 회귀 해
+
+$$
+(\mathbf{X}^\top\mathbf{X})^{-1} \;=\; (\mathbf{L}^{-1})^\top \mathbf{L}^{-1}
+$$
+
+삼각 행렬의 역은 $O(p^2)$ 에 계산. 따라서 전체 회귀 계산이 $O(np^2 + p^3)$.
+
+### 단계
+
+1. $\mathbf{A} = \mathbf{X}^\top\mathbf{X}$ 계산 ($O(np^2)$).
+2. Cholesky 분해 $\mathbf{A} = \mathbf{L}\mathbf{L}^\top$ ($O(p^3)$).
+3. Forward substitution: $\mathbf{L}\mathbf{z} = \mathbf{X}^\top\mathbf{y}$ 를 풀어 $\mathbf{z}$.
+4. Backward substitution: $\mathbf{L}^\top\hat{\boldsymbol\beta} = \mathbf{z}$ 를 풀어 $\hat{\boldsymbol\beta}$.
+
+### Pivot 작은 행의 처리
+
+Pivot 이 임계값 이하로 떨어지면 해당 행을 영 처리 → 일반화 역. aliasing 자동 처리.
+
+직관: Cholesky 는 "SPD 행렬의 LU 분해" 의 효율 버전. 대칭성·양의 정부호성 덕분에 일반 LU 의 절반 연산량. Sweep 과 같은 연산 비용이지만 구조가 단순해 수치 라이브러리에 널리 구현됨.
+
+### Cholesky vs Sweep — 어느 쪽을 쓰나
+
+| 축 | Sweep | Cholesky |
+|---|---|---|
+| 연산량 | $O(p^3)$ | $O(p^3)$ |
+| 모형 갱신 | 쉬움 ($\mathcal S_k$ 한 번으로 변수 추가·제거) | 처음부터 재분해 필요 |
+| aliasing 감지 | 자동 | pivot tolerance 로 수동 |
+| 소프트웨어 보급 | 전문 패키지 (GLIM 계열) | 거의 모든 수치 라이브러리 (LAPACK) |
+| 수치 안정성 | Cholesky 와 유사 | 표준적 |
+
+현대 소프트웨어는 대부분 Cholesky 또는 QR 을 쓴다. Sweep 은 stepwise regression 에서 잔존.
+
+---
+
+## Condition Number 제곱의 저주
+
+### 왜 $\mathbf{X}^\top\mathbf{X}$ 를 피해야 하는가
+
+행렬의 condition number $\kappa(\mathbf{A}) = \|\mathbf{A}\|\cdot\|\mathbf{A}^{-1}\|$ 는 수치 안정성 척도. $\kappa$ 가 크면 작은 입력 오차가 큰 출력 오차로 증폭.
+
+핵심 사실:
+
+$$
+\kappa(\mathbf{X}^\top\mathbf{X}) \;=\; \kappa(\mathbf{X})^2
+$$
+
+즉 정보행렬을 형성하는 순간 **조건수가 제곱** 되어 수치 정밀도가 절반으로 줄어든다.
+
+### 구체적 수치 영향
+
+부동소수점 연산의 유효숫자 $\approx -\log_{10}(\kappa)$ 감소.
+
+- $\kappa(\mathbf{X}) = 10^3$: $\mathbf{X}^\top\mathbf{X}$ 의 $\kappa = 10^6$ → double precision (16 자리) 에서 10 자리만 신뢰.
+- $\kappa(\mathbf{X}) = 10^6$: $\mathbf{X}^\top\mathbf{X}$ 의 $\kappa = 10^{12}$ → double precision 으로는 사실상 무의미.
+
+### 해결책 — QR 계열
+
+이 때문에 두 번째 계열의 알고리즘이 등장. **$\mathbf{X}$ 자체를 분해** 해 $\mathbf{X}^\top\mathbf{X}$ 를 건드리지 않는다.
+
+직관: 정보행렬을 만든다는 것은 "원래 $\kappa$ 를 제곱" 하는 짓이다. 다중공선성이 살짝만 있는 데이터에서도 QR 은 Cholesky 보다 10배 이상 정확한 답을 줄 수 있다.
+
+---
+
+## 직접 분해 — QR Decomposition (§3.8.2)
+
+### 정의
+
+$\mathbf{X}$ 가 $n\times p$ ($n \ge p$) 이면
+
+$$
+\mathbf{X} \;=\; \mathbf{Q}\mathbf{R},\qquad \mathbf{R} \;=\; \begin{pmatrix}\mathbf{R}_1 \\ \mathbf{0}\end{pmatrix}
+$$
+
+- $\mathbf{Q}$: $n \times n$ **직교 행렬** ($\mathbf{Q}^\top\mathbf{Q} = \mathbf{I}_n$).
+- $\mathbf{R}$: $n \times p$ 상삼각 ($\mathbf{R}_1$ 이 $p\times p$ 상삼각, 나머지는 0).
+
+### 통계적 해석
+
+$\mathbf{u} = \mathbf{Q}^\top\mathbf{y}$ 로 변환하면
+
+$$
+E[\mathbf{U}] \;=\; \mathbf{Q}^\top\mathbf{X}\boldsymbol\beta \;=\; \mathbf{Q}^\top\mathbf{Q}\mathbf{R}\boldsymbol\beta \;=\; \mathbf{R}\boldsymbol\beta \;=\; \begin{pmatrix}\mathbf{R}_1\boldsymbol\beta \\ \mathbf{0}\end{pmatrix}
+$$
+
+$$
+\mathrm{cov}(\mathbf{U}) \;=\; \mathbf{Q}^\top\sigma^2\mathbf{I}\mathbf{Q} \;=\; \sigma^2\mathbf{I}
+$$
+
+**변환 후 분산이 보존** 되며 (직교 변환의 성질), 평균이 상삼각 구조가 됨.
+
+**$\mathbf{U}$ 의 마지막 $n-p$ 성분은 평균 0** — $\boldsymbol\beta$ 에 대한 정보 없음 (이것이 잔차). 처음 $p$ 성분 $\mathbf{u}_1$ 이 $\boldsymbol\beta$ 의 정보를 담음.
+
+$$
+\mathbf{R}_1 \hat{\boldsymbol\beta} \;=\; \mathbf{u}_1
+$$
+
+상삼각 시스템이라 **back-substitution 으로 $O(p^2)$ 에 해결**.
+
+### 잔차 제곱합
+
+$$
+D_{\min} \;=\; \|\mathbf{y} - \mathbf{X}\hat{\boldsymbol\beta}\|^2 \;=\; \sum_{i=p+1}^n u_i^2
+$$
+
+변환된 벡터의 **마지막 $n-p$ 성분의 제곱합**. 우아하게 분리된다.
+
+### $\mathbf{R}_1$ 과 Cholesky 의 관계
+
+$$
+\mathbf{R}_1^\top \mathbf{R}_1 \;=\; \mathbf{R}^\top\mathbf{R} \;=\; \mathbf{R}^\top\mathbf{Q}^\top\mathbf{Q}\mathbf{R} \;=\; \mathbf{X}^\top\mathbf{X}
+$$
+
+즉 $\mathbf{R}_1^\top$ 이 **$\mathbf{X}^\top\mathbf{X}$ 의 Cholesky factor $\mathbf{L}$** 과 정확히 같다. 두 알고리즘이 **같은 삼각 행렬을 다른 경로로** 얻는 셈.
+
+차이는 수치 안정성. QR 은 $\mathbf{X}^\top\mathbf{X}$ 를 거치지 않으므로 $\kappa$ 제곱을 겪지 않는다.
+
+직관: QR 분해는 "직교 변환으로 회귀 문제를 상삼각 시스템으로 정리" 하는 절차. 직교 변환은 거리·각도 보존이라 수치 왜곡을 최소화. 현대 회귀 라이브러리의 사실상 표준.
+
+---
+
+## QR 의 세 구현
+
+### Householder 반사 (reflection)
+
+**반사 행렬** $\mathbf{H} = \mathbf{I} - 2\mathbf{v}\mathbf{v}^\top$ ($\|\mathbf{v}\|=1$) 은 벡터를 $\mathbf{v}$ 법선면에 대해 반사.
+
+적절한 $\mathbf{v}_k$ 를 선택해 $\mathbf{X}$ 의 $k$ 번째 열의 $k+1$ 이하 성분을 0 으로 만든다. 순차 적용:
+
+$$
+\mathbf{Q} \;=\; \mathbf{H}_{p-1}\cdots\mathbf{H}_1
+$$
+
+$p-1$ 번의 반사로 $\mathbf{X}$ 를 상삼각화.
+
+**장점**: 매우 안정적이고 효율적. LAPACK 의 표준.
+
+### Givens 회전 (rotation)
+
+평면 내 **2차원 회전** 으로 한 번에 **한 원소** 를 0 으로 만든다. $n$ 개 원소를 순차 처리.
+
+$$
+\mathbf{G}(\theta) \;=\; \begin{pmatrix}\cos\theta & -\sin\theta \\ \sin\theta & \cos\theta\end{pmatrix}
+$$
+
+**장점**:
+- **행 단위 업데이트** 가 자연스러움. 새 관측이 들어올 때 한 행을 추가만 하면 됨 (streaming / online 회귀).
+- 희소 행렬에서 0 구조 보존이 용이.
+
+**단점**: Householder 대비 연산량 약간 많음.
+
+### Gram-Schmidt 직교화
+
+$\mathbf{X}$ 의 열들을 **순차적으로 직교화**.
+
+$$
+\mathbf{q}_1 = \mathbf{x}_1 / \|\mathbf{x}_1\|
+$$
+
+$$
+\mathbf{q}_j = \mathbf{x}_j - \sum_{i<j}(\mathbf{q}_i^\top \mathbf{x}_j)\mathbf{q}_i,\quad \text{then normalize}
+$$
+
+고전 Gram-Schmidt 는 수치적으로 불안정. **Modified Gram-Schmidt** (Björck, 1967) 가 실용.
+
+**통계적 의미**: 각 $\mathbf{q}_j$ 는 $\mathbf{x}_j$ 를 이전 공변량들에 회귀한 **잔차**. 즉 "부분 회귀" 의 기하가 그대로 보임.
+
+**장점**: 해석이 직관적 (각 단계가 회귀). 통계 교육에 적합.
+
+**단점**: 현대 수치 라이브러리는 Householder 선호.
+
+### 세 방법 비교
+
+| 축 | Householder | Givens | Gram-Schmidt |
+|---|---|---|---|
+| 기본 연산 | 반사 | 회전 | 직교화 |
+| 한 번에 0 만드는 수 | 열 전체 | 원소 하나 | 한 열씩 |
+| 업데이트 용이성 | 어려움 | **쉬움** | 어려움 |
+| 수치 안정성 | 최상 | 좋음 | Modified 버전만 |
+| LAPACK 구현 | `DGEQRF` | `DLARTG` | (드묾) |
+| 주 용도 | 일반 배치 | 스트리밍·희소 | 교육·개념 |
+
+직관: 세 방법은 같은 QR 결과에 도달하는 다른 경로. 선택은 **데이터 크기, 업데이트 빈도, 희소 구조** 에 따라 달라진다.
+
+---
+
+## GLM 으로의 확장 — IRLS 의 수치 (§3.8.3)
+
+### 가중치 도입
+
+Ch.2 §2.5 에서 GLM MLE 가 IRLS 로 풀린다는 것을 보았다. 매 반복에서 **작업 반응 $\mathbf{z}$** 를 **가중치 $\mathbf{W}$** 로 회귀.
+
+$$
+\hat{\boldsymbol\beta}^{(t+1)} \;=\; (\mathbf{X}^\top\mathbf{W}^{(t)}\mathbf{X})^{-1}\mathbf{X}^\top\mathbf{W}^{(t)}\mathbf{z}^{(t)}
+$$
+
+Ch.3 §3.8 의 알고리즘들이 이 가중 정규방정식에 어떻게 적응하는가.
+
+### 적응 1: 정보행렬 기반
+
+$\mathbf{X}^\top\mathbf{X}$ 대신 $\mathbf{X}^\top\mathbf{W}\mathbf{X}$ 를 다룸. $\mathbf{W}$ 가 대각 행렬이라 $(\mathbf{X}^\top\mathbf{W})\mathbf{X}$ 의 계산이 각 행을 $\sqrt w_i$ 로 스케일한 것과 동등.
+
+### 적응 2: QR 계열
+
+$\mathbf{X}$ 대신 **$\mathbf{W}^{1/2}\mathbf{X}$** 를 분해. $\mathbf{W}^{1/2}$ 는 $\sqrt{w_i}$ 의 대각 행렬.
+
+$$
+\mathbf{W}^{1/2}\mathbf{X} \;=\; \mathbf{Q}\mathbf{R},\qquad \mathbf{R}_1\hat{\boldsymbol\beta} \;=\; \mathbf{u}_1 \;=\; \mathbf{Q}^\top\mathbf{W}^{1/2}\mathbf{z}
+$$
+
+### 문제 — 매 반복마다 재분해
+
+IRLS 는 $\mathbf{W}$ 가 반복마다 변하므로 **매 반복 새 QR / Cholesky 분해** 가 필요. Sweep 의 장점 (변수 추가·제거 용이) 은 쓰기 어려움 — 가중치 자체가 바뀌기 때문.
+
+이 때문에 "매 반복 분해 비용을 감당할 수 있는 선에서" 여전히 QR / Cholesky 가 표준. 적절한 IRLS 구현은 $p^3$ 를 반복 회수만큼 수행하지만, 수렴이 보통 5–10 회 내이므로 실무적으로 감내 가능.
+
+### 새로운 이슈 1: Unbounded 추정
+
+로그선형 모형 (Poisson GLM, log link) 에서 $\hat\mu_i = 0$ 인 셀이 발생하면 $\hat\eta_i = \log 0 = -\infty$. 이에 대응하는 일부 $\hat\beta_j$ 가 $-\infty$.
+
+예: $y_i = 0$ 인 cell 의 적합 $\hat\mu_i = 0$. 이 셀은 deviance 기여 0 이지만 $\hat\beta$ 에는 $-\infty$ 기여.
+
+**처방**: 해당 셀을 적합에서 제외하고 다시 돌린다. 유한 추정이 가능한 부분모형으로 환원.
+
+### 새로운 이슈 2: Pseudo-aliasing
+
+정상 aliasing 이 아닌 **가변 가중치로 인한 일시적 정보 부족**. IRLS 반복 중 어떤 공변량의 pivot 이 임계값 아래로 떨어짐.
+
+- 진짜 aliasing 이면 제거해도 deviance 변하지 않음.
+- Pseudo-aliasing 이면 제거 시 deviance **급증** — 실제로는 필요한 변수.
+
+**진단**: 해당 변수를 제거한 모형의 deviance 비교.
+
+**처방**: 완전 수렴 전 중단한 결과가 오히려 합리적일 수 있음. 또는 변수 스케일을 조정하거나 다른 수치 알고리즘 사용.
+
+### 수렴 진단
+
+- **모든 $\hat\beta$ 유한**: deviance 변화가 작으면 수렴.
+- **일부 $\hat\beta \to \pm\infty$**: deviance 는 천천히 수렴. 10 반복 정도 후 중단하고 수동 점검.
+- **Divergence**: 비정준 링크의 ill-fitted 모형에서 가끔. 단계 축소 (step-halving) 또는 시작값 변경.
+
+직관: Ch.3 §3.8 의 알고리즘들은 **선형모형의 단일 스텝 해결기** 였지만, GLM 의 IRLS 에서는 **반복 엔진**이 된다. 다중공선성·완전 분리·희소 데이터 같은 GLM 특유의 병리가 알고리즘 수준에서 드러나며, 수치 진단이 모형 진단의 한 층위를 이룬다.
+
+---
+
+## 코드 예시
+
+### Step 1: 네 알고리즘의 동일 결과 확인
+
+```python
+import numpy as np
+from scipy.linalg import cho_factor, cho_solve, qr, solve_triangular
+
+rng = np.random.default_rng(0)
+n, p = 500, 10
+X = rng.normal(size=(n, p))
+X = np.column_stack([np.ones(n), X])
+beta_true = rng.normal(size=p+1)
+y = X @ beta_true + rng.normal(scale=0.5, size=n)
+
+# (1) 정규방정식 직접 (가장 수치적으로 나쁨)
+beta_naive = np.linalg.solve(X.T @ X, X.T @ y)
+
+# (2) Cholesky
+c_factor, low = cho_factor(X.T @ X, lower=True)
+beta_chol = cho_solve((c_factor, low), X.T @ y)
+
+# (3) QR (Householder 경유, NumPy 기본)
+Q, R = np.linalg.qr(X, mode='reduced')
+beta_qr = solve_triangular(R, Q.T @ y)
+
+# (4) SVD (rank-deficient 에도 안전)
+beta_svd, *_ = np.linalg.lstsq(X, y, rcond=None)
+
+# 네 결과의 차이
+for name, b in [("Cholesky", beta_chol), ("QR", beta_qr), ("SVD", beta_svd)]:
+    print(f"|naive - {name}| max = {np.abs(beta_naive - b).max():.2e}")
+```
+
+조건이 양호할 때는 모두 기계 정밀도 내 일치. 조건이 나쁘면 (다음 Step) 차이가 드러난다.
+
+### Step 2: Condition number 제곱 효과
+
+```python
+# 심한 다중공선성 데이터
+n = 100
+x1 = rng.normal(size=n)
+x2 = x1 + rng.normal(scale=1e-6, size=n)   # 거의 같은 열
+X_ill = np.column_stack([np.ones(n), x1, x2])
+y_ill = 1 + 0.5 * x1 + 0.3 * x2 + rng.normal(scale=0.1, size=n)
+
+cond_X   = np.linalg.cond(X_ill)
+cond_XtX = np.linalg.cond(X_ill.T @ X_ill)
+print(f"cond(X)     = {cond_X:.2e}")
+print(f"cond(X'X)   = {cond_XtX:.2e}  (~ cond(X)^2 = {cond_X**2:.2e})")
+
+# 정규방정식 vs QR
+try:
+    beta_naive = np.linalg.solve(X_ill.T @ X_ill, X_ill.T @ y_ill)
+    Q, R = np.linalg.qr(X_ill)
+    beta_qr = solve_triangular(R, Q.T @ y_ill)
+    print(f"\nnaive: {beta_naive}")
+    print(f"QR   : {beta_qr}")
+    print(f"차이 : {np.abs(beta_naive - beta_qr).max():.2e}")
+except np.linalg.LinAlgError as e:
+    print(f"정규방정식 실패: {e}")
+```
+
+$\kappa(\mathbf{X}) \approx 10^6$ 에서 $\kappa(\mathbf{X}^\top\mathbf{X}) \approx 10^{12}$. 정규방정식 경로의 정밀도가 크게 떨어지거나 아예 실패.
+
+### Step 3: QR 의 점진 업데이트 (Givens 의 개념)
+
+```python
+# 새 관측이 들어올 때 모형 업데이트
+def update_qr(Q, R, x_new, y_new):
+    """단순화된 QR 업데이트. 실제 라이브러리는 Givens 회전 사용."""
+    X_new = np.vstack([Q @ R, x_new.reshape(1, -1)])
+    y_all = np.concatenate([Q.T @ y_old, [y_new]])  # 의사 코드
+    Q_new, R_new = np.linalg.qr(X_new)
+    return Q_new, R_new
+
+# 배치 1
+X1 = rng.normal(size=(100, 5))
+y1 = X1 @ rng.normal(size=5) + rng.normal(size=100)
+Q1, R1 = np.linalg.qr(X1)
+beta_batch1 = solve_triangular(R1, Q1.T @ y1)
+
+# 배치 2 추가 — 전체 재분해
+X2 = rng.normal(size=(50, 5))
+y2 = X2 @ rng.normal(size=5) + rng.normal(size=50)
+X_all = np.vstack([X1, X2])
+y_all = np.concatenate([y1, y2])
+Q_all, R_all = np.linalg.qr(X_all)
+beta_all = solve_triangular(R_all, Q_all.T @ y_all)
+
+print(f"배치 1 단독 계수: {beta_batch1}")
+print(f"전체 갱신 계수  : {beta_all}")
+# 실제 Givens 업데이트는 X1, R1 를 재사용해 O(p^2) 에 가능
+```
+
+Givens 회전 기반 점진 업데이트는 $O(p^2)$ 연산으로 새 관측을 통합. 스트리밍 데이터에서 매력적.
+
+### Step 4: IRLS 에서 QR 재활용
+
+```python
+# GLM (Poisson) IRLS 를 QR 로 구현
+rng = np.random.default_rng(0)
+n = 200
+X = np.column_stack([np.ones(n), rng.normal(size=n)])
+beta_true = np.array([0.5, 0.8])
+y_pois = rng.poisson(np.exp(X @ beta_true))
+
+beta = np.zeros(X.shape[1])
+for it in range(20):
+    eta = X @ beta
+    mu  = np.exp(eta)
+    z   = eta + (y_pois - mu) / mu            # 작업 반응
+    w   = mu                                   # 가중치
+
+    # W^{1/2} X 를 QR 분해 (정보행렬 우회)
+    X_w = X * np.sqrt(w)[:, None]
+    z_w = z * np.sqrt(w)
+    Q, R = np.linalg.qr(X_w)
+    beta_new = solve_triangular(R, Q.T @ z_w)
+
+    if np.abs(beta_new - beta).max() < 1e-10:
+        print(f"수렴: iter={it+1}")
+        beta = beta_new
+        break
+    beta = beta_new
+
+print(f"beta_hat = {beta},  beta_true = {beta_true}")
+```
+
+Ch.2 의 IRLS 를 Ch.3 의 QR 로 구현. 각 반복이 "가중 QR 회귀" 한 번. 수치적으로 $\mathbf{X}^\top\mathbf{W}\mathbf{X}$ 를 만들지 않고 진행.
+
+---
+
+## 흔한 실수
+
+| 실수 | 처방 |
+|---|---|
+| `np.linalg.solve(X.T @ X, X.T @ y)` 를 기본으로 사용 | `np.linalg.lstsq` 또는 QR 사용. 조건수 제곱 효과 방지 |
+| Condition number 점검 없이 결과 신뢰 | $\kappa(\mathbf{X}) > 10^6$ 이면 경고 고려 |
+| Rank deficient 시 일반 역행렬 의존 | SVD 기반 `lstsq` 가 자동 처리 |
+| IRLS 에서 매 반복 $\mathbf{X}^\top\mathbf{W}\mathbf{X}$ 역행렬 | $\mathbf{W}^{1/2}\mathbf{X}$ 의 QR 이 안전. statsmodels 기본 |
+| Pseudo-aliasing 을 진짜 aliasing 으로 오진 | deviance 변화 점검. 제거 시 급증하면 pseudo |
+| Unbounded $\hat\beta$ 경고 무시 | 해당 셀 제외 또는 penalized likelihood (Firth) |
+
+---
+
+## 요약
+
+- **정규방정식**: $(\mathbf{X}^\top\mathbf{X})\hat{\boldsymbol\beta} = \mathbf{X}^\top\mathbf{y}$. Rank-deficient 면 일반화 역으로 해결.
+- **두 계열의 알고리즘**:
+  - **정보행렬 기반** (Sweep, Cholesky): $\mathbf{X}^\top\mathbf{X}$ 를 형성. 간단하지만 조건수 제곱.
+  - **직접 분해** (QR: Householder, Givens, Gram-Schmidt): $\mathbf{X}$ 자체를 분해. 수치 안정성 우수.
+- **Beaton sweep**: 자기 역연산. 변수 추가·제거 용이. 부분 회귀 메모리를 행렬에 저장.
+- **Cholesky**: $\mathbf{A} = \mathbf{L}\mathbf{L}^\top$. 대칭성 활용한 효율적 분해.
+- **QR**: $\mathbf{X} = \mathbf{Q}\mathbf{R}$. $\mathbf{R}_1^\top = \mathbf{L}$ 관계로 Cholesky 와 동등하지만 $\kappa$ 제곱 회피.
+- **세 QR 구현**: Householder (표준), Givens (업데이트), Gram-Schmidt (교육).
+- **IRLS 로의 확장**: $\mathbf{X} \to \mathbf{W}^{1/2}\mathbf{X}$ 로 대체해 매 반복 QR/Cholesky. Unbounded 추정과 pseudo-aliasing 이 새로운 과제.
+
+한 줄 요약: §3.8 은 "**같은 해를 구하는 여러 방법과 그 품질 차이**" 를 가르친다. 이론적으로는 같지만 수치적으로는 다른 결과를 주는 알고리즘들 — Cholesky 는 편하고, QR 은 안전하다. 이 선택이 GLM 의 IRLS 까지 이어져 실무 라이브러리의 표준을 형성한다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [선형모형의 추정 — MLE·사영 기하](./02-6-estimation.qmd) — 정규방정식의 기하적 의미
+- [Aliasing — 식별불가의 두 얼굴](./02-5-aliasing.qmd) — rank-deficient 의 구조적 이해
+
+**관련 개념**
+
+- [GLM 적합 알고리즘 — IRLS 완전 유도](./01-6-glm-fitting-algorithm.qmd) — 본 절의 알고리즘이 매 반복 재활용됨
+- [다중 선형회귀](../154-multiple-linear-regression.qmd)
+
+**후속 주제**
+
+- Numerical linear algebra — Golub & Van Loan 의 체계적 참조
+- Regularization (Ridge, Lasso) — 조건수 개선 관점
+- Online / streaming regression — Givens 기반 점진 업데이트
