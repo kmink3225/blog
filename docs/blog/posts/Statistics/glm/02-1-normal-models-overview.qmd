@@ -1,0 +1,361 @@
+---
+title: "정규-항등 GLM 개관 — Models for Continuous Data with Constant Variance"
+subtitle: "McCullagh & Nelder Ch.3 — 고전 선형모형의 GLM 재해석"
+description: |
+  McCullagh & Nelder (1989) Ch.3 의 "등분산 연속 반응 모형" 을 개관한다.
+  정규분포·항등링크·상수분산의 조합이 어떻게 GLM 의 원점(baseline)이 되는지,
+  오차구조의 진짜 가정은 정규성이 아니라 "등분산" 이라는 점, 모형식 연산자
+  대수(+, *, /, ., ^), aliasing, 추정의 기하학적 해석(사영), QR·정보행렬 기반
+  알고리즘, 공변량 선택까지 — 각 절의 핵심과 후속 장(Ch.4~8)으로의 연결을
+  직관과 수식으로 정리한다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/14/2026
+---
+
+## 왜 "정규-항등-등분산" 이 GLM 의 원점인가
+
+McCullagh & Nelder Ch.3 은 일견 "이미 다 아는 고전 선형회귀" 를 다룬다. 그러나 이 장의 진짜 목적은 회귀를 다시 가르치는 것이 아니라 **"GLM 이 정규모형을 어떻게 일반화하는가" 의 정확한 출발점** 을 세우는 것이다. 고전 선형모형의 3요소
+
+$$
+Y_i \sim \mathcal N(\mu_i,\sigma^2),\qquad \mu = \eta,\qquad \eta = \sum_{j=1}^p x_j\beta_j
+$$
+
+를 GLM 의 세 구성요소 (확률 성분·연결 성분·체계적 성분) 의 **가장 단순한 선택**으로 재기술하면, 다른 모든 GLM 을 "어느 축을 비틀었는가" 로 분류할 수 있다.
+
+| 축 | 고전 선형 (Ch.3) | 이항 (Ch.4) | Poisson (Ch.6) | 감마 (Ch.8) |
+|---|---|---|---|---|
+| 확률 성분 | Normal | Binomial | Poisson | Gamma |
+| 연결 | identity | logit | log | inverse/log |
+| 분산 구조 | 상수 $\sigma^2$ | $\mu(1-\mu/m)$ | $\mu$ | $\mu^2$ |
+
+즉 Ch.3 은 "GLM 지도의 원점 좌표" 이며, 후속 장들은 이 원점에서 한두 축을 돌린 결과다.
+
+직관: 정규-항등 GLM 은 "아무것도 하지 않은 GLM" 이다. 링크가 항등이라 평균과 선형 예측자가 같고, 분산이 상수라 가중치가 필요 없다. 이런 특수성 덕분에 IRLS 가 **단 1회 반복으로 수렴** 해 OLS 와 동치가 된다. 후속 모형들의 복잡성은 "이 단순성에서 무엇이 깨지면 어떻게 보정해야 하는가" 로 이해할 수 있다.
+
+---
+
+## 오차구조 — 왜 진짜 가정은 "정규성" 이 아니라 "등분산" 인가 (§3.2)
+
+### 고전적 가정
+
+$$
+E(Y) = \mu,\qquad \mathrm{cov}(Y) = \sigma^2 \mathbf{I}
+$$
+
+즉 독립·등분산. 정규성은 **덤**이다. McCullagh & Nelder 는 이 점을 강조한다 — "정규성은 소표본 정확 이론의 기반이지만, 대표본에서는 CLT 가 보호해 준다."
+
+### 최소제곱은 1·2차 모멘트만 있으면 충분
+
+OLS 의 Gauss-Markov 정리는 정규성 없이도 성립한다. 선형 불편 추정량 중 **최소 분산** 을 달성하려면 다음만 있으면 된다.
+
+1. $E[\boldsymbol\varepsilon] = \mathbf{0}$
+2. $\mathrm{cov}(\boldsymbol\varepsilon) = \sigma^2\mathbf{I}$
+3. 설계 행렬 $\mathbf{X}$ 와 오차의 독립
+
+정규성은 "잔차의 **정확한 분포**" 를 결정할 뿐, 추정량의 **효율성 자체**는 결정하지 않는다.
+
+직관: 현실 데이터에서 "완벽한 정규" 는 없다. 검정·신뢰구간의 정확성을 위해 정규를 가정하지만, 점추정의 타당성은 **분산이 $\mu$ 에 무관하게 일정한가** 에 달려 있다. 이 관점이 GLM 으로 일반화될 때 "분산함수 $V(\mu)$" 라는 개념으로 확장된다.
+
+### 등분산 점검과 위반 시 대응
+
+| 위반 양상 | 진단 | 대응 |
+|---|---|---|
+| 분산이 $\mu$ 에 증가 | 잔차 vs 적합값 플롯의 나팔 모양 | $\log Y$ 변환 (감마 회귀가 더 적합할 수 있음) |
+| 분산이 $\mu$ 에 감소 | 적합값 큰 영역에서 잔차 축소 | 역변환 또는 inverse-link 감마 |
+| 반응이 양수만 가능하고 0 근처 | 정규성 자체가 부적합 | Gamma (Ch.8) 또는 Log-Normal |
+
+McCullagh 의 실무 지침: 데이터가 양수이고 평균이 표준편차의 3배 이하이면 정규 가정을 재검토하라. 이 문턱을 넘으면 Normal 의 음수 영역이 무시할 수 없어진다.
+
+---
+
+## 체계적 성분 — 공변량의 세 유형 (§3.3)
+
+선형 예측자 $\eta = \sum x_j\beta_j$ 에 들어가는 $x_j$ 는 세 종류다.
+
+### 연속 공변량
+
+수치형 변수 (나이·용량·온도). $\beta_j$ 는 "$x_j$ 단위 변화당 $\mu$ 의 변화" 로 직접 해석된다.
+
+### 범주형 요인 (qualitative covariate)
+
+수준이 $k$ 개인 요인 → 더미 변수 $k-1$ 개로 변환. 기준 수준 (reference level) 의 선택이 해석을 바꾼다. 예: treatment coding vs sum-to-zero coding.
+
+### 교호작용 더미
+
+두 요인의 수준 조합마다 하나의 더미. 주효과가 $k_1 + k_2 - 1$ 개라면 교호작용은 $(k_1-1)(k_2-1)$ 개 추가.
+
+직관: 선형 예측자는 "공변량 공간 → 실수" 의 선형 함수다. 공변량이 연속이면 기울기, 범주형이면 수준별 높이, 교호작용이면 수준 조합별 편차를 담는다. GLM 은 이 선형 예측자를 **링크 함수로 한 번 비틀어** 평균에 연결하므로, Ch.3 의 공변량 처리는 **모든 GLM 에 그대로** 적용된다.
+
+---
+
+## 모형식 연산자 대수 (§3.4)
+
+Nelder–Wedderburn 이 GLIM 에서 도입한 모형식 (model formula) 문법은 오늘날 R 의 `y ~ x1 + x2*x3` 의 기원이다. 핵심 연산자는 다섯 개.
+
+| 연산자 | 의미 | 예시 |
+|---|---|---|
+| `+` | 항 추가 | `y ~ A + B` — 주효과만 |
+| `*` | 주효과 + 교호작용 | `y ~ A*B` = `y ~ A + B + A:B` |
+| `:` | 교호작용만 | `y ~ A:B` — 주효과 없이 교호만 |
+| `/` | 중첩 (nesting) | `y ~ A/B` = `y ~ A + A:B` |
+| `.` | 전체 공변량 | `y ~ .` — 나머지 모든 변수 |
+| `^` | 최대 차수 | `(A+B+C)^2` — 2차 교호까지 |
+
+### 왜 대수가 중요한가
+
+모형식은 단순 기호가 아니라 **설계 행렬 $\mathbf{X}$ 를 생성하는 언어**다. `A*B` 와 `A + B + A:B` 가 동치임을 **컴파일러가 증명** 해야 하고, 중첩 `A/B` 가 `A + A:B` 로 풀린다는 규칙도 고정돼 있다. 이 규칙이 없으면 "같은 모형을 다르게 쓴 것" 인지 "실제로 다른 모형" 인지 구분이 불가능하다.
+
+직관: 모형식 대수는 "가설을 표현하는 작은 프로그래밍 언어" 다. 연구자가 `y ~ drug * time + patient_id/visit` 라고 쓰면 이 한 줄이 수백 개의 더미 열로 자동 전개된다. R, SAS, Stata, Python(`statsmodels.formula`) 의 공통 문법 뿌리.
+
+---
+
+## Aliasing — 식별불가 모수의 두 종류 (§3.5)
+
+### Intrinsic Aliasing (구조적 식별불가)
+
+모형식 자체가 선형 종속을 야기하는 경우. 예: $k$ 수준 요인의 더미 $k$ 개 + 절편을 모두 포함하면 $\sum \mathbb{1}\{A=a\} = 1$ 이라 하나는 중복. 해결 — reference level 제거 또는 sum-to-zero 제약.
+
+수학적 설명: 설계 행렬 $\mathbf{X}$ 가 rank deficient ($\mathrm{rank}(\mathbf{X}) < p$) 이면 $\mathbf{X}^\top\mathbf{X}$ 가 특이행렬. MLE 가 유일하지 않다.
+
+### Extrinsic Aliasing (데이터 의존 식별불가)
+
+모형식 자체는 문제없지만 **특정 데이터**에서 공변량이 선형 종속인 경우. 예: 임상시험에서 치료군의 모든 환자가 남성이면 성별·치료 구분 불가.
+
+### 진단
+
+- $\mathbf{X}^\top\mathbf{X}$ 의 조건수가 크다 → 극단적 다중공선성.
+- QR 분해에서 $\mathbf{R}$ 의 대각 성분이 0 에 근접.
+- VIF (Variance Inflation Factor) > 10.
+
+직관: Aliasing 은 "모수가 없다" 가 아니라 "구분할 정보가 없다" 는 것이다. 관측을 아무리 늘려도 구조적으로 풀리지 않으면 intrinsic, 관측 분포를 바꾸면 풀리면 extrinsic. 실험설계(randomization, factorial design)가 intrinsic 은 못 풀지만 extrinsic 은 예방할 수 있다.
+
+---
+
+## 추정의 기하학 — 사영(projection)으로 본 OLS (§3.6)
+
+### MLE 방정식
+
+정규-항등 가정 하 로그우도는
+
+$$
+\ell(\boldsymbol\beta) \;=\; -\frac{n}{2}\log(2\pi\sigma^2) - \frac{1}{2\sigma^2}\|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2
+$$
+
+$\boldsymbol\beta$ 에 대한 최대화는 $\|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2$ 최소화와 동치. 정규방정식
+
+$$
+\mathbf{X}^\top(\mathbf{y} - \mathbf{X}\hat{\boldsymbol\beta}) \;=\; \mathbf{0}
+$$
+
+이 잔차와 공변량의 직교성을 요구한다. 해는 $\hat{\boldsymbol\beta} = (\mathbf{X}^\top\mathbf{X})^{-1}\mathbf{X}^\top\mathbf{y}$.
+
+### 기하학적 해석
+
+적합값 $\hat{\mathbf{y}} = \mathbf{X}\hat{\boldsymbol\beta} = \mathbf{H}\mathbf{y}$ 은 관측 벡터 $\mathbf{y}$ 를 **$\mathbf{X}$ 의 열공간** 에 정사영(orthogonal projection) 한 것. $\mathbf{H} = \mathbf{X}(\mathbf{X}^\top\mathbf{X})^{-1}\mathbf{X}^\top$ 은 사영 행렬 (hat matrix).
+
+$$
+\mathbf{y} \;=\; \underbrace{\hat{\mathbf{y}}}_{\text{열공간}} + \underbrace{(\mathbf{y}-\hat{\mathbf{y}})}_{\text{열공간}\perp}
+$$
+
+이 직교분해가 **피타고라스** 형태의 제곱합 분해를 준다.
+
+$$
+\|\mathbf{y}\|^2 \;=\; \|\hat{\mathbf{y}}\|^2 + \|\mathbf{y}-\hat{\mathbf{y}}\|^2
+$$
+
+ANOVA 표의 "총제곱합 = 설명 + 잔차" 가 정확히 이 피타고라스다.
+
+### 정보 행렬과 불확실성
+
+$\mathrm{cov}(\hat{\boldsymbol\beta}) = \sigma^2(\mathbf{X}^\top\mathbf{X})^{-1}$. 정보 행렬 $\mathbf{X}^\top\mathbf{X}/\sigma^2$ 의 기하적 의미는 "공변량 공간에서 각 방향의 **신호 세기**" 다. 공변량이 서로 직교(직교 설계)면 정보 행렬이 대각이 되어 회귀계수 간 공분산이 0 — 각 계수를 독립적으로 해석할 수 있다.
+
+직관: OLS 는 "잔차의 길이를 최소화하는 그림자 (사영) 찾기" 다. 이 기하적 해석이 GLM 에서는 "가중 내적에 대한 사영" 으로 일반화된다 (IRLS 의 매 스텝이 그것이다).
+
+---
+
+## 표(table) 데이터 — 빈 셀과 융합 셀 (§3.7)
+
+요인형 설계의 데이터는 종종 **교차표** 형태로 정리된다. 두 가지 병리가 흔하다.
+
+### 빈 셀 (empty cells)
+
+요인 $A\times B$ 의 어떤 조합이 관측되지 않음. 해당 교호작용 계수가 식별 불가 → extrinsic aliasing.
+
+대응:
+- 교호작용을 모형에서 제외하거나,
+- 가능한 교호 항만 부분적으로 포함 (*restricted interaction*).
+
+### 융합 셀 (fused cells)
+
+이론적으로는 구별되지만 실무상 묶인 셀. 예: "매우 경증" 과 "경증" 을 통합. 범주 재구성 후 분석.
+
+직관: 요인 설계는 "완전 균형 (완전 요인·반복)" 이 가장 간단하지만 현실에서는 불균형이 표준. Ch.3 의 표 분석은 불균형 데이터에서 "어느 항을 어느 순서로 검정할 것인가" 의 규칙을 정한다. 이것이 Type I/II/III SS 라는 SAS 용어로 정착했다.
+
+---
+
+## 최소제곱 알고리즘 — 두 계열 (§3.8)
+
+### 계열 1: 정보행렬 기반
+
+$\mathbf{X}^\top\mathbf{X}\hat{\boldsymbol\beta} = \mathbf{X}^\top\mathbf{y}$ 를 직접 풀기. 구현이 단순하지만 조건수가 제곱되어 (원래 $\kappa(\mathbf{X})$ 가 $\kappa(\mathbf{X}^\top\mathbf{X}) = \kappa(\mathbf{X})^2$) 수치 안정성이 떨어진다.
+
+### 계열 2: 직접 분해 (direct decomposition)
+
+$\mathbf{X}$ 를 직접 분해해 $\mathbf{X}^\top\mathbf{X}$ 를 우회.
+
+- **QR 분해**: $\mathbf{X} = \mathbf{Q}\mathbf{R}$, $\hat{\boldsymbol\beta} = \mathbf{R}^{-1}\mathbf{Q}^\top\mathbf{y}$. 조건수 보존.
+- **SVD**: $\mathbf{X} = \mathbf{U}\boldsymbol\Sigma\mathbf{V}^\top$, rank-deficient 상황에서 pseudo-inverse 로 Moore-Penrose 최소 해.
+- **Cholesky**: $\mathbf{X}^\top\mathbf{X} = \mathbf{L}\mathbf{L}^\top$, 정보행렬 경유하지만 SPD 분해로 효율적.
+
+### GLM 으로의 확장
+
+Ch.3 의 알고리즘들이 GLM 에서는 **IRLS 의 매 반복마다 호출**된다 (Ch.2 §2.5). 즉 GLM 소프트웨어 내부의 "가중 정규방정식 풀이" 는 정확히 §3.8 의 기법들이다. R `lm.fit` 과 `glm.fit` 이 같은 QR 루틴을 공유하는 이유가 이것이다.
+
+직관: "정규모형 알고리즘이 GLM 에서 재활용" 된다는 관찰이 Nelder–Wedderburn 통합의 실용적 힘이다. 한 번 잘 짠 가중 OLS 엔진이 모든 GLM 을 처리한다.
+
+---
+
+## 공변량 선택 (§3.9)
+
+Ch.3 는 "어떤 항을 모형에 넣을 것인가" 의 전략도 다룬다.
+
+### 두 축의 긴장
+
+1. **Parsimony (단순성)**: 모수가 적을수록 해석·일반화 우월.
+2. **Adequacy (충분성)**: 신호를 놓치면 편향.
+
+### 평가 지표
+
+- **F-검정 / 이탈도 차이**: 중첩 모형의 유의성.
+- **AIC / BIC**: 우도 + 복잡도 벌점.
+- **$R^2_{\mathrm{adj}}$**: 자유도 보정.
+- **교차검증 (CV)**: 예측 성능 직접 측정.
+
+### McCullagh 의 경고
+
+"복잡한 데이터에서 최적 모형 하나를 인용하는 것은 오도일 수 있다. **여러 유사 모형** 을 함께 보고하라." — Ch.2 §2.3 에서 이미 강조된 원칙이 Ch.3 에서도 반복된다. 자동화 도구 (stepwise) 는 **스크리닝** 이지 **결정** 이 아니다.
+
+직관: 모형 선택은 p-value 기계가 아니다. 도메인 지식·예측 목적·해석 가능성의 다중 고려가 필요하며, Ch.3 의 알고리즘은 그 판단을 돕는 도구일 뿐이다.
+
+---
+
+## 코드 예시 — 정규-항등 GLM = OLS 동치성
+
+### Step 1: numpy OLS
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, p = 200, 3
+X = rng.normal(size=(n, p))
+X = np.column_stack([np.ones(n), X])    # 절편 포함
+beta_true = np.array([1.0, 0.5, -0.3, 0.8])
+y = X @ beta_true + rng.normal(scale=0.5, size=n)
+
+# OLS (QR 분해 기반)
+beta_hat, *_ = np.linalg.lstsq(X, y, rcond=None)
+y_hat = X @ beta_hat
+resid = y - y_hat
+sigma2_hat = (resid @ resid) / (n - X.shape[1])
+cov_beta = sigma2_hat * np.linalg.inv(X.T @ X)
+se = np.sqrt(np.diag(cov_beta))
+
+print(f"beta_hat = {beta_hat}")
+print(f"SE       = {se}")
+
+# Hat matrix leverage
+H = X @ np.linalg.inv(X.T @ X) @ X.T
+print(f"trace(H) = {H.trace():.2f}  (= p = {X.shape[1]})")
+```
+
+`trace(H) = p` — 사영 행렬의 흔적이 차원 수와 같다는 피타고라스 기하의 즉각적 결과.
+
+### Step 2: statsmodels GLM (Gaussian, identity)
+
+```python
+import statsmodels.api as sm
+
+m_ols = sm.OLS(y, X).fit()
+m_glm = sm.GLM(y, X, family=sm.families.Gaussian()).fit()
+
+print(f"OLS beta = {m_ols.params}")
+print(f"GLM beta = {m_glm.params}")
+print(f"차이     = {np.abs(m_ols.params - m_glm.params).max():.2e}")
+```
+
+두 결과가 기계 정밀도 내에서 동일. **정규-항등 GLM 이 OLS** 라는 Ch.3 의 주장이 수치로 확인된다. GLM 은 단지 IRLS 를 돌려 1회 만에 수렴했을 뿐.
+
+### Step 3: 모형식 문법 (R/statsmodels)
+
+```python
+import pandas as pd, statsmodels.formula.api as smf
+
+df = pd.DataFrame(np.column_stack([y, X[:, 1:]]), columns=["y","x1","x2","x3"])
+df["grp"] = pd.Categorical(rng.choice(["A","B","C"], size=n))
+
+# 주효과 + 교호작용
+m1 = smf.ols("y ~ x1 + x2 + grp",            data=df).fit()   # 주효과
+m2 = smf.ols("y ~ x1 * grp + x2",            data=df).fit()   # 교호 포함
+m3 = smf.ols("y ~ (x1 + x2 + x3)**2 + grp",  data=df).fit()   # 2차까지 모두
+print(m2.summary())
+```
+
+`x1 * grp` 가 `x1 + grp + x1:grp` 로 전개되고, 연속·범주 혼합 교호작용의 더미가 자동 생성되는 것이 모형식 대수 (§3.4) 의 결과다.
+
+---
+
+## Ch.3 에서 다음 장으로 — GLM 지도의 확장
+
+| 깨진 가정 | 다음 장 | 주요 변경 |
+|---|---|---|
+| 반응이 이진·이항 | Ch.4 Binary | logit/probit link, $V=\mu(1-\mu/m)$ |
+| 반응이 다범주 | Ch.5 Polytomous | 비례 오즈 모형 |
+| 반응이 카운트 | Ch.6 Log-linear / Poisson | log link, $V=\mu$ |
+| 반응이 양수·변동계수 상수 | Ch.8 Gamma | inverse/log link, $V=\mu^2$ |
+| 분포 미지정 | Ch.9 Quasi-likelihood | $V$ 만으로 추정 |
+| 평균·분산 동시 모형 | Ch.10 Joint modelling | 분산 구조 회귀 |
+
+Ch.3 은 **"가정이 모두 맞을 때의 참조 모형"** 이다. 이후 장은 "어느 가정이 깨지면 무엇을 바꿔야 하는가" 를 하나씩 다룬다. 독자가 이 지도를 쥐고 있으면, 새로운 GLM 변형을 만나도 "이건 Ch.X 의 어느 축을 비튼 결과" 로 분류할 수 있다.
+
+---
+
+## 요약
+
+- **Ch.3 의 위상**: GLM 지도의 원점 — 정규·항등·상수분산이라는 가장 단순한 GLM.
+- **핵심 가정은 정규성이 아닌 등분산**: 점추정의 타당성은 $\mathrm{cov}(\mathbf{Y})=\sigma^2\mathbf{I}$ 에 달림. 정규성은 정확 소표본 검정용.
+- **체계적 성분과 모형식 대수**: 연속·범주·교호 공변량을 `+`, `*`, `:`, `/` 연산자로 표기. 이 대수가 $\mathbf{X}$ 를 컴파일하는 언어.
+- **Aliasing 은 식별성 진단**: intrinsic (구조적) vs extrinsic (데이터 의존). rank-deficient 설계의 처방.
+- **MLE 의 기하**: 열공간 정사영, hat matrix 의 trace = $p$, 피타고라스 = ANOVA 분해.
+- **알고리즘은 직접 분해 (QR·SVD·Cholesky) 가 표준**: 수치 안정성. GLM 의 IRLS 에서 매 반복 재활용.
+- **공변량 선택은 자동화 이상**: parsimony × adequacy 의 균형, 여러 모형 병행 보고.
+
+한 줄 요약: Ch.3 은 GLM 을 "정규성에 붙잡힌 회귀" 에서 "가정의 조합으로 구축된 프레임워크" 로 옮기기 위한 **공통 기반 절**이다. 이 장을 이해하면 Ch.4 부터의 확장이 "이 원점에서 어느 축을 돌렸나" 의 단순한 이야기가 된다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [GLM 의 기원과 배경 — Gauss 부터 Nelder-Wedderburn 까지](./00-glm-mccullagh-ch1-background.qmd)
+- [GLM 이론 기초 — 지수족·정준연결·이탈도·IRLS](./01-1-glm-theory-foundation.qmd)
+- [The Components of a GLM](./01-3-glm-components.qmd)
+
+**관련 개념**
+
+- [GLM 적합 알고리즘 — IRLS 완전 유도](./01-6-glm-fitting-algorithm.qmd) — 정규-항등의 특수화로 OLS 환원
+- [단순 선형회귀 개요](../132-simple-linear-regression-overview.qmd)
+- [다중 선형회귀](../154-multiple-linear-regression.qmd)
+- [분산분석 개요](../126-anova-regression-overview.qmd)
+
+**후속 주제**
+
+- Binary Data (McCullagh Ch.4) — logit/probit, 이항 GLM
+- Log-linear Models (McCullagh Ch.6) — Poisson 회귀, 범주형 표 분석
+- Gamma Models (McCullagh Ch.8) — 양수 연속 반응, 변동계수 상수
+- Quasi-likelihood (McCullagh Ch.9) — 분포 미지정 확장
