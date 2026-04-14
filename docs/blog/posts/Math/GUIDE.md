@@ -144,8 +144,8 @@ print(f"내적: {dot_product}, 사잇각: {theta:.1f}도")
 
 **선행 지식**
 
-- [벡터의 기본](./linear_algebra/01.basic_vector.qmd)
-- [노름과 내적](./linear_algebra/02.norm_dot-product.qmd)
+- [벡터의 기본](./linear_algebra/mit-01-2-gilbert-strang-vectors-linear-combinations.qmd)
+- [노름과 내적](./linear_algebra/mit-01-3-gilbert-strang-vectors-length-dot-products.qmd)
 
 **후속 주제**
 

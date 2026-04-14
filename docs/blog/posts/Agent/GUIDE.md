@@ -157,7 +157,7 @@ print(response.content)
 
 **다른 카테고리 연결**
 
-- [벡터 공간과 유사도](../../Math/linear_algebra/02.norm_dot-product.qmd) — 임베딩의 수학적 기반
+- [벡터 공간과 유사도](../../Math/linear_algebra/mit-01-3-gilbert-strang-vectors-length-dot-products.qmd) — 임베딩의 수학적 기반
 - [텍스트 전처리](../../Engineering/Python/text-processing.qmd) — 문서 파이프라인 구축
 ```
 
