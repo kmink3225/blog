@@ -1,0 +1,537 @@
+---
+title: "Log-linear Models — Respiratory Ailments 예제"
+subtitle: "두 이항 반응 × 연령 공변량 · 이변량 로짓 vs 로그선형 해석 차이 (McCullagh & Nelder §6.6)"
+description: |
+  Ashford & Sowden (1970) 의 탄광부 호흡기 질환 데이터로 §6.5 의 다변량 반응 회귀 이론을
+  실제 적용한다. 경험 로짓·오즈비 플롯으로 선형 관계 확인, 식 (6.25) 이변량 로지스틱 모형,
+  주변 vs 결합 우도의 효율 비교, 이변량 로짓과 로그선형이 주는 계수 해석의 근본적 차이,
+  선택 편향이 오즈비 감소에 미치는 영향까지 수식과 직관으로 풀어낸다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/15/2026
+---
+
+## 이 예제가 담고 있는 것
+
+§6.5 의 다변량 반응 회귀 이론은 추상도가 높다 — contrast 변환·분해가능성·다변량 로짓 정의
+등 개념이 여러 층으로 쌓여 있다. §6.6 은 이 모든 이론을 **하나의 실제 데이터**에 적용해
+"어떻게 쓰는가" 와 "어떻게 해석하는가" 를 보여준다.
+
+Ashford & Sowden (1970) 의 탄광부 데이터는 작지만 풍부하다. **두 이항 반응**(숨참
+breathlessness $A$, 쌕쌕거림 wheeze $B$) 이 **연령(age)** 이라는 단일 공변량에 어떻게
+의존하는지를 묻는다. 이 단순한 구조에서도 다음 질문들이 드러난다.
+
+- 주변 로짓과 로그 오즈비가 연령에 어떻게 변하는가
+- 이변량 로지스틱 모형과 로그선형 모형은 **같은 데이터에 다른 답**을 준다 — 왜 그런가
+- 주변 우도와 결합 우도의 효율 차이는 얼마나 되는가
+- **선택 편향**이 오즈비 해석에 어떻게 영향을 주는가
+
+이 포스트는 §6.6.1 의 모형 적합과 §6.6.2 의 모수 해석 대비를 순서대로 따라간다.
+
+---
+
+## 데이터 (§6.6.1 Table 6.6)
+
+### 구조
+
+1970년 Ashford & Sowden 이 보고한 **영국 탄광 활동 중인 흡연 광부** 데이터. 조건:
+
+- 방사선학적 진폐증 증거 **없음**
+- 연령 20–64세
+- 질문지 조사로 breathlessness ($A$) 와 wheeze ($B$) 를 각각 이항으로 기록
+
+반응 구조 = **2×2 이변량** × **9개 연령 집단 (5세 간격)** = 3차원 분할표 ($2 \times 2 \times 9$).
+
+### Table 6.6 요약 수치
+
+| 연령 | $A = B = 1$ | $A = 1, B = 0$ | $A = 0, B = 1$ | $A = B = 0$ | 합 |
+|------|-------------|----------------|----------------|--------------|-----|
+| 20–24 | 9 | 7 | 95 | 1841 | 1952 |
+| 25–29 | 23 | 9 | 105 | 1654 | 1791 |
+| 30–34 | 54 | 19 | 177 | 1863 | 2113 |
+| 35–39 | 121 | 48 | 257 | 2357 | 2783 |
+| 40–44 | 169 | 54 | 273 | 1778 | 2274 |
+| 45–49 | 269 | 88 | 324 | 1712 | 2393 |
+| 50–54 | 404 | 117 | 245 | 1324 | 2090 |
+| 55–59 | 406 | 152 | 225 | 967 | 1750 |
+| 60–64 | 372 | 106 | 132 | 526 | 1136 |
+
+**관찰**: 총 18,282명 광부. 연령이 증가할수록 증상 있는 셀($A = 1$ 또는 $B = 1$) 이 커지고,
+합계 자체는 55세 이후 급감 (집단 내 은퇴·사망으로 인한 생존자 감소).
+
+### 선택 편향에 대한 경고
+
+McCullagh 는 이 데이터에 **명시적 경고**를 붙인다. 분석 대상이 "현역 광부 + 진폐증 없음 +
+흡연자" 로 **삼중 필터링**되어 있다.
+
+- **은퇴한 광부 제외**: 숨참이 너무 심해 일을 못 하면 자동으로 표본에서 사라진다
+- **진폐증 있는 광부 제외**: 이미 중증이라 다른 경로로 진단된 사람들
+- **흡연자로 국한**: 비흡연자와의 비교 불가능
+
+결과적으로 **강한 생존 편향(survivor bias)** 이 개입된다. Mantel & Brown (1973) 이 지적했듯,
+이 편향은 회귀 계수 자체를 체계적으로 왜곡시킬 수 있다. "어떤 건강 모집단"의 결론인지
+명확히 규정한 뒤에만 의미를 가진다.
+
+::: {.callout-important}
+## 통계 기법 $\ne$ 역학적 결론
+
+이 예제는 **기법 시연용** 데이터이다. 실제 "흡연 → 호흡기 질환" 인과를 이 데이터로
+주장하기는 어렵다. 모형 적합과 해석의 기법을 익히는 용도로만 사용한다.
+:::
+
+---
+
+## 예비 탐색 — 경험 로짓 플롯
+
+모형 적합 전에 **로그 척도에서 선형성이 있는가** 를 눈으로 확인한다.
+
+### 일변량 로짓 (breathlessness 예)
+
+$$
+Z_{ai} = \log\!\frac{y_{1.i} + \tfrac{1}{2}}{y_{2.i} + \tfrac{1}{2}}
+$$
+
+여기서 $y_{1.i}$ = 연령 $i$ 집단에서 숨참 있음 총합, $y_{2.i}$ = 없음 총합. $\tfrac{1}{2}$ 은
+0 셀 보정(continuity correction).
+
+**관찰**: $Z_{ai}$ vs 연령 플롯이 **강한 단조 증가** + 약간의 **2차 곡률**. 즉 대체로 직선이지만
+양끝이 중간보다 살짝 완만. 쌕쌕거림 $Z_{bi}$ 도 거의 같은 패턴.
+
+### 로그 오즈비 (교호작용)
+
+$$
+Z_{abi} = \log\!\frac{(y_{11i} + \tfrac{1}{2})(y_{22i} + \tfrac{1}{2})}{(y_{12i} + \tfrac{1}{2})(y_{21i} + \tfrac{1}{2})}
+$$
+
+**관찰**: **선형 감소 추세** (곡률 증거 없음). 연령이 증가할수록 두 증상의 연관이 **약해진다**.
+
+### 해석 — 왜 오즈비가 감소하는가
+
+이 감소 현상은 흥미롭지만 곧바로 의학적 해석으로 가면 안 된다. McCullagh 가 지적하는 대안
+설명:
+
+- **중도 절단(censoring)**: 두 증상을 모두 가진 사람이 은퇴·사망으로 **먼저 사라진다**. 남은
+  표본에서는 "한 증상만" 있는 사람의 비율이 상대적으로 늘어나 오즈비가 줄어든다
+- **질병 심각도의 분리**: 고연령에서 "심한 숨참"이 "쌕쌕거림 없이도" 진행되는 병리학적 전이
+
+어느 쪽이든 **"나이가 들면 연관이 약해진다"** 는 단순한 결론은 내릴 수 없다.
+
+---
+
+## 모형 — 이변량 로지스틱 (식 6.25)
+
+§6.5.4 의 다변량 회귀 프레임을 이 데이터에 적용. 세 로그 대조 $\eta_a, \eta_b, \eta_{ab}$
+를 모두 age 에 선형 회귀.
+
+$$
+\begin{aligned}
+\eta_a &= \beta_0^{(a)} + \beta_1^{(a)} x + \beta_2^{(a)} z, \\
+\eta_b &= \beta_0^{(b)} + \beta_1^{(b)} x + \beta_2^{(b)} z, \\
+\eta_{ab} &= \beta_0^{(ab)} + \beta_1^{(ab)} x + \beta_2^{(ab)} z,
+\end{aligned}
+\tag{6.25}
+$$
+
+여기서 **$x = (\text{age} - 42)/5$, $z = x^2$**. 중심화·스케일링이 중요한 이유:
+
+- **$-42$ 중심화**: 절편 $\beta_0$ 의 해석 = "평균 연령(42세)에서의 로짓". $42$ 는 관측 범위 중앙
+- **$/5$ 스케일**: $x$ 의 한 단위 = **5년**. 계수가 "5년 증가당 로짓 변화"
+- **$z = x^2$**: 2차 항의 유의성으로 곡률 검정
+
+모형식 표기 (§6.5.5): `A*B : x + z`.
+
+### 적합 결과 (Table 6.7, 선형만 포함 모형)
+
+| 모수 | 결합 우도 추정 | SE |
+|------|----------------|-----|
+| $A$: intercept | $-2.2625$ | 0.0299 |
+| $A$: $x$ | $0.5145$ | 0.0121 |
+| $B$: intercept | $-1.4878$ | 0.0206 |
+| $B$: $x$ | $0.3254$ | 0.0089 |
+| $A.B$: intercept | $3.0219$ | 0.0697 |
+| $A.B$: $x$ | $-0.1314$ | 0.0284 |
+
+**읽기**:
+
+- **$A$ 의 $x$ 계수 $0.515$**: 5년당 숨참 로짓이 0.515 증가. 연당 $0.515/5 = 0.103$ → 매년 **오즈 약 10.8% 증가** ($e^{0.103} = 1.108$)
+- **$B$ 의 $x$ 계수 $0.326$**: 연당 쌕쌕거림 오즈 6.7% 증가
+- **$A.B$ 의 $x$ 계수 $-0.131$**: 5년당 **로그 오즈비 감소** 0.131. 예비 플롯의 관찰 확인
+
+### 주변 vs 결합 우도 — 3% 효율 차이
+
+**비교**:
+
+| 접근 | 구현 | 효율 (상대 분산) |
+|------|------|------------------|
+| 주변 로지스틱 | $A \sim x$, $B \sim x$ 각각 적합 → $\eta_{ab}$ 는 section 7.4 의 반복 절차로 보정 | 기준 100% |
+| 결합 우도 | 모든 셀 확률을 한꺼번에 곱셈 | 평균 3%, 최대 7.5% 향상 |
+
+**McCullagh 의 결론**: "최대 3.6% 효율 향상이라면 — **엄청난 노력에 대한 보상이 사소하다
+(truly worthless gain in view of the effort expended)**".
+
+**실무적 함의**: 이변량 반응이라도 **주변 로지스틱 두 개를 각각** 적합한 뒤 오즈비만 별도로
+추정하는 간단한 접근이 실무에서 대부분 충분하다. 결합 우도 구현의 복잡도는 대개 보상되지 않는다.
+
+### 2차 항 검정 (Table 6.9)
+
+| 모형 | 이탈도 | 자유도 |
+|------|--------|--------|
+| $A*B : x$ (선형만) | 30.39 | 21 |
+| $A*B : x; (A+B):z$ (주변에만 2차) | 17.12 | 19 |
+| $A*B : x + z$ (전부 2차) | 16.96 | 18 |
+| $A*B : x; (A+B):R$ (age 9-수준 factor) | 6.80 | 7 |
+
+**해석**:
+
+- 이탈도 감소 $30.39 - 17.12 = 13.27$ on 2 df → **$A$ 와 $B$ 주변 로짓의 2차 계수가 강하게 유의**
+- 추가 로그 오즈비 2차 항은 $17.12 - 16.96 = 0.16$ on 1 df → **비유의**
+- 즉 **주변 로짓은 약간 곡선, 오즈비는 선형**
+- age 를 9-수준 factor 로 놓으면 이탈도 6.80 on 7 df → 2차 다항식으로 대부분 포착됨을 의미
+
+### "통계적 유의함" vs "실질적 크기"
+
+McCullagh 의 중요한 지적: 2차 항이 **"overwhelming statistical significance"** 지만
+**"numerically very small"** 하다. 연령의 전체 범위에 걸쳐 로짓 변화를 실질적으로 거의 바꾸지 않는다.
+
+**실무 교훈**: 대표본에서는 $p < 0.001$ 같은 유의성을 수십 개 모수에서 볼 수 있지만,
+**계수 자체가 해석에 기여하는 크기** 를 함께 보고해야 한다. "유의한데 무시해도 되는" 효과가
+빈번하다.
+
+---
+
+## §6.6.2 모수 해석 — 이변량 로짓 vs 로그선형
+
+이 부분이 §6.6 의 **진짜 교훈**이다. 두 모형 모두 같은 데이터에 로그 척도의 선형 회귀를
+적합하지만, **계수의 의미가 다르다**.
+
+### 이변량 로짓 모형의 적합
+
+$$
+\log(\hat\pi_{1.}/\hat\pi_{2.}) = -2.261 + 0.515 x
+$$
+
+$$
+\log(\hat\pi_{.1}/\hat\pi_{.2}) = -1.487 + 0.326 x
+$$
+
+$$
+\log\!\frac{\hat\pi_{11}\hat\pi_{22}}{\hat\pi_{12}\hat\pi_{21}} = 3.022 - 0.131 x
+$$
+
+**의미**: $\log(\pi_{1.}/\pi_{2.})$ 은 **주변** 로짓 — "전체 광부 중 숨참 있는 비율의 로짓".
+이것이 0.515 씩 5년당 증가. **해석 단위가 공변량 변화에 대한 "주변 변화"** 이다.
+
+### 로그선형 모형의 적합
+
+같은 데이터에 `log mu_ij = alpha_ij + beta_ij x` 를 적합. 즉 **셀 확률 $\pi_{ij}$ 자체를 로그
+선형으로**.
+
+$$
+\text{logit}\,\Pr(A = 1 \mid B = 1, x) = -0.418 + 0.349 x
+$$
+
+$$
+\text{logit}\,\Pr(B = 1 \mid A = 1, x) = 1.051 + 0.034 x
+$$
+
+$$
+\text{log odds-ratio} = 3.059 - 0.166 x
+$$
+
+**의미**: 로그선형의 계수를 조건부로 재구성하면 "**다른 증상이 있다는 조건 하에**" 의 로짓이
+나온다. 위 식은 "쌕쌕거림 있는 광부의 숨참 로짓" 및 "숨참 있는 광부의 쌕쌕거림 로짓".
+
+### 핵심 대비 — 주변 vs 조건부
+
+| 모수 | 이변량 로짓 | 로그선형 |
+|------|------------|---------|
+| $A$ 의 5년당 로짓 증가 | **0.515** (주변) | **0.349** (B=1 조건), **더 큰 값** (B=2 조건) |
+| $B$ 의 5년당 로짓 증가 | **0.326** (주변) | **0.034** (A=1 조건), **0.201** (A=2 조건) |
+| 로그 오즈비 기울기 | $-0.131$ | $-0.166$ |
+
+**주목할 점**: **주변 회귀 계수가 조건부 회귀 계수와 다르다**. 특히
+
+- $B$ on $x$ in A=1: $0.034$ (거의 0!)
+- $B$ on $x$ in A=2: $0.201$
+- $B$ on $x$ **주변**: $0.326$ — **두 조건부 값 모두보다 크다**
+
+이것은 직관에 반한다. 어떻게 **주변 변화가 두 조건부 변화 모두보다 클** 수 있는가?
+
+### 왜 주변이 조건부보다 "더 빠르게" 변하는가
+
+이것은 **Simpson 역설의 역 — "혼합 가속(mixture acceleration)"** 의 한 형태.
+
+**메커니즘**: 연령이 증가하면 (1) $B$ 내부의 각 부분모집단에서 $A$ 가 증가, **동시에** (2)
+$A$ 를 더 잘 가진 부분모집단($B=1$)이 상대적으로 커짐. 두 효과가 **같은 방향으로 겹쳐**
+주변 $B$ 비율이 조건부 변화보다 빠르게 움직인다.
+
+**그림으로 설명**:
+
+```
+연령 증가
+  ↓
+각 층(B=1, B=2) 내에서 A 비율 상승 (조건부 효과)
+  +
+층의 상대 크기 변화: B=1 층이 커짐 (혼합 가중치 이동)
+  ↓
+주변 A 비율은 두 효과의 합 → 각 조건부 값보다 크게 이동
+```
+
+### 추가 사례 $B$ on $x$
+
+- 조건부 효과는 $A=1$ 에서 $0.034$, $A=2$ 에서 $0.201$ — 둘 다 양수지만 큰 차이
+- 이 차이가 **로그 오즈비의 감소($-0.131 \text{ 또는 } -0.166$)** 를 만든다
+- 주변 효과 $0.326$ 는 두 조건부 값의 "가중 평균이 아니라 그 이상" — 혼합 분포가
+  움직이며 생기는 가속
+
+### 어느 해석이 "맞는가"
+
+McCullagh 의 강한 입장:
+
+::: {.callout-warning}
+## 다중 반응 동시 관측에서는 **주변 모형이 우선**
+
+"두 반응이 거의 동시에 관측되었다면, **한 반응을 다른 반응에 조건화한 분포가 공변량에
+어떻게 의존하는지** 에 관심을 가질 이유가 별로 없다."
+
+"반대로 주변 분포는 **얼마나 많은 반응을 관측했든 관심사이며**, 추가로 기록된 무관한
+반응 때문에 **조사 초점이 흔들려서는 안 된다**."
+:::
+
+예컨대 $C$ (위장 문제) 를 추가 관측하면 로그선형 모형 `A*B*x` 와 `A*B*C*x` 의 $A, B$ 계수가
+**일반적으로 달라진다**. 관측하지 않은 $C$ 를 기록했다는 사실 자체가 $A, B$ 의 해석을
+바꿔 버리는 것은 비합리적.
+
+반면 **다변량 로짓 모형 `A*B*C : x` 는 자동으로 `A*B : x` 와 `A : x` 를 내포**한다.
+즉 추가 반응을 기록해도 기존 해석이 깨지지 않는다.
+
+### 이 지침이 실무에 주는 것
+
+**규칙**: 다중 반응 관측치에서 대칭적 다변량 모형이 필요하면 **이변량 로짓 등 다변량 logit
+모형** 을 선호한다. 로그선형 모형은 한 반응을 "종속"으로 놓고 나머지를 설명 변수로
+다루는 경우(조건부 해석이 자연스러운 경우)에 국한한다.
+
+---
+
+## 코드 예시 — 재현
+
+### Step 1: 순수 Python — 경험 로짓 플롯
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+age_mid = np.array([22, 27, 32, 37, 42, 47, 52, 57, 62])
+# (A=1,B=1), (A=1,B=0), (A=0,B=1), (A=0,B=0)
+counts = np.array([
+    [9,   7,   95, 1841],
+    [23,  9,   105,1654],
+    [54,  19,  177,1863],
+    [121, 48,  257,2357],
+    [169, 54,  273,1778],
+    [269, 88,  324,1712],
+    [404, 117, 245,1324],
+    [406, 152, 225, 967],
+    [372, 106, 132, 526],
+], dtype=float)
+y11, y10, y01, y00 = counts.T
+y1_ = y11 + y10     # A=1 합
+y0_ = y01 + y00     # A=0
+y_1 = y11 + y01     # B=1
+y_0 = y10 + y00     # B=0
+
+Za = np.log((y1_ + 0.5) / (y0_ + 0.5))
+Zb = np.log((y_1 + 0.5) / (y_0 + 0.5))
+Zab = np.log(((y11 + 0.5) * (y00 + 0.5)) / ((y10 + 0.5) * (y01 + 0.5)))
+
+x = (age_mid - 42) / 5
+
+fig, axes = plt.subplots(1, 3, figsize=(13, 3.5))
+for ax, Z, name in zip(axes, [Za, Zb, Zab],
+                       ["logit(A)", "logit(B)", "log odds-ratio A.B"]):
+    ax.plot(x, Z, "o-")
+    ax.set(title=name, xlabel="x = (age - 42)/5")
+plt.tight_layout()
+```
+
+세 곡선 확인: 주변 로짓 두 개는 단조 증가 + 약한 곡률, 오즈비는 선형 감소.
+
+### Step 2: 이변량 로짓 적합 (반복적 주변-교호작용)
+
+`statsmodels` 에는 이변량 로지스틱 직접 구현이 없어 간단한 manual 적합.
+
+```python
+import numpy as np
+from scipy.optimize import minimize
+
+# Design (선형만): params = (beta0_a, beta1_a, beta0_b, beta1_b, beta0_ab, beta1_ab)
+def neg_loglik(params, counts, x):
+    b0a, b1a, b0b, b1b, b0ab, b1ab = params
+    n_age = len(x)
+    ll = 0.0
+    for i in range(n_age):
+        eta_a = b0a + b1a * x[i]
+        eta_b = b0b + b1b * x[i]
+        eta_ab = b0ab + b1ab * x[i]
+        # 2x2 셀 확률: pi_ij 를 eta_a, eta_b, eta_ab 로부터 재구성
+        # log odds of A in each B, using: logit pi_{1+} = eta_a
+        #                                  logit pi_{+1} = eta_b
+        #                                  log OR = eta_ab
+        # 이 변환은 반복 해결이 필요 — 단순화를 위해 Plackett 함수 사용
+        from scipy.optimize import brentq
+        p_a = 1 / (1 + np.exp(-eta_a))
+        p_b = 1 / (1 + np.exp(-eta_b))
+        psi = np.exp(eta_ab)
+        # Plackett: p11 = [1 + (p_a + p_b)(psi - 1)
+        #                   - sqrt({1 + (p_a + p_b)(psi-1)}^2 - 4 psi (psi-1) p_a p_b)] / (2(psi-1))
+        if abs(psi - 1) < 1e-6:
+            p11 = p_a * p_b
+        else:
+            S = 1 + (p_a + p_b) * (psi - 1)
+            p11 = (S - np.sqrt(S**2 - 4 * psi * (psi - 1) * p_a * p_b)) / (2 * (psi - 1))
+        p10 = p_a - p11
+        p01 = p_b - p11
+        p00 = 1 - p_a - p_b + p11
+        pis = np.array([p11, p10, p01, p00])
+        pis = np.maximum(pis, 1e-12)
+        ll += np.sum(counts[i] * np.log(pis))
+    return -ll
+
+init = np.array([-2.2, 0.5, -1.5, 0.3, 3.0, -0.1])
+res = minimize(neg_loglik, init, args=(counts, x), method="BFGS")
+print("결합 우도 추정 (교재 Table 6.7 비교):")
+names = ["A:1", "A:x", "B:1", "B:x", "A.B:1", "A.B:x"]
+for n, p in zip(names, res.x):
+    print(f"  {n:6s} = {p:+.4f}")
+```
+
+### Step 3: 로그선형 vs 이변량 로짓 계수 비교
+
+```python
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+# long format
+rows = []
+for i, (a, b) in enumerate([(1,1), (1,0), (0,1), (0,0)]):
+    for j, age in enumerate(age_mid):
+        rows.append({"A": a, "B": b, "x": (age-42)/5, "count": counts[j, i]})
+df = pd.DataFrame(rows)
+
+# 로그선형: count ~ A*B*x
+fit_loglin = smf.glm(
+    "count ~ C(A) * C(B) * x",
+    data=df, family=sm.families.Poisson()
+).fit()
+
+# 주변 로지스틱: A on x
+df_A = df.groupby(["A", "x"])["count"].sum().reset_index()
+df_A_wide = df_A.pivot(index="x", columns="A", values="count").reset_index()
+fit_A = sm.GLM(
+    df_A_wide[[1, 0]].values,
+    sm.add_constant(df_A_wide["x"]),
+    family=sm.families.Binomial()
+).fit()
+print(f"주변 logit(A) ~ x: intercept = {fit_A.params[0]:+.4f}, slope = {fit_A.params[1]:+.4f}")
+print(f"(교재: -2.261, 0.515)")
+
+# 조건부 A on x given B=1: 로그선형 계수에서 유도
+c_loglin = fit_loglin.params
+# logit Pr(A=1|B=1,x) = log(pi_11/pi_01) = 직접 추출
+# 자세한 수식 재구성 생략 — 교재 수치: -0.418, 0.349
+print("\n교재 로그선형 조건부 해석:")
+print("  logit Pr(A=1|B=1) = -0.418 + 0.349 x")
+print("  logit Pr(A=1|B=2) = 다른 값 (자세히는 Table 6.7 전용 분석)")
+```
+
+### R 대응
+
+```r
+# VGAM 의 이변량 로지스틱 (Dale copula 사용)
+library(VGAM)
+tab <- array(counts, dim = c(9, 4))
+df <- expand.grid(age = age_mid, cell = 1:4)
+# 상세 구현은 VGAM::binom2.or family 사용
+
+# 주변 로지스틱 두 개
+fit_A <- glm(cbind(y1_, y0_) ~ x, data = df_margin, family = binomial())
+fit_B <- glm(cbind(y_1, y_0) ~ x, data = df_margin, family = binomial())
+
+# 로그선형
+fit_loglin <- glm(count ~ A * B * x, data = df_long, family = poisson())
+```
+
+---
+
+## 결론 요약
+
+| 질문 | 답 |
+|------|-----|
+| 연령 → 증상 관계 | 로지스틱 선형에 약한 2차 곡률, 실질 크기는 작음 |
+| 연당 오즈 증가 | 숨참 10.8%, 쌕쌕거림 6.7% |
+| 오즈비의 연령 의존 | 연령 증가에 따라 선형 감소 (교재 $-0.131$/5년) |
+| 주변 우도 vs 결합 우도 | 효율 차이 3% 내외, 결합 구현 복잡도 보상 부족 |
+| 이변량 로짓 vs 로그선형 | 주변 해석 vs 조건부 해석 — **다른 계수** |
+| 어느 쪽을 선호하나 | 대칭적 다중 반응이면 **다변량 로짓** |
+| 역학적 인과 해석 | **선택 편향**으로 제한적 — 기법 시연용 |
+
+**이 예제가 Ch.6 에서 맡은 역할**: §6.5 의 추상 이론이 실제로 어떻게 구현되고, 어떻게 해석되며,
+무엇이 함정인지를 **한 데이터**에 집중시켜 보여준다. 특히 **"주변 계수 vs 조건부 계수"
+의 체계적 차이** 는 다중 반응 모형 선택의 가장 실제적인 지침이 된다.
+
+---
+
+## 자주 걸리는 함정
+
+| 함정 | 증상 | 처방 |
+|------|------|------|
+| 이변량 로짓 계수를 조건부로 읽음 | "다른 증상 있을 때" 로 오해 | 주변 확률에 대한 로짓임을 명시 |
+| 로그선형 $A.B:x$ 를 주변 오즈비 기울기로 읽음 | 수치 다름 | 조건부 오즈비 기울기임 |
+| 대표본 2차 항 $p < 0.001$ 을 실질적 중요성으로 | 과도한 모형 복잡화 | 계수 크기·예측 변화로 해석 |
+| 선택 편향 무시하고 인과 주장 | "흡연이 원인" 과대주장 | 표본 정의 범위 내에서만 결론 |
+| 결합 우도 복잡 구현에 시간 낭비 | 3% 효율 gain | 주변 로지스틱 2개 + 반복 오즈비로 충분 |
+| $Z_{ab}$ 감소를 생물학적 효과로 | 중도절단 가능성 간과 | Mantel-Brown 의 검열 가설 검토 |
+| $x$ 중심화 안 함 | 절편 해석 난해, 수치 불안정 | `(age - 중앙값)/스케일` 관행 따르기 |
+| age 9-수준 factor 만으로 끝냄 | 추세 정보 낭비 | factor 모형은 적합도 상한 확인용 |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Log-linear Models — 개관](./05-1-log-linear-overview.qmd)
+- [Likelihood Functions for Log-linear Models](./05-2-poisson-likelihood.qmd)
+- [Log-linear Examples (결핵균·선박)](./05-3-log-linear-examples.qmd)
+- [Log-linear ↔ Multinomial 쌍대성](./05-4-poisson-multinomial-duality.qmd)
+- [Multiple Responses in Log-linear Models](./05-5-multiple-responses.qmd)
+
+**후속 주제 (placeholder)**
+
+- [Log-linear 심화 결과와 연습 (§6.7~§6.8)](./05-7-log-linear-exercises.qmd)
+- [Conditional Likelihoods (Ch.7)](./07-conditional-likelihood.qmd) — 장해 모수 제거의 일반 이론
+
+**관련 개념**
+
+- [Simpson's Paradox 와 혼합 분포](../../Statistics/simpson-paradox.qmd) — 주변 vs 조건부 계수 차이
+- [Pearson–Plackett 이변량 분포](../../Statistics/plackett-copula.qmd) — 이변량 로짓 구현
+- [생존 편향과 관측 연구 함정](../../Experimentation/survivor-bias.qmd)
+- [로지스틱 회귀 해석 가이드](./logistic-regression-model.qmd)
+- [이산시간 해저드](../../Statistics/survival-discrete-hazard.qmd) — 중도절단 효과
+
+---
+
+## 참고문헌
+
+- McCullagh, P. & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.), §6.6. Chapman & Hall.
+- Ashford, J. R. & Sowden, R. R. (1970). Multi-variate probit analysis. *Biometrics*, 26, 535–546.
+- Mantel, N. & Brown, C. (1973). A logistic re-analysis of Ashford and Sowden's data on respiratory symptoms in British coal miners. *Biometrics*, 29, 649–665.
+- Grizzle, J. E. (1971). Multivariate logit analysis. *Biometrics*, 27, 1057–1062.
+- Plackett, R. L. (1965). A class of bivariate distributions. *JASA*, 60, 516–522.
+- Dale, J. R. (1986). Global cross-ratio models for bivariate discrete ordered responses. *Biometrics*, 42, 909–917.
+- Agresti, A. (2013). *Categorical Data Analysis* (3rd ed.), Ch.10. Wiley.
