@@ -1,0 +1,541 @@
+---
+title: "Polytomous GLM Examples — 치즈 맛과 탄광부 진폐증"
+subtitle: "비례 오즈·연속비율·잔차 진단·로그변환의 실제 적용 (McCullagh & Nelder §5.6)"
+description: |
+  McCullagh & Nelder 의 두 고전 예제를 끝까지 전개한다. (1) 치즈 맛 실험의 희소 데이터 편향
+  시뮬레이션, (2) 탄광부 진폐증의 비례 오즈 vs 연속비율 모형 비교, 로그 노출 변환,
+  누적 잔차 기반 진단이 단위 셀 잔차보다 왜 우수한가를 수식과 직관으로 정리한다.
+categories:
+  - Statistics
+  - Regression
+  - GLM
+author: Kwangmin Kim
+date: 04/15/2026
+---
+
+## 왜 "예제"를 따로 다루는가
+
+§5.6 의 두 예제(치즈 맛, 진폐증)는 Ch.5 전체의 이론을 **하나의 흐름으로 엮어 보여주는 장치**이다.
+치즈는 **정성적 범주 공변량** 에서 비례 오즈의 전형을, 진폐증은 **정량적 공변량** 에서 로그 변환과
+잔차 진단의 전형을 보여준다. 두 예제를 통해 확인해야 할 점:
+
+- **비례 오즈 vs 연속비율(계층) 모형** 이 같은 데이터에 어떻게 다르게 작동하는가
+- **단위 셀 잔차 vs 누적 잔차** 중 어느 쪽이 진단에 더 유용한가
+- **희소 데이터에서 MLE 편향** 이 얼마나 심각한가
+- **로그 변환(공변량) 의 선택** 을 잔차 플롯으로 어떻게 정당화하는가
+
+이 포스트는 치즈 실험의 시뮬레이션 결과(§5.6.1 후반부)와 진폐증 예제(§5.6.2) 전체를
+중심으로 정리한다. 치즈 실험 자체의 추정·해석은 [04-4 포스트](./04-4-polytomous-likelihood.qmd) 를 참조한다.
+
+---
+
+## 치즈 맛 실험 (§5.6.1) — 희소 데이터 편향 재검증
+
+### 복습 — 적합 결과
+
+네 첨가물 $A, B, C, D$ × 9점 척도 × 52명. 비례 오즈 $\text{logit}\,\gamma_{ij} = \theta_j - \beta_i$ 로
+
+$$
+\hat{\boldsymbol{\beta}} = (-1.613, -4.965, -3.323, 0), \qquad
+D = 20.31 \text{ on } 21 \text{ df}.
+$$
+
+$\hat{\sigma}^2 = 20.9/21 \approx 1$ 로 과산포 없음.
+
+### 걱정거리 — "희소한데 정말 괜찮은가"
+
+관측 수 $n = 32$ (4 × 8 경계) 대비 모수 수 $p = 11$ ($\theta_1, \ldots, \theta_8, \beta_A, \beta_B, \beta_C$).
+비율이 $11/32 \approx 0.34$ 로 상당히 크다. 더군다나 극단 셀(예: 첨가물 A 의 범주 1·2 는 0 관측)에서
+$\chi^2$ 근사가 나빠질 가능성이 있다.
+
+**핵심 질문**: 교과서적 점근이론이 이 정도 희소성에서도 유효한가?
+
+### 시뮬레이션 결과 (McCullagh §5.6.1 말미)
+
+$\hat{\theta}, \hat{\beta}$ 를 참값으로 두고 **같은 행 합($m_i = 52$)** 으로 25회 재샘플링하여 세 가지를 점검:
+
+| 점검 항목 | 결과 | 해석 |
+|-----------|------|------|
+| $\hat{\beta}_i$ 의 편향 | $\le 5\%$ | 매우 작다 |
+| 이탈도 분포 | 대략 $\chi^2_{21}$ (1·2차 모멘트 일치) | $\chi^2$ 근사 유효 |
+| 표준오차 정확도 | 참 SE 대비 약 10% **과대** | 약간 보수적 |
+
+**교훈 — 희소해도 비례 오즈 는 견고**: 모수 수 / 관측 수 비율이 0.34 정도여도,
+**관심 모수($\beta_i$) 에 대한 점근 추론은 거의 정확** 하다. 표준오차가 10% 과대평가되므로
+결론은 **보수적(conservative)** — 유의하다고 판단한 효과는 실제로도 유의할 가능성이 높다.
+
+**이 결과가 가능한 이유**:
+
+1. 각 행 합 $m_i = 52$ 가 크므로 다항 CLT 가 잘 작동
+2. $\theta_j$ 는 **장해 모수(nuisance)** 에 가깝고 $\beta_i$ 가 관심 모수 — 전자의 정확성이
+   다소 흔들려도 후자에는 거의 영향 없음
+3. 범주 병합(9 → 4) 실험에서도 $\hat{\beta}$ 가 거의 불변 → 범주 통합 불변성의 수치적 확인
+
+**경계**: $m_i$ 가 작아지는 상황(예: 각 처리군 10명 이하)에서는 동일한 보증이 없다.
+**"관측 수 vs. 모수 수" 뿐 아니라 "행 합 $m_i$ 가 충분히 큰가"** 가 더 결정적이다.
+
+### 조건부 우도로 장해 모수 제거 (§7.5.3 연계)
+
+편향이 작은 이유의 일부는 §7.5.3 에서 **조건부 우도(conditional likelihood)** 로 $\theta_j$ 를 소거한
+분석에서도 확인된다. 전체 우도 MLE 는 장해 모수까지 동시 추정하므로 편향이 커질 수 있지만,
+$\beta_i$ 에 대한 **조건부 MLE** 는 장해 모수 제거로 편향이 추가로 줄어든다. 이것은 Cox (1972)
+의 층화 논리와 같은 맥락이다.
+
+---
+
+## 탄광부 진폐증 (§5.6.2) — 정량 공변량과 로그 변환
+
+### 데이터 (Ashford, 1959)
+
+8개 노출 구간(평균 근무 연수 $t_i$)에서 광부를 진폐증 심각도 3단계로 분류.
+
+| 근무 연수 $t_i$ | I (정상) | II (경증) | III (중증) | 합 $m_i$ |
+|---|---|---|---|---|
+| 5.8 | 98 | 0 | 0 | 98 |
+| 15.0 | 51 | 2 | 1 | 54 |
+| 21.5 | 34 | 6 | 3 | 43 |
+| 27.5 | 35 | 5 | 8 | 48 |
+| 33.5 | 32 | 10 | 9 | 51 |
+| 39.5 | 23 | 7 | 8 | 38 |
+| 46.0 | 12 | 6 | 10 | 28 |
+| 51.5 | 4 | 2 | 5 | 11 |
+
+반응은 순서형 3범주 ($k = 3$), 공변량은 정량형 ($t_i$, 연속). 4범주였던 원 척도에서 상위 두
+범주를 병합한 것이므로 중증(Category III)은 "중증 이상"으로 읽어야 한다.
+
+### 예비 탐색 — 왜 $\log t$ 인가
+
+비례 오즈를 적합하기 전 **경험적 누적 로짓** 을 플롯해 선형성을 확인한다. 식 (5.19):
+
+$$
+\log\!\frac{y_{i1} + \tfrac{1}{2}}{m_i - y_{i1} + \tfrac{1}{2}}, \qquad
+\log\!\frac{y_{i1} + y_{i2} + \tfrac{1}{2}}{m_i - y_{i1} - y_{i2} + \tfrac{1}{2}}
+\tag{5.19}
+$$
+
+연속성 보정 $\tfrac{1}{2}$ 는 $0/m_i$ 또는 $m_i/m_i$ 인 셀에서 로짓이 $\pm\infty$ 가 되는 것을 막는다.
+
+**관찰**:
+
+- $t_i$ 에 대한 플롯: 두 로짓이 **평행 형태이지만 비선형** (곡선)
+- $\log t_i$ 에 대한 플롯: **평행하고 대략 선형**
+
+"평행성" 은 비례 오즈의 전제. "선형성" 은 공변량 척도 선택의 문제. $\log t$ 로 바꾸면 두 조건을
+동시에 만족한다 → 최종 모형
+
+$$
+\text{logit}\,\gamma_{ij} = \theta_j - \beta \log t_i, \quad j = 1, 2; \; i = 1, \ldots, 8.
+\tag{5.20}
+$$
+
+**직관 — 왜 로그 노출인가**: 분진 축적에 의한 폐손상은 **누적 용량(cumulative dose) 의
+대수적 반응** 을 보이는 경우가 많다. 의학·독성학에서 **log-dose-logit** 관계는 일종의 관례이며
+(Probit/logit 선량-반응 분석), 이 예제는 그 전형이다. 추가로 시각적 근거(예비 플롯)까지
+선형성을 지지하므로 수학적·과학적으로 모두 자연스럽다.
+
+### 적합 결과
+
+$$
+\hat{\beta} = 2.60 \;(\text{SE} = 0.38), \qquad \hat{\theta}_1 = 9.68, \quad \hat{\theta}_2 = 10.58.
+$$
+
+**해석 — 오즈 계산**:
+
+근무 $t = 5$ 년인 광부의 진폐증(범주 II 이상) 오즈:
+
+$$
+\exp(\hat{\theta}_1 - \hat{\beta}\log 5) = \exp(9.68 - 2.60 \cdot 1.609) \approx \exp(5.50) \approx 244.
+$$
+
+즉 **질병 없음 : 질병 있음 ≈ 244 : 1**, "질병 위험" 은 약 $1/243 \approx 0.4\%$.
+
+노출을 **두 배**로 늘리면 위험이 $2^{\hat{\beta}} = 2^{2.60} \approx 6.06$ 배로.
+
+| 근무 연수 | 진폐증 위험 (범주 II 이상) | 중증(III) 위험 |
+|-----------|---------------------------|-----------------|
+| 5 년 | 1/243 | 1/600 |
+| 10 년 | 1/40 | 1/100 |
+| 20 년 | 1/7 | 1/17 |
+
+**Proportional odds 의 힘**: 단 하나의 $\beta$ 로 **두 누적 경계의 변화를 동시에 기술**한다.
+계단이 하나뿐인 모형이 실제 데이터의 이단 구조를 적절히 설명하고 있다는 점이, 이 가정이
+이 데이터에 맞다는 것을 보여준다.
+
+**비교 — Ashford 의 프로빗 분석**: 원 논문은 probit 를 사용. 적합값은 비슷하지만 모수 값은
+다르다. 이유 두 가지: (1) 링크 함수 차이 (로지스틱 vs 정규), (2) 원 논문의 수치 정확도 한계.
+**결론(질적 순위·위험 배수)은 링크 선택에 거의 영향을 받지 않는다** — 이것이 비례 오즈·프로빗
+선택이 실무에서 자주 임의적인 이유.
+
+### 잔차 진단 — 단위 셀 vs. 누적
+
+$t$ 에 대한 선형 모형(비교용, $\text{logit}\,\gamma_{ij} = \theta_j - \beta t_i$) 적합 후 잔차 분석.
+
+#### 단위 셀 잔차 (Fig. 5.5a)
+
+24 개 표준화 셀 잔차
+
+$$
+r_{ij} = \frac{y_{ij} - \hat{y}_{ij}}{[m_i \hat{\pi}_{ij}(1 - \hat{\pi}_{ij})]^{1/2}}
+$$
+
+를 $t_i$ 에 플롯하면 **강한 곡선 패턴이 안 보인다**. 무작위처럼 흩어져 있어 모형 부적합성이
+잡히지 않는다.
+
+#### 누적 잔차 (Fig. 5.5b)
+
+같은 적합에 대해 **누적** 잔차
+
+$$
+R_{i1} = y_{i1} - \hat{y}_{i1}, \qquad R_{i2} = y_{i1} + y_{i2} - \hat{y}_{i1} - \hat{y}_{i2}
+$$
+
+를 플롯하면 **명확한 비선형 패턴** 이 드러난다. 즉 $t$ 선형 모형이 부적합하다는 것이 누적
+잔차로 비로소 보인다.
+
+### 왜 누적 잔차가 더 민감한가
+
+**이유 1 — 자유도 일치**: 한 다항 관측은 자유도 $k - 1$ 를 갖는다. 셀 잔차 $r_{ij}$ 는 $k$ 개를
+만들어내지만 그중 하나는 나머지의 종속적 함수 → 실질 자유도 초과. 누적 잔차는 정확히 $k-1$
+개를 만들어 자유도 낭비가 없다.
+
+**이유 2 — 신호의 방향 일관성**: 셀 잔차는 인접 범주 간 이동(예: "II 에 있어야 할 사람이
+I 로 넘어감") 이 **서로 반대 부호**로 나타나 상쇄된다. 누적 잔차는 한 방향으로 **축적** 되어
+부호가 같은 방향으로 쌓인다 — 곡선 패턴이 더 크게 드러난다.
+
+**이유 3 — 공변량 척도 부적합 감지**: $t$ 가 아니라 $\log t$ 를 써야 하는 상황에서 단위 셀
+잔차는 이동이 너무 미세해 놓친다. 누적 잔차는 **전체 분포의 이동** 을 한 지점에서 묶어 보기
+때문에 척도 부적합을 드러낸다.
+
+**$k = 3$ 특수 경우의 단순화**: 이 예제에서는 범주 3개라 누적 잔차 두 개 중 하나는
+$R_{i2} = -(y_{i3} - \hat{y}_{i3})$ 로, 범주 3의 부호 뒤집은 잔차와 같다. 따라서 "범주 2 잔차는
+무시하고 범주 3 잔차의 부호를 뒤집으면" 누적 플롯이 된다. 구현이 간단하다.
+
+::: {.callout-important}
+## 실무 원칙
+
+**순서형 반응의 잔차 분석은 누적 잔차로 한다.** 단위 셀 잔차 플롯만 보고 "무작위처럼 보인다"
+고 결론 내리면 중요한 부적합을 놓칠 수 있다. McCullagh 의 이 예제가 그 경고를 가장 명확히 보여준다.
+:::
+
+---
+
+## 비례 오즈 vs 연속비율 모형 — 두 분석의 대비
+
+### 연속비율 모형 (식 5.21)
+
+**계층적 관점**: 3범주 반응을 두 단계 이항으로 분해.
+
+```
+Stage 1:  정상(I) vs 질병(II + III)
+Stage 2:   (질병) → 경증(II) vs 중증(III)
+```
+
+식 (5.10) 의 로지스틱 버전, 부호 관례를 반대로:
+
+$$
+\log\!\frac{\pi_{ij}}{1 - \gamma_{ij}} = \alpha_j - \beta x_i
+\tag{5.21}
+$$
+
+여기서 $x_i$ 는 $t_i$ 또는 $\log t_i$.
+
+**해석**:
+
+- **Stage 1**: "질병 걸릴 위험" 오즈는 $\exp(-\alpha_1 + \beta x_i)$ — 노출 단위 증가마다 $e^\beta$ 배
+- **Stage 2**: "질병 중 중증이 될 위험" 오즈는 $\exp(-\alpha_2 + \beta x_i)$ — 같은 $e^\beta$ 배
+- **두 단계에서 같은 $\beta$** 를 쓴다는 가정 (단계별 상호작용 없음)
+
+### 이항으로의 분해
+
+모형 (5.21) 의 핵심은 각 단계를 독립 이항으로 본다는 것이다.
+
+| $i$ | $t_i$ | Stage 1: $y_{i1}^*/m_{i1}^*$ | Stage 2: $y_{i2}^*/m_{i2}^*$ |
+|---|---|---|---|
+| 1 | 5.8  | 0 / 98 | 0 / 0 |
+| 2 | 15.0 | 3 / 54 | 1 / 3 |
+| 3 | 21.5 | 9 / 43 | 3 / 9 |
+| ... | ... | ... | ... |
+
+$y_{i2}^*/m_{i2}^*$ 는 **분모가 0 에 가까우면 제거**(첫 행). 이에 따라 잃는 자유도 1개.
+
+식 (5.22):
+
+$$
+\log\!\frac{\pi_{ij}^*}{1 - \pi_{ij}^*} = -\alpha_j + \beta x_i, \quad j = 1, 2; \; i = 1, \ldots, 8.
+$$
+
+**수학적 사실**: 이 두 이항 로그우도의 합은 모형 (5.21) 의 다항 로그우도와 **정확히 같다**.
+즉 "다항 적합을 두 개의 독립 이항 GLM 으로 풀어도 동일한 결과를 얻는다" — §5.3.5 의 다항 =
+이항 곱 분해 (§5.3.5 에서 본 성질)의 직접 활용.
+
+### 적합 결과 (로그 노출 사용)
+
+$$
+\hat{\beta} = 2.32 \;(\text{SE} = 0.33), \qquad D = 7.6 \text{ on } 12 \text{ df}.
+$$
+
+비례 오즈(식 5.20): $\hat{\beta} = 2.60, D = 5.1 \text{ on } 13 \text{ df}$.
+
+| 모형 | $\hat{\beta}$ | SE | $D$ / df | 위험 2배 |
+|------|---------------|-----|----------|---------|
+| 비례 오즈 (5.20) | 2.60 | 0.38 | 5.1 / 13 | $2^{2.60} = 6.06$ |
+| 연속비율 (5.22) | 2.32 | 0.33 | 7.6 / 12 | $2^{2.32} = 5.00$ |
+
+**두 결과는 본질적으로 같은 이야기**: 노출 두 배 → 위험 약 5~6 배. 95% 신뢰구간도 겹친다:
+$2^{2.60 \pm 1.96 \cdot 0.38}$ 와 $2^{2.32 \pm 1.96 \cdot 0.33}$ 모두 대략 $(3.2, 10.2)$ 에 포함.
+
+### $\beta_1 = \beta_2$ 가정 검토
+
+연속비율 모형에서 두 단계가 같은 $\beta$ 를 갖는다는 제약을 완화($\beta_j$)하면 LR 차이로
+검정할 수 있다. McCullagh 는 **"결론이 미묘하다(inconclusive)"** 고 보고한다. 즉 데이터로는
+두 단계 효과가 정말로 같은지 확실히 말할 수 없다. 실무에서는 두 모형 모두 제시하고
+**과학적 플라우저빌리티** 로 택하는 것이 원칙.
+
+### 진단에서 본 차이
+
+- **비례 오즈(5.20) 의 잔차**: 뚜렷한 패턴 없음 → 모형 OK
+- **연속비율(5.22) 의 잔차**: 약한 패턴이 보임 → 비례 오즈가 **약간 선호**
+
+McCullagh 의 권고: **잔차가 더 깨끗한 모형을 택하되, 해석의 자연스러움**을 함께 고려한다.
+질병 관리 맥락에서는 "누적 로짓" 보다 "단계별 조건부 위험" 이 의학적으로 더 직관적일 수 있으므로
+연속비율 해석을 병기하는 것이 실무적으로 유용하다.
+
+---
+
+## 결론 요약
+
+| 질문 | 답 |
+|------|-----|
+| 분진 노출 → 진폐증 위험 증가하는가 | 강하게 증가 |
+| 관계의 형태 | $\log t$ 에 선형 (로그 용량-반응) |
+| 노출 두 배의 효과 | 위험 약 5~6 배, 95% CI (3.2, 10.2) |
+| 비례 오즈 vs 연속비율 | 수치적으로 거의 동일, 해석 맥락에 맞춰 선택 |
+| 모형 부적합 진단법 | **누적 잔차 플롯** (셀 잔차는 놓칠 수 있음) |
+| 미해결 질문 | (i) 노출 중단 시 위험 경로 (ii) 분진 감소 효과 — 이 데이터로는 연령과 교란되어 불가 |
+
+**이 예제가 Ch.5 전체에서 차지하는 위치**: §5.2 의 순서형 모형, §5.3 의 다항 = 이항 곱 분해,
+§5.4 의 우도·이탈도, §5.5 의 과산포 체크까지 **모든 장치를 한 데이터에 적용** 해 본다.
+비례 오즈와 연속비율이 **수학적으로 연관된 두 표현** 이지만 **해석적으로는 서로 다른 이야기** 임을
+확인할 수 있다.
+
+---
+
+## 코드 예시 — 진폐증 데이터 재현
+
+### Step 1: 순수 Python — 비례 오즈 모형 (로그 노출)
+
+```python
+import numpy as np
+from scipy.optimize import minimize
+from scipy.special import expit
+
+# Table 5.2 — 진폐증 데이터
+t = np.array([5.8, 15.0, 21.5, 27.5, 33.5, 39.5, 46.0, 51.5])
+counts = np.array([
+    [98,  0,  0],
+    [51,  2,  1],
+    [34,  6,  3],
+    [35,  5,  8],
+    [32, 10,  9],
+    [23,  7,  8],
+    [12,  6, 10],
+    [ 4,  2,  5],
+], dtype=float)
+n, k = counts.shape        # 8, 3
+m = counts.sum(axis=1)
+
+x = np.log(t)              # 로그 노출
+
+def nll_propodds(params, x, counts, k):
+    raw = params[:k-1]
+    theta = np.concatenate([[raw[0]], raw[0] + np.cumsum(np.exp(raw[1:]))])
+    beta = params[k-1:]
+    ll = 0.0
+    for i in range(len(x)):
+        gamma = expit(theta - beta[0] * x[i])
+        gamma = np.concatenate([[0.0], gamma, [1.0]])
+        pi = np.diff(gamma)
+        for j in range(k):
+            if counts[i, j] > 0:
+                ll += counts[i, j] * np.log(max(pi[j], 1e-12))
+    return -ll
+
+init = np.array([8.0, 0.0, 2.0])   # theta raw(2) + beta(1)
+res = minimize(nll_propodds, init, args=(x, counts, k),
+               method="BFGS")
+raw = res.x[:k-1]
+theta_hat = np.concatenate([[raw[0]], raw[0] + np.cumsum(np.exp(raw[1:]))])
+beta_hat = res.x[k-1:]
+print(f"theta_hat = {theta_hat.round(2)}   (교재: 9.68, 10.58)")
+print(f"beta_hat  = {beta_hat.round(2)}    (교재: 2.60)")
+
+# 위험 배수
+risk_double = 2 ** beta_hat[0]
+print(f"노출 2 배 시 위험 배수 = {risk_double:.2f}")
+
+# 5/10/20년 진폐증 위험
+for years in [5, 10, 20]:
+    odds_disease = np.exp(-theta_hat[0] + beta_hat[0] * np.log(years))
+    risk = odds_disease / (1 + odds_disease)
+    print(f"t = {years:2d}년: 오즈 = {odds_disease:.4f}, 위험 ≈ 1/{int(1/risk)}")
+```
+
+기대 출력: $\hat{\theta} \approx (9.68, 10.58)$, $\hat{\beta} \approx 2.60$, 위험 배수 약 6.06.
+
+### Step 2: 연속비율 모형 — 두 이항 GLM 의 합
+
+```python
+import statsmodels.api as sm
+
+# Stage 1: 정상 vs 질병
+y_stage1 = counts[:, 1:].sum(axis=1)   # 질병 수
+n_stage1 = m                            # 전체
+# Stage 2: 경증 vs 중증 (질병자 중)
+y_stage2 = counts[:, 2]
+n_stage2 = counts[:, 1:].sum(axis=1)
+
+# 첫 행은 y_stage2 = 0/0 이라 제거
+mask = n_stage2 > 0
+x_stage2 = x[mask]
+y_stage2 = y_stage2[mask]
+n_stage2 = n_stage2[mask]
+
+X1 = sm.add_constant(x)
+fit1 = sm.GLM(np.column_stack([y_stage1, n_stage1 - y_stage1]),
+              X1, family=sm.families.Binomial()).fit()
+
+X2 = sm.add_constant(x_stage2)
+fit2 = sm.GLM(np.column_stack([y_stage2, n_stage2 - y_stage2]),
+              X2, family=sm.families.Binomial()).fit()
+
+print(f"Stage 1 beta = {fit1.params[1]:.2f} (SE = {fit1.bse[1]:.2f})")
+print(f"Stage 2 beta = {fit2.params[1]:.2f} (SE = {fit2.bse[1]:.2f})")
+
+# 공통 beta 제약 모형 — 두 이항을 스택하여 한 번에 적합
+y_stack = np.concatenate([y_stage1, y_stage2])
+n_stack = np.concatenate([n_stage1, n_stage2])
+x_stack = np.concatenate([x, x_stage2])
+stage  = np.concatenate([np.zeros(len(x)), np.ones(len(x_stage2))])
+X_comb = np.column_stack([1 - stage, stage, x_stack])  # alpha1, alpha2, beta
+
+fit_common = sm.GLM(np.column_stack([y_stack, n_stack - y_stack]),
+                    X_comb, family=sm.families.Binomial()).fit()
+print(f"\n공통 beta = {fit_common.params[2]:.2f} (SE = {fit_common.bse[2]:.2f})")
+print(f"  (교재: 2.32 ± 0.33)")
+print(f"Deviance = {fit_common.deviance:.2f} on {int(fit_common.df_resid)} df")
+```
+
+### Step 3: 누적 잔차 플롯 (모형 부적합 감지)
+
+```python
+import matplotlib.pyplot as plt
+
+# 선형 t 모형으로 고의 적합 (부적합이 드러나야 함)
+def fit_propodds(x, counts, k, init):
+    res = minimize(nll_propodds, init, args=(x, counts, k), method="BFGS")
+    raw = res.x[:k-1]
+    theta = np.concatenate([[raw[0]], raw[0] + np.cumsum(np.exp(raw[1:]))])
+    beta = res.x[k-1:]
+    return theta, beta
+
+theta_t, beta_t = fit_propodds(t, counts, k, np.array([1.0, 0.0, 0.05]))
+
+# 기대 도수
+gamma_hat = np.zeros((n, k+1))
+for i in range(n):
+    gamma_hat[i, 0] = 0
+    gamma_hat[i, 1:k] = expit(theta_t - beta_t[0] * t[i])
+    gamma_hat[i, k] = 1
+pi_hat = np.diff(gamma_hat, axis=1)
+mu_hat = m[:, None] * pi_hat
+
+# 셀 잔차
+r_cell = (counts - mu_hat) / np.sqrt(mu_hat * (1 - pi_hat) + 1e-12)
+
+# 누적 잔차
+y_cum = counts.cumsum(axis=1)[:, :-1]
+mu_cum = mu_hat.cumsum(axis=1)[:, :-1]
+r_cum = y_cum - mu_cum
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+axes[0].scatter(np.repeat(t, k), r_cell.ravel())
+axes[0].axhline(0, color="gray", lw=0.5)
+axes[0].set(title="셀 잔차 (Fig. 5.5a)", xlabel="t", ylabel="표준화 잔차")
+axes[1].scatter(np.repeat(t, k-1), r_cum.ravel())
+axes[1].axhline(0, color="gray", lw=0.5)
+axes[1].set(title="누적 잔차 (Fig. 5.5b)", xlabel="t", ylabel="누적 잔차")
+plt.tight_layout()
+plt.savefig("pneumoconiosis_residuals.png", dpi=120)
+```
+
+셀 잔차 플롯은 산만하지만, 누적 잔차 플롯에서 **명확한 U자/곡선 패턴** 이 보여
+"t 에 선형" 이 부적합하며 **$\log t$ 가 필요하다** 는 진단을 시각적으로 확인할 수 있다.
+
+### R 대응
+
+```r
+# 비례 오즈
+library(MASS)
+data <- data.frame(
+  t = rep(c(5.8, 15.0, 21.5, 27.5, 33.5, 39.5, 46.0, 51.5), each = 3),
+  severity = factor(rep(c("I", "II", "III"), 8),
+                    levels = c("I", "II", "III"), ordered = TRUE),
+  count = c(98, 0, 0, 51, 2, 1, 34, 6, 3, 35, 5, 8,
+            32, 10, 9, 23, 7, 8, 12, 6, 10, 4, 2, 5)
+)
+fit <- polr(severity ~ log(t), data = data, weights = count, Hess = TRUE)
+summary(fit)
+
+# 연속비율 — VGAM 의 sratio family
+library(VGAM)
+tab <- matrix(data$count, nrow = 8, byrow = TRUE)
+colnames(tab) <- c("I", "II", "III")
+fit_cr <- vglm(tab ~ log(t), family = sratio(reverse = FALSE), data = data.frame(t = c(5.8, 15.0, 21.5, 27.5, 33.5, 39.5, 46.0, 51.5)))
+summary(fit_cr)
+```
+
+---
+
+## 자주 걸리는 함정
+
+| 함정 | 증상 | 처방 |
+|------|------|------|
+| 공변량 척도 검토 없이 선형 적합 | 셀 잔차는 깨끗해 보이나 진짜 패턴 놓침 | 누적 잔차 플롯 + 예비 로짓 플롯 |
+| 희소 데이터에서 이탈도 절댓값으로 적합도 판단 | $\chi^2$ 근사 편향 | 복제 시뮬레이션 또는 모형 비교(LR) 로 확인 |
+| 연속비율의 자유도 계산 누락 | $y_{12} = 0/0$ 같은 퇴화 셀 무시 | 퇴화 셀 제거로 자유도 1 감소 반영 |
+| 비례 오즈 $\beta$ 와 연속비율 $\beta$ 를 직접 동일시 | 해석 혼동 | **같은 방향·유사 크기** 확인, 동일 값 기대 금지 |
+| 로그 변환을 데이터 기반으로만 선택 | 교란/외삽 위험 | **과학적 타당성(용량-반응 이론)** 으로 보강 |
+| `probit` vs `logit` 차이 큰 것으로 오해 | 수치는 다르지만 결론 동일 | 위험 배수·p-value 등 **실무 양** 으로 해석 |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Models for Polytomous Data — 개관](./04-1-polytomous-data-overview.qmd)
+- [Measurement Scales](./04-2-measurement-scales.qmd)
+- [The Multinomial Distribution](./04-3-multinomial-distribution.qmd)
+- [Likelihood Functions for Polytomous GLMs — 치즈 실험 적합](./04-4-polytomous-likelihood.qmd)
+- [Over-dispersion](./04-5-overdispersion.qmd)
+
+**후속 주제 (placeholder)**
+
+- [조건부 우도와 장해 모수 제거 (Ch.7)](./07-conditional-likelihood.qmd) — 치즈 예제의 편향 개선
+- [Log-linear Models (Ch.6)](./05-1-log-linear-overview.qmd) — 다항과의 동치성
+- [GLM 잔차의 세 유형](./01-5-glm-residuals.qmd) — Pearson·Anscombe·Deviance 잔차
+
+**관련 개념**
+
+- [생존분석의 이산 해저드](../../Statistics/survival-discrete-hazard.qmd) — 연속비율과 수학적 동형
+- [용량-반응 분석과 프로빗/로짓](../../Statistics/dose-response.qmd)
+
+---
+
+## 참고문헌
+
+- McCullagh, P. & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.), §5.6. Chapman & Hall.
+- Ashford, J. R. (1959). An approach to the analysis of data for semi-quantal responses in biological assay. *Biometrics*, 15, 573–581.
+- McCullagh, P. (1980). Regression models for ordinal data. *JRSS B*, 42(2), 109–142.
+- Cox, D. R. (1972). The analysis of multivariate binary data. *Appl. Stat.*, 21, 113–120.
+- Agresti, A. (2010). *Analysis of Ordinal Categorical Data* (2nd ed.). Wiley.
