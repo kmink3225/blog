@@ -1,0 +1,21 @@
+---
+description: 시리즈 재구성 — 카테고리 내 .qmd 파일들의 중복·누락·순서 진단 → 병합/분할/번호 재배치 → index 반영
+---
+
+CLAUDE.md 의 실행 프로토콜(Phase 0~4)을 순서대로 따른다.
+
+## 로드할 가이드 (Phase 0)
+
+1. `guides/AGENT_GUIDE_CORE.md`
+2. `AGENT_GUIDE.md`
+3. `guides/info-search.md`
+4. `guides/organize-series.md`
+5. `docs/blog/posts/{category}/GUIDE.md`
+
+## 실행
+
+위 가이드를 Read 한 뒤, organize-series Step 순서로 수행한다.
+
+인자 (카테고리): $ARGUMENTS
+
+예시: `Statistics`

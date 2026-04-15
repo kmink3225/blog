@@ -1,0 +1,20 @@
+---
+description: 품질 감사 (읽기 전용) — 지정 파일의 추상적 서술·누락 섹션·규칙 위반을 진단·보고만 함 (파일 수정 안 함)
+---
+
+CLAUDE.md 의 실행 프로토콜(Phase 0~3)을 순서대로 따른다. **파일 변경 없음 → Phase 4(배포) 스킵.**
+
+## 로드할 가이드 (Phase 0)
+
+1. `guides/AGENT_GUIDE_CORE.md`
+2. `AGENT_GUIDE.md`
+3. `guides/audit.md`
+4. `docs/blog/posts/{category}/GUIDE.md`
+
+## 실행
+
+위 가이드를 Read 한 뒤, audit Step 순서로 진단·보고한다. **형식 교정만으로 "양호" 판정 금지**, 콘텐츠 품질 단계(A~G) 전부 수행. 인라인 `$` 공백 규칙(`$한글`, `한글$` 패턴)은 반드시 grep으로 점검한다.
+
+인자 (파일 경로): $ARGUMENTS
+
+예시: `Statistics/56-common-families-discrete.qmd`

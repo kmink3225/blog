@@ -1,0 +1,20 @@
+---
+description: 기존 포스트 교정 — 지정 파일의 YAML·한다체·수식·구조를 현행 규칙에 맞게 직접 수정 (내용 삭제 금지)
+---
+
+CLAUDE.md 의 실행 프로토콜(Phase 0~4)을 순서대로 따른다.
+
+## 로드할 가이드 (Phase 0)
+
+1. `guides/AGENT_GUIDE_CORE.md`
+2. `AGENT_GUIDE.md`
+3. `guides/retrofit-post.md`
+4. `docs/blog/posts/{category}/GUIDE.md` (인자 file-path 에서 category 추출)
+
+## 실행
+
+위 가이드를 모두 Read 한 뒤, retrofit-post Step 순서대로 수정한다. **내용 삭제 금지**, 형식·구조·규칙 위반만 직접 교정.
+
+인자 (파일 경로): $ARGUMENTS
+
+예시: `Statistics/101-maximum-likelihood-estimators.qmd`

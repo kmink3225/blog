@@ -1,0 +1,20 @@
+---
+description: index.qmd 재편성 — 카테고리 내 모든 .qmd 메타데이터를 읽고 논리적 그룹핑·순서로 index.qmd 재작성
+---
+
+CLAUDE.md 의 실행 프로토콜(Phase 0~4)을 순서대로 따른다.
+
+## 로드할 가이드 (Phase 0)
+
+1. `guides/AGENT_GUIDE_CORE.md`
+2. `AGENT_GUIDE.md`
+3. `guides/reorganize-index.md`
+4. `docs/blog/posts/{category}/GUIDE.md`
+
+## 실행
+
+위 가이드를 Read 한 뒤, reorganize-index Step 순서로 수행한다.
+
+인자 (카테고리): $ARGUMENTS
+
+예시: `Statistics`

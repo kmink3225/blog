@@ -1,0 +1,22 @@
+---
+description: TBD 메모 → 정식 포스트 전환 — TBD.qmd의 임시 메모를 정식 .qmd로 분리·재작성 → index 업데이트
+---
+
+CLAUDE.md 의 실행 프로토콜(Phase 0~4)을 순서대로 따른다.
+
+## 로드할 가이드 (Phase 0)
+
+1. `guides/AGENT_GUIDE_CORE.md`
+2. `AGENT_GUIDE.md`
+3. `guides/info-search.md`
+4. `guides/convert-tbd.md`
+5. `docs/blog/posts/{category}/GUIDE.md`
+6. Essay 인 경우 추가: `docs/blog/posts/Data_Science/Essay/GUIDE.md`
+
+## 실행
+
+위 가이드를 모두 Read 한 뒤, info-search → convert-tbd Step 순서로 수행한다.
+
+인자 (카테고리): $ARGUMENTS
+
+예시: `Statistics`, `Data_Science/Essay`
