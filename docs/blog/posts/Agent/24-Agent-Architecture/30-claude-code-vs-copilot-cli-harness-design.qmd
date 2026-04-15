@@ -1,0 +1,905 @@
+---
+title: "Claude Code vs GitHub Copilot CLI — 하네스 설계 차이와 Task 선택 가이드"
+subtitle: "같은 모델·같은 프롬프트, 다른 행동 — 컨텍스트 압축·Tool Result 수명·길이 제약·Skill 로딩이 만드는 실무 격차"
+description: |
+  Claude Code 와 GitHub Copilot CLI 가 동일한 Claude Sonnet 4.6 모델과 동일한 시스템 프롬프트
+  환경에서도 다르게 동작하는 이유를, 관찰 가능한 행동 차이로부터 출발해 하네스 내부 설계
+  원칙까지 역추적한다. Auto-compaction, Tool result lifecycle, 응답 길이 제약, Skill 로딩 정책,
+  Protected zone 다섯 축으로 두 하네스를 대조하고, Task 유형별 적재적소 선택 기준을 제시한다.
+  한쪽을 편드는 것이 아니라 각각이 적합한 영역을 식별하는 것이 목적이다.
+categories:
+  - Agent
+  - Architecture
+  - Engineering
+author: Kwangmin Kim
+date: 04/15/2026
+execute:
+  eval: false
+---
+
+## 왜 이 비교가 필요한가
+
+AI 코딩 에이전트 시장이 급속히 수렴하고 있다. 2024년 초까지만 해도 Claude Code 는 "에이전트",
+GitHub Copilot CLI 는 "셸 명령 도우미" 로 체급이 달랐지만, 2025년 들어 **Copilot CLI 가 에이전트
+모드로 진화**하며 카테고리 경계가 흐려졌다. 더욱이 **Copilot CLI 가 기본 모델로 Claude Sonnet
+4.6 을 쓸 수 있게 된 순간**, 두 도구를 가르는 변수는 **하네스 설계** 하나만 남았다.
+
+이 글은 구체적 질문에서 출발한다.
+
+> "동일한 Claude Sonnet 4.6 을 백엔드로 쓰고 동일한 시스템 프롬프트(CLAUDE.md)를 주면, 두
+> CLI 가 같게 동작할까?"
+
+답은 **아니다**. 그것도 사소한 차이가 아니라 **깊은 routing 시나리오에서 완전히 다른 충실성**
+을 보인다. 이 글은 그 차이의 원인을 역추적하고, 어떤 task 에서 어느 도구가 적합한지
+정리한다.
+
+::: {.callout-important}
+## 이 글의 입장
+
+어느 한쪽이 우월하다는 주장이 **아니다**. 두 하네스는 **다른 설계 철학**을 구현한 것이며,
+각각이 최적화한 영역이 다르다. 목표는 "Task 의 성질에 맞춰 도구를 선택적으로 사용" 하는 실무
+판단 기준을 제공하는 것이다.
+:::
+
+---
+
+## 관찰된 행동 차이 — Deep Routing 실험
+
+### 실험 조건
+
+공정한 비교를 위해 다음이 통제된 환경을 상정한다.
+
+| 변수 | 값 | 설명 |
+|------|-----|------|
+| **모델** | Claude Sonnet 4.6 | 양쪽 CLI 모두 동일 백엔드 |
+| **시스템 프롬프트** | 동일 CLAUDE.md | 프로젝트 단위로 공유 |
+| **Task** | 동일 | 블로그 포스트 작성 등 deep routing task |
+| **워크스페이스** | 동일 | 같은 파일 구조, 같은 가이드 파일들 |
+
+**변하는 것은 하네스 하나뿐**. 이 조건에서 행동 차이가 관찰된다면, 그 원인은 모델이나 프롬프트가
+아니라 **하네스 설계 자체**이다.
+
+### Task 시나리오 — 다단계 라우팅이 필요한 작성 태스크
+
+사용자의 블로그 프로젝트에서 `/write` 슬래시 커맨드 처리는 다음과 같은 **4~5 단계 routing**을
+요구한다.
+
+```
+사용자 요청 /write
+    ↓
+Phase 0: 필수 가이드 파일 로드 (4개)
+  1. guides/AGENT_GUIDE_CORE.md       — 항상-온 규칙
+  2. AGENT_GUIDE.md                   — 슬래시 커맨드 라우팅
+  3. guides/write-post.md             — 스킬 가이드
+  4. docs/blog/posts/{cat}/GUIDE.md   — 카테고리 가이드
+    ↓
+Phase 1: info-search 3-Layer 병렬 탐색
+    ↓
+Phase 2: write-post.md 의 Step 1~6 순차 실행
+    ↓
+Phase 3: Self-Check 6 항목 체크리스트 출력
+    ↓
+Phase 4: publish.md 로드 → git add → commit → push
+```
+
+각 Phase 내부에 다시 Step 세부 지시가 있다. 전체적으로 **지시 depth 가 4~5 단계**, 준수해야
+할 **세부 규칙이 수십 개**.
+
+### 관찰된 차이
+
+**Claude Code 에서**:
+
+- Phase 0 의 4개 파일을 Read 는 하지만, 각 파일의 **세부 Step 을 응답에 명시적으로 출력하지
+  않음**
+- Self-Check 6 항목을 **내부적으로만 점검** 하고 출력 생략
+- `absolute rule 5개` 중 일부를 암묵적으로 건너뜀 (예: `## 1. 개요` 같은 수동 번호가 들어가는
+  경우)
+- 긴 태스크의 후반부로 갈수록 **초반에 읽은 가이드의 세부 내용을 잊어버림** — 같은 세션 내에서
+  이미 주어진 규칙과 모순되는 행동 발생
+
+**Copilot CLI 에서**:
+
+- Phase 0 의 파일을 Read 하고, **각 가이드의 Step 을 응답에 그대로 반영**
+- Self-Check 체크리스트를 **항목별로 명시적 출력**
+- 수동 번호 금지·이모지 금지 같은 규칙을 **태스크 후반까지 지속적으로 준수**
+- 응답이 전반적으로 길고 verbose — 사용자가 "짧게" 요구하지 않는 한 단계마다 명시
+
+### 사용자의 실증 관찰
+
+CLAUDE.md 자체에 다음과 같은 문구가 있다:
+
+> "Claude Code 는 규칙을 자체 요약·압축하거나, 단계를 건너뛰는 경향이 있다."
+
+이 문장 자체가 **누적된 관찰의 산물**. 같은 프로젝트·같은 규칙을 Copilot CLI 에 적용하면 이런
+방어 문구가 불필요하다는 것이 역설적 증거이다.
+
+---
+
+## 원인 후보 — 가설 전개의 역사
+
+이 차이의 원인은 단순하지 않다. 실험 과정에서 가설이 단계적으로 정교화됐다.
+
+### 가설 1: 모델 차이 (기각)
+
+첫 번째 추측은 "Claude 는 요약을 잘하도록 학습됐고, GPT 는 체크리스트를 따르도록 학습됐다"
+였다. 이것이 맞았다면 모델 선택으로 해결됐을 것이다.
+
+**기각 이유**: 실제로는 **양쪽 CLI 모두 Claude Sonnet 4.6 을 사용**. 모델이 동일하므로
+학습 편향 차이는 이 비교에 적용되지 않는다.
+
+### 가설 2: 시스템 프롬프트 차이 (기각)
+
+두 번째 추측은 "Copilot CLI 가 더 엄격한 지시 준수 프롬프트를 내부적으로 주입한다" 였다.
+
+**부분 기각**: 시스템 프롬프트 내용의 차이는 존재한다. 그러나 **CLAUDE.md 라는 사용자
+프로젝트 규칙**은 양쪽에 동일하게 전달된다. 근본 차이는 "어떻게 프롬프트를 주입하느냐"보다
+"**주입된 프롬프트를 얼마나 오래·얼마나 충실하게 유지하느냐**" 에 있다.
+
+### 가설 3: 하네스 설계 차이 (채택)
+
+남은 유일한 변수는 **CLI 도구의 하네스(harness) 설계** — 즉 모델과 사용자 사이의 미들웨어가
+컨텍스트·도구·응답을 어떻게 관리하는가.
+
+이 가설은 **문서화된 증거**와 **시스템 프롬프트에 박힌 자기 설명**으로 확인할 수 있다.
+
+---
+
+## 하네스 차이 5대 축
+
+### 축 1: 자동 압축 (Auto-compaction)
+
+#### Claude Code 의 정책 — 적극적 자동 압축
+
+Claude Code 시스템 프롬프트에 **자체 명시**:
+
+> "The system will automatically compress prior messages in your conversation as it approaches
+> context limits. This means your conversation with the user is not limited by the context
+> window."
+
+**작동 방식**:
+
+- 시스템이 컨텍스트 한계의 일정 임계값 도달 시 **자동 판단**
+- 이전 대화(tool result, 중간 메시지, 사용자 입력 일부)를 **요약·압축**
+- 모델 입장에서는 **통제권 밖**의 일
+
+**결과**:
+
+- 긴 대화가 가능해짐 (사용자 입장에서 이득)
+- 그러나 Phase 0 에서 읽은 가이드 파일의 **세부 내용이 손실**될 수 있음 → Phase 4 시점에 "읽었다"
+  는 메타 정보만 남고 실제 규칙은 사라짐
+
+#### Copilot CLI 의 정책 — 사용자 명시 호출만
+
+Copilot CLI 에는 **`/compact` 명령**이 존재한다. 사용자가 명시적으로 호출할 때만 압축이 일어난다.
+
+**작동 방식**:
+
+- 컨텍스트가 차올라도 **시스템이 자동으로 요약하지 않음**
+- 사용자가 "지금 압축해" 라고 지시해야 압축
+- 압축 전까지는 **원문 그대로 유지**
+
+**결과**:
+
+- 깊은 routing 태스크 후반부에도 **초반에 로드한 가이드 원문이 남아있음**
+- 대신 긴 대화에서 응답이 느려지고 토큰 비용 증가
+
+#### 설계 철학의 차이
+
+| 축 | Claude Code | Copilot CLI |
+|----|-------------|-------------|
+| 우선순위 | **컨텍스트 효율성** | **지시 충실성** |
+| 긴 대화 | 자동 대응 | 사용자 관리 필요 |
+| 원문 보존 | 임계값 초과 시 손실 가능 | 명시적 호출 전까지 보존 |
+| 심층 routing 신뢰도 | 낮음 | 높음 |
+
+---
+
+### 축 2: Tool Result 수명 (Lifecycle)
+
+#### Claude Code 의 정책 — 임시 버퍼 취급
+
+Claude Code 시스템 프롬프트의 **결정적 문구**:
+
+> "When working with tool results, write down any important information you might need later in
+> your response, as the original tool result may be cleared later."
+
+번역: **"Tool result 는 나중에 clear 될 수 있으니, 필요한 정보는 모델이 직접 응답 텍스트 안에
+메모해야 한다."**
+
+이것은 사실상 하네스의 자백이다. Tool result 가 **영속적이지 않음**을 인정하고, 그 책임을
+모델에게 전가한다.
+
+**실무 영향**:
+
+- Phase 0 에서 `Read` 도구로 가이드 4개를 로드해도, Phase 2~4 도달 시점엔 그 파일 내용이 **이미
+  clear 되어 있을 수 있음**
+- 모델은 자신의 응답에 가이드 내용을 **미리 베껴두는 방어 행동**이 필요
+- 이 방어가 제대로 되지 않으면 "**읽었다는 사실만 기억하고 규칙은 잊음**" 현상 발생
+
+#### Copilot CLI 의 정책 — 컨텍스트 한계까지 보존
+
+Copilot CLI 에는 **유사한 경고 문구가 없다**. Tool result 는 컨텍스트 한계 직전까지 **활성
+상태로 유지**된다.
+
+**실무 영향**:
+
+- Phase 0 에서 읽은 GUIDE.md 가 Phase 4 Self-Check 시점에도 **그대로 참조 가능**
+- 모델이 규칙을 "기억" 할 필요 없이 **파일 내용을 실시간 참조**하며 검증
+- 응답이 장황해질 수 있지만, 규칙 누락은 거의 발생하지 않음
+
+#### 수명 정책 비교
+
+```
+┌─────────────────┬────────────────────────────┬─────────────────────────┐
+│       시점      │        Claude Code         │       Copilot CLI       │
+├─────────────────┼────────────────────────────┼─────────────────────────┤
+│ Tool 실행 직후  │ 전체 내용 사용 가능        │ 전체 내용 사용 가능     │
+├─────────────────┼────────────────────────────┼─────────────────────────┤
+│ 몇 턴 후        │ 요약 or clear 가능         │ 원문 유지               │
+├─────────────────┼────────────────────────────┼─────────────────────────┤
+│ 컨텍스트 70%    │ 자동 압축 시작             │ 여전히 원문             │
+├─────────────────┼────────────────────────────┼─────────────────────────┤
+│ 컨텍스트 90%    │ 적극적 압축 → 메모 의존    │ 사용자 /compact 요청 필요 │
+├─────────────────┼────────────────────────────┼─────────────────────────┤
+│ 컨텍스트 100%   │ 자동 처리                  │ 에러 or 강제 압축       │
+└─────────────────┴────────────────────────────┴─────────────────────────┘
+```
+
+---
+
+### 축 3: 응답 길이 제약
+
+#### Claude Code 의 정책 — 시스템 레벨 강제
+
+시스템 프롬프트 말미에 명시:
+
+> "Length limits: keep text between tool calls to ≤25 words. Keep final responses to ≤100 words
+> unless the task requires more detail."
+
+번역: **"Tool call 사이 텍스트는 25 단어 이하, 최종 응답은 100 단어 이하."**
+
+이것은 사용자의 명시적 요청 없이도 **시스템이 강제하는 제약**. 토큰 효율성과 응답 속도를
+위한 선택이다.
+
+**긍정적 영향**: 간결한 응답, 빠른 피드백, 낮은 토큰 비용.
+
+**부정적 영향**: 사용자가 다음과 같이 요구해도 **시스템 제약과 충돌**한다.
+
+```
+CLAUDE.md:
+  "각 Step 시작 시 어떤 단계를 수행하는지 사용자에게 보이는 텍스트로 명시한다.
+   Self-Check 6 항목을 체크리스트 형태로 반드시 출력한다."
+```
+
+Self-Check 만 해도 6 줄. 각 Step 명시까지 더하면 tool call 사이 텍스트가 25 단어를 한참 넘는다.
+**구조적 모순** 상황. 모델은 두 규칙 사이에서 절충하는데, 실무적으로는 **시스템 제약이
+이기는 경우가 많다**.
+
+#### Copilot CLI 의 정책 — 강제 제약 없음
+
+Copilot CLI 의 공개 문서에는 **이런 강제 길이 제약이 없다**. 모델이 사용자 지시에 따라 자유롭게
+응답 길이를 조정할 수 있다.
+
+**실무 영향**:
+
+- 사용자가 "단계마다 명시해" 라고 하면 그대로 이행
+- 응답이 장황할 수 있지만, 명시적 출력 의무는 완전히 지켜짐
+
+#### 길이 제약이 지시 충실성과 충돌하는 이유
+
+많은 프로젝트 규칙이 **verbose 한 출력**을 요구한다:
+
+- Self-Check 체크리스트 출력
+- Step 번호와 요약의 명시적 출력
+- 분할 판단 결과 표 출력
+- 의사결정 근거 명시
+
+이런 요구는 본질적으로 "모델의 내부 과정을 외부화" 하는 것. 길이 제약이 있으면 이런
+외부화가 **체계적으로 억제**된다. 사용자의 규칙이 강할수록 이 충돌이 심해진다.
+
+---
+
+### 축 4: Skill / Instruction 로딩
+
+#### Claude Code 의 정책 — Eager 메타데이터 + Lazy 본문
+
+관찰된 사실 (시스템 프롬프트 분석):
+
+- 세션 시작 시 **모든 skill 의 메타데이터(이름 + 설명)** 가 system-reminder 로 주입됨
+  (30+ 개 skill 동시 주입)
+- Skill **본문**은 `Skill` tool 호출 시에만 로드됨 (lazy)
+- 호출된 skill 의 본문은 **별도 시스템 프롬프트 블록**으로 컨텍스트에 주입됨
+
+**부작용 — Routing depth 증폭**:
+
+```
+Skill A 호출
+  ↓ (시스템 프롬프트에 A 본문 주입)
+Skill A 가 Skill B 참조
+  ↓ (B 본문 추가 주입)
+Skill B 가 Skill C 참조
+  ↓ (C 본문 추가 주입)
+```
+
+각 단계가 컨텍스트를 **가속적으로 채우며**, 이것이 다시 auto-compaction 을 앞당긴다.
+**악순환**: 깊은 routing → 빠른 컨텍스트 소모 → 이른 압축 → 규칙 손실.
+
+#### Copilot CLI 의 정책 — 명시적 파일 Read
+
+Copilot CLI 는 skill/instruction 파일을 **파일 시스템에서 필요할 때 Read tool 로 직접 가져온다**.
+미리 주입하지 않는다.
+
+**장점 1 — 추적 가능성**:
+
+각 Read 가 **명시적 tool call 로 실행 로그에 남음**. "어떤 파일을 언제 읽었는가" 가 모델
+응답의 일부로 기록된다. "읽었다는 사실" 이 메타데이터로 압축되는 게 아니라, **실제 tool call
+이력**이 남는다.
+
+**장점 2 — 컨텍스트 보전**:
+
+읽지 않은 파일은 컨텍스트를 **차지하지 않음**. 필요한 것만 그때그때 로드하므로 routing depth 가
+깊어져도 컨텍스트가 일시에 폭발하지 않는다.
+
+**단점**:
+
+- 모든 가이드 파일을 **명시적 Read** 해야 하므로 응답이 장황
+- 캐싱 효율이 떨어질 수 있음 (같은 파일을 여러 번 읽을 가능성)
+
+#### 두 정책의 대비
+
+| 항목 | Claude Code | Copilot CLI |
+|------|-------------|-------------|
+| 메타데이터 로딩 | Eager (세션 시작 시) | Lazy (필요 시 ls/find) |
+| 본문 로딩 | Lazy (Skill tool 호출) | Lazy (Read tool 호출) |
+| 로딩 인터페이스 | 전용 `Skill` tool | 범용 `Read` tool |
+| 컨텍스트 효과 | 호출 시 별도 블록 주입 | 일반 파일 읽기와 동일 |
+| 추적성 | Skill 호출 log | 명시적 Read call |
+| Depth 증폭 | 심함 (각 skill 이 subskill 호출 시 누적) | 덜함 (파일 읽기로 단일화) |
+
+---
+
+### 축 5: System Instruction Protected Zone
+
+#### Claude Code — 보호 여부 불확실
+
+Claude Code 내부의 **protected zone 존재 여부는 비공개**. 관찰 가능한 것:
+
+- CLAUDE.md 내용은 **세션 시작 시 시스템 프롬프트로 주입** 됨
+- 여러 압축 사이클 후에도 CLAUDE.md **규칙이 살아있는지**는 장기 세션에서만 확인 가능
+- 사용자의 관찰 — "Phase 0 가이드 로드 지시를 건너뛴다" — 은 두 가지 가능성을 시사:
+  1. CLAUDE.md 자체가 완전히 protect 되지 않음
+  2. Protect 되어도 **응답 길이 제약 + tool result 압축** 때문에 실행 단계에서 누락
+
+#### Copilot CLI — Protected Zone 추정
+
+Copilot CLI 는 **AGENT_GUIDE.md, CLAUDE.md, .github/copilot-instructions.md** 같은 custom
+instruction 파일들을 **컨텍스트의 "protected zone"** 에 배치하는 것으로 추정된다 (공개 문서 +
+관찰 기반 추론).
+
+**의미**:
+
+- Tool result 는 압축될 수 있어도 **규칙 파일은 살아있음**
+- `/compact` 실행 시에도 custom instruction 은 **압축 대상이 아님**
+- 장기 태스크에서도 초기 규칙이 **원문 그대로** 유지
+
+#### Protected Zone 의 필요성
+
+**비유**: 운영체제의 **보호 모드(protected mode) 메모리** 와 비슷한 개념.
+
+- 사용자 프로세스(tool result, 중간 대화) 는 스와핑·압축 대상
+- **커널 공간 (시스템 규칙, 사용자 custom instruction)** 은 보호
+
+장기 자율 에이전트 (예: PR 작성, 이슈 처리) 는 **태스크 시작 시점의 지시를 끝까지 정확히 이행**
+해야 한다. 중간에 지시가 증발하면 에이전트가 엉뚱한 결과물을 생성. 그래서 **구조적 지시
+보존**이 필수. Copilot CLI 가 원래 **GitHub Copilot coding agent 하네스 기반**이라는 사실이
+이 설계 선택을 뒷받침한다.
+
+---
+
+## 설계 철학의 근본 차이 — 출발점의 잔재
+
+### Claude Code 의 출발점 — 대화형 어시스턴트
+
+Claude Code 는 초기에 **대화형 코딩 어시스턴트**로 포지셔닝됐다. 사용자가 질문을 던지고
+모델이 답하는 **short-term 상호작용**이 기본 가정.
+
+**이 가정이 낳은 선택**:
+
+- 대화가 길어지면 **자동 압축**해서 흐름 유지 — 대화형 UX 에 맞음
+- Tool result 는 **즉시 소비되고 잊혀도 됨** — 다음 대화 턴이 주인공
+- **짧은 응답**이 대화 리듬에 맞음 — 채팅처럼 주고받기
+- Skill 본문을 **필요 시 주입**해서 기능 확장 — 모듈식 성장
+
+### Copilot CLI 의 출발점 — 장기 자율 에이전트
+
+Copilot CLI 는 공식 문서에서 **"GitHub Copilot coding agent 와 동일한 agentic harness 기반"**
+이라고 명시한다. 이 하네스는 원래 **자율적으로 PR 을 작성하고, 이슈를 처리하고, 코드베이스
+전체를 탐색하는 장기 태스크**를 위해 설계됐다.
+
+**이 가정이 낳은 선택**:
+
+- 태스크 시작 시점의 **지시를 끝까지 보존** — 중간 손실이 치명적
+- Tool result **원문 유지** — 장시간 탐색 후 초기 발견을 재참조
+- **응답 길이 제약 없음** — 자율 작업 로그는 verbose 해야 추적 가능
+- Custom instruction **protected zone** — 태스크 범위 이탈 방지
+- 사용자 명시 호출로만 압축 — 자동 처리가 오히려 신뢰성 저하
+
+### 근본 Trade-off
+
+```
+┌──────────────────────────────┬─────────────────────────────────┐
+│        Claude Code           │         Copilot CLI             │
+├──────────────────────────────┼─────────────────────────────────┤
+│ 컨텍스트 효율성 우선         │ 지시 충실성 우선                │
+│ 짧은 상호작용에 최적         │ 장기 태스크에 최적              │
+│ 자동화된 컨텍스트 관리       │ 명시적 컨텍스트 관리            │
+│ 모델이 많은 책임             │ 하네스가 많은 책임              │
+│ 토큰 비용 낮음               │ 토큰 비용 높음                  │
+│ Deep routing 에 취약         │ Deep routing 에 강함            │
+└──────────────────────────────┴─────────────────────────────────┘
+```
+
+이것은 **우열이 아니라 trade-off**. 각각이 최적화한 영역이 있다.
+
+---
+
+## 5대 축 요약 표
+
+| 설계 축 | Claude Code | Copilot CLI | 심층 Routing 영향 |
+|---------|-------------|-------------|-------------------|
+| 자동 압축 | 공격적 (시스템 판단) | 사용자 명시 호출만 | Copilot CLI 유리 |
+| Tool result 수명 | 임시 버퍼, clear 가능 | 한계 전까지 보존 | Copilot CLI 유리 |
+| 시스템 instruction 보호 | 불확실 | Protected zone 추정 | Copilot CLI 유리 |
+| 응답 길이 제약 | 25/100 단어 강제 | 없거나 약함 | Copilot CLI 유리 |
+| Skill 로딩 | Eager 메타 + Lazy 본문 | 명시적 Read | Copilot CLI 유리 |
+| **출발점** | 대화형 어시스턴트 | 장기 자율 에이전트 | — |
+
+**편향 경계**: 위 표가 "5:0 Copilot CLI 승" 처럼 보이지만, 이것은 **"심층 routing + 복잡한
+custom instruction" 이라는 특정 시나리오에서의 평가**이다. 다른 시나리오에서는 결과가 뒤집힌다
+(다음 섹션).
+
+---
+
+## Task 유형별 적재적소 가이드
+
+두 도구가 **어느 task 에서 어느 쪽이 유리한가**를 체계적으로 정리한다.
+
+### Task 분류 축
+
+| 축 1 | 축 2 |
+|------|------|
+| **Routing Depth** — 지시의 중첩 깊이 | **Context Duration** — task 의 시간 규모 |
+| 얕음 (1~2단계) ↔ 깊음 (4+단계) | 짧음 (몇 분) ↔ 김 (수 시간+) |
+
+| 축 3 | 축 4 |
+|------|------|
+| **Instruction Strictness** — 규칙 엄격성 | **Output Verbosity** — 응답 길이 요구 |
+| 느슨 ↔ 엄격 | 간결 ↔ 상세 |
+
+### Claude Code 가 적합한 Task
+
+#### A. 대화형 탐색 (Exploratory Conversation)
+
+**특징**: 사용자가 **생각하며 묻고** 모델이 **빠르게 답하는** 패턴.
+
+- 축 1 (Depth): 얕음 (단순 Q&A)
+- 축 2 (Duration): 짧음 (몇 분~몇 십 분)
+- 축 3 (Strictness): 느슨 (자유 대화)
+- 축 4 (Verbosity): 간결 (빠른 피드백 우선)
+
+**예시**:
+
+- "이 함수가 왜 이렇게 느린 것 같아?"
+- "pytorch 의 `torch.einsum` 어떻게 쓰지?"
+- "이 에러 메시지가 뭘 의미해?"
+
+**Claude Code 가 유리한 이유**:
+
+- 짧은 응답으로 **대화 리듬 유지**
+- Auto-compaction 으로 **긴 세션도 중단 없이** 계속
+- 단순 질문에서는 skill 깊이가 얕아 routing 문제 없음
+
+#### B. 1~2 단계 규칙의 파일 편집
+
+**특징**: 규칙이 있지만 **깊이가 얕음**.
+
+- 예: "이 함수의 이름을 snake_case 로 바꿔" (규칙 1개)
+- 예: "테스트 추가해" (규칙 2개: 테스트 프레임워크 + 파일 위치)
+
+**Claude Code 가 유리한 이유**:
+
+- 최소 토큰으로 **빠른 실행**
+- 간단한 규칙은 auto-compaction 해도 잘 보존됨
+- 비용 대비 효율 높음
+
+#### C. 단일 카테고리 내 소규모 태스크
+
+**특징**: 프로젝트 내 **좁은 범위** 에서의 작업.
+
+- 예: 한 파일에 함수 2~3개 추가
+- 예: 단일 모듈의 리팩토링
+
+**Claude Code 가 유리한 이유**:
+
+- Deep routing 불필요
+- Context 소모가 제한적
+- Auto-compaction 이 발동할 일이 드묾
+
+#### D. 실험적 코드 작성 (Prototyping)
+
+**특징**: **일회성 실험**, 엄격한 규칙 없음.
+
+- 예: Jupyter notebook 탐색
+- 예: PoC 수준 코드
+
+**Claude Code 가 유리한 이유**:
+
+- 빠른 응답
+- 낮은 비용
+- 규칙 엄격성 낮아 하네스 차이가 중요하지 않음
+
+### Copilot CLI 가 적합한 Task
+
+#### A. 심층 Routing 을 요구하는 프로젝트 작업
+
+**특징**: CLAUDE.md / AGENT_GUIDE / Skill / Category GUIDE 의 **4~5 단계 라우팅**.
+
+- 예: 블로그 포스트 자동 작성 (본 글의 원 시나리오)
+- 예: 엄격한 프로젝트 컨벤션이 있는 기업 코드베이스
+
+**Copilot CLI 가 유리한 이유**:
+
+- Instruction protected zone 으로 **규칙 손실 없음**
+- 깊은 routing 에서도 **각 단계 명시적 실행**
+- 길이 제약 없이 **Self-Check 체크리스트 완전 출력**
+
+#### B. 장기 자율 에이전트 Task
+
+**특징**: 사용자 개입 없이 **수 시간~수일** 실행되는 task.
+
+- 예: 자동 PR 작성
+- 예: 이슈 분석 → 코드 수정 → 테스트 → 커밋
+- 예: 대규모 리팩토링 (수십 파일)
+
+**Copilot CLI 가 유리한 이유**:
+
+- GitHub coding agent 하네스 **기반 설계**
+- Tool result 원문 보존으로 **초기 발견을 후반에도 참조**
+- Instruction 충실성으로 **task 범위 이탈 방지**
+
+#### C. Verbose Output 이 필요한 Task
+
+**특징**: 각 단계의 **명시적 기록**이 중요.
+
+- 예: 감사(audit) 보고서 작성
+- 예: 의사결정 과정의 단계별 로그 출력
+- 예: 체크리스트 기반 수동 검증
+
+**Copilot CLI 가 유리한 이유**:
+
+- 길이 제약 없음
+- Verbose output 을 **구조적으로 허용**
+- 사용자 규칙과 **충돌하지 않음**
+
+#### D. 다단계 검증이 필요한 Critical Task
+
+**특징**: 각 단계에서 **명시적 확인** 필요.
+
+- 예: 프로덕션 배포 스크립트 작성
+- 예: 보안 감사
+- 예: 데이터 마이그레이션
+
+**Copilot CLI 가 유리한 이유**:
+
+- 각 검증 단계를 **tool call 로 명시** → 감사 추적 가능
+- Tool result 원문 보존 → **후속 검증에서 초기 증거 재참조**
+- Protected zone 으로 보안 규칙 **끝까지 유지**
+
+### 결정 매트릭스
+
+```
+                     Routing Depth
+                  얕음  ←→  깊음
+      짧음  ┌──────────┬──────────┐
+            │  Claude  │ 둘 중 선호 │
+            │   Code   │ (context  │
+Context     │  (채팅)  │   따라)   │
+Duration    ├──────────┼──────────┤
+            │  Claude  │ Copilot  │
+      김    │   Code   │   CLI    │
+            │ (단순작업)│(자율에이전트)│
+            └──────────┴──────────┘
+```
+
+**실무 판단 순서**:
+
+1. **Routing depth** 가 4+ 단계인가? → Yes: Copilot CLI
+2. **엄격한 custom instruction** 이 있는가? → Yes: Copilot CLI
+3. **Verbose output** 이 필수인가? → Yes: Copilot CLI
+4. **위 셋 모두 아님** → Claude Code (비용·속도 우위)
+
+---
+
+## 혼합 사용 전략 (Hybrid Workflow)
+
+두 도구를 배타적으로 쓸 필요는 없다. **Task 단계별로 다르게** 쓰는 전략이 실무에서 유용하다.
+
+### 전략 1: 탐색은 Claude Code, 작성은 Copilot CLI
+
+**시나리오**: "블로그 포스트 쓰기"
+
+```
+1단계 (Claude Code): 주제 탐색, 아이디어 발산
+   - "이 주제에 대해 어떤 관점이 가능할까?"
+   - "핵심 개념 3가지를 정리해줘"
+   - 대화형, 짧은 응답 OK
+
+2단계 (Copilot CLI): 실제 포스트 작성
+   - /write 슬래시 커맨드 실행
+   - Phase 0~4 엄격 준수
+   - Self-Check 체크리스트 출력
+```
+
+이 분할은 **각 단계의 성격**에 도구를 맞춘다. 탐색 단계에서는 Claude Code 의 속도·비용
+이점이 크고, 작성 단계에서는 Copilot CLI 의 충실성이 결정적이다.
+
+### 전략 2: 프로토타입은 Claude Code, 프로덕션은 Copilot CLI
+
+**시나리오**: "신규 기능 개발"
+
+```
+1단계 (Claude Code): 빠른 프로토타입
+   - PoC 코드 작성
+   - 실험적 아이디어 검증
+   - 대화형 디버깅
+
+2단계 (Copilot CLI): 프로덕션화
+   - 프로젝트 컨벤션 엄수 (lint rule, 테스트 커버리지)
+   - 문서화 표준 준수
+   - PR 작성 및 리뷰
+```
+
+### 전략 3: 검토는 Claude Code, 실행은 Copilot CLI
+
+**시나리오**: "대규모 리팩토링"
+
+```
+1단계 (Claude Code): 변경 범위 파악
+   - "이 인터페이스를 바꾸면 어디가 영향받지?"
+   - 빠른 영향도 분석
+
+2단계 (Copilot CLI): 실제 변경 실행
+   - 각 파일 수정
+   - 테스트 실행
+   - 단계별 커밋
+```
+
+### 전략 4: 기록 없는 작업 Claude Code, 기록이 필요한 작업 Copilot CLI
+
+**기준**: "이 작업의 **로그가 나중에 감사 대상**인가?"
+
+| 답 | 선택 |
+|----|------|
+| No (개인 탐색·학습) | Claude Code |
+| Yes (팀 공유·규제 준수·생산) | Copilot CLI |
+
+---
+
+## 한계와 불확실성
+
+이 분석은 **관찰과 합리적 추론**에 기반한다. 확실한 것과 불확실한 것을 구분한다.
+
+### 확실한 것 (강한 증거)
+
+1. **Claude Code 의 auto-compaction** — 시스템 프롬프트에 **명시적 문구** 존재
+2. **Tool result clear 가능성** — 시스템 프롬프트에 **명시적 경고** 존재
+3. **응답 길이 제약 25/100 단어** — 시스템 프롬프트에 **명시적 수치** 존재
+4. **관찰된 행동 차이** — 동일 모델·동일 프롬프트에서 **재현 가능한 차이**
+
+### 추정 (증거 기반 추론)
+
+1. **Copilot CLI 의 protected zone** — 공개 문서 + 관찰, 직접 확인 불가
+2. **Copilot CLI 의 압축 정책** — `/compact` 명령 존재로부터 역추론
+3. **Copilot CLI 의 skill 로딩 방식** — 사용자 관찰 신뢰
+
+### 불확실 (추가 검증 필요)
+
+1. **구체적 압축 알고리즘** — Claude Code 의 압축이 **어떤 priority** 로 작동하는지 비공개
+2. **Copilot CLI 내부 하네스 상세** — Anthropic 외부의 inspection 한계
+3. **버전별 변화** — 두 도구 모두 빠르게 진화 중, 이 분석은 **2025 말 시점** 의 스냅샷
+4. **모델 벤더 정책 변화** — Copilot 이 다른 모델로 전환할 경우 비교 조건 변경
+
+### 해석의 주의
+
+::: {.callout-warning}
+## "심층 Routing 에서 Copilot CLI 가 우월" 의 정확한 의미
+
+이 글의 분석은 **"깊은 routing + 엄격한 custom instruction"** 이라는 특정 시나리오에 국한된다.
+다른 시나리오 (예: 단순 대화, 짧은 작업, 비용 민감성) 에서는 Claude Code 가 명확히 유리하다.
+
+"어느 쪽이 낫다" 가 아니라 **"어떤 용도에 어느 쪽이 맞다"** 가 정확한 프레이밍이다.
+:::
+
+---
+
+## 대안 도구의 맥락
+
+다른 AI 코딩 에이전트들과의 관계도 짚고 간다.
+
+| 도구 | 카테고리 | Claude Code/Copilot CLI 와의 관계 |
+|------|----------|------------------------------------|
+| **Aider** | 오픈소스 에이전트 | Git 커밋 기반 롤백 — 파괴적 수정 방어 측면에서 보완 |
+| **OpenDevin** | 오픈소스 에이전트 | 자율 에이전트 오픈소스 대안 |
+| **Cursor** | IDE 통합 | 에디터 내 에이전트 — 터미널 CLI 와 보완 |
+| **Amazon Q Developer CLI** | 상용 CLI (구 Fig) | 셸 명령 중심, 일부 에이전트 기능 |
+| **Warp** | 지능형 터미널 | 명령 제안 중심, 에이전트 약함 |
+
+**중요한 확인**: 2023 년 이전 자료에서 자주 언급되던 **Fig** 는 2023 년 Amazon 에 인수된 후
+**Amazon Q Developer CLI 로 통합·재출시**됐다. 현재 "Fig" 라는 독립 제품을 대안으로 추천하는 건
+부정확하다.
+
+---
+
+## 실무 체크리스트
+
+### 프로젝트 시작 시 질문
+
+두 도구 중 어느 것을 기본값으로 쓸지 결정할 때 점검:
+
+| 질문 | Yes → Copilot CLI | No → Claude Code |
+|------|-------------------|------------------|
+| CLAUDE.md 가 200줄 이상인가? | ✓ | |
+| Skill 시스템을 적극 사용하는가? | ✓ | |
+| 팀 컨벤션 준수가 비즈니스 크리티컬인가? | ✓ | |
+| 각 작업의 감사 로그가 필요한가? | ✓ | |
+| 장기 자율 태스크(PR 자동화 등)를 돌리는가? | ✓ | |
+| 응답 속도가 비용보다 중요한가? | | ✓ |
+| 1회성 탐색이 많은가? | | ✓ |
+| 프로토타입 단계인가? | | ✓ |
+
+**3개 이상 ✓ 한쪽** 이면 그 쪽을 기본값으로. 혼합 사용도 권장.
+
+### 세션 중 전환 신호
+
+한 세션에서 전환을 고려할 신호:
+
+**Claude Code → Copilot CLI 로 전환**:
+- 같은 규칙이 반복적으로 무시됨
+- Self-Check 가 생략됨
+- 응답이 규칙보다 짧음
+- Task 가 예상보다 길어짐
+
+**Copilot CLI → Claude Code 로 전환**:
+- 응답이 불필요하게 장황
+- 단순 질문에 과도한 검증 단계
+- 빠른 반복이 필요한 실험 단계
+
+---
+
+## 사용자의 자기 관찰 인용
+
+이 글의 핵심 관찰은 사용자가 직접 수행한 **통제 실험** 에서 왔다.
+
+> "내가 시스템 프롬프트를 스킬 기반으로 복잡하게 만들면 일련의 지시 routing depth 가 4~5 단계로
+> 깊어지면 클로드 코드는 컨텍스트 압축 기반이기 때문에 문맥을 과하게 압축하여 세부 지시들을
+> 아예 건너뛰거나 읽었어도 실행하지 않는 현상들이 두드러져 반면 copilot cli 는 왠만하면
+> 모든 걸 세세하게 읽고 하나씩 수 많은 규칙들을 단계별로 수행하는 경향이 있어."
+
+> "copilot cli 와 클로드 코드 모두 claude sonnet 4.6 으로 같은 시스템 프롬프트로 실험을
+> 했기 때문에 두 차이점은 오직 cli tools 과 실행 설계 방식의 차이 뿐이야."
+
+이것이 본 글의 출발점. 모델·프롬프트 변수가 통제된 관찰에서 나온 차이는 전적으로 **하네스
+설계**에 귀속된다는 논리적 결론이다.
+
+**Claude 자신의 인정**:
+
+이 대화에 참여한 Claude Code 가 스스로 인정한 부분 (원 대화 인용):
+
+> "인정한다. 깊은 routing + 다단계 규칙이라는 조건에서는:
+>
+> - Claude Code: 압축 → 단계 누락 → '읽었다고 주장하지만 실행 안 함' 패턴
+> - Copilot CLI: 압축 보수적 → 단계 보존 → '세세하게 하나씩 이행' 패턴
+>
+> 이 차이는 하네스 정책(컨텍스트 관리 방식)의 효과다. 단순 모델 비교로는 드러나지 않는 실무적
+> 격차다."
+
+모델 스스로가 자신의 약점을 인정한 **메타 증거**이다.
+
+---
+
+## 결론
+
+### 한 문장 요약
+
+같은 Claude Sonnet 4.6 을 써도 **Claude Code 는 컨텍스트 효율성**에, **Copilot CLI 는 지시
+충실성**에 최적화된 하네스이며, 이 trade-off 의 차이가 task 성격에 따른 적합성을 결정한다.
+
+### 핵심 메시지 3가지
+
+1. **"같은 모델 = 같은 성능" 은 환상이다**. 하네스가 행동의 절반을 결정한다.
+2. **Task 의 성격이 도구 선택을 주도해야 한다**. 기본값으로 한쪽만 쓰는 것은 비효율.
+3. **편향 없는 비교는 "어느 쪽이 낫다" 가 아니라 "어느 쪽이 어떤 용도에 맞다" 이다**.
+
+### 실무 액션 아이템
+
+- [ ] 현재 프로젝트의 CLAUDE.md 분량·routing depth 를 측정
+- [ ] 주요 task 유형을 4가지 축(Depth, Duration, Strictness, Verbosity)으로 분류
+- [ ] 각 task 에 어느 도구가 적합한지 결정
+- [ ] 혼합 사용 전략 중 가장 맞는 것을 1개 선택해 시범 적용
+- [ ] 1~2주 운영 후 결과 평가 (규칙 준수율, 비용, 속도)
+
+### 장기 전망
+
+두 하네스는 **수렴 중**이다. Claude Code 는 지시 충실성을 강화하고, Copilot CLI 는 효율성을
+개선하고 있다. 이 글의 5대 축 비교는 **2025 말 스냅샷**이며, 6개월~1년 단위로 재평가가 필요.
+
+그러나 **출발점의 잔재**는 오래 남는다. 대화형에서 시작한 하네스와 장기 자율 에이전트에서
+시작한 하네스는 설계 DNA 가 다르며, 이 차이는 근본적으로 해소되기 어려울 수 있다.
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Claude Code 의 Long Context 대응 전략](./04-claude-code-context-strategy.qmd)
+- [GitHub Copilot CLI SW Tool 명세와 Claude Code 대조 분석](./29-github-copilot-cli-tool-specification.qmd)
+- [Claude Code Custom Tools 와 Agent 연결](./27-connect-claude-copilot-tools-to-custom-agent.qmd)
+- [Skill 기반 Agent 패턴](./01-skill-based-agent-pattern.qmd)
+
+**아키텍처 심화**
+
+- [System Prompt Types 와 Layered Routing](./10-system-prompt-types-and-layered-routing.qmd)
+- [Attention Dilution 과 2-Pass Workflow](./12-attention-dilution-and-2pass-workflow.qmd)
+- [LLM 지시 준수 메커니즘](./24-llm-instruction-compliance-mechanisms.qmd)
+- [System Prompt Dynamic Injection Architecture](./25-system-prompt-dynamic-injection-architecture.qmd)
+- [Skill Routing Scalability and Limits](./18-skill-routing-scalability-and-limits.qmd)
+
+**실무 적용**
+
+- [블로그 자동화에 Skill 패턴 적용](./07-skill-pattern-applied-blog-knowledge-system.qmd)
+- [Multi-Repo Agent Architecture](./23-multi-repo-agent-architecture.qmd)
+
+**관련 도구**
+
+- [MCP Tool Integration](./15-mcp-tool-integration.qmd)
+- [Custom Tool Development 과 등록](./28-custom-tool-development-and-registration.qmd)
+
+---
+
+## 참고문헌
+
+### 공식 문서
+
+- Anthropic. (2025). *Claude Code Documentation*. https://docs.claude.com/claude-code
+- GitHub. (2025). *GitHub Copilot CLI Documentation*. https://docs.github.com/copilot/github-copilot-in-the-cli
+- GitHub. (2025). *GitHub Copilot coding agent*. https://docs.github.com/copilot/using-github-copilot/using-copilot-coding-agent
+
+### 하네스 설계 관련 연구
+
+- Yao, S. et al. (2022). ReAct: Synergizing Reasoning and Acting in Language Models. arXiv:2210.03629.
+- Park, J. S. et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior. *UIST*.
+- Hong, S. et al. (2023). MetaGPT: Meta Programming for Multi-Agent Collaborative Framework. arXiv:2308.00352.
+
+### 벤치마크
+
+- Jimenez, C. et al. (2023). SWE-bench: Can Language Models Resolve Real-World GitHub Issues? arXiv:2310.06770.
+- Liu, X. et al. (2024). AgentBench: Evaluating LLMs as Agents. *ICLR*.
+
+### 컨텍스트 관리 기법
+
+- Packer, C. et al. (2023). MemGPT: Towards LLMs as Operating Systems. arXiv:2310.08560.
+- Xu, P. et al. (2024). Retrieval meets Long Context Large Language Models. *ICLR*.
+
+### 경쟁·대안 도구
+
+- Aider-AI. (2024). *Aider: AI pair programming in your terminal*. https://aider.chat
+- OpenDevin. (2024). *OpenDevin: An Open Platform for AI Software Developers*. https://github.com/OpenDevin/OpenDevin
+- Cursor. (2024). *Cursor: The AI Code Editor*. https://cursor.sh
+- Amazon. (2024). *Amazon Q Developer CLI* (formerly Fig). https://aws.amazon.com/q/developer
+
+### 역사적 맥락
+
+- Fig → Amazon 인수 발표 (2023). https://github.com/withfig/autocomplete
+- GitHub Copilot CLI 에이전트 모드 출시 (2025).
+- Anthropic Claude Code 출시 (2024).
