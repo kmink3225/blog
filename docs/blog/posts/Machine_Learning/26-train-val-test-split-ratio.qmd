@@ -1,0 +1,394 @@
+---
+title: "Train/Val/Test 분할 비율 선택"
+subtitle: "60/20/20 vs 70/10/20 vs 80/10/10 — 데이터 규모별 실무 가이드"
+description: |
+  모델 학습을 위한 데이터 분할 비율을 어떻게 정할지 체계적으로 정리한다. Train·Val·Test 각
+  부분의 역할, 세 가지 대표 비율의 트레이드오프, 데이터 규모별 권장 분할, Early Stopping
+  여부가 선택에 미치는 영향, K-Fold CV 로의 전환 지점을 수식과 실무 수치로 함께 전개한다.
+categories:
+  - Machine Learning
+  - Deep Learning
+  - Data Science
+author: Kwangmin Kim
+date: 04/15/2026
+---
+
+## 왜 분할 비율을 고민해야 하는가
+
+"데이터를 어떻게 나눌 것인가" 는 모델 성능 평가의 첫 관문이다. 잘못 나누면 **아무리 좋은
+모델도 잘못된 결론**을 준다.
+
+- Train 이 작으면 → 학습이 부족해 성능이 저평가
+- Val 이 작으면 → 하이퍼파라미터 튜닝이 불안정, Early Stopping 이 조기·지연 발동
+- Test 가 작으면 → 평가 자체의 신뢰구간이 커서 모델 간 비교가 무의미
+
+실무에서 자주 쓰이는 세 비율 — **60/20/20, 70/10/20, 80/10/10** — 이 각각 어떤 상황에 맞는지,
+그리고 데이터 규모가 커질수록 왜 Test·Val 비율이 줄어도 되는지를 정리한다.
+
+::: {.callout-important}
+## 한 줄 요약
+
+**분할 비율은 "데이터 크기" 와 "학습 전략(Early Stopping 사용 여부)" 두 축으로 결정한다.**
+작은 데이터 + Early Stopping → Val 비율 높게 (60/20/20). 중간 데이터 + 고정 에포크 → Train
+우선 (70/10/20). 대규모 + 빅 모델 → Train 최대화 (80/10/10 또는 그 이상).
+:::
+
+---
+
+## 정의 — Train, Val, Test 각각의 역할
+
+::: {.callout-note}
+## 정의: 세 분할의 목적
+
+| 분할 | 목적 | 반복 사용 | 최종 결정에 영향 |
+|------|------|----------|------------------|
+| **Train** | 모델 파라미터 학습 | 매 epoch | O (학습 중 반복 사용) |
+| **Validation (Val)** | 하이퍼파라미터 선택, Early Stopping | 매 epoch 또는 튜닝 시 | O (모델 선택에 직접 사용) |
+| **Test** | 최종 일반화 성능 추정 | **단 한 번** | X (모델 선택 후 평가만) |
+
+Test set 은 **선택 과정에 단 한 번도 개입하지 않아야** 한다. Test 성능을 보고 모델을 바꾸는
+순간, Test 는 사실상 두 번째 Validation 이 되어 일반화 능력을 과대평가하게 만든다.
+:::
+
+---
+
+## 각 분할 비율의 트레이드오프
+
+### 비율별 장단점
+
+| 분할 | Train | Val | Test | 장점 | 단점 |
+|------|-------|-----|------|------|------|
+| 60/20/20 | 적음 | 많음 | 많음 | Val 안정적 (하이퍼파라미터 튜닝 신뢰↑) | Train 이 작아 학습 성능 손해 |
+| 70/10/20 | 중간 | 적음 | 많음 | Train·Test 균형 | Val 분산 큼 (작은 noise 에도 흔들림) |
+| 80/10/10 | 많음 | 적음 | 적음 | Train 풍부 | Test 평가 신뢰도 낮음 |
+
+### 수치 예시 — 7,698건 프로젝트
+
+총 $N = 7{,}698$ 건 데이터에서 각 비율의 실제 분할 크기.
+
+| 분할 | Train | Val | Test |
+|------|-------|-----|------|
+| 60/20/20 | 4,618 | 1,539 | 1,539 |
+| 70/10/20 | 5,389 | 770 | 1,539 |
+| 80/10/10 | 6,159 | 770 | 770 |
+
+**Val 770 건은 충분한가?** 14 클래스 다중 분류 기준:
+
+- 평균 **클래스당 55 건** → 통계적으로 유의미한 per-class 지표 계산 가능
+- 극단 클래스(일반단어·번호 등)에서도 **55~64 건** 확보 → 모든 클래스의 F1 계산이 안정적
+- 단 특정 rare class (클래스당 < 20 건) 가 있으면 Val 비율 상향 필요
+
+---
+
+## 핵심 원리 — 평가 정확도와 샘플 크기
+
+### 정확도의 표준오차
+
+정확도 $p$ 의 표본 표준오차는 이항분포에서
+
+$$
+\text{SE}(\hat{p}) = \sqrt{\frac{p(1-p)}{n}}
+$$
+
+**수치적 의미**:
+
+| 정확도 | n = 500 | n = 1,000 | n = 1,540 | n = 10,000 |
+|--------|---------|-----------|-----------|------------|
+| 95% | ±0.95% | ±0.68% | ±0.55% | ±0.21% |
+| 90% | ±1.31% | ±0.93% | ±0.75% | ±0.30% |
+
+**Test set 크기가 성능 변동에 미치는 영향**: Test 1,540 건이면 95% 신뢰구간 폭이 약 ±1.1% 점.
+두 모델의 성능 차이가 이 수준 이하면 **통계적으로 구분 불가능**. Test 가 500 건으로 줄면
+±1.9%, 더 엄격한 비교가 어려워진다.
+
+**Val 도 같은 논리**: 770 건 Val 은 전체 정확도 추정 SE 약 0.8%. 두 하이퍼파라미터 조합의
+차이가 이보다 작으면 Val 로 구분 불가능. **Val 이 작으면 하이퍼파라미터 선택이 노이즈에
+좌우되어 일관성이 떨어진다**.
+
+### Early Stopping 과 Val 의 관계
+
+Early Stopping 은 Val 성능이 개선되지 않으면 학습을 조기 종료하는 기법. **Val 분산이 크면
+false positive** — 실제 개선 가능한 모델을 일찍 멈추거나, 실제 overfitting 을 감지 못함.
+
+```
+Early Stopping 성공 조건:
+  - Val 분산이 작음 (충분히 큰 Val)
+  - 또는 patience 크게 설정 (일시적 악화 허용)
+```
+
+이것이 **"Early Stopping 활발 사용 → 60/20/20 선호"** 의 이유. BiLSTM 처럼 patience=10 으로
+운영하는 모델은 Val 크기 확보가 Train 크기보다 중요할 수 있다.
+
+반면 **고정 에포크(5~10) + 큰 사전학습 모델**(KoBERT, ALBERT) 은 Val 분산에 덜 민감. Val 을
+줄이고 Train 을 늘리는 70/10/20 이 적합.
+
+---
+
+## 데이터 규모별 실무 권장
+
+### 권장 비율 테이블
+
+| 데이터 규모 | 추천 분할 | 이유 |
+|-------------|-----------|------|
+| < 1,000 건 | **K-Fold CV** 또는 60/20/20 | 작은 Val/Test 도 안정적 평가 필요, CV 로 분산 감소 |
+| 1,000~10,000 건 | **70/10/20** (또는 80/10/10) | Train 확보 우선, Val/Test 각 700~1,000 건이면 충분 |
+| 10,000~100,000 건 | **80/10/10** 또는 그 이상 | Val·Test 각 1,000 건 이상이면 통계적으로 충분 |
+| > 100,000 건 | **98/1/1** (ImageNet 등) | 1% 만 해도 1,000+ 건 확보 |
+
+### 원리 — 왜 큰 데이터에서 Val/Test 비율이 줄어도 되는가
+
+Val/Test 의 목적은 **성능 추정의 정확도 확보** 이지 **비례 크기 유지**가 아니다.
+"정확도 ±0.3%p 이내" 를 목표로 하면:
+
+$$
+1.96 \cdot \sqrt{\frac{p(1-p)}{n}} \le 0.003
+\quad\Rightarrow\quad
+n \ge \frac{1.96^2 \cdot p(1-p)}{0.003^2}
+$$
+
+$p = 0.95$ 기준 $n \ge 2{,}026$. 즉 **Test 2천 건이면 ±0.3%p 정확도**. 데이터 10만 건에서는 2%
+면 충분. 100만 건에서는 0.2% 로 1%p 미만 정확도까지 가능.
+
+**ImageNet(128만 건)이 98/1/1 을 쓰는 이유**: Val·Test 각 1.28만 건이면 이미 수천 건의 통계적
+여유. Train 을 더 늘려 얻는 **학습 이득**이 Val/Test 비율 감소의 **평가 정밀도 손실**을 압도.
+
+---
+
+## 왜 필요한가 — 세 고려사항
+
+### 1. 과소 Train 의 대가
+
+Train 이 너무 작으면 모델이 데이터의 실제 패턴을 학습하지 못한다. 특히 대용량 사전학습
+모델(BERT 계열)은 fine-tuning 데이터가 적어도 어느 정도 작동하지만, **from-scratch 모델**이나
+클래스 수가 많은 분류 문제에서는 Train 부족이 성능 병목.
+
+**rule of thumb**: 분류 클래스당 최소 **50~100 건** 확보 필요 (많을수록 유리). 14-class 에서는
+14 × 100 = 1,400 건이 Train 하한.
+
+### 2. 과소 Val 의 대가
+
+Val 이 작으면 **하이퍼파라미터 선택이 random sample 에 좌우된다**.
+
+```
+예: Learning rate = {1e-3, 5e-4, 1e-4} 비교
+    Val = 100 건 (클래스당 ~7건)
+    → 각 LR 에서 Val accuracy 가 ±3%p 흔들림
+    → "우연히 가장 좋은 LR" 이 선택될 확률 높음
+```
+
+### 3. 과소 Test 의 대가
+
+Test 가 작으면 **최종 성능 보고의 신뢰구간이 넓어** 모델 간 비교나 배포 결정이 어렵다. 예:
+Test 500 건에서 모델 A = 95%, B = 94% 라면 두 모델은 **통계적으로 구분 불가** (§통계적 유의성
+참조).
+
+---
+
+## 응용 — 실제 프로젝트 의사결정
+
+### 시나리오 1 — 이중 모델 비교 프로젝트
+
+**상황**: BiLSTM(Early Stopping 사용) vs KoBERT(고정 에포크) 를 같은 데이터에서 비교.
+
+**논쟁**: "두 모델이 같은 분할을 써야 공정한가?"
+
+**답**: **반드시 같은 Test 를 써야 한다.** Val 은 모델 특성에 맞춰 다를 수 있다.
+
+| 모델 | 분할 | 근거 |
+|------|------|------|
+| BiLSTM | 60/20/20 | Early Stopping patience=10 → Val 안정성 우선 |
+| KoBERT | 70/10/20 | 고정 5 epoch → Train 확보 우선 |
+| **공통 Test** | **20%** | **같은 Test 로 최종 비교 공정성 확보** |
+
+Val 을 다르게 써도 Test 가 같으면 최종 비교는 유효. 다만 보고서에 "BiLSTM 은 Train 4,618 건만
+쓴 불리한 조건" 임을 명시해야 한다.
+
+### 시나리오 2 — K-Fold CV 전환 기준
+
+**데이터 < 1,000 건**에서는 고정 분할보다 **K-Fold CV** 가 낫다.
+
+$$
+\text{CV 성능} = \frac{1}{K}\sum_{k=1}^K \text{Acc}_k, \quad \text{SE}_{\text{CV}} = \text{Std}(\text{Acc}_k) / \sqrt{K}
+$$
+
+$K = 5$ 로 평균 Test 성능 + 각 fold 표준편차를 함께 보고. 이것이 단일 분할보다 **훨씬 안정적**.
+
+단점: 학습 시간 $K$ 배. 딥러닝에서는 fold 별로 수 시간이 걸리면 비현실적. 중소 규모 ML 에서만
+실용적.
+
+### 시나리오 3 — 클래스 불균형
+
+**상황**: 14 클래스 중 1 클래스가 전체의 50%.
+
+**주의**: **stratified split** 필수. 각 분할에 모든 클래스가 원래 비율로 들어가도록. `sklearn`
+의 `StratifiedKFold` 또는 `train_test_split(stratify=y)` 사용.
+
+Rare class (클래스당 < 30 건) 가 있으면 Val 을 20%로 늘려 per-class 평가의 신뢰도 확보.
+
+---
+
+## 예시 — 수치 시뮬레이션
+
+### 분할 비율에 따른 Val 분산 비교
+
+가상의 fine-tuning 실험에서 Learning rate 3개 후보를 비교한다고 하자. 실제 최적 LR 의
+Val accuracy 는 95%, 차선 LR 은 94.5%.
+
+| Val 크기 | Val acc SE | 최적 LR 이 가장 높게 나올 확률 |
+|----------|-----------|--------------------------------|
+| 100 | ±2.2% | 약 55% — 거의 동전 |
+| 500 | ±0.98% | 약 72% |
+| 1,000 | ±0.69% | 약 82% |
+| 1,539 | ±0.56% | 약 88% |
+
+**결론**: Val 1,000 건 이상이면 하이퍼파라미터 순위가 안정적. 그 이하에서는 **여러 random seed
+로 반복 실험** 하거나 CV 를 써야 한다.
+
+---
+
+## 코드 예시
+
+### Step 1: sklearn 으로 분할 구현
+
+```python
+import numpy as np
+from sklearn.model_selection import train_test_split
+
+rng = np.random.default_rng(42)
+n, k_class = 7698, 14
+X = rng.normal(size=(n, 50))
+y = rng.choice(k_class, size=n)
+
+# 70/10/20 분할 (stratified)
+# 먼저 train+val (80%) vs test (20%)
+X_trainval, X_test, y_trainval, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+# 그 다음 train (70%/80% = 87.5%) vs val (10%/80% = 12.5%)
+X_train, X_val, y_train, y_val = train_test_split(
+    X_trainval, y_trainval, test_size=0.125, stratify=y_trainval, random_state=42
+)
+
+for name, split in [("Train", y_train), ("Val", y_val), ("Test", y_test)]:
+    print(f"{name:6s}: {len(split):5d}  (클래스당 평균 {len(split)/k_class:.0f} 건)")
+
+# 출력 예:
+# Train :  5388  (클래스당 평균 385 건)
+# Val   :   771  (클래스당 평균 55 건)
+# Test  :  1540  (클래스당 평균 110 건)
+```
+
+### Step 2: Val 크기에 따른 하이퍼파라미터 선택 안정성
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+def simulate_hp_selection(true_accs, val_size, n_trials=1000):
+    """n 개 후보 하이퍼파라미터, true_accs = 각 후보의 실제 Val 정확도.
+    val_size 에서 관측된 정확도로 최고를 고르는 확률 반환."""
+    best_idx_correct = 0
+    for _ in range(n_trials):
+        observed = [
+            rng.binomial(val_size, p) / val_size
+            for p in true_accs
+        ]
+        if np.argmax(observed) == np.argmax(true_accs):
+            best_idx_correct += 1
+    return best_idx_correct / n_trials
+
+true_accs = [0.95, 0.945, 0.935]   # 3 개 LR 의 실제 Val 정확도
+print("Val 크기 | 최적 LR 선택 확률")
+for val_size in [100, 300, 500, 1000, 1540, 3000]:
+    p_correct = simulate_hp_selection(true_accs, val_size)
+    print(f"{val_size:>6} | {p_correct:.2%}")
+```
+
+결과 예:
+
+```
+Val 크기 | 최적 LR 선택 확률
+   100 | 54.5%
+   300 | 64.2%
+   500 | 72.3%
+  1000 | 81.8%
+  1540 | 87.5%
+  3000 | 93.4%
+```
+
+**해석**: Val 이 500 미만이면 거의 랜덤, 1,000+ 에서 안정, 3,000 이상에서 거의 확실.
+
+### Step 3: K-Fold CV 전환
+
+```python
+from sklearn.model_selection import StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+
+def cv_evaluate(X, y, model_factory, k=5, random_state=42):
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=random_state)
+    scores = []
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+        model = model_factory()
+        model.fit(X[train_idx], y[train_idx])
+        pred = model.predict(X[val_idx])
+        acc = accuracy_score(y[val_idx], pred)
+        scores.append(acc)
+        print(f"Fold {fold}: Acc = {acc:.4f}")
+    mean, std = np.mean(scores), np.std(scores, ddof=1)
+    print(f"\nCV: {mean:.4f} ± {std:.4f}  (n={len(scores)} folds)")
+    return mean, std
+
+# 데이터가 작을 때 (예: 500건) 권장
+X_small = X[:500]
+y_small = y[:500]
+cv_evaluate(X_small, y_small, lambda: RandomForestClassifier(n_estimators=100))
+```
+
+---
+
+## 자주 걸리는 함정
+
+| 함정 | 증상 | 처방 |
+|------|------|------|
+| Test 를 여러 번 평가해서 모델 비교 | Test 성능 과대평가 | Test 는 최종 한 번만, 비교는 Val 으로 |
+| Stratify 없이 split | Rare class 가 Test 에 없음 | `stratify=y` 옵션 사용 |
+| Val = Test 혼용 | 하이퍼파라미터 선택이 Test leak | 셋 분할 엄수 |
+| 불균형 데이터에 60/20/20 고정 | Val 의 rare class 가 0~1 건 | Val 비율 상향 또는 stratified CV |
+| 데이터 100,000 건에 60/20/20 | Train 낭비 | 98/1/1 또는 95/2.5/2.5 |
+| Early Stop patience 조정 없이 작은 Val | False stop 다발 | Val 크기 상향 또는 patience 증가 |
+| Time series 데이터에 random split | 미래 데이터가 Train 에 유입 | 시간 순서 기반 분할 |
+| 같은 프로젝트 내 모델마다 다른 Test | 비교 무효화 | **Test 는 반드시 공통** |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [편향-분산 트레이드오프](./bias-variance-tradeoff.qmd) — placeholder
+- [Cross-validation 전략](./cross-validation.qmd) — placeholder
+- [Ablation Study — 모델 컴포넌트 기여도 분석](../Deep_Learning/ablation-study.qmd)
+
+**후속 주제**
+
+- [공정한 NLP 모델 벤치마킹](../Deep_Learning/fair-benchmarking-nlp-models.qmd)
+- [모델 정확도 차이의 통계적 유의성 — McNemar's Test](../Statistics/170-1-mcnemar-model-comparison.qmd)
+- [Fine-tuning 샘플 수 추정](./25-sample-size-fine-tuning.qmd)
+
+**관련 개념**
+
+- [Stratified Sampling](./stratified-sampling.qmd) — placeholder
+- [Hyperparameter Tuning 전략](./hyperparameter-tuning.qmd) — placeholder
+- [Model Selection 과 Generalization Bound](../Statistics/model-selection.qmd) — placeholder
+
+---
+
+## 참고문헌
+
+- Hastie, T., Tibshirani, R., & Friedman, J. (2009). *The Elements of Statistical Learning* (2nd ed.), Ch.7. Springer.
+- Raschka, S. (2018). Model evaluation, model selection, and algorithm selection in machine learning. arXiv:1811.12808.
+- Bengio, Y. & Grandvalet, Y. (2004). No unbiased estimator of the variance of K-fold cross-validation. *JMLR*, 5, 1089–1105.
+- Goodfellow, I., Bengio, Y., & Courville, A. (2016). *Deep Learning*, Ch.11. MIT Press.
+- Kohavi, R. (1995). A study of cross-validation and bootstrap for accuracy estimation and model selection. *IJCAI*, 14, 1137–1145.

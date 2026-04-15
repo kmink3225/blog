@@ -1,0 +1,482 @@
+---
+title: "모델 정확도 차이의 통계적 유의성"
+subtitle: "$\\sqrt{p(1-p)/n}$ 신뢰구간 vs McNemar's Test — 언제, 왜, 어떻게"
+description: |
+  두 분류 모델의 정확도 차이가 통계적으로 유의한지 판단하는 두 접근을 비교한다.
+  이항분포 표준오차 기반 신뢰구간의 유도와 한계, McNemar's paired test 의 원리와 우위,
+  학습 확률성을 고려한 다중 시드 반복, 실무에서의 "의미 있는 차이" 임계값을 수식과
+  코드로 함께 전개한다.
+categories:
+  - Statistics
+  - Machine Learning
+  - Deep Learning
+author: Kwangmin Kim
+date: 04/15/2026
+---
+
+## 왜 이 검정이 필요한가
+
+"모델 A 정확도 96.36%, 모델 B 94.81%. **A가 B보다 낫다**" — 이 결론이 옳은가?
+
+답은 상황에 따라 다르다.
+
+- Test set 이 1만 건이면: **거의 확실히 A가 낫다**
+- Test set 이 1천 건이면: **애매하다**
+- Test set 이 100 건이면: **구분 불가**
+
+**핵심 문제**: 1.55%p 차이는 **통계적 변동의 범위** 일 수도 있고, **실제 성능 차이** 일 수도
+있다. 이 구분은 다음에 의해 결정된다.
+
+1. Test set 크기 → 정확도 추정의 표준오차
+2. 학습 자체의 확률성 → 시드를 바꾸면 결과가 흔들림
+3. 두 모델이 **같은 샘플** 에 대해 어떻게 다르게 예측했는가
+
+이 포스트는 두 가지 주요 접근 — **이항 CI 기반 비교** 와 **McNemar's paired test** — 을 수식,
+직관, 코드로 전개한다.
+
+::: {.callout-important}
+## 한 줄 결론
+
+**단일 Test 에서 두 모델이 같은 샘플을 봤다면 McNemar's test 가 독립 이항 CI 보다 더 강력**.
+McNemar 는 "둘 다 맞춘 샘플" 을 비교에서 제외해 noise 를 줄인다. 실무에서는 McNemar p-value +
+다중 시드 반복을 함께 보고해야 배포 결정이 안전.
+:::
+
+---
+
+## 정의 — 두 접근의 측정 대상
+
+::: {.callout-note}
+## 정의: 두 통계량의 대상
+
+| 접근 | 측정하는 것 | 필요 정보 |
+|------|-------------|-----------|
+| **이항 CI** $\sqrt{p(1-p)/n}$ | **단일 모델** 정확도의 불확실성 | 각 모델의 (정확도, n) |
+| **McNemar's Test** | **두 모델** 예측이 진짜 다른가 | 각 모델의 **샘플별 예측** (paired) |
+
+이 둘은 다른 질문에 답한다. 두 모델을 비교하려면 McNemar 가 자연스러운 선택이다.
+:::
+
+---
+
+## 접근 1 — 이항분포 표준오차 기반 신뢰구간
+
+### 유도
+
+각 Test 샘플은 "맞음(1) / 틀림(0)" 의 **베르누이 시행**. 독립 $n$ 개 샘플 평균(= 정확도)의
+분산은
+
+$$
+\mathrm{Var}(\hat{p}) = \frac{p(1-p)}{n}, \qquad
+\text{SE}(\hat{p}) = \sqrt{\frac{p(1-p)}{n}}
+$$
+
+95% 신뢰구간:
+
+$$
+\hat{p} \pm 1.96 \cdot \text{SE}(\hat{p})
+$$
+
+### 프로젝트 수치 예시
+
+Test = 1,540 건, 두 모델:
+
+| 모델 | 정확도 | 정답 수 | SE | 95% CI |
+|------|--------|---------|-----|--------|
+| BiLSTM | 94.81% | 1,460 / 1,540 | ±0.56% | [93.71%, 95.91%] |
+| KoBERT | 96.36% | 1,484 / 1,540 | ±0.48% | [95.42%, 97.30%] |
+
+**관찰**: 두 CI 가 **살짝 겹친다** (BiLSTM 상단 95.91% > KoBERT 하단 95.42%).
+
+### 해석의 함정 — "CI 겹침 = 차이 없음" 이 아니다
+
+CI 겹침으로부터 "차이 없다" 는 결론은 **약한 기준**. 실제로는 더 엄격한 검정이 차이를
+감지할 수 있다. 이유:
+
+1. **CI 는 단일 모델** 의 불확실성. 두 모델의 **차이의 CI** 와 다르다
+2. **독립 가정**: 위 SE 는 "Test 샘플이 바뀌면 어떻게 될까" 를 측정. 실제로는 **같은 Test
+   샘플** 을 두 모델이 봤으므로 독립 아님
+
+차이의 CI 를 제대로 계산하면:
+
+$$
+\text{Var}(\hat{p}_1 - \hat{p}_2) = \text{Var}(\hat{p}_1) + \text{Var}(\hat{p}_2) - 2\mathrm{Cov}(\hat{p}_1, \hat{p}_2)
+$$
+
+**두 모델의 예측이 상관되어 있다** (같은 Test 샘플이 어려우면 둘 다 틀릴 가능성) → $\mathrm{Cov} > 0$
+→ 차이의 분산이 **독립 가정보다 작다**. 즉 "CI 겹침이지만 차이는 유의" 가 가능.
+
+이 상관 구조를 정확히 활용하는 것이 McNemar's test.
+
+---
+
+## 접근 2 — McNemar's Test
+
+### 핵심 아이디어
+
+두 모델이 **같은 Test 샘플** 에 대해 어떻게 다르게 예측했는지만 본다.
+
+|  | 모델 B 맞음 | 모델 B 틀림 |
+|---|---|---|
+| **모델 A 맞음** | $a$ (둘 다 맞음) | $b$ (A만 맞춤) |
+| **모델 A 틀림** | $c$ (B만 맞춤) | $d$ (둘 다 틀림) |
+
+**정보가 있는 셀은 $b, c$**:
+
+- $a$, $d$: 두 모델이 **일치** → 성능 차이 판단에 무관
+- $b$, $c$: 두 모델이 **불일치** → 이 차이가 우연인지 검정
+
+### 가설과 검정 통계량
+
+귀무가설 $H_0$: 두 모델 성능 동일 → $b$ 와 $c$ 기대값 같음.
+
+$$
+E(b \mid H_0) = E(c \mid H_0) = \frac{b + c}{2}
+$$
+
+**McNemar's $\chi^2$ 통계량** (연속성 보정 포함):
+
+$$
+\chi^2_{\text{MC}} = \frac{(|b - c| - 1)^2}{b + c}
+$$
+
+자유도 1 카이제곱 분포. $p < 0.05$ 면 두 모델이 통계적으로 다름.
+
+### 연속성 보정 $-1$ 의 의미
+
+$b, c$ 는 이산. $\chi^2_1$ 근사의 정확도를 높이기 위해 **Yates 보정** $-1$ 을 적용. $b + c$ 가
+작을 때 특히 중요. 25 이상이면 무시 가능하지만 습관적으로 포함.
+
+**더 엄격한 대안 — 정확 검정**: $b + c < 25$ 일 때는 $\chi^2$ 근사 대신 이항 정확 검정
+
+$$
+p\text{-value} = 2 \cdot \sum_{k=0}^{\min(b, c)} \binom{b+c}{k} (1/2)^{b+c}
+$$
+
+### 가상 시나리오 계산
+
+Test 1,540 건, 두 모델 비교:
+
+- 둘 다 맞춤 $a = 1{,}440$
+- BiLSTM 만 맞춤 $b = 20$
+- KoBERT 만 맞춤 $c = 44$
+- 둘 다 틀림 $d = 36$
+
+$$
+\chi^2 = \frac{(|20 - 44| - 1)^2}{20 + 44} = \frac{529}{64} \approx 8.27
+$$
+
+$p \approx 0.004$ → **유의미한 차이**. 표준 CI 겹침으로는 보이지 않던 차이가 McNemar 에서는
+드러남.
+
+---
+
+## 왜 McNemar 가 더 강력한가
+
+### Paired vs Unpaired 의 통계적 원리
+
+**독립 이항 CI 는 "Test 샘플 변동만" 고려**. 같은 Test 를 써도 독립 샘플인 것처럼 분산을
+과대평가.
+
+**McNemar 는 "같은 Test" 조건을 활용**. 두 모델이 동시에 맞춘 $a = 1{,}440$ 건은 비교에서
+제거 (noise 원인). **의견이 갈린 $b + c = 64$ 건만 정교하게 분석**.
+
+**비유**: 두 심판의 판정이 "다르다" 를 증명하려면:
+
+- 약한 방법: 각 심판의 판정 성공률을 따로 계산해 비교
+- 강한 방법: **같은 경기에서** 두 심판이 다르게 판정한 사례만 분석
+
+McNemar 는 후자이다.
+
+### 검정력 비교
+
+같은 유의수준($\alpha = 0.05$)에서 McNemar 가 독립 이항 test 보다 **높은 검정력** 을 갖는 것이
+보통이다. 차이를 감지하는 능력이 크다는 뜻.
+
+특히 두 모델의 예측이 **강한 상관** (대부분 같은 답)을 가질 때 McNemar 의 우위가 커진다. NLP
+모델들은 대부분 이 조건을 만족.
+
+---
+
+## 두 방법의 비교표
+
+| 항목 | $\sqrt{p(1-p)/n}$ CI | McNemar's Test |
+|------|----------------------|-----------------|
+| 목적 | 단일 모델 정확도 불확실성 | 두 모델 차이 검정 |
+| 입력 | 정확도 $p$, 샘플 수 $n$ | 두 모델의 샘플별 예측 (paired) |
+| 결과 | 신뢰구간 | p-value |
+| 가정 | 샘플 독립 | 같은 Test 에서 다른 예측 |
+| 민감도 | 낮음 (Test 작으면 CI 큼) | 높음 (paired 라 noise 제거) |
+| 두 모델 비교 | 약한 기준 (CI 겹침 ≠ 차이 없음) | 강한 기준 |
+| 언제 씀 | 단일 모델 성능 보고 | 두 모델 중 어느 것이 나은가 |
+
+---
+
+## 학습 확률성 추가 고려
+
+Test 정확도가 **학습 시드** 에 따라 달라진다는 사실도 감안해야 한다.
+
+### 학습 과정의 확률성 요인
+
+| 원인 | 편차 (%p) |
+|------|----------|
+| Test set 샘플링 | ±0.5 ~ ±1.0 |
+| 가중치 초기화 (시드) | ±0.3 ~ ±1.0 |
+| Dropout 랜덤성 | ±0.2 ~ ±0.5 |
+| DataLoader shuffle | ±0.2 ~ ±0.4 |
+| **총합** | **±1 ~ ±2** |
+
+**1.5%p 차이는 "총 편차 범위 이내"** → 단일 실행 결과만으로는 불충분.
+
+### 다중 시드 반복 실험
+
+```python
+seeds = [42, 123, 2024, 7, 99]
+results = [train_with_seed(s) for s in seeds]
+mean, std = np.mean(results), np.std(results, ddof=1)
+print(f"{mean:.2f}% ± {std:.2f}%")
+```
+
+**두 모델 각각 5회 반복**:
+
+- BiLSTM: 94.5% ± 0.8%
+- KoBERT: 96.2% ± 0.5%
+
+오차범위를 고려해 **명확히 분리**되면 유의미. 위 예에서 95% CI 가 $(92.9, 96.1)$ 과 $(95.2, 97.2)$
+— 겹치는 영역이 작아 더 분명한 판단 가능.
+
+---
+
+## 실무 가이드 — "의미 있는 차이" 임계값
+
+### 프로젝트 맥락별 기준
+
+| 비교 | 차이 (%p) | 유의성 |
+|------|-----------|--------|
+| BiLSTM vs KoBERT | +1.55 | 애매 (noise 범위) |
+| BiLSTM vs DistilKoBERT | +1.69 | 애매 |
+| KoBERT vs DistilKoBERT | +3.24 | 의미 있음 (noise 2배 초과) |
+| DistilKoBERT vs mBERT | +2.72 | 의미 있음 |
+
+**실무 임계값**:
+
+- **< 1%p**: 무시 (완전 noise)
+- **1~2%p**: 애매 → 반드시 McNemar 또는 다중 시드로 확인
+- **2~3%p**: 의심 → McNemar 로 검증 후 판단
+- **> 3%p**: 대체로 유의 → 다중 시드로 최종 확인
+
+### 보고 시나리오별 기준
+
+| 상황 | 기준 |
+|------|------|
+| 데모 목적 | 더 높은 수치 선택 (편의) |
+| 프로덕션 결정 | **3회 이상 재실행** → 평균 비교 |
+| 논문·보고서 | **다중 시드 평균 + 표준편차** 필수 표기 |
+| 공개 벤치마크 | **McNemar p-value + 효과 크기** 함께 |
+
+---
+
+## 코드 예시
+
+### Step 1: 독립 이항 CI 계산
+
+```python
+import numpy as np
+from scipy.stats import norm
+
+def binomial_ci(correct, n, alpha=0.05):
+    p = correct / n
+    se = np.sqrt(p * (1 - p) / n)
+    z = norm.ppf(1 - alpha / 2)
+    return p, p - z * se, p + z * se
+
+# 프로젝트 예시
+p_a, lo_a, hi_a = binomial_ci(1460, 1540)
+p_b, lo_b, hi_b = binomial_ci(1484, 1540)
+print(f"BiLSTM:  {p_a:.4f}  95% CI [{lo_a:.4f}, {hi_a:.4f}]")
+print(f"KoBERT:  {p_b:.4f}  95% CI [{lo_b:.4f}, {hi_b:.4f}]")
+print(f"CI 겹침: {hi_a > lo_b}")
+```
+
+### Step 2: McNemar's Test 구현
+
+```python
+import numpy as np
+from scipy.stats import chi2, binom
+
+def mcnemar_test(y_true, pred_a, pred_b, exact=False):
+    """두 모델 paired 비교.
+    Returns: (chi2_stat, p_value, (a, b, c, d))"""
+    correct_a = pred_a == y_true
+    correct_b = pred_b == y_true
+    a = np.sum(correct_a & correct_b)
+    b = np.sum(correct_a & ~correct_b)
+    c = np.sum(~correct_a & correct_b)
+    d = np.sum(~correct_a & ~correct_b)
+
+    if b + c < 25 or exact:
+        # 이항 정확 검정 (양측)
+        k = min(b, c)
+        p = 2 * sum(
+            binom.pmf(i, b + c, 0.5) for i in range(k + 1)
+        )
+        p = min(p, 1.0)
+        return None, p, (a, b, c, d)
+    else:
+        # Yates 연속성 보정 카이제곱
+        chi2_stat = (abs(b - c) - 1)**2 / (b + c)
+        p = 1 - chi2.cdf(chi2_stat, df=1)
+        return chi2_stat, p, (a, b, c, d)
+
+
+# 예시 사용
+rng = np.random.default_rng(0)
+y_true = rng.integers(0, 14, size=1540)
+# 두 모델의 가상 예측 (실제는 모델 출력)
+pred_a = y_true.copy()
+flip_idx = rng.choice(1540, size=80, replace=False)
+pred_a[flip_idx] = (pred_a[flip_idx] + 1) % 14
+pred_b = y_true.copy()
+flip_idx = rng.choice(1540, size=56, replace=False)
+pred_b[flip_idx] = (pred_b[flip_idx] + 1) % 14
+
+chi2_stat, p, (a, b, c, d) = mcnemar_test(y_true, pred_a, pred_b)
+print(f"Confusion table: a={a}, b={b}, c={c}, d={d}")
+print(f"Chi-square = {chi2_stat:.2f}")
+print(f"p-value    = {p:.4f}")
+print(f"결론: {'유의미한 차이' if p < 0.05 else '차이 불충분'}")
+```
+
+### Step 3: statsmodels 사용 (실무 권장)
+
+```python
+from statsmodels.stats.contingency_tables import mcnemar
+
+pairs = [("BiLSTM", pred_a), ("KoBERT", pred_b)]
+print(f"{'Model A':15s}{'vs':^5s}{'Model B':15s}  chi2     p-value  Significance")
+for i, (name_a, preds_a) in enumerate(pairs):
+    for name_b, preds_b in pairs[i+1:]:
+        correct_a = preds_a == y_true
+        correct_b = preds_b == y_true
+        b = int(np.sum(correct_a & ~correct_b))
+        c = int(np.sum(~correct_a & correct_b))
+        result = mcnemar(
+            [[0, b], [c, 0]], exact=False, correction=True
+        )
+        sig = "***" if result.pvalue < 0.001 else (
+              "**"  if result.pvalue < 0.01 else (
+              "*"   if result.pvalue < 0.05 else "n.s."))
+        print(f"{name_a:15s} vs  {name_b:15s} "
+              f"{result.statistic:6.2f}  {result.pvalue:.4f}  {sig}")
+```
+
+### Step 4: 다중 시드 반복
+
+```python
+import numpy as np
+
+def multi_seed_comparison(train_fn, seeds=[42, 123, 2024, 7, 99]):
+    """train_fn(seed) → test_accuracy 반환하는 함수 가정."""
+    accs = [train_fn(s) for s in seeds]
+    mean = np.mean(accs)
+    std = np.std(accs, ddof=1)
+    se = std / np.sqrt(len(accs))
+    ci_lo = mean - 1.96 * se
+    ci_hi = mean + 1.96 * se
+    return mean, std, (ci_lo, ci_hi)
+
+# 두 모델 비교 (가상)
+def mock_train_bilstm(seed):
+    rng = np.random.default_rng(seed)
+    return 0.945 + rng.normal(scale=0.008)
+
+def mock_train_kobert(seed):
+    rng = np.random.default_rng(seed)
+    return 0.962 + rng.normal(scale=0.005)
+
+seeds = [42, 123, 2024, 7, 99]
+mean_a, std_a, ci_a = multi_seed_comparison(mock_train_bilstm, seeds)
+mean_b, std_b, ci_b = multi_seed_comparison(mock_train_kobert, seeds)
+
+print(f"BiLSTM: {mean_a:.4f} ± {std_a:.4f}  95% CI [{ci_a[0]:.4f}, {ci_a[1]:.4f}]")
+print(f"KoBERT: {mean_b:.4f} ± {std_b:.4f}  95% CI [{ci_b[0]:.4f}, {ci_b[1]:.4f}]")
+
+# 평균 차이의 paired t-test
+from scipy.stats import ttest_rel
+accs_a = [mock_train_bilstm(s) for s in seeds]
+accs_b = [mock_train_kobert(s) for s in seeds]
+t, p = ttest_rel(accs_b, accs_a)  # paired t-test (same seeds)
+print(f"\nPaired t-test: t = {t:.2f}, p = {p:.4f}")
+```
+
+---
+
+## 자주 걸리는 함정
+
+| 함정 | 증상 | 처방 |
+|------|------|------|
+| 독립 이항 CI 겹침으로 "차이 없음" 단정 | 실제 유의한 차이 놓침 | McNemar 추가 검정 |
+| McNemar 를 unpaired test 처럼 사용 | 두 모델이 다른 Test 에 대한 예측 | 반드시 **같은 Test** 에서 paired 예측 |
+| $b + c$ 가 작을 때 $\chi^2$ 근사 | p-value 부정확 | $b + c < 25$ 면 이항 정확 검정 |
+| 단일 실행 결과로 배포 결정 | 학습 확률성 무시 | 3회 이상 반복, 다중 시드 |
+| 다중 비교 보정 누락 | False positive 증가 | Bonferroni 또는 Benjamini-Hochberg |
+| McNemar p-value 만 보고 효과 크기 무시 | 실질적 차이 크기 불명 | Cohen's g 또는 정확도 차이 함께 |
+| Cross-validation 과 McNemar 혼동 | 독립 가정 위배 | 5x2 CV paired t-test 등 전용 방법 |
+| 연속성 보정 잊음 | $b + c$ 작을 때 p-value 과대 | `correction=True` 또는 정확 검정 |
+
+---
+
+## 요약 — 의사결정 플로우
+
+```
+두 모델 정확도 차이 d 발견
+   ↓
+d < 1%p ?
+   → Yes: 무시 (noise 수준)
+   → No: 아래로
+   ↓
+같은 Test 에서 paired 예측 가능한가?
+   → Yes: McNemar's test
+     ↓ p < 0.05 ?
+     → Yes: 유의미 — 다중 시드로 재확인 권장
+     → No: 의심 — 다중 시드 반복으로 최종 판단
+   → No: 독립 이항 CI + 다중 시드 평균
+   ↓
+프로덕션 결정이면:
+   → 반드시 3회+ 반복 + 효과 크기 함께 보고
+```
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [이항 분포의 성질](./03-2-binomial-distribution.qmd) — placeholder
+- [카이제곱 검정 개관](./chi-square-test-overview.qmd) — placeholder
+- [신뢰구간의 의미와 유도](./confidence-interval-foundations.qmd) — placeholder
+
+**후속 주제**
+
+- [Fisher's Exact Test](./fisher-exact.qmd) — placeholder (작은 표본에서의 정확 검정)
+- [Paired t-test 와 Wilcoxon Signed-rank](./paired-tests.qmd) — placeholder
+- [5x2 Cross-Validation t-test](./5x2-cv-test.qmd) — placeholder
+
+**관련 개념**
+
+- [Train/Val/Test 분할 비율](../Machine_Learning/26-train-val-test-split-ratio.qmd)
+- [공정한 NLP 모델 벤치마킹](../Deep_Learning/fair-benchmarking-nlp-models.qmd)
+- [Ablation Study 의 통계적 검정](../Deep_Learning/ablation-study.qmd)
+- [다중 비교 보정 — Bonferroni, BH](./166-multiple-testing.qmd)
+- [Effect Size (Cohen's d, h, g)](./effect-size-cohen.qmd) — placeholder
+
+---
+
+## 참고문헌
+
+- McNemar, Q. (1947). Note on the sampling error of the difference between correlated proportions or percentages. *Psychometrika*, 12, 153–157.
+- Dietterich, T. G. (1998). Approximate statistical tests for comparing supervised classification learning algorithms. *Neural Computation*, 10, 1895–1923.
+- Yates, F. (1934). Contingency tables involving small numbers and the $\chi^2$ test. *JRSS Supplement*, 1, 217–235.
+- Demšar, J. (2006). Statistical comparisons of classifiers over multiple data sets. *JMLR*, 7, 1–30.
+- Japkowicz, N. & Shah, M. (2011). *Evaluating Learning Algorithms: A Classification Perspective*. Cambridge.
+- Nadeau, C. & Bengio, Y. (2003). Inference for the generalization error. *Machine Learning*, 52, 239–281.

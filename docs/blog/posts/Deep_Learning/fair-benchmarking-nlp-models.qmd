@@ -1,0 +1,449 @@
+---
+title: "공정한 NLP 모델 벤치마킹"
+subtitle: "토크나이저와 임베딩은 통일하지 말 것 — BiLSTM vs KoBERT vs mBERT 비교 설계"
+description: |
+  여러 사전학습 NLP 모델을 비교할 때 "무엇을 통일하고 무엇을 통일하지 말아야 하는가" 를
+  정리한다. 토크나이저·임베딩이 모델 아키텍처의 일부인 이유, Subword tokenization 이
+  fine-tuning 에 주는 영향, 학습 데이터·Test·평가 지표·시드는 통일하고 LR·Batch·Epoch 는
+  모델별 최적값을 써야 하는 이유를 수식과 코드로 함께 전개한다.
+categories:
+  - Deep Learning
+  - Machine Learning
+  - NLP
+author: Kwangmin Kim
+date: 04/15/2026
+---
+
+## 흔한 오해에서 시작
+
+여러 NLP 모델을 비교할 때 연구자가 흔히 품는 질문:
+
+> **"공정한 벤치마킹을 위해 토크나이저와 임베딩 모델을 통일해야 하지 않을까?"**
+
+직관적으로는 "변인 통제" 라는 과학적 원칙이 떠오른다. 같은 데이터·같은 토크나이저·같은 임베딩·
+다른 모델 아키텍처만 비교하는 것이 깔끔해 보인다.
+
+**답: 아니다. 오히려 통일하면 공정성이 깨진다.**
+
+이 직관적 실수가 왜 실수인지, 그리고 공정한 비교를 위해 실제로 **무엇을 통일하고 무엇을
+통일하지 말아야 하는가** 를 체계적으로 정리한다.
+
+::: {.callout-important}
+## 한 줄 요약
+
+NLP 모델은 **"토크나이저 + 임베딩 + 아키텍처 + 사전학습" 이 결합된 하나의 패키지**이다. 이
+패키지에서 일부만 바꾸면 모델의 원래 설계 장점이 파괴된다. **공정한 비교는 각 모델의 권장
+설정을 각자 쓰게 하고, 데이터·Test·평가 지표만 통일하는 것**이다.
+:::
+
+---
+
+## 정의 — 사전학습 NLP 모델의 구성 요소
+
+::: {.callout-note}
+## 정의: 사전학습 NLP 모델의 4요소
+
+현대 NLP 모델(BERT 계열, GPT 계열 등)은 네 가지 요소가 **함께 설계·학습**된 패키지이다.
+
+| 요소 | 역할 | 변경 가능성 |
+|------|------|-------------|
+| **Tokenizer** | 텍스트 → 토큰 ID 시퀀스 | 사전학습 시 고정, Fine-tuning 시 변경 불가 |
+| **Embedding** | 토큰 ID → 벡터 | 사전학습으로 학습된 가중치, 파인튜닝에서 미세 조정 가능 |
+| **Architecture** | 벡터 시퀀스 → 표현 학습 | 사전학습 시 고정, Fine-tuning 에서 분류 헤드만 교체 |
+| **Pretraining** | 대용량 corpus 로 사전 학습 | 이미 완료됨, 파인튜닝에서 수정 안 함 |
+
+핵심: **토크나이저는 사전학습 시점에 vocab 이 확정**된다. Fine-tuning 단계에서 변경 불가.
+모델을 쓴다는 것은 그 모델의 토크나이저를 함께 쓰는 것.
+:::
+
+---
+
+## 왜 토크나이저를 통일하면 안 되는가
+
+### 모델별 토크나이저의 근본적 차이
+
+| 모델 | 토크나이저 | 단위 | 예: "실험시작일자" |
+|------|-----------|------|-------------------|
+| BiLSTM (from-scratch) | 음절 또는 단어 | 음절 | 실, 험, 시, 작, 일, 자 |
+| KoBERT | SentencePiece (BPE) | subword | ▁실험, 시, 작, 일, 자 |
+| DistilKoBERT | SentencePiece | subword | ▁실험, 시, 작, 일자 |
+| mBERT | WordPiece | subword | 실, ##험, ##시, ##작, ##일, ##자 |
+| ALBERT | SentencePiece | subword | ▁실험, 시작, 일자 |
+
+**각 토크나이저가 설계된 이유가 다르다**:
+
+- **BiLSTM 의 음절 단위**: from-scratch 학습 전제. 작은 vocab 으로 OOV 문제 해결
+- **KoBERT 의 SentencePiece**: 한국어 대용량 corpus 에서 빈도 기반 subword 학습
+- **mBERT 의 WordPiece**: 100+ 언어 지원을 위해 언어 비의존적 접두사 `##` 사용
+
+### 통일 시나리오 1 — KoBERT 토크나이저를 BiLSTM 에 강제
+
+```
+원문: "실험시작일자"
+KoBERT: ▁실험 / 시 / 작 / 일 / 자  (subword)
+BiLSTM (원래): 실 / 험 / 시 / 작 / 일 / 자  (음절)
+```
+
+**BiLSTM 은 음절 단위 학습 설계**. subword 로 바꾸면:
+
+1. Vocab 크기 변화 (음절 3,000 → subword 32,000)
+2. 시퀀스 길이 감소 (5~10배) → RNN hidden 전파 경로 짧아짐
+3. 원래 음절 단위에서 BiLSTM 이 잘 잡던 **형태소 경계** 신호 상실
+
+결과: **BiLSTM 의 원래 설계 장점이 파괴**되고 의도치 않게 불리한 조건에서 평가.
+
+### 통일 시나리오 2 — BiLSTM vocab 을 KoBERT 에 강제
+
+더 심각하다. KoBERT 는 **한국어 대용량 corpus(뉴스, 위키, 블로그 25GB)** 에서 SentencePiece
+vocab 으로 사전학습됐다. 이 vocab 을 음절 단위로 바꾸면:
+
+- **사전학습 가중치 완전 파괴**: 임베딩 행렬이 subword ID 기준인데, 음절 ID 로 재매핑 불가
+- Fine-tuning 출발점이 **무작위 초기화**와 다름없어짐
+- 결과: KoBERT 의 본질인 "대용량 사전학습 효과" 가 사라짐
+
+**핵심 원리**: 토크나이저와 임베딩은 **모델 본체의 일부**이다. "모델 아키텍처만 비교" 하는
+것은 원리적으로 불가능.
+
+---
+
+## Subword Tokenization 의 한계와 대응
+
+### 의미 단위의 파편화
+
+예: **"실험시작일자"** → KoBERT 가 `▁실험 / 시 / 작 / 일 / 자` 로 분할.
+
+**우려**: "일자" 가 하나의 의미 단위여야 하는데 `##일` + `##자` 로 분리됨. Fine-tuning 으로 이
+문제가 해결되는가?
+
+### 답: Fine-tuning 은 **토크나이저는 바꾸지 않는다**
+
+Fine-tuning 이 수정하는 것:
+
+- 임베딩 행렬 가중치 (미세 조정)
+- Transformer layer 가중치
+- 분류 헤드 (새로 학습)
+
+Fine-tuning 이 수정하지 **않는 것**:
+
+- **토크나이저** 자체 (vocab 고정)
+- Subword 경계 결정 로직
+
+즉 `##일 + ##자` 분해는 Fine-tuning 으로 `일자` 로 합쳐지지 않는다.
+
+### 그럼에도 학습이 되는 이유 — Attention 의 결합력
+
+BERT 계열의 attention 메커니즘이 보완한다.
+
+```
+[##일, ##자] 시퀀스
+  ↓
+Self-attention 이 인접 subword 간 관련도 학습
+  ↓
+"##일 다음 ##자" 패턴이 "날짜" 문맥에 자주 등장하는 것을 학습
+  ↓
+분류 헤드는 합쳐진 벡터 표현에서 의미 추출
+```
+
+**단, 손해는 분명 존재**:
+
+- **신호 분산**: 1개 강력 신호(`일자`) → 2개 약한 신호(`##일`, `##자`)
+- **Noise 증가**: `##일` 은 "일주일", "휴일", "내일" 등 여러 문맥에 등장
+- **순위**: SentencePiece (KoBERT) 의 `▁실험/시/작/일/자` 가 WordPiece 의 `실/##험/##시/##작/##일/##자`
+  보다 유리 (한국어 의미 단위 보존도 높음)
+
+### 해결 옵션 3가지
+
+**A. 그대로 학습 (가장 간단, 권장)**
+
+- 데이터가 수천 건 이상이면 attention 이 패턴 충분히 학습 가능
+- 최적 대비 1~2%p 성능 손실 예상
+- 추가 작업 0
+
+**B. 도메인 어휘 추가**
+
+```python
+# 새 토큰 추가 → 임베딩 행렬 확장
+new_tokens = ["일자", "번호", "코드", "단위", "비밀번호", "ID"]
+tokenizer.add_tokens(new_tokens)
+model.resize_token_embeddings(len(tokenizer))
+# 새 토큰 임베딩은 랜덤 초기화 → fine-tuning 에서 학습됨
+```
+
+- **장점**: 강한 의미 단위 보존
+- **단점**: 새 토큰 임베딩이 랜덤이라 **충분한 epoch** 필요, 초기에는 오히려 노이즈
+
+**C. 모델 교체**
+
+- 더 나은 토크나이저를 쓰는 모델(KoBERT, DistilKoBERT)로 변경
+- ALBERT 의 경량성 장점을 포기하는 것이 대가
+
+**실무 권장**: A 로 먼저 학습 → 90% 미만이면 B 시도. 대부분 A 로 충분.
+
+---
+
+## 통일해야 할 것 vs 통일하지 말아야 할 것
+
+### 표로 정리
+
+| 구분 | 항목 | 이유 |
+|------|------|------|
+| **✅ 통일 필수** | 학습 데이터 | 동일 문제를 풀어야 함 |
+| | Train/Val/Test 분할 (같은 random_state) | 데이터 누수 방지, 동일 Test 로 평가 |
+| | 평가 지표 (Acc, Macro/Weighted F1, per-class F1) | 같은 잣대로 측정 |
+| | 랜덤 시드 | 재현성 |
+| **✅ 통일 권장** | 하드웨어 (같은 GPU) | 학습 시간 비교의 공정성 |
+| **❌ 통일 금지** | 토크나이저 | 모델별 사전학습과 결합 |
+| | 임베딩 | 사전학습 가중치가 본질 |
+| | Learning Rate | 모델별 최적값 상이 (BiLSTM 1e-3 vs BERT 2e-5) |
+| | Batch Size | 모델 크기 따라 GPU 메모리 한계 다름 |
+| | Optimizer 선택 | AdamW vs Adam vs SGD 의 적합 모델 다름 |
+| | Weight decay | 모델 크기·구조에 따라 최적값 다름 |
+| **⚖️ 조건부** | Epochs | BiLSTM(Early Stop) 은 많이, BERT 는 5~10 표준 |
+| | Val 비율 | Early Stopping 사용 여부에 따라 |
+
+### 왜 Learning Rate 도 모델별로 달라야 하는가
+
+**경험적 최적값**:
+
+- Random init RNN (BiLSTM from-scratch): **1e-3** (큰 LR 로 빠르게 수렴)
+- 사전학습 Transformer (BERT 계열): **2e-5 ~ 5e-5** (작은 LR 로 미세 조정)
+- 대용량 모델 (GPT-3 파인튜닝): **1e-5 ~ 5e-6** (매우 작은 LR)
+
+**원리**: 사전학습 모델은 이미 좋은 가중치 위치에 있으므로 **작은 LR 로 미세 수정**. From-scratch
+는 무작위 초기값에서 출발하므로 **큰 LR 로 빠르게 이동**.
+
+LR 을 통일하면 **한쪽 모델의 학습 자체가 실패**한다. BiLSTM 에 2e-5 를 쓰면 수렴이 너무 느리고,
+BERT 에 1e-3 를 쓰면 **catastrophic forgetting** (사전학습 가중치 파괴) 발생.
+
+---
+
+## 실무 체크리스트
+
+### 프로젝트 세팅 시
+
+| 항목 | 통일 여부 | 체크 |
+|------|-----------|------|
+| 학습 데이터 (dl_cleaned.parquet) | ✅ 통일 | □ |
+| Test 분할 (seed=42, test 20%) | ✅ 통일 | □ |
+| Val 분할 | ⚠️ 모델별 허용 | □ |
+| 평가 지표 (Test Acc + F1) | ✅ 통일 | □ |
+| 토크나이저 | ❌ 각 모델 권장 토크나이저 | □ |
+| Learning Rate | ❌ 각 모델 최적값 | □ |
+| Batch Size | ❌ GPU 메모리 한계 내 | □ |
+| Random Seed | ✅ 통일 (재현성) | □ |
+
+### 결과 보고 시
+
+각 모델의 세팅을 **투명하게 공개**한다.
+
+```markdown
+| 모델 | Tokenizer | LR | Batch | Epochs | Early Stop |
+|------|-----------|-----|-------|--------|------------|
+| BiLSTM | 음절 (vocab 3K) | 1e-3 | 64 | patience=10 | O |
+| KoBERT | SentencePiece (vocab 8K) | 5e-5 | 32 | 5 고정 | X |
+| mBERT | WordPiece (vocab 120K) | 3e-5 | 16 | 5 고정 | X |
+```
+
+이렇게 공개하면 독자가 "각 모델이 자기 설계에 맞는 조건에서 돌았는가" 를 판단 가능.
+
+---
+
+## 예외 상황 — "아키텍처 본질만 비교"
+
+연구 질문이 **"아키텍처 자체의 능력 차이"** 라면 얘기가 다르다.
+
+예: "BiLSTM 의 본 능력 vs Transformer 의 본 능력"
+
+**이 경우의 조건**:
+
+- 모든 모델을 **사전학습 없이** 같은 데이터로 처음부터 학습
+- 같은 vocabulary
+- 같은 입력 표현
+- 같은 optimizer 가족 (예: AdamW)
+
+이것은 **실무 질문**(어떤 모델을 배포할까?)이 아니라 **아키텍처 연구** 질문이다. 배포 후보 선정
+목적이라면 각 모델을 자기 사전학습 포함해 비교하는 것이 맞다.
+
+**구분 기준**:
+
+| 목적 | 질문 | 비교 방법 |
+|------|------|-----------|
+| **배포 후보 선정** | "어떤 모델 패키지가 가장 성능 좋은가?" | 각 모델 사전학습 + 권장 설정 그대로 |
+| **아키텍처 연구** | "RNN vs Attention, 어느 메커니즘이 본질적으로 우수한가?" | 사전학습 제거, 모든 조건 통일 |
+
+이 글의 주제는 **전자** (실무 배포 선정). 이런 맥락이라면 토크나이저·임베딩·LR 통일은 금지.
+
+---
+
+## 코드 예시
+
+### Step 1: 각 모델의 권장 토크나이저 로드
+
+```python
+from transformers import AutoTokenizer
+
+# KoBERT
+tokenizer_kobert = AutoTokenizer.from_pretrained("monologg/kobert")
+text = "실험시작일자"
+print(f"KoBERT: {tokenizer_kobert.tokenize(text)}")
+# → ['▁실험', '시', '작', '일', '자']
+
+# mBERT
+tokenizer_mbert = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
+print(f"mBERT:  {tokenizer_mbert.tokenize(text)}")
+# → ['실', '##험', '##시', '##작', '##일', '##자']
+
+# ALBERT
+tokenizer_albert = AutoTokenizer.from_pretrained(
+    "kykim/albert-kor-base"
+)
+print(f"ALBERT: {tokenizer_albert.tokenize(text)}")
+# → ['▁실험', '시작', '일자']
+
+# BiLSTM from-scratch — 사용자 정의 음절 토크나이저
+def syllable_tokenize(text):
+    return list(text)
+
+print(f"BiLSTM: {syllable_tokenize(text)}")
+# → ['실', '험', '시', '작', '일', '자']
+```
+
+### Step 2: 공정한 비교 설정
+
+```python
+import torch
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+# === 공통 설정 (반드시 통일) ===
+SEED = 42
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+
+# 데이터 로드
+df = pd.read_parquet("dl_cleaned_domain_train_data.parquet")
+X, y = df["text"].values, df["label"].values
+
+# Test 분할 — 모든 모델 공통
+X_trainval, X_test, y_trainval, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=SEED
+)
+
+# === 모델별 설정 (통일 금지) ===
+configs = {
+    "BiLSTM": {
+        "tokenizer": "syllable",
+        "lr": 1e-3,
+        "batch": 64,
+        "max_epochs": 100,
+        "early_stop_patience": 10,
+        "val_ratio_from_trainval": 0.25,    # 60/20/20 의 Val 부분
+    },
+    "KoBERT": {
+        "tokenizer": "monologg/kobert",
+        "lr": 5e-5,
+        "batch": 32,
+        "max_epochs": 5,
+        "early_stop_patience": None,
+        "val_ratio_from_trainval": 0.125,   # 70/10/20 의 Val 부분
+    },
+    "mBERT": {
+        "tokenizer": "bert-base-multilingual-cased",
+        "lr": 3e-5,
+        "batch": 16,
+        "max_epochs": 5,
+        "early_stop_patience": None,
+        "val_ratio_from_trainval": 0.125,
+    },
+}
+
+# 각 모델별 Val 분할 (Test 는 공통 유지)
+for name, cfg in configs.items():
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_trainval, y_trainval,
+        test_size=cfg["val_ratio_from_trainval"],
+        stratify=y_trainval,
+        random_state=SEED,
+    )
+    print(f"{name:8s}: Train {len(X_train)}, Val {len(X_val)}, Test {len(X_test)}")
+```
+
+### Step 3: 도메인 어휘 추가 (옵션 B)
+
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+model_name = "kykim/albert-kor-base"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(
+    model_name, num_labels=14
+)
+
+# Before: "일자" 가 ["##일", "##자"] 로 분리
+print(tokenizer.tokenize("일자"))
+
+# 도메인 어휘 추가
+domain_vocab = ["일자", "번호", "코드", "단위", "비밀번호", "ID"]
+num_added = tokenizer.add_tokens(domain_vocab)
+print(f"추가된 토큰 수: {num_added}")
+
+# 임베딩 행렬 확장 — 새 토큰은 랜덤 초기화
+model.resize_token_embeddings(len(tokenizer))
+
+# After: "일자" 가 단일 토큰
+print(tokenizer.tokenize("일자"))
+# → ['일자']
+
+# 이제 Fine-tuning — 새 토큰 임베딩이 데이터로부터 학습됨
+# 주의: Epoch 를 5 → 10 이상으로 늘리는 것을 권장
+```
+
+---
+
+## 자주 걸리는 함정
+
+| 함정 | 증상 | 처방 |
+|------|------|------|
+| 토크나이저 통일로 공정성 확보 시도 | 한쪽 모델의 사전학습 효과 파괴 | 각 모델의 권장 토크나이저 사용 |
+| LR 통일 (예: 모두 1e-3) | BERT 가 catastrophic forgetting | 각 모델의 권장 LR |
+| LR 통일 (예: 모두 2e-5) | BiLSTM 이 수렴 실패 | 각 모델의 권장 LR |
+| Val 분할을 동일 비율로 강제 | Early Stopping 모델의 false stop | 모델 특성별 허용 |
+| Batch Size 통일 | 큰 모델에서 OOM 또는 작은 모델에서 비효율 | GPU 메모리 한계 내 각자 |
+| Test 분할이 모델마다 다름 | 최종 비교 무효 | **Test 는 반드시 공통** |
+| 토큰화 차이를 사후에 보고서에 감춤 | 재현 불가 | 모델별 세팅 표를 투명하게 공개 |
+| Subword 문제로 토크나이저 자체를 바꿈 | 사전학습 가중치 파괴 | `add_tokens()` 로 어휘만 확장 |
+
+---
+
+## 관련 주제
+
+**선행 지식**
+
+- [Transformer 아키텍처](./NLP/20.transformer.qmd)
+- [BERT 사전학습과 Fine-tuning](./NLP/22.ptm_BERT.qmd)
+- [Subword Tokenization (BPE, WordPiece, SentencePiece)](./NLP/17.RNN_Subword.qmd)
+- [Fine-tuning 클래스당 샘플 수 추정](./fine-tuning-sample-size.qmd)
+
+**후속 주제**
+
+- [Train/Val/Test 분할 비율 선택](../Machine_Learning/26-train-val-test-split-ratio.qmd)
+- [모델 정확도 차이의 통계적 유의성 — McNemar's Test](../Statistics/170-1-mcnemar-model-comparison.qmd)
+- [Ablation Study — 모델 컴포넌트 기여도 분석](./ablation-study.qmd)
+
+**관련 개념**
+
+- [Catastrophic Forgetting](../Machine_Learning/catastrophic-forgetting.qmd) — placeholder
+- [Transfer Learning 과 Domain Adaptation](./transfer-learning.qmd) — placeholder
+- [Hugging Face Ecosystem](./NLP/27.plm_hugging_face.qmd)
+
+---
+
+## 참고문헌
+
+- Devlin, J. et al. (2019). BERT: Pre-training of Deep Bidirectional Transformers. *NAACL*.
+- Kudo, T. & Richardson, J. (2018). SentencePiece: A simple and language independent subword tokenizer. *EMNLP Demo*.
+- Lan, Z. et al. (2020). ALBERT: A lite BERT for self-supervised learning of language representations. *ICLR*.
+- Park, J. (2020). *KoBERT*: Korean BERT pretrained cased. SK T-Brain.
+- Howard, J. & Ruder, S. (2018). Universal Language Model Fine-tuning for Text Classification. *ACL*.
+- Dodge, J. et al. (2020). Fine-tuning Pretrained Language Models: Weight Initializations, Data Orders, and Early Stopping. arXiv:2002.06305.
