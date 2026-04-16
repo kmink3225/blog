@@ -1,0 +1,462 @@
+---
+title: "Prompt · Context · Harness Engineering — 세 층위의 구분과 포함 관계"
+subtitle: "Skill-based Prompt Engineering 이 세 층위를 통합한 것처럼 보이지만 실제로는 다른 층을 푸는 작업이다"
+description: |
+  AI 에이전트 시스템을 설계하다 보면 Prompt Engineering, Context Engineering, Harness Engineering
+  세 용어가 혼용된다. 특히 Skill-based Prompt Engineering 같은 최근 기법이 세 층을 가로지르는
+  듯 보여 "Context와 Harness Engineering이 Prompt Engineering의 하위 카테고리인가" 하는 혼동이
+  생긴다. 이 글은 세 층위의 정확한 정의, 작업 단위, 질문의 차이, 포함 관계, 그리고 같은 증상을
+  어느 층에서 진단할지의 실무 기준을 정리한다.
+categories:
+  - Agent
+  - Architecture
+  - Engineering
+author: Kwangmin Kim
+date: 04/16/2026
+execute:
+  eval: false
+---
+
+## 왜 용어 구분이 필요한가
+
+최근 AI 에이전트 시스템을 설계하는 글이나 업계 논의에서 **Prompt Engineering**, **Context
+Engineering**, **Harness Engineering** 세 용어가 자주 등장한다. 얼핏 보면 다 "LLM 을 잘 쓰기
+위한 엔지니어링" 처럼 들려서 구분이 모호하다. 특히 **Skill-based Prompt Engineering** 같은
+기법은 다음을 모두 다룬다.
+
+- 스킬 파일 내부에 어떻게 지시를 쓸 것인가 (Prompt)
+- 어떤 스킬을 언제 로드할 것인가 (Context)
+- 스킬을 어떻게 스캔·주입하는가 (Harness)
+
+이것을 보면 "그럼 Context·Harness Engineering 은 Prompt Engineering 의 **하위 카테고리**인가"
+라는 결론이 자연스럽게 나온다. **이 결론은 틀렸다**. Skill-based Prompt Engineering 은 세 층을
+**같은 작업에서 동시에 건드려야 해서** 그렇게 보일 뿐, 세 층은 본질적으로 **다른 작업**이다.
+
+이 글은 세 층위를 정확히 정의하고, 혼동을 유발하는 접점을 짚고, 실무에서 "어느 층위의 문제인지"
+를 진단하는 기준을 제시한다.
+
+::: {.callout-important}
+## 이 글의 출발 질문
+
+"Context Engineering 과 Harness Engineering 이 Skill-based Prompt Engineering 으로 이해돼서
+모두 Prompt Engineering 안에 포함되는 건지 알았는데 용어 혼동이 온다."
+
+답: **포함 관계는 반대 방향이다**. Prompt ⊂ Context ⊂ Harness 라고 봐야 정확하다. Skill-based
+Prompt Engineering 은 "하나의 기법이 세 층을 가로지르는" 사례이지, 세 층을 Prompt 아래에 통합한
+것이 아니다.
+:::
+
+---
+
+## 세 층위 정의
+
+간단한 표로 먼저 잡고 각 층을 상세 서술한다.
+
+| 구분 | 다루는 대상 | 작업 단위 | 핵심 질문 |
+|------|-----------|---------|---------|
+| **Prompt Engineering** | 단일 요청 텍스트 | 한 프롬프트 | "이 지시를 어떻게 **써야** 모델이 잘 따르는가" |
+| **Context Engineering** | 프롬프트 + 주변 맥락 전체 | 한 세션·상태 | "모델에게 **무엇을·언제·얼마나** 보여줄 것인가" |
+| **Harness Engineering** | 모델과 사용자 사이의 미들웨어 | CLI·에이전트 전체 | "모델·도구·맥락을 **어떻게 관리**하는 시스템을 만드는가" |
+
+아래로 갈수록 **더 바깥 층**이다. 바깥 층이 안쪽 층을 감싸고 있다.
+
+### Prompt Engineering — 문장 단위 최적화
+
+**다루는 대상**: 모델에 전달되는 **한 번의 입력 텍스트** 자체.
+
+**대표적 작업**:
+
+- Few-shot 예시 배치 전략
+- Chain-of-Thought trigger 문장 (예: "단계적으로 생각해")
+- 역할 지정 ("당신은 숙련된 통계학자다")
+- 응답 형식 지시 (JSON schema, 마크다운 구조)
+- Zero-shot 대 few-shot 비교 실험
+- System / User / Assistant 메시지 분리
+- Negative 예시 ("~ 하지 마라") 의 위치와 수
+
+**산출물**: 더 잘 동작하는 **프롬프트 템플릿**.
+
+**성공 기준**: 동일 모델·동일 컨텍스트에서 **출력 품질**이 올라갔는가.
+
+Prompt Engineering 은 **모델이 주어진 입력을 어떻게 해석하도록 유도할지**에 집중한다.
+어떤 정보를 주느냐는 고정이고, **같은 정보를 어떻게 표현할지**가 주제다.
+
+### Context Engineering — 세션 단위 정보 관리
+
+**다루는 대상**: 모델이 응답 생성 시 **실제로 볼 수 있는 정보 전체**.
+
+**대표적 작업**:
+
+- Retrieval 설계 — 어떤 문서를 RAG 로 주입할지, 몇 개 청크를 가져올지
+- 대화 히스토리 관리 — 몇 턴을 남기고 어떻게 요약할지
+- Tool result lifecycle — 도구 결과를 원문 보존할지 요약할지
+- System prompt · user message · tool result 배치 순서
+- 컨텍스트 윈도우 예산 배정 — 시스템 30%, 히스토리 40%, RAG 25%, 응답 5%
+- Long-context 모델에서 정보 분포 전략
+- 멀티 문서 컨텍스트의 문서 간 구분자 설계
+
+**산출물**: 메모리 전략, 요약 정책, retrieval 파이프라인, 컨텍스트 조립 규칙.
+
+**성공 기준**: 모델이 **올바른 정보에 접근**했는가. 필요한 맥락이 윈도우 안에 있었는가.
+
+Context Engineering 은 **무엇을·언제·어떻게 컨텍스트에 포함시킬지** 결정한다. 프롬프트는
+"표현" 을 다루지만 컨텍스트는 "범위와 순서" 를 다룬다.
+
+### Harness Engineering — 시스템 단위 실행 환경 설계
+
+**다루는 대상**: 모델을 감싸는 **미들웨어 런타임** 자체.
+
+**대표적 작업**:
+
+- Tool loop 정책 — 모델 응답 → 도구 호출 → 결과 주입 → 다음 응답의 반복 규칙
+- Auto-compaction 알고리즘 — 컨텍스트가 가득 차면 무엇을 어떻게 압축할지
+- Tool result lifecycle 하네스 정책 — 결과를 얼마나 보존할지 (영속 / 요약 / 제거)
+- Skill 로딩 정책 — Eager 메타데이터 주입 vs Lazy 본문 로딩
+- Protected zone — 압축 대상에서 제외할 영역 지정
+- 응답 길이 제약 — 하네스가 강제하는 max tokens
+- 에러 복구 · 재시도 정책
+- Subprocess 인터페이스 — CLI 입출력 규약
+- 병렬 agent fleet 조율
+
+**산출물**: Claude Code · Copilot CLI · Cursor · Aider 같은 **에이전트 하네스 전체**.
+
+**성공 기준**: 시스템이 **반복적으로 안정적**인가. 장시간 태스크에서 규칙이 유지되는가.
+
+Harness Engineering 은 **프롬프트·컨텍스트가 실행되는 환경의 룰**을 설계한다. 단일 요청이
+아니라 **수많은 요청의 시스템적 특성**이 대상이다.
+
+---
+
+## 한 줄 요약 — 직관적 구분
+
+세 층을 가장 빠르게 구분하는 방법이다.
+
+```
+Prompt Engineering    → "문장을 어떻게 쓸까"
+Context Engineering   → "모델에게 무엇을 보여줄까"
+Harness Engineering   → "이 전체를 어떻게 통제할까"
+```
+
+대표 산출물을 붙이면 더 분명해진다.
+
+| 층 | 대표 산출물 |
+|----|-----------|
+| Prompt | 프롬프트 템플릿, few-shot 예시 세트, system prompt 문장 |
+| Context | RAG 파이프라인, 대화 요약 정책, 윈도우 예산 배분 규칙 |
+| Harness | Claude Code, GitHub Copilot CLI, Cursor, Aider |
+
+---
+
+## 흔한 오해 — "Context Engineering = RAG" 가 아니다
+
+Context Engineering 을 처음 접하면 "외부 데이터 기반 LLM 답변 (RAG, 문서 업로드)" 과 동의어
+라고 이해하기 쉽다. **RAG 는 Context Engineering 의 대표 기법 중 하나이지, 전부가 아니다**.
+
+Context Engineering 이 실제로 다루는 범위:
+
+| 범위 | 예시 | RAG 와의 관계 |
+|------|------|-------------|
+| 외부 데이터 주입 | RAG, 문서 업로드, 웹 검색 결과 | RAG 자체 |
+| 대화 히스토리 관리 | 몇 턴 남길지, 어떻게 요약할지 | RAG 아님 |
+| Tool result 배치 | 도구 실행 결과를 어디에 어떻게 넣을지 | RAG 아님 |
+| 시스템 프롬프트 조립 | 규칙·스킬·사용자 지시의 배치 순서 | RAG 아님 |
+| 윈도우 예산 배정 | 시스템 30%, 히스토리 40%, RAG 25%, 응답 5% | RAG 가 예산의 일부 |
+| Long-context 전략 | 정보 배치 위치 (lost-in-the-middle 회피) | RAG 적용 가능하나 독립 |
+
+RAG 는 "모델에게 무엇을 보여줄까" 의 **한 가지 답** ("외부 문서를 검색해서 보여준다") 이다.
+Context Engineering 은 **그 질문 자체를 체계적으로 다루는 분야**이며, 검색 이외에도 히스토리·
+도구 결과·시스템 프롬프트 조립 등 **컨텍스트 윈도우에 들어가는 모든 것**을 관리한다.
+
+::: {.callout-note}
+## 비유
+
+RAG 가 Context Engineering 인 것은 **SELECT 문이 데이터베이스 엔지니어링**인 것과 비슷하다.
+SELECT 는 데이터베이스의 대표 기능이지만, 데이터베이스 엔지니어링에는 인덱싱·트랜잭션·
+복제·파티셔닝·스키마 설계 등 SELECT 와 직접 관련 없는 영역이 훨씬 넓다.
+:::
+
+---
+
+## 포함 관계 — 바깥이 안쪽을 감싼다
+
+세 층위는 **동심원 구조**다.
+
+```
+┌─────────────────────────────────────────────┐
+│  Harness Engineering                        │
+│  (시스템 런타임 규칙)                        │
+│                                             │
+│  ┌─────────────────────────────────────┐   │
+│  │  Context Engineering                │   │
+│  │  (세션 상태 · 정보 배치)            │   │
+│  │                                     │   │
+│  │  ┌───────────────────────────┐     │   │
+│  │  │  Prompt Engineering       │     │   │
+│  │  │  (한 입력 텍스트)          │     │   │
+│  │  └───────────────────────────┘     │   │
+│  └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────┘
+```
+
+- **Prompt** 는 한 번의 입력 텍스트
+- **Context** 는 그 프롬프트를 포함한 **주변 상태 전체**
+- **Harness** 는 그 컨텍스트를 **어떻게 관리·압축·유지할지** 결정하는 런타임
+
+위 포함 관계는 "상위 층이 하위 층을 **제약**한다" 는 뜻이다. Harness 가 Tool result 를 2 턴
+뒤에 clear 하는 정책을 가지면, 그 위에서 아무리 Context Engineering 으로 "Tool result 보존을
+전제한 RAG" 를 설계해도 후반부에서 실패한다. Harness 가 응답 길이를 100 단어로 강제하면
+Prompt 에 "5 섹션 체크리스트로 응답하라" 고 쓰여있어도 시스템 제약이 이긴다.
+
+즉 **문제의 해결은 항상 자신의 층 또는 바깥 층에서 가능**하다. 안쪽 층만 만지면 바깥 층의
+제약에 걸려 실패한다.
+
+---
+
+## 혼동을 유발하는 지점 — Skill-based Prompt Engineering
+
+사용자가 "Context · Harness 가 Prompt 의 하위 카테고리인가" 혼동하는 이유는 **Skill-based
+Prompt Engineering 같은 기법이 세 층을 동시에 건드리기 때문**이다. 각 기법이 실제로 어느
+층을 건드리는지 분해해본다.
+
+### Skill-based Prompt Engineering 이 건드리는 세 층
+
+Skill 기반 접근에서 하는 일을 쪼개면:
+
+| 활동 | 실제 층위 |
+|------|---------|
+| `SKILL.md` 내부 지시문 작성 (역할·규칙·출력 형식) | Prompt Engineering |
+| 스킬 메타데이터(name, description) 작성 | Prompt + Context (라우팅 결정 정보) |
+| 어느 스킬을 언제 로드할지 조건 정의 | Context Engineering |
+| 스킬 본문을 **시스템 프롬프트 블록으로 주입** | Context Engineering |
+| 스킬 메타데이터를 **Eager 전체 주입할지 Lazy 로드할지** | **Harness Engineering** |
+| 스킬 간 중첩 호출 시 컨텍스트 누적 관리 | **Harness Engineering** |
+| Protected zone 에 스킬 본문 넣을지 결정 | **Harness Engineering** |
+
+Skill-based Prompt Engineering 은 **이름에 "Prompt" 가 있지만 실제로는 세 층을 가로지른다**.
+이 이름 때문에 마치 Context·Harness 까지 Prompt 아래로 들어가는 것처럼 보이는 **용어의 함정**이
+생긴다.
+
+### 정확한 이해
+
+Skill 기법이 세 층을 **통합한 것이 아니라**, 세 층에 **동시에 작업이 필요한 패턴**일 뿐이다.
+하나의 기법이 여러 층의 작업을 요구한다고 해서 그 층들이 병합되는 것이 아니다.
+
+비유: **건물 리모델링**을 한다고 하자. 벽지 교체(표면), 배관 교체(인프라), 구조 보강(뼈대)
+셋을 동시에 해야 할 수 있다. 이것이 "벽지가 배관과 구조를 포함한다" 는 뜻은 아니다. 각각은
+**독립된 도메인**이고, 단지 **한 프로젝트가 셋을 모두 건드릴 수 있을 뿐**이다.
+
+Skill-based Prompt Engineering 도 마찬가지. "Prompt" 라는 이름은 **그 중 한 층을 대표하는 이름
+일 뿐**이지 다른 층을 포함한다는 의미가 아니다.
+
+---
+
+## 같은 실패를 세 층위가 다르게 진단한다
+
+"긴 작업 후반부에 규칙을 잊는다" 는 동일한 증상을 세 층에서 진단하면 처방이 달라진다.
+
+### 증상
+
+4~5 단계 routing 이 있는 블로그 포스트 작성 태스크. Phase 0 에서 가이드 4개를 Read 했는데,
+Phase 4 시점에서 가이드의 세부 규칙을 잊어버리고 `## 1. 개요` 같은 수동 번호를 붙인다.
+
+### Prompt 층의 진단과 처방
+
+> "지시 표현이 약하다. 더 강하게 써라."
+
+- CoT trigger 추가: "각 단계 실행 전 해당 가이드의 규칙을 먼저 되짚어 말하라"
+- 절대 규칙을 **인라인 반복**: 가이드마다 "수동 번호 금지" 를 중복 삽입
+- 긍정 + 부정 예시 동시 제공: "✓ ## 개요 / ✗ ## 1. 개요"
+
+**한계**: 프롬프트를 아무리 강하게 써도, 모델이 **그 프롬프트의 해당 부분을 후반부에서 보고
+있지 않으면** 소용없다. 문제가 상위 층에 있으면 이 처방은 실패한다.
+
+### Context 층의 진단과 처방
+
+> "규칙이 컨텍스트에서 사라졌다. 다시 주입하거나 요약에서 보존해야 한다."
+
+- Phase 4 시작 시 **가이드 핵심 규칙을 재주입**하는 체크포인트 삽입
+- 요약 정책을 바꿔 "절대 규칙은 요약 대상에서 제외"
+- Phase 별 필수 규칙을 **매 Phase 의 user message 에 다시 삽입**
+
+**한계**: Context 층에서 재주입을 설계해도, **Harness 가 auto-compaction 을 공격적으로 실행**
+하면 재주입한 내용마저 압축될 수 있다. 근본 원인이 Harness 에 있으면 이 처방도 부분적 해결.
+
+### Harness 층의 진단과 처방
+
+> "Auto-compaction 정책 자체가 문제다. Protected zone 을 만들어라."
+
+- Custom instruction 파일을 **압축 대상 제외 영역**에 배치
+- Tool result lifecycle 을 "한계 전까지 보존" 으로 변경
+- Auto-compaction 임계값 상향 조정
+- Skill 로딩을 Eager 에서 Lazy 로 바꿔 초기 컨텍스트 부담 감소
+
+**본질적 해결**: 상위 층에서 규칙 보존 메커니즘 자체를 만들면 하위 층의 처방이 필요 없어진다.
+
+### 실무 함의
+
+- 문제의 **원인이 있는 층에서 해결**해야 근본적이다
+- 바깥 층의 제약이 **안쪽 층의 최선을 무효화**할 수 있다
+- 잘못된 층에서 해결을 시도하면 **임시방편**만 쌓이고 문제가 재발한다
+
+---
+
+## 기법들의 층위별 분류
+
+혼동되기 쉬운 기법들을 명시적으로 분류해둔다.
+
+| 기법 / 용어 | 주 층위 | 비고 |
+|------------|--------|------|
+| Few-shot prompting | Prompt | 예시를 프롬프트 안에 배치 |
+| Chain-of-Thought | Prompt | trigger 문장 설계 |
+| Role prompting | Prompt | "당신은 ~" 역할 지정 |
+| Self-consistency | Prompt (+약간의 Context) | 여러 샘플 집계 |
+| ReAct | Prompt + Harness | 추론·행동 패턴 + tool loop |
+| RAG | Context | 외부 지식 주입 |
+| Long-context 전략 | Context | 배치·압축·reorder |
+| Memory system (세션 간 기억) | Context + Harness | 저장은 Harness, 활용은 Context |
+| Tool use · function calling | Context + Harness | 도구 스키마 주입 + 실행 loop |
+| Skill 시스템 | Prompt + Context + Harness | 앞서 분해한 대로 |
+| MCP (Model Context Protocol) | Harness | 도구·컨텍스트 공급 프로토콜 |
+| Auto-compaction | Harness | 컨텍스트 압축 정책 |
+| Tool result lifecycle 관리 | Harness | 보존·요약·제거 정책 |
+| Subagent / parallel agents | Harness | 병렬 실행 조율 |
+| Protected zone | Harness | 시스템 instruction 보호 |
+| Output length limits | Harness | 응답 길이 강제 |
+| Fleet workflow | Harness | 여러 에이전트 조율 |
+
+**읽는 법**: 이 표는 절대적 분류가 아니라 **주된 층위**를 표시한다. 여러 층을 건드리는 기법은
+겹쳐 적었다. 실무에서는 "이 기법이 주로 어느 층의 문제를 푸는가" 를 보면 된다.
+
+---
+
+## 실무 적용 — 진단과 처방의 순서
+
+문제가 발생했을 때 어느 층부터 확인할지의 순서.
+
+### 1. 증상의 규모로 먼저 판단한다
+
+- **한 번 실행에서만 발생** → Prompt 층 가능성 높음
+- **같은 태스크의 여러 실행에서 반복** → Context 층 가능성
+- **여러 태스크·여러 세션에 걸쳐 시스템적으로 발생** → Harness 층 가능성
+
+### 2. 해결 비용을 고려한다
+
+| 층 | 변경 비용 | 영향 범위 |
+|----|----------|----------|
+| Prompt | 낮음 (텍스트 수정) | 해당 프롬프트에 한정 |
+| Context | 중간 (파이프라인 변경) | 해당 태스크 유형 전체 |
+| Harness | 높음 (런타임 수정) | 시스템 전역 |
+
+위로 올라갈수록 **더 많은 문제를 한 번에 해결**하지만 **변경 비용이 크고 회귀 위험**도 커진다.
+
+### 3. 가장 안쪽 층에서 먼저 시도한다
+
+- Prompt 수정으로 해결되면 여기서 멈춘다
+- 해결되지 않으면 Context 층으로
+- 여전히 해결되지 않으면 Harness 층으로
+
+::: {.callout-warning}
+## 주의 — 역순 추론의 함정
+
+많은 초보자가 "내 프롬프트가 이상하다" 고 생각하며 Prompt 층에서만 시행착오를 반복한다.
+실제로는 Harness 가 강제하는 응답 길이 제한이나 tool result 압축이 원인일 수 있다. 이 경우
+Prompt 를 아무리 고쳐도 해결되지 않고 **원인을 찾지 못한 채 프롬프트만 비대해진다**. 층위
+구분은 **이 함정을 피하는 진단 도구**로 작동한다.
+:::
+
+---
+
+## 세 층위를 명시적으로 분리해야 하는 이유
+
+"그냥 다 엔지니어링이니까 편의상 Prompt Engineering 이라 부르면 안 되나" 라는 반론이 가능하다.
+왜 엄격히 구분해야 하는가.
+
+### 이유 1: 책임 소재가 다르다
+
+- Prompt Engineering 은 **프롬프트 작성자 (사용자·도메인 전문가)** 의 영역
+- Context Engineering 은 **애플리케이션 개발자** 의 영역 (RAG, 메모리, 파이프라인 설계)
+- Harness Engineering 은 **에이전트 플랫폼 개발자 (Anthropic, GitHub, Cursor)** 의 영역
+
+구분을 흐리면 "누가 이 문제를 해결해야 하는가" 가 모호해진다.
+
+### 이유 2: 최적화 대상이 다르다
+
+- Prompt: 출력 품질
+- Context: 정보 접근성 (올바른 정보가 보였는가)
+- Harness: 시스템 안정성 (장시간·반복 실행에서 일관성)
+
+한 층을 최적화한다고 다른 층이 좋아지지 않는다. 오히려 **trade-off 관계**가 흔하다. 하네스가
+Context 효율성을 위해 auto-compaction 을 공격적으로 하면 Prompt·Context 층의 품질이 희생된다.
+(자세한 예시는 [Claude Code vs Copilot CLI 하네스 설계 차이](./30-claude-code-vs-copilot-cli-harness-design.qmd)
+참조.)
+
+### 이유 3: 비용 구조가 다르다
+
+- Prompt 변경: 거의 무료, 즉시
+- Context 변경: retrieval·요약 비용 발생, 중간
+- Harness 변경: 런타임 재배포 또는 도구 전환, 크고 느림
+
+문제의 원인 층을 잘못 진단하면 **가장 비싼 쪽에서 수정을 시도**하거나 **가장 싼 쪽만 반복
+수정**하며 시간을 낭비한다.
+
+---
+
+## 결론
+
+세 층위는 **다른 문제를 푼다**. 이름의 유사성 때문에 섞어 쓰지만 실제로는:
+
+- **Prompt Engineering** — *문장 단위* 최적화 (어떻게 쓸 것인가)
+- **Context Engineering** — *세션 단위* 정보 관리 (무엇을 보여줄 것인가)
+- **Harness Engineering** — *시스템 단위* 런타임 설계 (어떻게 관리할 것인가)
+
+Skill-based Prompt Engineering 처럼 **이름은 한 층을 가리키지만 실제로는 세 층을 가로지르는
+기법**이 있어 혼동이 생긴다. 그러나 한 기법이 세 층을 건드린다고 층들이 통합되는 것은
+아니다. 세 층은 **독립된 도메인**이며, 문제 해결 시 **원인이 있는 층에서** 고쳐야 근본적이다.
+
+다음에 에이전트 시스템의 문제를 진단할 때:
+
+1. **증상을 본다**
+2. **세 층 중 어디의 문제인가 묻는다**
+3. **그 층의 도구로 해결한다**
+4. **한 층의 처방이 실패하면 한 층 밖을 의심한다**
+
+이 4 단계 진단 루틴이 "Prompt 만 끝없이 손보는 함정" 을 피하는 가장 간단한 방법이다.
+
+---
+
+## 관련 주제
+
+**프롬프트 층**
+
+- [프롬프트 설계와 SW 설계의 구조적 대응](./11-prompt-design-vs-sw-design.qmd)
+- [시스템 프롬프트 유형 분류와 혼합 설계](./10-system-prompt-types-and-layered-routing.qmd)
+- [프롬프트 길이와 구조 설계](./20-prompt-length-and-structure.qmd)
+
+**컨텍스트 층**
+
+- [Claude Code 의 Long Context 대응 전략](./04-claude-code-context-strategy.qmd)
+- [Attention Dilution 과 2-Pass Workflow](./12-attention-dilution-and-2pass-workflow.qmd)
+- [Context Management](./02-context-management.qmd)
+
+**하네스 층**
+
+- [Claude Code vs Copilot CLI — 하네스 설계 차이와 Task 선택 가이드](./30-claude-code-vs-copilot-cli-harness-design.qmd)
+- [LLM 지시 준수 메커니즘](./24-llm-instruction-compliance-mechanisms.qmd)
+- [System Prompt Dynamic Injection Architecture](./25-system-prompt-dynamic-injection-architecture.qmd)
+
+**스킬 시스템 (세 층을 가로지르는 기법)**
+
+- [Skill-based Agent Pattern](./01-skill-based-agent-pattern.qmd)
+- [Skill 라우팅의 확장성과 한계](./18-skill-routing-scalability-and-limits.qmd)
+- [SKILL.md 명세와 작성법](./16-skill-md-specification.qmd)
+
+---
+
+## 참고문헌
+
+- Anthropic. (2025). *Claude Code Documentation*. https://docs.claude.com/claude-code
+- GitHub. (2025). *GitHub Copilot CLI Documentation*. https://docs.github.com/copilot/github-copilot-in-the-cli
+- Yao, S. et al. (2022). ReAct: Synergizing Reasoning and Acting in Language Models. arXiv:2210.03629.
+- Packer, C. et al. (2023). MemGPT: Towards LLMs as Operating Systems. arXiv:2310.08560.
+- Xu, P. et al. (2024). Retrieval meets Long Context Large Language Models. *ICLR*.
+- Anthropic. (2024). *Model Context Protocol (MCP) Specification*. https://modelcontextprotocol.io
