@@ -1,0 +1,555 @@
+---
+title: "Joint Modelling of Mean and Dispersion — 평균과 산포를 동시에 회귀하는 이중 GLM"
+subtitle: "McCullagh & Nelder Ch.10 — Pregibon·Nair·Smyth 산업 품질 실험용 프레임워크"
+description: |
+  관측값의 평균 $\mu_i$ 뿐 아니라 산포 $\phi_i$ 자체를 공변량의 함수로 모형화한다.
+  Q⁺ 기준, 첨도·자유도 보정, Godambe-Thompson 결합 최적 추정방정식,
+  Leaf-spring 실험(Taguchi 품질 공학)으로 이어지는 전체 체계를 유도한다.
+categories:
+  - Statistics
+  - Regression
+author: Kwangmin Kim
+date: 04/19/2026
+execute:
+  eval: false
+---
+
+## 서론 — 왜 산포를 모형화해야 하는가
+
+지금까지의 GLM 은 분산을 $\mathrm{var}(Y_i) = \phi \, V(\mu_i)$ 로 두고, 산포 $\phi$ 를 **전역 상수**(또는 기지 가중치 $w_i^{-1}$) 로 가정했다.
+
+그러나 산업 품질 실험(Taguchi 유형)에서는 평균을 목표값에 맞추는 것만으로 부족하다. **제품의 산포 자체**가 공정 조건에 따라 달라지므로, 평균과 동시에 산포의 변동도 공변량으로 설명해야 한다. McCullagh & Nelder (1989, Ch.10) 는 Pregibon (1984) 의 제안을 따라 $\mu_i$ 와 $\phi_i$ 를 **한 쌍의 연결된 GLM** 으로 모형화한다.
+
+직관적으로 말하면, 제품 공정을 이렇게 설계하고 싶다.
+
+- "온도를 올리면 평균이 목표값에 가까워진다" — 기존 GLM
+- "**그리고 동시에** 온도를 올리면 단위 간 편차도 줄어든다" — 분산 GLM
+
+두 모형은 얽혀 있다. 평균 모형이 추정한 $\hat\mu_i$ 가 산포 응답변수 $d_i = d_i(Y_i, \hat\mu_i)$ 의 입력이 되고, 산포 모형이 추정한 $\hat\phi_i$ 는 다시 평균 모형의 가중치 $1/\hat\phi_i$ 로 들어간다. **교대 적합 알고리즘** 이 자연스럽게 등장하는 이유다.
+
+## 모형 설정 — 평균 GLM + 산포 GLM
+
+::: {.callout-note}
+## 정의: 결합 평균-산포 모형 (Joint Mean-Dispersion Model)
+
+독립 관측 $Y_1, \ldots, Y_n$ 에 대해 **평균 부분**:
+
+$$
+E(Y_i) = \mu_i, \quad \eta_i = g(\mu_i) = \sum_j x_{ij} \beta_j, \quad \mathrm{var}(Y_i) = \phi_i V(\mu_i) \tag{10.1}
+$$
+
+**산포 부분**: 적절한 산포 통계량 $d_i \equiv d_i(Y_i; \mu_i)$ 에 대해
+
+$$
+E(d_i) = \phi_i, \quad \zeta_i = h(\phi_i) = \sum_j u_{ij} \gamma_j, \quad \mathrm{var}(d_i) = \tau V_D(\phi_i) \tag{10.2}
+$$
+
+여기서 $h(\cdot)$ 는 산포 연결함수, $\zeta_i$ 는 산포 선형예측자, $V_D(\phi)$ 는 산포 분산함수다. 산포 공변량 $u_i$ 는 보통 평균 공변량 $x_i$ 의 부분집합이지만 반드시 그럴 필요는 없다.
+:::
+
+### 산포 통계량 $d_i$ 의 두 선택지
+
+**선택 1**: 일반화 Pearson 기여분
+
+$$
+d_i = r_P^2 = \frac{(Y_i - \mu_i)^2}{V(\mu_i)}
+$$
+
+**선택 2**: 이탈도 기여분
+
+$$
+d_i = r_D^2 = 2 \int_{\mu_i}^{Y_i} \frac{Y_i - t}{V(t)} \, dt
+$$
+
+정규 이론에서는 둘이 정확히 같지만 일반적으로는 다르다. $r_P^2$ 는 참 $\mu$ 에서 평가하면 $E(r_P^2) = \phi$ 가 **정확히** 성립하고, $r_D^2$ 는 근사적으로만 $E(r_D^2) \simeq \phi$ 다.
+
+### 연결함수·분산함수 선택
+
+$Y$ 가 정규이면 $d_i$ 는 $\phi_i \chi_1^2$ 분포를 따르므로 $V_D(\phi) = 2\phi^2$ (감마 분포 꼴)가 자연스럽다. 연결함수는 두 가지가 흔하다.
+
+| 연결 | 의미 | 적합한 상황 |
+|------|------|-------------|
+| 항등 $\zeta = \phi$ | 가법 분산 성분 | 분산 성분 분해 (ANOVA 전통) |
+| 로그 $\zeta = \log\phi$ | 곱셈적 공변량 효과 | 품질 실험 — 로그 분산을 선형 모형화 |
+
+$Y$ 가 비정규면 $r_D^2$ 의 편향이나 $r_P^2$ 의 과산포를 감안한 보정이 필요하다(§10.5).
+
+### 교대 적합 알고리즘
+
+두 모형의 의존 구조는 다음과 같다.
+
+```
+평균 모형 적합 (weight = 1/hat_phi_i)  →  hat_mu_i 생성
+         ↑                                    ↓
+산포 모형 적합 (y = d_i(Y_i, hat_mu_i))  ←  hat_phi_i 생성
+```
+
+이는 EM 과 구조가 닮았지만 **IRLS 두 개가 교차 수렴**하는 double GLM (Smyth, 1989) 의 표준 형태다. 실무에서는 `dglm::dglm` (R) 이나 `statsmodels` 의 사용자 정의 구현으로 이 루프를 자동화한다.
+
+## 평균-산포 효과의 상호작용 — null 대조와 반복 대조
+
+데이터에 각 공변량 조합마다 복제(replicate)가 있으면, 각 점에서 표본분산 $s_i^2$ 을 만들 수 있다(= **반복 대조 replicate contrast**). 한편 평균 모형에 $p$ 개 모수를 적합하면 $n' - p$ 개의 평균 0 대조가 남는다(= **null 대조 null contrast**). 이 null 대조는 이론적으로 평균의 노이즈만 담고 있으므로 산포 추정에 활용 가능하다.
+
+그러나 **함정**이 있다. null 대조가 진짜 null 인지는 **평균 모형이 올바르다는 전제** 하에서만 성립한다. 예를 들어 연속 공변량 $x$ 의 효과 $\beta x$ 가 작아 유의하지 않다고 평균 모형에서 빼면, 실제 남은 잔차 $(y - \hat\mu)^2$ 은 $x$ 양끝에서 크고 중앙에서 작아진다. 이 패턴이 **산포 모형에서 $x$ 의 이차 효과로 나타난다** — 실제로는 평균 모형의 누락에서 온 인공물이다.
+
+::: {.callout-warning}
+## 함정: 오염된 null 대조
+
+평균 모형의 누락(주효과, 상호작용 모두)이 산포 모형에서 **허위 분산 효과**로 보인다. 산포 모델링 실험을 설계할 때는 **순수 복제(pure replicate)** 에서 얻은 분산 추정을 확보하는 것이 중요하다. null 대조는 복제 대조와 **호환 가능할 때만** 결합한다.
+:::
+
+후반부 Leaf-spring 예제에서 실제로 복제-기반 분석과 null-기반 분석이 **정반대 부호**의 $B, C$ 효과를 내는 사례가 나타난다.
+
+## Extended Quasi-likelihood 를 기준으로
+
+§9.6 에서 도입한 $Q^+$ 를 최적화 기준으로 사용한다.
+
+$$
+-2 Q^+ = \sum_{i=1}^n \frac{d_i}{\phi_i} + \sum_{i=1}^n \log\!\left(2\pi \phi_i V(y_i)\right) \tag{10.3}
+$$
+
+$\mu = \mu(\beta)$, $\phi = \phi(\gamma)$ 로 모수화하면, (10.3) 에서 $\beta$ 에 대한 편미분은
+
+$$
+\sum_{i=1}^n \frac{y_i - \mu_i}{\phi_i V(\mu_i)} \frac{\partial \mu_i}{\partial \beta_j} = 0 \tag{10.4}
+$$
+
+이것은 **Wedderburn 준우도 방정식에 가중치 $1/\phi_i$ 만 더한 형태**다. 산포가 더 이상 상수가 아니므로 이 가중치가 필수다.
+
+$\gamma$ 에 대한 편미분은
+
+$$
+\sum_{i=1}^n \frac{d_i - \phi_i}{\phi_i^2} \frac{\partial \phi_i}{\partial \gamma_j} = 0 \tag{10.5}
+$$
+
+이 식은 **응답변수를 $d_i$ 로, 분산함수를 $V_D(\phi) = \phi^2$ 로 둔 Wedderburn 방정식**과 같다.
+
+### 직관: Q+ 는 산포에 대해 감마-로그 GLM 을 가정한다
+
+식 (10.5) 가 $V_D(\phi) = \phi^2$ 를 함축하는 것은, **$d_i$ 가 감마 분포 (지수 분포 × scale=2, 즉 $\chi_1^2$)를 따른다** 고 가정하는 것과 동치다. 즉 $Q^+$ 를 적합 기준으로 쓰면 내부적으로 "산포 응답 $d_i$ 는 평균 $\phi_i$, CV 상수인 감마"로 취급된다. 정규 이론에서만 정확하고, 다른 분포에서는 근사일 뿐이다. 이 근사 오차를 바로잡는 것이 §10.5 의 핵심이다.
+
+## 추정방정식의 보정
+
+### 첨도 보정
+
+$d_i$ 의 진짜 분산은 정규에서의 $2\phi_i^2$ 를 **초과**할 수 있다. 정확한 분산은 다음과 같다.
+
+$$
+\mathrm{var}\{(Y-\mu)^2\} = \kappa_4 + 2\kappa_2^2 = 2\kappa_2^2(1 + \rho_4/2)
+$$
+
+여기서 $\rho_4 = \kappa_4/\kappa_2^2$ 는 **표준화된 4차 누율**(표준화 첨도). 따라서 $r_P^2 = (Y-\mu)^2/V(\mu)$ 의 분산은 $2\phi^2(1 + \rho_4/2)$ 이다.
+
+과산포 포아송·이항 처럼 누율이 조건 (9.21) $\kappa_{r+1} = \kappa_r' \kappa_2$ 를 만족하면 $\rho_3, \rho_4$ 가 $\phi$ 와 $V(\mu)$ 의 도함수로 표현된다.
+
+$$
+\rho_3 = \phi^{1/2} V'(\mu)/\{V(\mu)\}^{1/2}, \qquad \rho_4 = \phi V''(\mu) + \rho_3^2
+$$
+
+이탈도 기여 $r_D^2$ 에 대해서는
+
+$$
+E(r_D^2) \simeq \phi(1 + b), \qquad \mathrm{var}(r_D^2) \simeq 2\phi^2(1 + b)^2
+$$
+
+여기서 $b = b(\phi, \mu) = (5\rho_3^2 - 3\rho_4)/12$ 는 통상 작은 보정항이다.
+
+### Table 10.1 — 표준 분포별 산포 보정
+
+| 분포 | $1 + \rho_4/2$ | $b(\phi, \mu)$ |
+|------|----------------|-----------------|
+| Normal | 1 | 0 |
+| Poisson (과산포) | $1 + \phi/(2\mu)$ | $\phi/(6\mu)$ |
+| Binomial (과산포) | $1 + \frac{\phi}{2m}\!\left(\frac{1-6\pi(1-\pi)}{\pi(1-\pi)}\right)$ | $\frac{\phi}{6m}\!\left(\frac{1-\pi(1-\pi)}{\pi(1-\pi)}\right)$ |
+| Gamma | $1 + 3\phi$ | $\phi/6$ |
+| Inverse Gaussian | $1 + 15\phi\mu/2$ | 0 |
+
+실무 보정: $r_P^2$ 의 초과분산을 상쇄하기 위해 **사전가중치 $(1 + \rho_4/2)^{-1}$** 을 산포 추정방정식에 추가한다. Prentice (1988) 가 과산포 이항 데이터에서 제안한 방식이다.
+
+### 자유도 보정
+
+$Q^+$ 에서 유도한 산포 방정식은 평균 모형에 $p$ 개 모수를 적합했다는 사실을 반영하지 못한다. 이를 보정하려면 $Q^+$ 의 둘째 항에 $\nu/n$ ($\nu = n - p$) 을 곱한다.
+
+$$
+-2 Q_M^+ = \sum_i \frac{d_i}{\phi_i} + \frac{\nu}{n} \sum_i \log\!\left(\phi_i V(y_i)\right) \tag{10.6}
+$$
+
+상수 산포($\phi_i = \phi$) 에서 이 보정은 $\hat\phi = D/\nu$ (정규 이론의 불편분산 추정량) 을 준다. 더 일반적으로는 **근사 REML (제한최대우도)** 추정량을 산출한다. 분산 성분·공분산 함수 추정에서 REML 이 표준인 이유와 같은 맥락이다.
+
+로그 연결을 쓰면 자유도 보정은 **절편만** 바꾸므로 관심 기울기에는 영향이 없다. 그러나 beta-binomial 같이 $\phi_i = 1 + \theta(m_i - 1)$ 꼴이면 $Q^+$ 와 $Q_M^+$ 가 $\theta$ 의 다른 추정값을 준다.
+
+### 8가지 변형 — 산포 모형 추정 옵션
+
+1. $d = r_P^2$ vs $d = r_D^2$
+2. 사전가중치 $1$ vs $(1 + \rho_4/2)^{-1}$
+3. 자유도 보정 유무
+
+총 $2^3 = 8$ 조합. 저자의 권고는 다음과 같다.
+
+- 자유도 보정: **하는 쪽이 바람직함** (REML 유사)
+- 첨도 보정: $\rho_4$ 추정이 정확하다면 **하는 쪽이 바람직함**
+- $r_P^2$ vs $r_D^2$: 판단 애매
+
+$Q^+$ 와 $Q_M^+$ 는 이 8가지 중 **두 가지에 대해서만** 최적화 기준을 제공한다. 나머지는 최적 추정방정식 이론(§9.4, §9.5)에 기대야 한다.
+
+## 결합 최적 추정방정식 (§10.6)
+
+Godambe-Thompson (1988) 의 접근: 두 기본 추정함수
+
+$$
+g_{1i} = Y_i - \mu_i, \qquad g_{2i} = (Y_i - \mu_i)^2 - \phi_i V(\mu_i)
+$$
+
+로 시작한다. 둘 다 평균이 0 이다. §9.4 의 결합 공식 $U = D^T V^{-1} g$ 을 $(\mu_i, \phi_i)$ 를 미제약으로 두고 적용한다.
+
+### 공분산·도함수 행렬
+
+$(g_{1i}, g_{2i})$ 의 공분산:
+
+$$
+V_i = \begin{pmatrix} \kappa_2 & \kappa_3 \\ \kappa_3 & \kappa_4 + 2\kappa_2^2 \end{pmatrix}
+$$
+
+여기서 $\kappa_2 = \phi_i V(\mu_i)$, $\Delta = \det(V_i) = \kappa_2^3(2 + \rho_4 - \rho_3^2)$. 역행렬:
+
+$$
+V_i^{-1} = \frac{1}{\Delta} \begin{pmatrix} \kappa_4 + 2\kappa_2^2 & -\kappa_3 \\ -\kappa_3 & \kappa_2 \end{pmatrix}
+$$
+
+$(\mu_i, \phi_i)$ 에 대한 $-E\{\partial g/\partial \theta\}$ 행렬:
+
+$$
+D_i = \begin{pmatrix} 1 & 0 \\ \phi V'(\mu) & V(\mu) \end{pmatrix}
+$$
+
+따라서 결합 추정방정식은 (회귀·산포 모수가 공통이 없을 때):
+
+$$
+\sum_i \left\{ \frac{\kappa_4 + 2\kappa_2^2 - \kappa_3 \phi V'}{\Delta} g_{1i} + \frac{\kappa_2 \phi V' - \kappa_3}{\Delta} g_{2i} \right\} \frac{\partial \mu_i}{\partial \beta_j} = 0 \tag{10.7a}
+$$
+
+$$
+\sum_i \left( g_{2i} - \kappa_3 g_{1i}/\kappa_2 \right) \frac{\kappa_2 V}{\Delta} \frac{\partial \phi_i}{\partial \gamma_r} = 0 \tag{10.7b}
+$$
+
+이것은 $Q^+$ 에서 나온 (10.4), (10.5) 과 **다르다** — 첨도 보정을 넣더라도 일치하지 않는다. 즉 **최적 추정방정식과 Q⁺ 극대화는 동치가 아니다**.
+
+### 직관: 왜 $g_{2i}$ 항에서 $\kappa_3 g_{1i}/\kappa_2$ 를 뺐는가
+
+식 (10.7b) 의 $g_{2i} - (\kappa_3/\kappa_2) g_{1i}$ 는 $g_{2i}$ 를 $g_{1i}$ 에 대해 **회귀 잔차화한 것**이다. 두 함수가 상관되어 있을 때($\kappa_3 \neq 0$), 산포 정보만 순수하게 뽑으려면 평균 정보에 설명되지 않는 부분을 취해야 한다. 최소제곱의 "부분 회귀"와 같은 원리다.
+
+### 지수족에서의 단순화
+
+지수족이면 $\kappa_3 = \kappa_2 \phi V'$ 라는 누율-분산 관계가 성립한다. 이 경우:
+
+$$
+D^T V^{-1} = \begin{pmatrix} \kappa_2^{-1} & 0 \\ -\kappa_3 V/\Delta & \kappa_2 V/\Delta \end{pmatrix}
+$$
+
+회귀 모수에 대한 방정식이
+
+$$
+\sum_i \frac{y_i - \mu_i}{\phi_i V(\mu_i)} \frac{\partial \mu_i}{\partial \beta_j} = 0, \quad j = 1, \ldots, p
+$$
+
+즉 **원래 Wedderburn 준우도 방정식 (10.4) 과 정확히 일치**한다. 지수족 아래서는 $g_{2i}$ 를 $\beta$ 추정에 이용하는 추가 이득이 없다.
+
+## 공변량이 평균·산포에 **공통**일 때의 주의
+
+식 (10.7) 유도에서 "regression and dispersion models have no parameters in common" 을 가정했다. 이는 **모수가 겹치지 않는다** 는 조건이고, **공변량·요인이 겹치는 것은 허용**한다. 실무에서는 같은 요인 $B$ 가 $\mu$ 에도 영향을 주고 $\phi$ 에도 영향을 주지만, 두 모형은 각각 독립된 기울기 $\beta_B, \gamma_B$ 를 갖는다. 문제없다.
+
+하지만 **같은 모수 $\theta$ 가 두 모형에 동시에 들어가는 경우**(예: variance function 의 non-linear parameter)는 교차 편미분 항이 살아나 (10.7) 이 훨씬 복잡해진다. Ch.11 (non-linear parameters) 에서 다루는 주제다.
+
+## 예제 — Leaf-Spring 실험 (§10.7)
+
+Pignatiello & Ramberg (1985). 트럭 leaf spring (판 스프링) 의 **free height** $y$ 를 목표값 8인치에 맞추는 열처리 공정 설계. $2^{5-1}$ 부분인수 실험, 각 조합 3회 복제, 총 48개 관측.
+
+| 요인 | 의미 |
+|------|------|
+| $B$ | 노 온도 (furnace temperature) |
+| $C$ | 가열 시간 (heating time) |
+| $D$ | 이동 시간 (transfer time) |
+| $E$ | 고정 시간 (hold-down time) |
+| $O$ | 퀜치 오일 온도 |
+
+정의 대조(defining contrast): $I = BCDE$. 따라서 별칭 쌍: $BD \equiv CE$, $CD \equiv BE$, $DE \equiv BC$.
+
+### 평균 모형 적합
+
+반복분산 대 반복평균 플롯(Fig. 10.1)에서 산포가 평균에 의존하는 증거는 약함. 정규·상수 분산 가정 채택. 단계별 적합 결과 최종 모형:
+
+$$
+M = (B + C) \cdot O + E
+$$
+
+ANOVA 요약 (축약):
+
+| Term | S.S. | d.f. | M.S. |
+|------|------|------|------|
+| $B + C + E + O$ | 1.898 | 4 | 0.4745 |
+| $B \cdot O + C \cdot O$ | 0.414 | 2 | 0.2071 |
+| Total $M$ | 2.312 | 6 | 0.3853 |
+| Rest of treatments | 0.124 | 9 | 0.0138 |
+| Replicates | 0.530 | 32 | 0.0166 |
+
+해석:
+- $C$: $O$ 높음 → 효과 거의 없음, $O$ 낮음 → 음의 효과
+- $B$ (노 온도): 모든 $O$ 에서 양의 효과, $O$ 높음에서 두 배 큼
+- $E$ (고정 시간): 항상 양의 효과
+
+목표값 8인치에 가장 가까운 조합: $(B, C, D, E, O) = (+, -, \pm, -, -)$, 다음 $(+, -, \pm, +, -)$. 적합값 7.953, 8.057.
+
+### 산포 모형 — 세 가지 분석
+
+**분석 1**: Pignatiello-Ramberg 원 분석. 반복 표본분산 $s_i^2$ 의 로그를 선형모형으로. 15개 요인 대조 중 가장 큰 5개($B, DO, BCO \equiv DEO, CD \equiv BE, CDO \equiv BEO$) 선택. **문제**: §3.5 의 marginality 조건 무시, 우연히 큰 대조 선택 위험. 또한 run 1 의 $s_1^2 = 0.0003$ (다음 작은 값 $0.0012$) 이 반올림 때문에 극단으로 작게 나타났고, 로그 스케일에서 이상치가 됨.
+
+**분석 2**: 반복 분산만 사용, 감마 오차 + 로그 연결. $r = 3$ 샘플에서
+
+$$
+E(s^2) = \phi, \qquad \mathrm{var}(s^2) = \frac{\kappa_4}{r} + \frac{2\kappa_2^2}{r-1} = \phi^2(1 + \rho_4/3)
+$$
+
+$\rho_4 = 0$ (정규) 가정 하에 $s^2$ 이 지수분포 → scale factor = 1. 적합 결과(Table 10.3, 대표):
+
+| 산포 모형 | Gamma deviance | d.f. | $-2Q_M^+$ | d.f. |
+|-----------|----------------|------|-----------|------|
+| 1 (절편만) | 26.57 | 15 | 106.9 | 31 |
+| $B$ | 20.58 | 14 | 101.1 | 30 |
+| $C$ | 22.99 | 14 | 103.4 | 30 |
+| $B + C$ | 16.08 | 13 | 96.4 | 29 |
+| $B + C + D + E + O$ | 15.00 | 10 | 95.4 | 26 |
+| $B \cdot C$ | 15.89 | 12 | 96.3 | 28 |
+
+$B + C$ 모형의 추정값:
+
+$$
+\hat b = 1.369 \pm 0.514, \qquad \hat c = -1.092 \pm 0.514 \tag{10.8}
+$$
+
+해석: 고온 $B$ 에서 분산이 $\exp(1.369) \simeq 3.9$ 배 증가, 가열시간 $C$ 증가는 분산을 $\exp(-1.092) \simeq 0.34$ 배로 감소. SE 는 보정계수 $1 + \hat\rho_4/3 = 1.056 = X^2/13$ (보정 후 카이제곱 / 자유도)으로 계산. 지수 오차에서 감마 평균 이탈도 기댓값 $\simeq 7/6$ 과 거의 정확히 일치 (Exercise 10.1 관련).
+
+**분석 3**: null 대조 추가 (반복 대조 + null 대조 결합). 모형 $M = (B+C) \cdot O + E$ 로 평균을 적합한 뒤 잔차 기반 null 대조를 산포 분석에 포함. 결과(Table 10.4):
+
+| 산포 모형 | $-2Q_M^+$ | d.f. |
+|-----------|-----------|------|
+| 1 | 135.5 | 40 |
+| $B$ | 132.7 | 39 |
+| $C$ | 134.7 | 39 |
+| $B + C$ | 132.4 | 38 |
+| $B + C + D + E + O$ | 130.8 | 35 |
+| $B \cdot E$ | 131.5 | 37 |
+
+Table 10.3 (반복만)과 **충돌**: $C$ 효과가 사라지고 $B$ 효과도 축소. $B+C$ 의 결합 이탈도 감소가 반복만 분석에서 10.5 였는데, 결합 분석에서는 3.1 (자유도 2) 로 무의미.
+
+**분석 4**: null 대조만 사용 (모든 관측을 run mean 으로 대체). 결과(Table 10.5):
+
+| 산포 모형 | $-2Q_M^+$ | d.f. |
+|-----------|-----------|------|
+| 1 | 67.4 | 8 |
+| $B$ | 55.1 | 7 |
+| $C$ | 8.13 | 7 |
+| $B + C$ | -3.16 | 6 |
+| $B \cdot C$ | -5.63 | 5 |
+
+$B + C$ 모형 추정값:
+
+$$
+\hat b = -1.820 \pm 0.943, \qquad \hat c = 4.785 \pm 0.943
+$$
+
+**반복 분석과 정반대 부호**! 이 부호 반전이 결합 분석(분석 3)에서 $B, C$ 효과가 작아 보이는 이유다.
+
+### 해석: 산포의 두 원천
+
+반복 대조와 null 대조가 **다른 종류의 변동**을 포착한다.
+
+- 반복 대조: run 내부 단기적 변동 (heat-to-heat noise, 순간 공정 변동)
+- null 대조: run 간 장기적 변동 (day-to-day, batch-to-batch)
+
+두 원천이 공정 요인 $B, C$ 에 정반대로 반응한다면 — 예컨대 온도를 올리면 단기 노이즈는 증폭되지만 장기 편차(setup-dependent)는 감소 — **Taguchi 품질 설계의 핵심 교훈**이 드러난다: **어떤 분산을 최소화할 것인가**를 먼저 정의해야 의미 있는 답을 얻는다.
+
+## 응용 분야
+
+| 분야 | 활용 | 구체적 예시 |
+|------|------|-------------|
+| 산업 품질공학 | 평균 목표·분산 최소 | Taguchi robust parameter design, leaf spring, 반도체 수율 |
+| 임상시험 | 치료 효과 + 반응 변동성 | 혈압 강하제의 평균 효과와 환자 간 편차 동시 모형 |
+| 보험 | 손해 빈도 + 손해 크기 분산 | 운전자 특성이 claim 평균·분산에 미치는 영향 |
+| 계량경제 | 변동성 모형 | GARCH 의 이산 버전, 이질적 분산 회귀 |
+| 생태학 | 개체수 평균·분산 | 서식지별 개체수 평균과 과산포 $\phi$ 의 공변량 의존성 |
+
+## 코드 예시 — Leaf Spring Double GLM
+
+### Step 1: Python — Q⁺ 교대 알고리즘 직접 구현
+
+```python
+import numpy as np
+from scipy.stats import gamma
+
+# Leaf spring 데이터 (Pignatiello-Ramberg 1985, Table 10.2)
+# 각 행: (B, C, D, E, O, y1, y2, y3)  B,C,D,E,O 는 +1/-1
+design = np.array([
+    [-1,-1,-1,-1,-1, 7.78, 7.78, 7.81],
+    [+1,-1,-1,+1,-1, 8.15, 8.18, 7.88],
+    [-1,+1,-1,+1,-1, 7.50, 7.56, 7.50],
+    [+1,+1,-1,-1,-1, 7.59, 7.56, 7.75],
+    [-1,-1,+1,+1,-1, 7.94, 8.00, 7.88],
+    [+1,-1,+1,-1,-1, 7.69, 8.09, 8.06],
+    [-1,+1,+1,-1,-1, 7.56, 7.62, 7.44],
+    [+1,+1,+1,+1,-1, 7.56, 7.81, 7.69],
+    [-1,-1,-1,-1,+1, 7.50, 7.25, 7.12],
+    [+1,-1,-1,+1,+1, 7.88, 7.88, 7.44],
+    [-1,+1,-1,+1,+1, 7.50, 7.56, 7.50],
+    [+1,+1,-1,-1,+1, 7.63, 7.75, 7.56],
+    [-1,-1,+1,+1,+1, 7.32, 7.44, 7.44],
+    [+1,-1,+1,-1,+1, 7.56, 7.69, 7.62],
+    [-1,+1,+1,-1,+1, 7.18, 7.18, 7.25],
+    [+1,+1,+1,+1,+1, 7.81, 7.50, 7.59],
+])
+
+B, C, D, E, O = design[:, 0], design[:, 1], design[:, 2], design[:, 3], design[:, 4]
+Y = design[:, 5:8]            # (16, 3)
+y_flat = Y.flatten()
+run_idx = np.repeat(np.arange(16), 3)
+
+# 평균 설계행렬 M = (B+C)*O + E  — 16개 run 수준, 각 run 에 3회 반복
+X_mean = np.column_stack([
+    np.ones(16), B, C, E, O, B*O, C*O
+])
+X_mean_full = X_mean[run_idx]  # (48, 7)
+
+# 산포 설계행렬 (로그 연결): B + C
+U_disp = np.column_stack([np.ones(16), B, C])
+
+# 교대 IRLS
+phi = np.ones(16)   # 초기 산포
+for it in range(20):
+    # Step A: 평균 회귀 (가중 OLS, V=1 정규)
+    w = 1.0 / np.repeat(phi, 3)
+    W = np.diag(w)
+    beta = np.linalg.solve(
+        X_mean_full.T @ W @ X_mean_full,
+        X_mean_full.T @ W @ y_flat
+    )
+    mu = X_mean_full @ beta
+
+    # Step B: 산포 응답 d_i = run variance (r_D^2 ~ r_P^2 for Normal)
+    resid = y_flat - mu
+    d_run = np.array([resid[run_idx == k].var(ddof=0) for k in range(16)])
+    # (실무: 감마 GLM 로그 연결, Fisher scoring. 여기서는 간단히 log 변환 OLS)
+    log_d = np.log(d_run + 1e-10)
+    gamma_hat = np.linalg.solve(U_disp.T @ U_disp, U_disp.T @ log_d)
+    phi = np.exp(U_disp @ gamma_hat)
+
+print("beta (mean):", np.round(beta, 4))
+print("gamma (dispersion, log-link):", np.round(gamma_hat, 4))
+print("exp(gamma_B) =", np.exp(gamma_hat[1]).round(3),
+      "exp(gamma_C) =", np.exp(gamma_hat[2]).round(3))
+```
+
+예상 출력 (Table 10.3 의 $B+C$ 모형): `gamma_B ~ +1.37`, `gamma_C ~ -1.09`. 분산이 고온에서 $\simeq 3.9$ 배 증가, 가열시간 증가로 $\simeq 0.34$ 배 감소.
+
+### Step 2: R — dglm 패키지로 표준 적합
+
+```r
+library(dglm)
+
+# 동일 leaf-spring 데이터
+d <- expand.grid(rep = 1:3, run = 1:16)
+d$B <- c(-1,+1,-1,+1,-1,+1,-1,+1,-1,+1,-1,+1,-1,+1,-1,+1)[d$run]
+d$C <- c(-1,-1,+1,+1,-1,-1,+1,+1,-1,-1,+1,+1,-1,-1,+1,+1)[d$run]
+d$E <- c(-1,+1,+1,-1,+1,-1,-1,+1,-1,+1,+1,-1,+1,-1,-1,+1)[d$run]
+d$O <- rep(c(-1,+1), each = 8)[d$run]
+# y 채워넣기 생략 — design 행렬로부터 복원
+
+# double GLM: 평균 (가우시안, 항등) + 산포 (감마, 로그)
+fit <- dglm(
+  formula  = y ~ B + C + E + O + B:O + C:O,   # 평균
+  dformula = ~ B + C,                          # 산포
+  family   = gaussian(link = "identity"),
+  dlink    = "log",
+  data     = d
+)
+summary(fit)                     # 평균 계수
+summary(fit$dispersion.fit)      # 산포 계수
+```
+
+`dglm` 은 내부적으로 두 IRLS 를 교대로 수렴할 때까지 돌린다. 산포 부분의 $-2Q_M^+$ 는 Table 10.3 의 96.4 (모형 $B+C$) 와 근사 일치한다.
+
+### Step 3: 첨도 보정을 반영한 사전가중치
+
+```python
+# 과산포 포아송: 1 + rho_4/2 = 1 + phi/(2*mu)
+def kurtosis_weight_poisson(phi, mu):
+    return 1.0 / (1.0 + phi / (2.0 * mu))
+
+# 감마: 1 + rho_4/2 = 1 + 3*phi
+def kurtosis_weight_gamma(phi):
+    return 1.0 / (1.0 + 3.0 * phi)
+
+# 산포 IRLS 의 prior weight 로 곱한다
+# weight_i = kurtosis_weight(phi_hat_i, mu_hat_i)  (필요 시)
+```
+
+첨도가 큰 분포에서 $r_P^2$ 의 초과분산을 보정해 산포 회귀 계수의 SE 가 과소추정되는 것을 막는다.
+
+## 산포 모형의 진단
+
+| 진단 | 어떤 문제를 잡는가 |
+|------|--------------------|
+| run variance $s_i^2$ vs $\bar y_i$ 산점도 | 평균-분산 관계 잔류 → $V(\mu)$ 선택 오류 |
+| 산포 잔차 $(d_i - \hat\phi_i)/\hat\phi_i$ QQ-plot | $d_i$ 분포 가정 (감마) 위반 |
+| null 대조 vs replicate 대조 이탈도 비교 | 두 원천의 일관성 |
+| Gamma mean deviance $\simeq 7/6$ 지수오차 | 지수 가정 적절성 (Ex 10.1) |
+
+**핵심 경고**: 산포 모형 잔차의 정규성 · 상수 분산 가정은 평균 모형의 그것보다 훨씬 취약하다. $d_i$ 는 항상 양수, 분포 오른쪽 꼬리가 두텁다. 반드시 **로그 변환 스케일** 에서 진단한다.
+
+## 연습문제 (10.1~10.4) 핵심 아이디어
+
+- **Ex 10.1**: 지수 오차에서 감마 이탈도의 기댓값이 $\simeq 7/6$ 임을 보임. 앞서 부록 C.4 의 $E(-2\ell) \simeq p + \text{조정항}$ 근사 이용. run 당 표본 크기 $r=3$, 자유도 $r-1=2$ 인데, 이탈도의 chi-square 근사 대신 정확 감마 누율로 계산하면 $E(D)/\nu \simeq 1.167$.
+- **Ex 10.2**: (10.7) 에서 "회귀·산포 모수 공통 없음" 조건이 왜 필수인가. 공통 $\theta$ 가 있으면 $\partial \mu/\partial \theta$ 와 $\partial \phi/\partial \theta$ 가 모두 추정방정식에 기여하며, 두 채널이 서로 상쇄·보강되는 결합 편미분이 필요. 실무에서 공통 모수는 흔치 않으나, NB 의 $k$ 처럼 variance function 의 non-linear parameter 가 평균 구조에도 (canonical link 통해) 들어가면 위배.
+- **Ex 10.3**: Table 10.1 의 과산포 포아송·이항 수치 유도. $\kappa_{r+1} = \kappa_r' \kappa_2$ 조건 하에서 $V(\mu) = \mu$ (Poisson) 이면 $V' = 1, V'' = 0$ 이므로 $\rho_3 = \phi^{1/2}/\mu^{1/2}$, $\rho_4 = 0 + \rho_3^2 = \phi/\mu$. 따라서 $1 + \rho_4/2 = 1 + \phi/(2\mu)$, $b = (5\phi/\mu - 3\phi/\mu)/12 = \phi/(6\mu)$. 이항은 $V(\pi) = \pi(1-\pi)/m$ 대입.
+- **Ex 10.4**: $Q^+$ 에서 $(\beta, \gamma)$ 에 대한 기대 Fisher 정보행렬이 **블록대각**. 즉 $E(\partial^2 Q^+/\partial \beta \partial \gamma) = 0$. 이는 $\partial Q^+/\partial \beta$ 가 $y - \mu$ 선형이고 $\partial Q^+/\partial \gamma$ 가 $d - \phi$ 선형인데, $E(Y-\mu) = 0$ 과 $E(d-\phi) = 0$ 이 서로 **직교** 하기 때문. 실무적 함의: $\hat\beta, \hat\gamma$ 의 점근 공분산이 분리되어 산포 불확실성이 $\hat\beta$ SE 에 영향을 주지 않는다 (선두 차원 근사에서).
+
+## Bibliographic Notes
+
+- **Pregibon (1984)**: 평균-산포 연결 GLM 의 최초 제안
+- **Aitkin (1987)**: 이질 분산 정규 모형의 일반 처리
+- **Cook & Weisberg (1983)**: 분산 이질성의 score test
+- **Smyth (1989)**: 평균-산포 추정 알고리즘 비교. 현재 R 패키지 `dglm` 의 기반
+- **Godambe & Thompson (1988)**: 결합 최적 추정방정식 체계 (식 10.7)
+- **Nelder & Lee (1991)**: 확장 준우도의 더 발전된 이론
+- **Prentice (1988)**: 과산포 이항에서의 $\rho_4$ 보정
+
+## 정리 및 다음 주제
+
+이 장은 GLM 프레임워크의 **산포 차원으로의 확장**을 완성했다. 평균 모형이 전부인 시대가 끝나고, "공정이나 치료가 평균을 바꾸는가, 분산을 바꾸는가, 혹은 둘 다인가?" 를 체계적으로 질문할 수 있게 됐다. 핵심 요약:
+
+1. $Y$ 와 $d$ 를 각각 응답으로 하는 두 GLM 을 교대 IRLS 로 수렴시키는 **double GLM** 구조.
+2. $Q^+$ 를 극대화하면 $V_D(\phi) = \phi^2$ (감마-로그) 산포 모형과 동치인 추정방정식이 나온다.
+3. 비정규 $Y$ 에서 **첨도 보정** $(1+\rho_4/2)^{-1}$ 과 **자유도 보정** $\nu/n$ 이 필요하다 (유사 REML).
+4. Godambe-Thompson 의 결합 최적 추정방정식은 $Q^+$ 와 다르지만 지수족에서는 평균 부분이 Wedderburn 식 (10.4) 와 일치한다.
+5. null 대조와 replicate 대조의 **산포 원천 차이**를 무시하면 부호 반전(leaf-spring) 같은 충돌이 생긴다.
+
+다음 장(Ch.11)은 **variance function 자체 또는 link 자체에 미지 모수**가 들어가는 경우 — NB 의 $k$, Box-Cox 의 $\lambda$ — 를 다룬다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Extended Quasi-likelihood — Q⁺ 정의·h₁ 유도·Saddlepoint 근사 (McCullagh §9.6)](./08-6-extended-quasi-likelihood.qmd)
+- [Optimal Estimating Functions — 추정함수 이론·결합 공식 (McCullagh §9.4)](./08-4-optimal-estimating-functions.qmd)
+- [Optimality Criteria — 선형 추정함수 클래스·Gauss-Markov 유비 (McCullagh §9.5)](./08-5-optimality-criteria.qmd)
+- [GLM 적합도 측정 — Deviance·Pearson·Analysis of Deviance (McCullagh §2.3)](./01-4-glm-measuring-goodness-of-fit.qmd)
+
+**후속 주제**
+
+- Models with Additional Non-Linear Parameters — variance·link 의 미지 모수 (McCullagh Ch.11)
+- REML 과 분산 성분 추정 (Mixed Model 연결)
+- Taguchi Robust Parameter Design 의 GLM 재해석
+
+**관련 개념**
+
+- [이항 자료의 과산포 — Over-dispersion (McCullagh §4.5)](./03-5-overdispersion.qmd) — 단일 $\phi$ 상수의 한계
+- [Gamma GLM — 분산 함수·이탈도·산포 추정 (McCullagh §8.3)](./07-3-gamma-models.qmd) — 산포 회귀의 전신
+- [Quasi-likelihood Functions 개관 (McCullagh Ch.9)](./08-1-quasi-likelihood-overview.qmd)
