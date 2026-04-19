@@ -1,0 +1,506 @@
+---
+title: "Models with Additional Non-Linear Parameters — 변동함수·연결함수·공변량 속에 숨어 있는 미지 모수"
+subtitle: "McCullagh & Nelder Ch.11 — GLM 프레임워크를 Box-Cox·NB·Box-Tidwell 까지 확장"
+description: |
+  GLM 의 분산함수 $V(\mu)$, 연결함수 $g(\mu)$, 또는 공변량 변환에
+  미지의 비선형 모수가 들어가는 모형을 다룬다. Pregibon 의 linearization,
+  Box-Tidwell 반복법, 음이항의 $k$, 권력 연결 $\mu^\lambda$ 의 프로파일 이탈도를
+  하나의 체계로 정리한다.
+categories:
+  - Statistics
+  - Regression
+author: Kwangmin Kim
+date: 04/19/2026
+execute:
+  eval: false
+---
+
+## 서론 — 'non-linear' 의 좁은 의미
+
+"일반화 선형 모형" 이라는 이름은 절반만 맞다. 고전적 정규-항등 선형모형을 제외한 모든 GLM 은 **실은 비선형**이다. 로지스틱 회귀의 $\pi = e^\eta/(1+e^\eta)$, 포아송 회귀의 $\mu = e^\eta$, 감마 회귀의 $\mu = 1/\eta$ 는 $\beta$ 에 대해 분명히 비선형이다.
+
+그러나 GLM 의 비선형성은 **특정 장소에만** 허용되어 있다.
+
+- 체계적 예측자 $\eta = \sum_j \beta_j x_j$: $\beta$ 에 대해 **엄격히 선형**
+- 연결함수 $g(\mu) = \eta$: $\mu \leftrightarrow \eta$ 변환은 비선형 가능하지만 **함수 형태는 고정**
+- 분산함수 $V(\mu)$: $\mu$ 에 의존하는 함수이지만 **함수 형태는 고정**
+
+즉 기존 GLM 은 "비선형성을 특정 위치에 가두어 놓은 모형" 이다. 이 좁은 틀을 풀면 — 분산함수, 연결함수, 또는 공변량 자체 안에 **미지의 모수** 가 숨어 있으면 — 원래 의미의 비선형 회귀가 된다.
+
+이 장(McCullagh & Nelder 1989, Ch.11)이 다루는 세 가지 출구는 다음과 같다.
+
+1. **분산함수 속 비선형 모수**: 예) 음이항의 $V(\mu) = \mu + \mu^2/k$ 에서 $k$
+2. **연결함수 속 비선형 모수**: 예) Box-Cox 형 $g(\mu; \lambda) = \mu^\lambda$ 에서 $\lambda$
+3. **공변량 속 비선형 모수**: 예) Mitscherlich $\mu = \beta_0 + \beta_1 e^{-kx}$ 에서 $k$
+
+각 경우 공통적으로 **Pregibon (1980)-Box-Tidwell (1962) 형의 Taylor 선형화** 를 반복 적용하여 표준 GLM 적합 알고리즘에 통합한다.
+
+### 직관: 왜 '추가' 비선형 모수가 까다로운가
+
+GLM 의 IRLS 는 매 반복에서 **설계행렬 $X$ 와 가중치 $W$ 가 고정** 된 상태로 가중 최소제곱을 푼다. 그런데 $V(\mu)$ 안에 모수 $k$ 가 있으면, $W = \text{diag}(1/V(\mu_i))$ 자체가 $k$ 에 의존한다. $g(\mu; \lambda)$ 의 $\lambda$ 가 미지이면 **설계행렬** 이 $\lambda$ 에 의존한다. 비선형 공변량 $g(x; \theta)$ 의 $\theta$ 가 미지이면 **공변량 값** 이 매 반복마다 바뀐다.
+
+따라서 알고리즘은 바깥 루프(비선형 모수)와 안쪽 루프(IRLS) 의 **이중 반복**이 된다. 수렴은 초기값에 민감해지고, $\hat\theta$ 의 점근 공분산은 $\hat\beta$ 만 추정했을 때의 공식과 달라진다.
+
+## §11.2 분산함수 속 비선형 모수 — 음이항과 반올림 오차
+
+### 분산함수의 두 종류 모수
+
+기존 GLM 의 분산은 $\mathrm{var}(Y_i) = \phi V(\mu_i)$ 꼴이었다. 여기서 $\phi$ 는 **산포 모수**(dispersion) 로, $\hat\beta$ 방정식과 분리해 추정할 수 있다. 산포는 likelihood 방정식의 **해에 영향을 주지 않는** 특수한 위치에 있다.
+
+그러나 분산함수가 $V(\mu; k) = \mu + \mu^2/k$ 처럼 **구조적 모수** $k$ 를 포함하면 사정이 달라진다. $k$ 는 $V$ 의 형태 자체를 바꾸므로 $\hat\beta$ 추정과 얽힌다.
+
+### 음이항 — 감마-포아송 혼합의 초과 분산
+
+::: {.callout-note}
+## 정의: 음이항 분포와 분산함수
+
+$k > 0$, $\alpha > 0$ 에 대해
+
+$$
+\Pr(Y = y; \alpha, k) = \frac{(y+k-1)!}{y!(k-1)!} \frac{\alpha^y}{(1+\alpha)^{y+k}}, \quad y = 0, 1, 2, \ldots
+$$
+
+평균과 분산:
+
+$$
+E(Y) = \mu = k\alpha, \qquad \mathrm{var}(Y) = k\alpha + k\alpha^2 = \mu + \mu^2/k
+$$
+
+$k \to \infty$ 극한에서 포아송 $V(\mu) = \mu$ 로 수렴.
+:::
+
+**직관**: 음이항은 "포아송 평균 $\Lambda$ 자체가 감마 분포로 변동하는" 혼합으로 해석된다. $\Lambda \sim \text{Gamma}(k, \alpha)$ 이면 $Y | \Lambda \sim \text{Poisson}(\Lambda)$ 의 주변분포가 음이항이다. 추가 분산 $\mu^2/k$ 는 개체별 평균 $\Lambda$ 가 들쭉날쭉한 데서 온다. $k$ 는 "혼합의 집중도" — $k$ 가 크면 $\Lambda$ 의 변동이 작아 포아송에 가깝고, $k$ 가 작으면 과산포가 심하다.
+
+### 음이항의 canonical link — $k$ 가 링크에도 등장
+
+고정 $k$ 에서 로그우도의 canonical link 는
+
+$$
+\eta = \log\!\left(\frac{\alpha}{1+\alpha}\right) = \log\!\left(\frac{\mu}{\mu+k}\right)
+$$
+
+이다. **$k$ 가 링크 함수 자체에 들어간다**. 이 때문에 $k$ 의 불확실성이 $\hat\beta$ 에 직접 번진다. 실무에서는 canonical link 대신 로그 링크 $\log\mu$ 를 쓰고 $V(\mu) = \mu + \mu^2/k$ 만 분산함수로 사용하는 편이 일반적이다.
+
+### $k$ 의 추정
+
+최대우도는 digamma 함수를 포함하는 비선형 방정식을 요구한다. 실무 대안:
+
+| 방법 | 조건 |
+|------|------|
+| 모멘트 적합 | 표본분산 $= \mu + \mu^2/k$ 를 만족하는 $k$ |
+| 평균 이탈도 = 1 | $D(\hat k)/(n-p) = 1$ 이 되는 $\hat k$ |
+| Pearson $X^2 = n - p$ | $\sum r_P^2 = n - p$ 를 만족하는 $\hat k$ |
+
+표준 구현은 Profile likelihood: 여러 $k$ 값에 대해 GLM 을 적합한 뒤 이탈도가 최소인 $k$ 선택. `statsmodels.discrete.NegativeBinomial`, R `MASS::glm.nb` 이 이 방식을 자동화한다.
+
+### 반올림 오차로 인한 분산함수 — $V = \tau^2 + \sigma^2 \mu^2$
+
+감마 오차 데이터를 **고정 소수점** 으로 기록하면 비례 오차 $\sigma^2 \mu^2$ 에 상수 반올림 오차 $\tau^2$ 가 더해진다.
+
+$$
+V(\mu; \tau^2, \sigma^2) = \tau^2 + \sigma^2 \mu^2
+$$
+
+**해석**: 작은 $\mu$ 에서는 반올림이 지배적 (상수 분산), 큰 $\mu$ 에서는 비례 오차가 지배적. **결과적으로 작은 관측치의 가중치가 상대적으로 줄어든다** — 순수 감마 GLM 은 작은 값을 과신해 계수가 왜곡된다.
+
+quasi-likelihood 체계에서 $\sigma^2/\tau^2$ 를 음이항의 $k$ 와 같은 방식으로 반복 추정한다.
+
+## §11.3 연결함수 속 비선형 모수 — Power link 와 Pregibon 선형화
+
+### 멱 연결 가족
+
+$$
+g(\mu; \lambda) = \begin{cases} \mu^\lambda & \lambda \neq 0 \\ \log\mu & \lambda = 0 \end{cases}
+\qquad \text{또는} \qquad g(\mu; \lambda) = \frac{\mu^\lambda - 1}{\lambda}
+$$
+
+$\lambda = 1$: 항등, $\lambda = 0$: 로그, $\lambda = -1$: 역수, $\lambda = 0.5$: 제곱근. 한 장의 그래프 위에 **여러 표준 링크가 연속적으로 이어진다**.
+
+### 직관: $\lambda$ 를 왜 추정하는가
+
+링크를 "이론이 정한 것" 으로 받아들이는 대신, 데이터가 말하게 할 수 있다. $\lambda$ 에 대해 이탈도 $D(\lambda)$ 를 플롯하면:
+
+- 최솟값에서 **데이터가 선호하는 링크** 를 읽는다
+- 95% 신뢰구간 $\{\lambda: D(\lambda) - D(\hat\lambda) < \chi^2_{1, 0.05}\}$ 으로 링크 선택의 **불확실성** 을 본다
+- 관심 있는 특정 값(예: $\lambda = 0$ 로그 링크)이 신뢰구간에 들어가면 그 링크가 **기각되지 않는다**
+
+McCullagh & Nelder 의 자동차 보험 예제(Fig. 11.1)에서 최솟값은 $\lambda \approx -1$ (역수 링크), 95% 신뢰구간은 $\lambda = 0$ 까지 포함 — 로그 링크도 허용 가능.
+
+### Pregibon (1980) 의 선형화 전략
+
+미지 $\lambda$ 를 최적화하려면 매 $\lambda$ 마다 IRLS 를 다시 돌려야 한다. 이를 한 번의 IRLS 로 합치는 기법이 **Taylor 전개 후 보조 공변량으로 흡수** 하는 방식이다.
+
+연결함수를 초기값 $\lambda_0$ 근방에서 일차 전개:
+
+$$
+g(\mu; \lambda) \simeq g(\mu; \lambda_0) + (\lambda - \lambda_0) \left.\frac{\partial g}{\partial \lambda}\right|_{\lambda_0}
+$$
+
+멱 가족에서 $\partial \mu^\lambda / \partial \lambda = \mu^\lambda \log\mu$ 이므로
+
+$$
+\mu^\lambda \simeq \mu^{\lambda_0} + (\lambda - \lambda_0) \mu^{\lambda_0} \log\mu \tag{11.1}
+$$
+
+이제 GLM 적합식 $g(\mu; \lambda) = \sum \beta_j x_j$ 를 다음처럼 재배치한다.
+
+$$
+\mu^{\lambda_0} = \sum \beta_j x_j - (\lambda - \lambda_0) \hat\mu_0^{\lambda_0} \log \hat\mu_0
+$$
+
+**해석**: 원래 모형에 **여분의 공변량** $v = -\hat\mu_0^{\lambda_0} \log \hat\mu_0$ 를 추가하여 $\lambda_0$-링크 GLM 을 적합하면, $v$ 의 계수 $\hat\gamma$ 가 $(\lambda - \lambda_0)$ 의 1차 근사 추정치가 된다. 새 $\lambda_1 = \lambda_0 + \hat\gamma$ 로 갱신 후 반복.
+
+### 직관: 왜 '공변량 하나 추가' 로 링크 모수가 추정되는가
+
+핵심은 **"링크의 미지 부분을 잔차처럼 다룬다"** 는 생각이다. $\lambda_0$-링크로 적합한 모형이 맞지 않는다면, 그 불일치의 방향이 $\mu^{\lambda_0} \log\mu$ 꼴로 나타난다 (Taylor 전개의 1차항). 이 방향을 설계행렬에 추가하면, 새로 나오는 계수가 곧 "$\lambda_0$ 에서 얼마나 벗어나야 하는가" 를 말해 준다.
+
+이는 **score test 의 기하학** 과 같다: 귀무가설 $\lambda = \lambda_0$ 에서 출발해 "방향 $v$ 에 대한 잔차 적합" 으로 $\lambda$ 의 편차를 감지한다.
+
+### 수렴성의 함정
+
+(11.1) 의 1차 근사는 $\lambda_0 \approx \hat\lambda$ 일 때만 타당하다. 시작값이 해에서 멀면 새 $\lambda_1$ 이 발산하거나 진동할 수 있다. Pregibon 의 권고:
+
+> "이 방법은 **합리적 적합을 개선**하는 데 유용하지, **절망적 상황을 고칠** 목적으로는 기대하지 말라."
+
+실무적으로는 $\lambda$ 를 $\{-2, -1.5, \ldots, 1.5, 2\}$ 의 격자에서 profile deviance 를 그려 **전역 최솟값의 대략 위치** 를 먼저 확인한 뒤 그 근방에서 Pregibon 반복을 돌린다.
+
+### 이중 연결 모수와 이항 링크 가족
+
+공차 분포(tolerance distribution) 기반 probit 분석용 일반화:
+
+$$
+g(\mu; \lambda, \delta) = \frac{\pi^{\lambda - \delta} - 1}{\lambda - \delta} - \frac{(1-\pi)^{\lambda + \delta} - 1}{\lambda + \delta}
+$$
+
+$\lambda, \delta \to 0$ 극한에서 로짓 링크가 된다. 두 개의 비선형 모수를 동시에 추정하려면 공변량 두 개를 설계행렬에 추가 (각각 $\partial g/\partial \lambda$, $\partial g/\partial \delta$).
+
+이항 데이터용 단일 모수 가족:
+
+$$
+g(\mu; \lambda) = \log\!\left[\frac{(1/(1-\pi))^\lambda - 1}{\lambda}\right]
+$$
+
+$\lambda = 1$ 은 로지스틱, $\lambda \to 0$ 은 complementary log-log. 이 가족을 통해 **로지스틱 가정을 cloglog 방향으로 검정** 할 수 있다.
+
+### 데이터 변환 vs 적합값 변환 — GLM 의 철학적 승리
+
+Box & Cox (1964) 의 원래 제안은 **$y$ 자체** 를 $y^\lambda$ 로 변환해 정규-항등 선형모형을 적용하는 것이었다. 그러나 이 방식은 두 가지 목표를 한 변환에 떠맡긴다.
+
+1. 체계 부분의 **가법성**
+2. 무작위 부분의 **등분산성·정규성**
+
+하나의 $\lambda$ 로 두 목표를 동시에 달성한다는 보장이 없다. 예로 Nelder & Wedderburn 의 Fisher 결핵 재분석에서 **$\sqrt{y}$ 가 분산은 안정** 시키지만 **$\log y$ 가 가법성** 을 준다. 두 목표가 **다른 변환** 을 요구한다.
+
+GLM 은 이 둘을 **분리** 한다.
+
+- 가법성은 링크 $g$ 로 처리 ($\eta = g(\mu)$)
+- 분산은 분산함수 $V(\mu)$ 로 처리
+
+변환 기반 모형에서 벌어지던 트레이드오프가 해소된다. $Y$ 를 직접 변환하지 않고 **적합값 $\mu$ 만 변환** 하므로 데이터 스케일의 해석도 보존된다.
+
+## §11.4 공변량 속 비선형 모수 — Box-Tidwell 과 drug mixture
+
+### 공변량 변환의 두 상황
+
+선형 예측자가 $\eta = \sum \beta_j g_j(x_j; \theta_j)$ 인 모형을 생각한다.
+
+| $\theta_j$ | 처리 | 왜 |
+|-----------|------|----|
+| 알려짐 | $g_j(x_j; \theta_j)$ 를 그냥 공변량 값으로 사용 | 설계행렬이 고정 |
+| 알려지지 않음 | 비선형 반복 필요 | 설계행렬이 $\theta_j$ 에 의존 |
+
+예: $e^{-kx}$ 를 공변량으로 쓰고 싶을 때, $k$ 를 미리 알면 그저 $z = e^{-kx}$ 열을 만들면 된다. $k$ 를 추정해야 하면 **Box-Tidwell (1962)** 의 반복법으로 처리한다.
+
+### Box-Tidwell 선형화
+
+비선형 항 $\beta \, g(x; \theta)$ 를 초기값 $\theta_0$ 근방에서 전개:
+
+$$
+g(x; \theta) \simeq g(x; \theta_0) + (\theta - \theta_0) \left.\frac{\partial g}{\partial \theta}\right|_{\theta_0}
+$$
+
+이를 $\beta$ 로 곱해 두 개의 선형 항으로 재작성:
+
+$$
+\beta \, g(x; \theta) \simeq \beta \, u + \gamma \, v
+$$
+
+여기서
+
+$$
+u = g(x; \theta_0), \quad v = \left.\frac{\partial g}{\partial \theta}\right|_{\theta_0}, \quad \gamma = \beta (\theta - \theta_0)
+$$
+
+갱신 규칙:
+
+$$
+\hat\theta_1 = \theta_0 + \hat\gamma / \hat\beta
+$$
+
+$\hat\gamma, \hat\beta$ 은 설계행렬에 $u, v$ 를 **두 열로 넣어** GLM 을 적합한 결과의 계수다.
+
+### 직관: 분자 $\hat\gamma$ 와 분모 $\hat\beta$ 의 역할
+
+$\gamma = \beta(\theta - \theta_0)$ 이므로 $\hat\gamma = \hat\beta(\hat\theta - \theta_0)$. 양변을 $\hat\beta$ 로 나누면 $(\hat\theta - \theta_0) = \hat\gamma/\hat\beta$. 즉 $\hat\beta$ 는 "$g(x; \theta)$ 공변량의 **전체 기울기**", $\hat\gamma$ 는 "**$\theta$ 방향의 추가 변동**" 을 포착하는 계수다. 둘의 비율이 곧 $\theta$ 의 편차 업데이트다.
+
+### 점근 공분산의 보정
+
+단순 IRLS 는 설계행렬을 **고정** 으로 본다. 따라서 출력되는 $(\mathbf X^T W \mathbf X)^{-1}$ 은 "$\theta$ 를 알고 있을 때 $\hat\beta$ 의 공분산" 이다. $\theta$ 를 추정했으므로 이 공분산은 **과소**다.
+
+보정 방법: 마지막 반복에서 $v$ 자리에 $\hat\beta \cdot v$ 를 넣고 GLM 을 한 번 더 돌린다. 그러면 이 열에 해당하는 $(\mathbf X^T W \mathbf X)^{-1}$ 성분이 **$\hat\theta$ 의 점근 분산** 을 직접 준다.
+
+### 상관 모수의 함정
+
+비선형 공변량을 둘 이상 넣으면 위험하다.
+
+$$
+\eta = \beta_0 + \beta_1 e^{k_1 x_1} + \beta_2 e^{k_2 x_2}
+$$
+
+$k_1, k_2$ 가 가까울수록 두 공변량이 거의 선형 종속이 되어 **$\hat k_j$ 의 표준오차가 폭발** 한다. McCullagh & Nelder 의 권고: **비선형 모수는 두세 개까지가 실용적 한계**.
+
+### Drug mixture — 자연스럽게 등장하는 비선형 모수
+
+두 약물 $x_1, x_2$ 의 결합 효과를 공통 log-dose 척도로 모형:
+
+$$
+\eta = \beta_0 + \beta_1 \log(x_1 + \theta x_2)
+$$
+
+**$\theta$ 의 의미**: 약물 2가 약물 1과 비교해 **몇 배 강한가** (relative potency). $\theta = 1$ 이면 동량 상호 대체, $\theta < 1$ 이면 약물 2가 약함.
+
+추정 전략 두 가지:
+
+1. **Box-Tidwell 선형화**: $v = \partial \log(x_1 + \theta x_2)/\partial \theta = x_2/(x_1 + \theta_0 x_2)$ 를 공변량으로 추가
+2. **Profile deviance**: $\theta$ 의 격자 위에서 각 값마다 GLM 적합, 이탈도 최솟값을 찾는다 (Darby & Ellis, 1976). 신뢰구간:
+
+$$
+\{\theta : D(\theta) - D(\hat\theta) < s^2 F^*_{1, n-p, \alpha}\}, \quad s^2 = D(\hat\theta)/(n-p)
+$$
+
+### 왜 profile 이 더 안전한가
+
+Box-Tidwell 반복은 빠르지만 초기값에 민감하고 공분산 보정이 필요하다. Profile deviance 는 계산량이 많지만:
+
+- $D(\theta)$ 곡선을 **전역적** 으로 본다 — 여러 극소점이 있는 경우도 감지
+- 신뢰구간을 **이차 근사 없이** 읽을 수 있다 (곡률이 크지 않으면 Wald 근사가 부정확)
+- 수렴 실패 시 "이 $\theta$ 에서는 모형이 불안정" 이라는 진단 정보를 제공
+
+## 응용 분야
+
+| 분야 | 활용 | 구체적 예시 |
+|------|------|-------------|
+| 농학 | 비료-수확량 응답 곡선 | Bermuda grass $1/\mu = \beta_0 + \sum \beta_i/(x_i + \alpha_i)$, $\alpha_i$ = 토양 잔류량 |
+| 약리학 | 약물 혼합의 상대 효능 | 살충제 + 상승제, insulin assay, 두 약물의 log-dose 결합 |
+| 독성학 | Tolerance distribution 링크 선택 | logit ↔ cloglog 사이 연속 보간 (Pregibon 이항 가족) |
+| 손해보험 | claim 비용의 link 적합 | 멱 가족 $\mu^\lambda$ 의 profile deviance 로 역수 링크 vs 로그 링크 판별 |
+| 생태학 | Mitscherlich 포화 성장 | $\mu = \beta_0 (1 - e^{-kx})$, $k$ 는 자원 흡수율 |
+| 계량경제 | Box-Cox 변환 검정 | 변환 필요성·정도를 이탈도로 정량화 |
+| 공정 공학 | 음이항 count regression | 결함 수에 대한 $k$ 추정 — 과산포 정도 판별 |
+
+## 예시 — Bermuda grass 비료 실험 (§11.5.1 맛보기)
+
+Welch et al. (1963). 질소 $N$, 인 $P$, 칼륨 $K$ 의 $4^3$ 요인 실험. 각 영양소가 이미 토양에 **알려지지 않은 양** $\alpha_i$ 만큼 존재한다고 가정.
+
+응답 모형(감마 오차, 역수 링크):
+
+$$
+\frac{1}{\mu} = \eta = \beta_0 + \sum_{i=1}^3 \frac{\beta_i}{x_i + \alpha_i}
+$$
+
+$\alpha_i$ 세 개가 **공변량 속 비선형 모수**. Box-Tidwell 업데이트에서 보조 공변량:
+
+$$
+v_i = \frac{\partial}{\partial \alpha_i} \frac{1}{x_i + \alpha_i} = -\frac{1}{(x_i + \alpha_i)^2} = -u_i^2
+$$
+
+설계행렬에 $u_1, u_2, u_3, v_1, v_2, v_3$ 여섯 열을 넣고 감마 GLM 적합 → $\hat\gamma_i / \hat\beta_i$ 로 $\hat\alpha_i$ 갱신 → 반복.
+
+**해석**: $\hat\alpha_N$ 이 크면 토양에 질소 잔류량이 많다는 뜻. 이 값이 역으로 산출되므로 **비료 설계가 토양 상태에 자동 적응** 한다.
+
+## 코드 예시 — Pregibon 멱 연결 반복
+
+### Step 1: Python — 직접 구현
+
+```python
+import numpy as np
+import statsmodels.api as sm
+
+# 시뮬레이션 데이터 (감마, 알려지지 않은 멱 링크 lambda* = 0.5)
+rng = np.random.default_rng(42)
+n = 200
+x1 = rng.uniform(0.5, 5.0, n)
+x2 = rng.uniform(0.5, 5.0, n)
+X = np.column_stack([np.ones(n), x1, x2])
+
+beta_true = np.array([1.5, 0.4, -0.2])
+eta_true = X @ beta_true                    # eta = mu^0.5
+mu_true = eta_true ** 2                      # lambda = 0.5
+y = rng.gamma(shape=5.0, scale=mu_true / 5.0)
+
+def pregibon_update(X, y, lam0, n_inner=25, tol=1e-7):
+    """lam0 에서 시작하여 Pregibon 선형화 한 번 수행, 갱신된 lambda 반환."""
+    # Step A: lam0-링크 GLM 적합 (멱 링크는 statsmodels 에 없으므로 custom)
+    mu = np.mean(y) * np.ones_like(y)
+    for _ in range(n_inner):
+        eta = mu ** lam0
+        d_eta_d_mu = lam0 * mu ** (lam0 - 1.0)
+        W = (1.0 / (d_eta_d_mu ** 2 * mu ** 2))   # 감마: V(mu)=mu^2
+        z = eta + (y - mu) * d_eta_d_mu
+        # 가중 회귀
+        WX = X * W[:, None]
+        beta = np.linalg.solve(X.T @ WX, X.T @ (W * z))
+        eta_new = X @ beta
+        mu_new = np.where(eta_new > 0, eta_new ** (1.0 / lam0), mu)
+        if np.max(np.abs(mu_new - mu)) < tol:
+            mu = mu_new
+            break
+        mu = mu_new
+
+    # Step B: 보조 공변량 v = -mu^lam0 * log(mu) 추가하여 1회 재적합
+    v = -(mu ** lam0) * np.log(mu + 1e-12)
+    X_aug = np.column_stack([X, v])
+    eta = mu ** lam0
+    d_eta_d_mu = lam0 * mu ** (lam0 - 1.0)
+    W = 1.0 / (d_eta_d_mu ** 2 * mu ** 2)
+    z = eta + (y - mu) * d_eta_d_mu
+    WX = X_aug * W[:, None]
+    coef = np.linalg.solve(X_aug.T @ WX, X_aug.T @ (W * z))
+    gamma_hat = coef[-1]                      # gamma = lambda - lam0
+    return lam0 + gamma_hat, beta
+
+# 외부 반복
+lam = 1.0                                     # 초기값: 항등
+for k in range(15):
+    lam_new, beta_hat = pregibon_update(X, y, lam)
+    if abs(lam_new - lam) < 1e-5:
+        break
+    lam = 0.7 * lam + 0.3 * lam_new           # 과감한 업데이트 방지용 감쇠
+print(f"lambda_hat = {lam:.4f}  (true = 0.5)")
+print(f"beta_hat   = {beta_hat}")
+```
+
+예상 출력: `lambda_hat ≈ 0.48~0.52` 근처로 수렴. 감쇠 인자(0.3)는 Pregibon 이 경고한 발산을 막기 위한 실무 트릭.
+
+### Step 2: R — profile deviance 와 MASS::glm.nb
+
+```r
+# Profile deviance 로 power link 탐색 (Box-Cox 형)
+library(MASS)
+set.seed(42)
+n <- 200
+x <- runif(n, 0.5, 5)
+mu <- (1 + 0.3 * x)^2                         # lambda* = 0.5 로 생성
+y <- rgamma(n, shape = 5, scale = mu/5)
+
+profile_dev <- function(lambda, x, y) {
+  eta_fn <- function(mu) if (lambda == 0) log(mu) else mu^lambda
+  inv_fn <- function(eta) if (lambda == 0) exp(eta) else eta^(1/lambda)
+  # custom link object
+  link <- structure(list(
+    linkfun = eta_fn, linkinv = inv_fn,
+    mu.eta = function(eta) if (lambda == 0) exp(eta) else (1/lambda) * eta^(1/lambda - 1),
+    valideta = function(eta) all(eta > 0),
+    name = sprintf("power(%g)", lambda)
+  ), class = "link-glm")
+  fit <- try(glm(y ~ x, family = Gamma(link = link)), silent = TRUE)
+  if (inherits(fit, "try-error")) return(NA)
+  fit$deviance
+}
+
+lams <- seq(-1, 1.5, by = 0.05)
+devs <- sapply(lams, profile_dev, x = x, y = y)
+plot(lams, devs, type = "l", xlab = expression(lambda), ylab = "Deviance")
+abline(h = min(devs, na.rm = TRUE) + qchisq(0.95, 1), col = "red", lty = 2)
+
+# 음이항 k 추정
+fit_nb <- glm.nb(round(y * 10) ~ x)            # count 로 환산하여 데모
+summary(fit_nb)
+cat("theta (k) =", fit_nb$theta, "\n")
+```
+
+`glm.nb` 는 내부적으로 $k$ 의 profile likelihood 를 IRLS 와 번갈아 풀며 수렴시킨다.
+
+### Step 3: 점근 공분산 보정 스케치
+
+```python
+# Box-Tidwell 의 theta 에 대한 분산
+# 방법: 마지막 반복에서 v_adjusted = beta_hat * v 를 넣어 재적합
+# (X^T W X)^{-1} 에서 해당 열 성분이 Var(theta_hat)
+def final_var_theta(X, y, beta_hat, theta_hat, g_fn, dg_dtheta_fn):
+    u = g_fn(X[:, 1], theta_hat)
+    v = dg_dtheta_fn(X[:, 1], theta_hat)
+    v_adj = beta_hat * v
+    X_final = np.column_stack([np.ones(len(y)), u, v_adj])
+    # 해당 모형 IRLS 로 적합 후 (X'WX)^{-1} 의 [2, 2] 성분 추출
+    # ... (실무: statsmodels GLM 적합 후 cov_params()[-1, -1])
+    pass
+```
+
+핵심 아이디어: $v$ 자리에 $\hat\beta \cdot v$ 를 넣으면 이 열의 계수가 곧 $(\theta - \theta_0)$ 이 되어 $(\mathbf X^T W \mathbf X)^{-1}$ 에서 $\theta$ 의 분산을 직접 읽을 수 있다.
+
+## 진단과 실무 가이드
+
+| 진단 | 어떤 문제를 잡는가 |
+|------|--------------------|
+| $D(\lambda)$, $D(\theta)$ profile 곡선 | 여러 극소점, 불안정 수렴 영역 |
+| Pregibon 반복의 $\lambda$ 진동 | 1차 근사 타당성 붕괴 → 격자 탐색 후 재시작 |
+| $\hat\gamma$ 와 $\hat\beta$ 의 상관 | 0.9 이상이면 $\theta$ 식별 불량 — 데이터가 비선형성을 분해 못 함 |
+| $\hat k$ (NB) 의 표준오차 | 큰 SE 는 과산포 방향의 불확실성 — 대안 분포 고려 |
+| 보정 없는 $\hat\theta$ SE | 기본 IRLS 출력은 과소 — 반드시 최종 보정 반복 |
+
+**실무 체크리스트**:
+
+1. 비선형 모수가 **정말 필요한지** 먼저 묻는다. 고정 $k = 1$ (음이항) 이나 고정 $\lambda = 0$ (로그 링크)이 해석·수렴·단순성 면에서 나을 수 있다
+2. 초기값을 **격자 탐색** 으로 결정한다. 내부 지식(예: $\lambda \approx 0.5$ 가 전형)이 있으면 그 근방에서 시작
+3. 비선형 모수 개수는 **두세 개까지**. 더 많으면 다른 접근(비선형 최소제곱, Bayesian hierarchical) 을 고려
+4. 수렴 후 반드시 **공분산 보정 반복** 을 돌려 $\hat\theta$ 의 SE 를 구한다
+5. 이탈도의 **profile 곡선** 을 보고 Wald 신뢰구간의 타당성을 확인
+
+## Bibliographic Notes
+
+- **Box & Cox (1964)**: 데이터 변환의 멱 가족. 원래 의도는 데이터 변환이었으나 link 함수 가족으로 재해석됨
+- **Box & Tidwell (1962)**: 공변량의 비선형 모수에 대한 linearization 방법. 선형 회귀 맥락에서 처음 제안
+- **Pregibon (1980)**: Goodness-of-link test. 링크 함수 안의 비선형 모수를 보조 공변량으로 변환하는 아이디어의 체계화
+- **Anscombe (1949)**: 음이항 $k$ 의 단일 표본·다수 표본 추정
+- **Manton et al. (1981)**: $\alpha, k$ 모두 공변량 의존시키는 일반화 (현재 프레임워크 밖)
+- **Darby & Ellis (1976)**: Drug mixture 의 profile deviance 접근
+- **Nelder & Wedderburn (1972)**: 데이터 변환 vs 적합값 변환의 분리 주장. GLM 의 철학적 출발점
+
+## 정리 및 다음 주제
+
+이 장은 GLM 프레임워크의 **'가려진' 비선형 모수** 에 체계적 처리 방법을 부여한다. 세 가지 출구 — 분산함수, 연결함수, 공변량 — 는 서로 다르지만 **공통 수법** 으로 통합된다.
+
+1. **분산함수의 비선형 모수**(NB 의 $k$, rounding 의 $\sigma^2/\tau^2$)는 profile deviance 또는 모멘트 매칭으로 추정
+2. **연결함수의 비선형 모수**(Box-Cox $\lambda$)는 Pregibon 선형화로 보조 공변량을 추가해 1차 근사 업데이트
+3. **공변량의 비선형 모수**(drug mixture $\theta$, Mitscherlich $k$)는 Box-Tidwell 선형화 — $(u, v)$ 두 열로 재작성
+4. 세 경우 모두 **이중 반복** 구조 — 외부는 비선형 모수, 내부는 IRLS
+5. 점근 공분산은 **보정 반복** 으로 얻는다. 기본 IRLS 출력은 과소 분산
+
+다음 장(Ch.12) 은 **모형 진단** — 이 모든 장치로 적합한 모형이 **실제로 데이터에 적합한지** 검사하는 체계적 전략을 다룬다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Gamma GLM — 분산 함수·이탈도·산포 추정 (McCullagh §8.3)](./07-3-gamma-models.qmd) — 비례 분산의 기본
+- [GLM 적합 알고리즘 — IRLS 의 완전한 유도 (McCullagh §2.5)](./01-6-glm-fitting-algorithm.qmd) — 반복 적합의 안쪽 루프
+- [Likelihood Functions for Log-linear Models — 포아송 로그우도·과산포 3 메커니즘·NB (McCullagh §6.2)](./05-2-poisson-likelihood.qmd) — 음이항의 등장 맥락
+- [Joint Modelling of Mean and Dispersion — 이중 GLM (McCullagh Ch.10)](./09-1-joint-mean-dispersion-overview.qmd) — 외부/내부 반복 구조의 전례
+
+**후속 주제**
+
+- Parameters in the Variance Function — NB 의 $k$ 상세·rounding 분산 (McCullagh §11.2)
+- Parameters in the Link Function — Pregibon 선형화 완전 유도 (McCullagh §11.3)
+- Non-linear Parameters in Covariates — Box-Tidwell·drug mixture 완전 분석 (McCullagh §11.4)
+- Bermuda Grass 비료 실험 — 역수 응답면·토양 잔류 추정 (McCullagh §11.5.1)
+- Insecticide-Synergist Assay — 상승제 효과의 GLM 적합 (McCullagh §11.5.2)
+- Insulin Assay — Drug mixture 의 profile deviance (McCullagh §11.5.3)
+- Model Checking — 잔차·레버리지·score test (McCullagh Ch.12)
+
+**관련 개념**
+
+- [Quasi-likelihood Functions 개관 (McCullagh Ch.9)](./08-1-quasi-likelihood-overview.qmd) — $\phi$ vs $k$ 의 차이
+- [Extended Quasi-likelihood — Q⁺ 정의 (McCullagh §9.6)](./08-6-extended-quasi-likelihood.qmd) — 산포 추정의 일반 체계
+- [이항 자료의 과산포 — Over-dispersion (McCullagh §4.5)](./03-5-overdispersion.qmd) — NB 가 포아송 과산포 해결책인 이유
+- [Adjustments of the Estimating Equations — 첨도·자유도 보정 (McCullagh §10.5)](./09-5-dispersion-equation-adjustments.qmd) — 보정 반복의 사촌
