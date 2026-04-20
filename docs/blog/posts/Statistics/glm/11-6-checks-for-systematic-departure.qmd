@@ -1,0 +1,520 @@
+---
+title: "Checks for Systematic Departure — 분산·링크·공변량 척도 세 축 (McCullagh §12.6)"
+subtitle: "세 잔차 플롯·등정보 스케일·EQL 프로파일·$\\widehat\\eta^2$ 검정·부분 잔차·구성 변량·forward vs backward"
+description: |
+  McCullagh & Nelder (1989) §12.6 을 심화한다.
+  모형의 체계적 이탈(systematic departure) 은 세 축에서 발생한다 —
+  **분산 함수** $V(\mu)$, **링크 함수** $g(\mu)$, **공변량 척도** $x$.
+  §12.6.1 의 세 잔차 플롯(적합값·공변량·추가 변수), §12.6.2 의 분산 함수 검정
+  ($V = \mu^\zeta$ EQL 프로파일 · 자동차 보험 ζ∈(1.87, 2.85) 예제),
+  §12.6.3 의 링크 검정 ($z$ vs $\widehat\eta$ 플롯 · Hinkley $\widehat\eta^2$ 추가 검정 · 멱 링크 족),
+  §12.6.4 의 부분 잔차 플롯 $u = z - \widehat\eta + \widehat\gamma x$ 와 Box-Cox 동시 변환·구성 변량,
+  §12.6.5 의 복합 진단(forward 대 backward) 까지, 직관과 수식·Python 으로 풀어낸다.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — 이탈의 세 축
+
+GLM 의 모형 명세는 세 구성 요소로 이뤄진다 (§2.2).
+
+1. **확률 성분**: 분산 함수 $V(\mu)$ 가 오차의 형태를 결정.
+2. **체계 성분**: 선형 예측자 $\eta = x^T\beta$ 의 구조.
+3. **연결 성분**: 링크 함수 $g(\mu) = \eta$ 가 두 성분을 이어줌.
+
+체계적 이탈(systematic departure) 은 이 **세 성분 중 하나 이상** 이 잘못됐을 때 발생한다. §12.6 은 각 성분을 **독립적으로 진단** 할 수 있는 도구를 제시한다.
+
+| 이탈 원인 | 비공식 도구 | 공식 도구 |
+|---|---|---|
+| **분산 함수** $V(\mu)$ 오류 | $|r_D'|$ vs $\widehat\mu$ 평활 | $V = \mu^\zeta$ EQL 프로파일 |
+| **링크 함수** $g(\mu)$ 오류 | $z$ vs $\widehat\eta$ 플롯 | $\widehat\eta^2$ 추가 검정 · 멱 링크 프로파일 |
+| **공변량 척도** $x$ 오류 | 부분 잔차 플롯 $u$ vs $x$ | Box-Cox $h(x;\theta)$ 프로파일 · 구성 변량 $v = \partial h/\partial\theta_0$ |
+
+이 세 진단은 서로 **혼입(confounded)** 된다 — 링크 검정에서 잡히는 곡률이 사실은 공변량 척도 문제일 수 있다. §12.6.5 는 이 혼입을 **forward-backward 이중 검정** 으로 완화한다.
+
+이번 글은 세 축을 순서대로 심화한다. 각 축에서 **무엇을 플롯하고, 무엇을 검정하고, 어떻게 해석하는가** 를 수식과 직관으로 구분한다.
+
+## 비공식 진단 — 세 잔차 플롯 (§12.6.1)
+
+### 플롯 1: 잔차 vs 적합값 (등정보 스케일)
+
+**세로축**: 표준화 이탈도 잔차 $r_D'$ (§12.5).
+**가로축**: 등정보 스케일로 변환된 적합값.
+
+| 분포 | 등정보 스케일 |
+|---|---|
+| 정규 | $\widehat\mu$ |
+| 포아송 | $2\sqrt{\widehat\mu}$ |
+| 이항 | $2\arcsin\sqrt{\widehat\mu}$ (단, $\widehat\mu$ 는 비율 $\widehat\pi$ 로 해석) |
+| 감마 | $2\log\widehat\mu$ |
+| 역 가우시안 | $-2/\sqrt{\widehat\mu}$ |
+
+### 왜 등정보 스케일인가
+
+정규 오차에서 $y - \widehat\mu$ 를 $\widehat\mu$ 에 대해 플롯할 때, **$y$ 값이 고정된 등고선은 기울기 $-1$ 의 평행 직선** 이다. 즉 눈이 자연스럽게 "대각선 격자" 를 읽으면 된다.
+
+다른 분포에서는 등고선이 곡선이라 눈이 해석하기 어려워진다. **등정보 스케일** 은 "$r = 0$ 근방에서 기울기 $-1$ 을 복원" 하도록 설계된다 — 즉 정규 오차와 **시각적으로 같은 그래프** 를 읽을 수 있게 해 준다.
+
+수학적으로 등정보 스케일은 **Anscombe 잔차** 가 쓰는 변환에서 유도된다. $g_{\text{CI}}(\mu)$ 는 $g_{\text{CI}}'(\mu) = 1/\sqrt{V(\mu)}$ 를 만족하는 함수 — 즉 "$\mu$ 가 움직일 때 $g_{\text{CI}}$ 가 변하는 속도가 표준편차에 반비례" 하도록 맞춘다.
+
+- 정규 ($V = 1$): $g_{\text{CI}}(\mu) = \mu$ 자체.
+- 포아송 ($V = \mu$): $g_{\text{CI}}(\mu) = 2\sqrt\mu$.
+- 감마 ($V = \mu^2$): $g_{\text{CI}}(\mu) = 2\log\mu$.
+- 이항 ($V = \pi(1-\pi)/m$): $g_{\text{CI}}(\pi) = 2\arcsin\sqrt\pi$.
+
+::: {.callout-tip}
+## 직관: 등정보 스케일은 "정보 기준 가로축"
+
+평범한 $\widehat\mu$ 축에서는 "$\mu = 1$ 에서의 1 단위" 와 "$\mu = 100$ 에서의 1 단위" 가 다른 **정보량** 을 담는다. 포아송의 경우 전자는 1 관측치 규모, 후자는 100 관측치 규모의 정보.
+
+등정보 스케일은 이 불균형을 교정해 "1 단위 이동 = 같은 정보량 이동" 을 만든다. 결과적으로 **가로축의 점 밀도** 가 데이터의 실제 정보 밀도를 반영하게 되고, 시각적 해석이 공정해진다.
+:::
+
+### 귀무 패턴과 전형적 이탈
+
+**귀무 패턴**: 잔차가 $\widehat\mu$ 변화에 관계없이 **평균 0, 일정 범위** 로 흩뿌려져 있어야 한다.
+
+**두 유형의 이탈**:
+
+1. **평균의 곡률 (curvature in mean)**: 평활 곡선이 U 자 또는 역 U 자. 원인은 (a) 링크 함수 오류, (b) 공변량 척도 오류, (c) 누락된 이차 항 중 하나. 세 원인은 §12.6.3-4 에서 구분한다.
+2. **범위의 체계적 변화 (range change with fitted value)**: 잔차의 분산이 $\widehat\mu$ 에 따라 달라짐. 원인은 **분산 함수 오류** → §12.6.2 로 이관.
+
+### 이항 데이터의 예외
+
+이항 반응 $y_i \in \{0, 1\}$ 에 대해서는 이 플롯이 **구조적으로 무의미** 하다. 점들이 $y = 0$ 또는 $y = 1$ 두 곡선 중 하나에 놓이기 때문. $\widehat\mu$ 가 0 에 가까우면 거의 모두 $y = 0$, 1 에 가까우면 거의 모두 $y = 1$ 이라 눈이 구조를 읽을 수 없다.
+
+이항 데이터는 **부분 잔차 플롯** (§12.6.4) 또는 **추가 변수 플롯** 에 의존해야 한다.
+
+### 플롯 2: 잔차 vs 공변량
+
+세로축 동일 (표준화 이탈도 잔차), 가로축은 관심 공변량 $x_j$ 자체.
+
+**귀무 패턴**: 위와 동일 — 추세 없음.
+
+**추세 해석**:
+- 단순 기울기: $x_j$ 의 선형 항 계수가 편향됐거나 (다른 공변량과의 상관), 선형 예측자에 누락된 항이 있음.
+- 곡률: $x_j$ 의 척도가 잘못됐거나 (log $x$ 필요), $x_j^2$ 이 빠졌거나, 링크 함수가 이 $x_j$ 방향에서 오류.
+
+### 주의 — 다른 공변량의 척도 오류가 새어 들어온다
+
+$x_2$ 의 척도가 잘못됐으면 **$x_1$ vs 잔차** 플롯에도 추세가 나타날 수 있다. 이유는 $x_1, x_2$ 가 상관되어 있으면, $x_2$ 의 오류가 $x_1$ 의 기울기 추정으로 옮겨가기 때문.
+
+해결: **모든 공변량에 대해** 잔차 플롯을 그리고, 이탈 패턴을 종합해 원인을 판단. 한 플롯만 보고 결론 내리지 말 것.
+
+### 플롯 3: 추가 변수 플롯 (Added-variable plot)
+
+누락된 공변량 $u$ 를 포함해야 할지 검사.
+
+**왜 $r$ vs $u$ 를 직접 플롯하면 안 되는가**: $u$ 가 **기존 공변량들과 상관** 되어 있으면, 잔차와의 상관이 "순수한 $u$ 효과" 가 아니라 "$u$ 의 새 정보 + $u$ 와 기존 공변량의 상관으로 인한 착시" 의 혼합이 된다.
+
+**올바른 절차** (McCullagh-Nelder §12.6.1):
+
+1. **$u$ 를 반응 변수로** 삼아, 원 모형과 **같은 선형 예측자 $X\beta$ 와 같은 IRLS 가중치** 로 GLM 회귀 적합.
+2. 그 회귀의 **(비표준화) 잔차** $r_u$ 를 추출.
+3. 원 모형의 **$y$ 잔차** $r_y$ 를 $r_u$ 에 대해 플롯.
+
+**해석**: $u$ 가 불필요하면 플롯은 평평. 필요하면 **선형 추세** — 기울기가 곧 $u$ 의 추정 계수다.
+
+::: {.callout-important}
+## 직관: 추가 변수 플롯은 "$u$ 의 순수 기여" 를 본다
+
+$r_u$ 는 "$X\beta$ 로 설명 안 되는 $u$ 의 부분" 이다. 이 부분이 "$X\beta$ 로 설명 안 되는 $y$ 의 부분" ($r_y$) 과 상관되면, $u$ 는 **기존 공변량 너머** 의 새 정보를 가진다.
+
+이 절차는 다중 회귀의 **편상관** 을 시각화한 것과 같다. 한번에 보여 주는 정보: 추가해야 할 강도(기울기), 선형인지 비선형인지(곡률), 이상점(이탈점 있는지).
+:::
+
+## §12.6.2 — 분산 함수 검정
+
+### 비공식 검사
+
+세로축: $|r_D'|$ (표준화 이탈도 잔차의 절댓값).
+가로축: 등정보 스케일 적합값.
+
+**귀무 패턴**: 추세 없음. 평균은 대략 상수(약 0.8, 반정규 분포의 평균).
+
+**이탈 해석**:
+- **양의 추세** ($|r|$ 가 $\widehat\mu$ 따라 증가): 분산 함수가 **너무 천천히** 증가. 예: $V = \mu$ 를 가정했는데 실제는 $V = \mu^2$ 이면 큰 $\mu$ 에서 관측 분산이 모형 분산보다 커서 $|r|$ 이 과대. 해법: 분산 함수 멱을 올린다.
+- **음의 추세**: 반대. $V = \mu^2$ 가정인데 실제 $V = \mu$ 이면 큰 $\mu$ 에서 $|r|$ 이 축소. 멱을 내린다.
+
+평활을 얹어 추세를 확인하되, §12.4 의 주의사항 (환영 가능성) 을 기억한다.
+
+### 공식 검사 — EQL 프로파일
+
+분산 함수를 **1-parameter 멱 족** 으로 내포시킨다.
+
+$$V(\mu;\zeta) = \mu^\zeta.$$
+
+- $\zeta = 0$: 정규 오차 ($V = 1$).
+- $\zeta = 1$: 포아송 ($V = \mu$).
+- $\zeta = 2$: 감마 ($V = \mu^2$).
+- $\zeta = 3$: 역 가우시안 ($V = \mu^3$).
+
+$\zeta$ 를 연속 모수로 보고 **확장 준-우도 (extended quasi-likelihood, EQL)** 의 프로파일 이탈도를 계산 (§9.6):
+
+$$D(\zeta) = -2 Q^+(\widehat\beta(\zeta), \widehat\phi(\zeta), \zeta; y), \qquad \widehat\beta(\zeta), \widehat\phi(\zeta) \text{ 는 } \zeta \text{ 고정 시 MLE}.$$
+
+$D(\zeta)$ 곡선을 그리고, $\widehat\zeta$ 에서의 최솟값에서 $\chi_1^2$ 임계값 3.84 (95%) 만큼 올라간 수평선이 **$\zeta$ 의 95% 프로파일 신뢰구간** 이다.
+
+**사전값** $\zeta_0$ (예: 감마 모형이면 $\zeta_0 = 2$) 이 이 구간에 포함되면 모형 통과.
+
+### 사례 — 자동차 보험 청구 데이터 (McCullagh §8.4.1)
+
+Fig. 12.2: $V(\mu;\zeta) = \mu^\zeta$ 의 프로파일 이탈도 곡선. $\widehat\zeta \approx 2.3$, 95% 신뢰구간 약 $(1.87, 2.85)$. 사전값 $\zeta_0 = 2$ (감마) 가 구간 안에 포함되므로 **감마 모형은 유지** 한다.
+
+::: {.callout-note}
+## 왜 Pearson $X^2$ 이탈도가 아니라 EQL 프로파일인가
+
+단순 이탈도는 $\zeta$ 가 고정된 모형의 적합도를 잰다. $\zeta$ 끼리 비교하려면 **다른 분산 함수 하에서 계산된 이탈도** 를 비교해야 하는데, 이 값들은 **서로 다른 상수항** 을 포함해 직접 비교 불가.
+
+EQL 은 이 상수항을 **명시적으로** 포함시킨 양이다 ($-\frac{1}{2}\log(2\pi\phi V(y))$ 항이 $\zeta$ 의존). 따라서 서로 다른 $\zeta$ 에서의 EQL 값을 **직접 비교** 할 수 있다. 이것이 §9.6 의 핵심 공헌이다.
+:::
+
+## §12.6.3 — 링크 함수 검정
+
+### 비공식 검사 — $z$ vs $\widehat\eta$
+
+조정 종속변량 $z = \widehat\eta + (y - \widehat\mu) \cdot g'(\widehat\mu)$ 를 $\widehat\eta$ 에 대해 플롯.
+
+**귀무 패턴**: 직선. 왜? $z$ 의 기대값은 Taylor 1차로 $\eta + (\mu - \mu) g'(\mu) = \eta$ — 즉 참 $\eta$. 모형이 옳으면 $\widehat\eta \approx \eta$ 이므로 $z$ 와 $\widehat\eta$ 는 기울기 1 의 직선 위에 놓인다.
+
+**곡률 해석** (멱 링크 족 $\eta = \mu^\lambda$ 가정):
+- **위로 볼록** (upward curvature): 사용 링크의 멱이 너무 낮음 → 더 큰 $\lambda$ 필요.
+- **아래로 볼록** (downward curvature): 반대.
+
+평활을 얹으면 약한 곡률도 보인다. 이항 데이터는 조정 종속변량이 두 곡선에 놓이므로 **비공식 검사는 이항에서 무용** — 공식 검사로.
+
+### 공식 검사 1: Hinkley (1985) 의 $\widehat\eta^2$ 검정
+
+**가장 단순하고 실무에서 가장 자주 쓰는 검정**.
+
+$M_0$ 를 적합해 $\widehat\eta$ 를 얻은 뒤, **확장 모형**
+
+$$\eta_{\text{ext}} = X\beta + \gamma \widehat\eta^2$$
+
+에서 $\gamma = 0$ 검정. 이탈도 차이 또는 스코어 검정 (§12.3) 으로 평가.
+
+**이론적 근거** (§12.2 채널 4): 링크 함수 $g(\mu;\lambda)$ 를 현재 값 $\lambda_0$ 에서 Taylor 전개하면
+
+$$g(\mu;\lambda) \simeq g(\mu;\lambda_0) + (\lambda - \lambda_0) \cdot [\partial g/\partial\lambda]_{\lambda_0}.$$
+
+멱 링크 $g = \mu^\lambda$ 에서 $\partial g/\partial\lambda = \mu^\lambda \log\mu = \eta \log\mu$. $\lambda_0 = 1$ 근방에서 이 항의 **주요 변동** 은 $\eta^2$ 에 비례한다 (수식 정리 생략). 따라서 $\widehat\eta^2$ 추가는 "링크의 2차 곡률" 을 잡는다.
+
+### 공식 검사 2: 멱 링크 프로파일 (Pregibon, 1980)
+
+링크 $g(\mu;\lambda) = \mu^\lambda$ 를 가족으로 취급. $\lambda$ 를 격자로 고정하고 이탈도 $D(\lambda)$ 계산. $\widehat\lambda$ 에서 $\chi_1^2$ 경계로 신뢰구간.
+
+이 기법은 **§11.3 의 Pregibon 선형화** 로 구현. 자세한 내용은 해당 포스트.
+
+### 링크 vs 공변량 척도의 혼입
+
+**중요 경고** (§12.6.3 끝): $\widehat\eta^2$ 검정이 유의하게 나올 때 원인은 **둘 중 하나** (또는 둘 다) 다.
+
+1. 링크 함수가 잘못됐다.
+2. 공변량 척도가 잘못됐다 (누락된 이차 항 등).
+
+이유: 공변량 척도 오류가 $\eta$ 의 비선형 곡률로 나타나고, 이것이 $\widehat\eta^2$ 항에 **같은 방식으로** 흡수된다.
+
+해결: §12.6.4 의 **부분 잔차 플롯** 으로 공변량 척도를 먼저 검사한 뒤 링크 검정.
+
+### 흔한 링크 문제
+
+- **감마 + 로그 링크**: 경제·생물학 계수율 데이터. 잘못된 링크 선택이 자주 일어나는 영역. Box-Cox 멱 링크 프로파일로 확인.
+- **이항 + 로짓 vs probit vs cloglog**: 세 링크를 포함하는 1-모수 가족 (Prentice 1976) 이 있다. §11.3.2 참조.
+
+## §12.6.4 — 공변량 척도 검정
+
+### 부분 잔차 (Partial Residual) 의 정의
+
+GLM 의 부분 잔차:
+
+$$u = z - \widehat\eta + \widehat\gamma x$$
+
+여기서 $z$ 는 조정 종속변량, $\widehat\eta$ 는 적합한 선형 예측자, $\widehat\gamma$ 는 관심 공변량 $x$ 의 계수 추정치.
+
+### 해석
+
+$u$ 는 "**$x$ 효과를 도로 더한 잔차**" 다. 모형이 옳으면 $u$ 와 $x$ 는 **기울기 $\widehat\gamma$** 의 직선 관계.
+
+$x$ 의 **척도** 가 잘못되면 (예: 실제는 $\log x$ 가 선형으로 들어가야 하는데 $x$ 로 적합함), 이 관계가 직선이 아니라 **곡선** 이 된다. 곡선의 **형태가 올바른 변환을 암시** 한다.
+
+::: {.callout-tip}
+## 직관: "$x$ 만 남겨 두고 다른 건 정리한 데이터"
+
+잔차 $r = z - \widehat\eta$ 는 "$x$ 를 포함한 모든 효과를 뺀 것". 여기에 $\widehat\gamma x$ 를 **다시 더하면** "$x$ 효과만 남긴 데이터" 가 된다. 이것을 $x$ 에 대해 플롯하면 $x$ 의 **진짜 기여 형태** 가 드러난다.
+
+예시:
+- 직선: $x$ 의 현재 척도가 맞음.
+- 위쪽 볼록 (concave): $\log x$ 가 더 적절.
+- 아래쪽 볼록 (convex): $x^2$ 또는 더 큰 멱이 적절.
+- S 자: 로지스틱류 (그러나 공변량 변환이 아니라 링크 변환의 신호일 수도).
+:::
+
+### 평활의 가치
+
+부분 잔차 플롯에 **LOWESS 를 얹으면** 작은 곡률도 잘 드러난다. 특히 이진 데이터에서 놀랍게 유용 — 일반 잔차 플롯은 무용하지만 부분 잔차 플롯은 구조를 보인다.
+
+### 다공변량 문제 — 반복 적합 필요
+
+$x_1$ 의 척도가 맞는지 보려고 부분 잔차 플롯을 그렸는데, 사실 $x_2$ 의 척도가 잘못돼 있다면? $\widehat\gamma_1, \widehat\eta$ 가 편향되어 $x_1$ 의 부분 잔차에도 **가짜 곡률** 이 나타난다.
+
+해결책: **반복적으로** 각 $x$ 의 부분 잔차를 확인 → 가장 명확한 변환 채택 → 재적합 → 다시 모든 부분 잔차 확인. 수렴까지 반복.
+
+### 공식 검사 — Box-Cox 동시 변환
+
+여러 $x$ 의 척도를 **동시에** 검정하는 공식 방법: 각 $x_j$ 에 멱 변환
+
+$$h(x;\theta) = \begin{cases} (x^\theta - 1)/\theta & \theta \neq 0 \\ \log x & \theta = 0 \end{cases}$$
+
+을 적용하고, $\theta$ 값을 격자로 바꾸며 이탈도 최솟값을 찾는다. $\widehat\theta$ 에서의 적합을 $\theta_0 = 1$ (즉 원 척도) 의 적합과 비교.
+
+**단일 $\theta$** 로 여러 $x$ 를 동시 변환하는 것은 물리적으로 같은 차원의 공변량들 (예: 다양한 화학물 농도) 에 적절.
+
+### 구성 변량 플롯 (Constructed-Variable Plot)
+
+$\theta$ 주변에서의 국소 민감도를 **플롯으로** 확인하는 비공식 도구.
+
+1. 구성 변량 $v = [\partial h(x;\theta)/\partial \theta]_{\theta_0}$ 를 계산.
+   - $\theta_0 = 1$ 이면 $v = [\partial\{(x^\theta-1)/\theta\}/\partial\theta]_{\theta=1} = (x \log x - x + 1)$.
+2. $v$ 를 반응 변수로, 원 모형의 선형 예측자와 IRLS 가중치로 회귀 적합.
+3. 그 회귀의 잔차 $r_v$ 를 추출.
+4. **원 모형의 $y$ 잔차 $r_y$** 를 $r_v$ 에 대해 플롯.
+
+**해석**: 기울기가 $(\theta - \theta_0) \widehat\gamma$ 에 비례. 0 이면 $\theta_0$ 이 옳다. 0 이 아니면 변환 필요, 기울기 부호로 방향 판단.
+
+이것이 **§11.4 Box-Tidwell 선형화의 시각 버전** 이다. 공식적으로는 같은 구성 변량을 $y$ 회귀에 **추가 공변량** 으로 넣어 스코어 검정으로 돌릴 수도 있다.
+
+## §12.6.5 — 복합 체계적 이탈
+
+### 문제 — Forward 편향
+
+세 축 (분산 · 링크 · 공변량 척도) 을 각각 **독립적으로** 검정하면 **위험** 하다.
+
+- 변형 추가 공변량을 하나씩 투입 → forward selection 유사.
+- 각 공변량과 나머지가 **상관** 되어 있으면, 각각 유의하게 보이지만 사실은 같은 문제의 다른 표현.
+- 즉 "첫 번째로 유의하게 보인 원인" 을 수용하면 **다른 원인을 놓치거나** **가짜 원인을 붙잡는다**.
+
+### 해법 — Backward Selection
+
+**Davison & Tsai (1988)** 의 절차:
+
+1. **모든 가능한 추가 항** (공변량 가족·링크 가족·분산 가족·누락된 교호작용 등) 을 한꺼번에 확장 모형 $M_{\text{full}}$ 에 투입.
+2. $M_{\text{full}}$ 를 적합해 **결합 효과** 를 얻는다.
+3. 한 항씩 제거하며 **제거 효과** (이탈도 증가 또는 스코어 통계량) 를 측정.
+4. 제거 시 증가가 큰 항이 **진짜 문제의 원인**. 작은 항은 다른 항과의 상관에 의해 **가짜로 유의** 했던 것.
+
+### Forward vs Backward 비교
+
+| 절차 | 장점 | 단점 |
+|---|---|---|
+| **Forward** | 계산 싸다 (스코어 검정으로 한 번에 훑기 가능), 해석 간단 | 상관된 원인들이 서로 가려 가장 쉬운 하나만 잡힘 |
+| **Backward** | 혼입 해소, 원인 순서 정확 | 계산 비싸다 ($M_{\text{full}}$ 수렴 필요), 확장 모형 정의가 복잡 |
+
+**실무 지침**: 작은 문제는 forward 로 빠르게, 여러 이탈 원인이 동시에 의심되는 큰 문제는 backward 로 신중하게.
+
+### 변수 선택의 유사성
+
+§12.6.5 는 모형 진단을 **변수 선택 (variable selection)** 의 특수 사례로 본다. §3.9 의 forward/backward 선택 기법이 그대로 적용된다.
+
+차이점: 일반 변수 선택은 "관심 공변량" 후보 중에서 고르지만, 진단의 변수 선택은 "이탈 교정용 constructed variable" 후보 (예: $\widehat\eta^2$, $\log x$, 구성 변량 $v$) 중에서 고른다.
+
+## Python 실전 — 세 축 진단
+
+### 시나리오 설정
+
+의도적으로 **공변량 척도 오류** 를 심어 놓고, 세 축 진단을 순차 적용해 원인을 찾아간다.
+
+```python
+import numpy as np
+import statsmodels.api as sm
+from statsmodels.nonparametric.smoothers_lowess import lowess
+import matplotlib.pyplot as plt
+from scipy import stats
+
+np.random.seed(42)
+n = 300
+
+# 참 데이터 생성: log(x) 가 선형
+x = np.random.uniform(0.5, 10, n)  # 양수 범위
+eta_true = 1.0 + 2.0 * np.log(x)    # log 척도가 진실
+mu_true = np.exp(eta_true)
+shape = 8.0
+y = np.random.gamma(shape, mu_true / shape)  # 감마 오차
+
+# M_0 적합: 로그 링크 감마, 그러나 x 원 척도 (잘못됨)
+X_wrong = sm.add_constant(x[:, None])
+fam = sm.families.Gamma(link=sm.families.links.log())
+m0 = sm.GLM(y, X_wrong, family=fam).fit()
+print(f"M_0 (x 원 척도): deviance = {m0.deviance:.3f}")
+```
+
+### 플롯 1: 잔차 vs 등정보 스케일 적합값
+
+```python
+mu_hat = m0.fittedvalues
+r_D = m0.resid_deviance
+
+# 감마의 등정보 스케일: 2 log μ̂
+eta_plot = 2 * np.log(mu_hat)
+
+smooth = lowess(r_D, eta_plot, frac=0.3, return_sorted=True)
+
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.scatter(eta_plot, r_D, alpha=0.3, s=10)
+ax.plot(smooth[:, 0], smooth[:, 1], 'r-', lw=2)
+ax.axhline(0, ls='--', color='gray')
+ax.set_xlabel(r'$2\log\hat\mu$')
+ax.set_ylabel('Deviance residual')
+ax.set_title('Plot 1: 곡률이 보인다 → 세 축 중 하나에 문제')
+plt.show()
+```
+
+평활이 U 자를 그리면 세 원인(링크, 척도, 누락 이차항) 중 하나. 다음 단계로 구분.
+
+### 플롯 2: 잔차 vs 공변량 (원 척도)
+
+```python
+smooth_x = lowess(r_D, x, frac=0.3, return_sorted=True)
+
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.scatter(x, r_D, alpha=0.3, s=10)
+ax.plot(smooth_x[:, 0], smooth_x[:, 1], 'r-', lw=2)
+ax.axhline(0, ls='--', color='gray')
+ax.set_xlabel(r'$x$ (원 척도)')
+ax.set_ylabel('Deviance residual')
+ax.set_title('Plot 2: x 원 척도에서 강한 곡률')
+plt.show()
+```
+
+평활이 **강한 U 자** 를 그린다면 $x$ 척도가 의심.
+
+### 플롯 3: 부분 잔차 vs $x$
+
+```python
+# 조정 종속변량 z
+g_prime = 1.0 / mu_hat                       # 로그 링크의 g'(μ) = 1/μ
+z = m0.linear_predictor + (y - mu_hat) * g_prime
+
+# 부분 잔차 u = z - η̂ + γ̂ x
+gamma_hat = m0.params[1]
+u = z - m0.linear_predictor + gamma_hat * x
+
+smooth_u = lowess(u, x, frac=0.3, return_sorted=True)
+
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.scatter(x, u, alpha=0.3, s=10)
+ax.plot(smooth_u[:, 0], smooth_u[:, 1], 'r-', lw=2)
+# 선형 기준선 (현재 기울기)
+x_sorted = np.sort(x)
+ax.plot(x_sorted, gamma_hat * x_sorted + u.mean() - gamma_hat * x.mean(),
+        'k--', alpha=0.5, label=f'기울기 = {gamma_hat:.3f}')
+ax.set_xlabel(r'$x$')
+ax.set_ylabel(r'Partial residual $u = z - \hat\eta + \hat\gamma x$')
+ax.set_title(r'Plot 3: 부분 잔차가 $\log x$ 형태 → x 대신 log x 사용')
+ax.legend()
+plt.show()
+```
+
+평활이 **$\log x$ 형태** 의 곡선이면 $x \to \log x$ 변환이 해법.
+
+### 공식 검정 — Box-Cox 프로파일
+
+```python
+def fit_with_power(theta, x, y):
+    if abs(theta) < 1e-6:
+        x_trans = np.log(x)
+    else:
+        x_trans = (x ** theta - 1) / theta
+    X = sm.add_constant(x_trans[:, None])
+    return sm.GLM(y, X, family=fam).fit()
+
+theta_grid = np.linspace(-1, 2, 31)
+devs = [fit_with_power(t, x, y).deviance for t in theta_grid]
+
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.plot(theta_grid, devs, 'o-')
+ax.axhline(min(devs) + 3.84, ls='--', color='red', label='$\\chi_1^2(0.95)$ 경계')
+ax.axvline(1, ls=':', color='gray', label='$\\theta_0 = 1$ (원 척도)')
+ax.axvline(0, ls=':', color='blue', label='$\\theta = 0$ ($\\log x$)')
+ax.set_xlabel(r'$\theta$')
+ax.set_ylabel('Deviance')
+ax.set_title('Box-Cox 프로파일: $\\hat\\theta \\approx 0$ → log 변환이 최적')
+ax.legend()
+plt.show()
+
+# 최적 θ
+theta_best = theta_grid[np.argmin(devs)]
+print(f"최적 θ = {theta_best:.2f}")
+```
+
+$\widehat\theta \approx 0$ 에서 최솟값이 나오면 **$\log x$ 변환** 이 최적이다. 원 척도 $\theta_0 = 1$ 이 95% 신뢰구간 밖에 있으면 척도 오류가 공식적으로 확증.
+
+### 해결한 모형으로 재적합
+
+```python
+X_right = sm.add_constant(np.log(x)[:, None])
+m1 = sm.GLM(y, X_right, family=fam).fit()
+print(f"M_1 (log x 사용): deviance = {m1.deviance:.3f}")
+print(f"감소량 = {m0.deviance - m1.deviance:.3f}")
+```
+
+재적합의 이탈도가 극적으로 감소하면 진단이 정확했다는 증거다. 추가 플롯 1, 2, 3 을 다시 그려 **귀무 패턴** 을 확인해 원인이 제거됐음을 점검한다.
+
+## 요약
+
+§12.6 의 진단 체계를 한 장으로 요약하면 다음이다.
+
+```
+[Plot 1] r_D' vs 등정보 적합값
+    │
+    ├── 범위 변화 → §12.6.2 분산 함수 검정 (|r| 추세 + EQL 프로파일)
+    │
+    └── 곡률 → 세 원인 중 하나
+            │
+            ├── §12.6.4 공변량 척도 (부분 잔차 플롯 + Box-Cox)
+            │
+            ├── §12.6.3 링크 함수 (z vs η̂ + Hinkley η̂²)
+            │
+            └── 누락된 이차항 (추가 변수 플롯)
+
+[복합] §12.6.5 backward selection 으로 혼입 해소
+```
+
+**중요 원칙 세 가지**:
+
+1. **등정보 스케일** 로 플롯하라 — 정규 회귀와 같은 시각 기준 확보.
+2. **비공식 → 공식** 순서 — 평활로 가설 생성, 프로파일 검정으로 확증.
+3. **혼입 의심 시 backward** — 여러 원인이 공존할 수 있음을 인정하고 결합 모형에서 개별 효과를 분리.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Model Checking — 개관 (McCullagh Ch.12)](./11-1-model-checking-overview.qmd)
+- [Techniques in Model Checking (McCullagh §12.2)](./11-2-techniques-in-model-checking.qmd)
+- [Score Tests for Extra Parameters (McCullagh §12.3)](./11-3-score-tests-for-extra-parameters.qmd)
+- [Smoothing as an Aid (McCullagh §12.4)](./11-4-smoothing-as-aid.qmd)
+- [Raw Materials — 잔차·햇 행렬 (McCullagh §12.5)](./11-5-raw-materials-of-model-checking.qmd)
+
+**직접 관련 — 세 축 각각의 심화**
+
+- [Parameters in the Variance Function (McCullagh §11.2)](./10-2-parameters-in-variance-function.qmd) — $V = \mu^\zeta$ 프로파일
+- [Parameters in the Link Function (McCullagh §11.3)](./10-3-parameters-in-link-function.qmd) — 멱 링크 · Pregibon
+- [Non-Linear Parameters in the Covariates (McCullagh §11.4)](./10-4-non-linear-parameters-in-covariates.qmd) — Box-Tidwell 선형화
+- [Extended Quasi-likelihood (McCullagh §9.6)](./08-6-extended-quasi-likelihood.qmd) — EQL 프로파일의 이론
+- [공변량 선택 — Forward/Backward (McCullagh §3.9)](./02-9-selection-of-covariates.qmd)
+
+**관련 개념**
+
+- [GLM 잔차의 세 유형 (McCullagh §2.4)](./01-5-glm-residuals.qmd) — 등정보 스케일 유도
+- [Anscombe 잔차](./01-5-glm-residuals.qmd)
+
+**후속 주제**
+
+- [Checks for Isolated Departure — 레버리지·일관성·영향력 (McCullagh §12.7)](./11-7-checks-for-isolated-departure.qmd)
+- [Model Checking Examples — 당근·Minitab 나무·보험금 (McCullagh §12.8)](./11-8-model-checking-examples.qmd) — 세 축 진단을 실제 데이터에 적용
+- [A Strategy for Model Checking (McCullagh §12.9)](./11-9-strategy-for-model-checking.qmd) — 진단 전략의 한계
