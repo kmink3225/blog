@@ -1,0 +1,453 @@
+---
+title: "Part IV: Regression Models — 선형에서 결측까지, 베이즈 회귀의 전 지형"
+subtitle: "Gelman BDA Ch.14~18 개관 — 선형·계층·GLM·강건·결측 모형을 한 장으로"
+description: |
+  Gelman et al. *Bayesian Data Analysis* (3rd ed., 2013) 의 Part IV 다섯 장을 한 장으로 조망한다.
+  Ch.14 정규 선형 회귀의 베이즈 분석, Ch.15 계층적 회귀(varying intercepts/slopes·ANOVA),
+  Ch.16 GLM 의 베이즈 확장(logistic·Poisson·과분산·MRP), Ch.17 t 분포 기반 robust 추론,
+  Ch.18 결측자료의 다중 대체까지, Part III 계산 엔진 위에서 어떻게 구체적 모델들이
+  조립되는지를 수식·직관·cross-link 로 정리한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/20/2026
+---
+
+## Part I~III 과의 연결 — Part IV 의 위치
+
+[Part I](./00-bayesian-part1-overview.qmd) 은 베이즈 언어, [Part II](./01-bayesian-part2-overview.qmd) 는 모델 사이클, [Part III](./02-bayesian-part3-overview.qmd) 은 계산 엔진을 다뤘다. Part IV 는 이 세 층 위에서 **"실무에서 가장 자주 쓰는 모델 — 회귀" 의 베이즈 버전** 을 조립한다.
+
+::: {.callout-important}
+## Part IV 의 한 줄 요약
+
+**"회귀는 베이즈 모델링의 관문이다. 선형 → 계층 → GLM → 강건 → 결측 까지의 확장은 Part I 의 언어로 모델을 쓰고, Part III 의 엔진으로 돌리는 과정의 연습이다."**
+
+선형 회귀 하나를 베이즈로 이해하면 계층적 혼합 모형·GLM·결측 대체까지 **같은 문법의 변주** 라는 것이 보인다 (Gelman et al., 2013, Ch.14~18).
+:::
+
+Part IV 의 구성은 다음과 같다.
+
+| 장 | 핵심 질문 | 한 줄 역할 |
+|:---:|:---|:---|
+| Ch.14 | **선형 회귀를 베이즈로 어떻게 쓰는가** | 정규 선형 회귀·비정보적 사전·QR 분해 |
+| Ch.15 | **다수준 데이터를 어떻게 공유하는가** | varying intercept/slope·ANOVA·shrinkage |
+| Ch.16 | **비정규 반응변수를 어떻게 다루는가** | 로지스틱·포아송·과분산·MRP·잠재 변수 해석 |
+| Ch.17 | **이상치에 어떻게 강건해지는가** | t 분포 혼합·robit·8 schools 재방문 |
+| Ch.18 | **결측이 있으면 어떻게 추론하는가** | 다중 대체·MAR·MCAR·data augmentation |
+
+각 장을 **왜 필요한가 → 모델 수식 → 직관 → 계산 · 실무 연결** 순서로 정리한다. 상세 구현과 예제는 후속 포스트에서 다룬다.
+
+---
+
+## Ch.14 Introduction to Regression Models — "빈도주의 OLS 와 베이즈 회귀가 만나는 지점"
+
+### 모델 설정
+
+정규 선형 회귀 모델.
+
+$$
+y \mid \beta, \sigma^2, X \sim N(X\beta, \sigma^2 I_n)
+$$
+
+$y \in \mathbb{R}^n$, $X \in \mathbb{R}^{n \times k}$, $\beta \in \mathbb{R}^k$, $\sigma^2 > 0$. 표준 비정보적 사전분포는
+
+$$
+p(\beta, \sigma^2 \mid X) \propto \sigma^{-2}
+$$
+
+$\sigma^{-2}$ 는 $\log \sigma^2$ 에 대한 균등 분포에 해당 — scale 파라미터의 관례적 무지 표현이다.
+
+### 사후분포 (켤레 구조 덕분에 닫힌 형태)
+
+조건부 및 주변 사후분포가 해석적으로 풀린다.
+
+$$
+\beta \mid \sigma^2, y \sim N(\hat{\beta}, V_{\beta} \sigma^2), \quad \sigma^2 \mid y \sim \text{Inv-}\chi^2(n - k, \ s^2)
+$$
+
+여기서
+$$
+\hat{\beta} = (X^\top X)^{-1} X^\top y, \quad V_{\beta} = (X^\top X)^{-1}, \quad s^2 = \frac{1}{n-k} (y - X\hat{\beta})^\top (y - X\hat{\beta})
+$$
+
+::: {.callout-tip}
+## 직관 — 비정보적 사전 하에서 베이즈는 OLS 와 "같은 답" 을 준다
+
+$\beta$ 의 최소제곱 추정량 $\hat{\beta}$ 가 사후 평균·최빈값과 일치하고, $\sigma^2$ 의 주변 사후 분포가 빈도주의 카이제곱 분포와 동형이다. **차이는 해석** — 빈도주의는 "추정량의 표본 분포", 베이즈는 "모수의 사후 분포". 같은 숫자를 다른 문장으로 읽는다.
+:::
+
+### 사후 예측 분포
+
+새 관측 $\tilde{y} \mid \tilde{X}$ 의 예측 분포.
+
+$$
+\tilde{y} \mid y \sim t_{n-k}\!\left(\tilde{X}\hat{\beta}, \ s^2 (I + \tilde{X} V_{\beta} \tilde{X}^\top)\right)
+$$
+
+두 원천의 불확실성이 합쳐진다 — $s^2 I$ 는 **표본 변동**, $s^2 \tilde{X} V_{\beta} \tilde{X}^\top$ 는 **파라미터 불확실성**. 빈도주의 예측 구간은 후자 부분의 해석이 모호하지만, 베이즈 예측 구간은 "새 관측의 사후 확률" 로 자연스럽게 정의된다.
+
+### 정규화는 곧 사전분포다
+
+Ridge 와 LASSO 가 베이즈 관점에서 재해석된다.
+
+$$
+\text{Ridge}: \beta_j \sim N(0, \tau^2) \quad \Longleftrightarrow \quad \hat{\beta}_{\text{ridge}} = \arg\min_{\beta} \|y - X\beta\|^2 + \lambda \|\beta\|^2
+$$
+
+$$
+\text{LASSO}: \beta_j \sim \text{Laplace}(0, b) \quad \Longleftrightarrow \quad \hat{\beta}_{\text{LASSO}} = \arg\min_{\beta} \|y - X\beta\|^2 + \lambda \|\beta\|_1
+$$
+
+Laplace 의 첨도가 $\beta_j = 0$ 주변에 밀도를 집중시키기 때문에 LASSO 가 희소성을 만든다. **"정규화 강도" = "사전 정보의 양"** 이 정확히 같은 양이라는 점이 베이즈 관점에서 가장 명확하다.
+
+### 계산
+
+$k$ 가 수백 이상이면 $X^\top X$ 의 역계산이 수치적으로 불안정하다. **QR 분해** $X = QR$ 을 써서 $\hat{\beta} = R^{-1} Q^\top y$ 로 계산하는 것이 표준이다. $R$ 이 상삼각이라 역치환으로 풀린다.
+
+비정보적 사전 하에서는 사후 시뮬레이션이 Part III 의 Gibbs · MH · HMC 없이도 가능하지만, **정보적 사전** 이나 **비정규 오차** (Ch.17) 로 확장되는 순간 MCMC 가 필요해진다.
+
+---
+
+## Ch.15 Hierarchical Linear Models — "부분 풀링의 예술"
+
+### 왜 계층 모형인가
+
+데이터가 그룹 구조를 가질 때 — 학교별 학생 점수, 병원별 환자 결과, 주(state) 별 투표율 — 두 극단적 선택이 문제를 일으킨다.
+
+| 선택 | 문제 |
+|:---|:---|
+| 완전 풀링 (pooling): 모든 그룹이 동일 모수 | 그룹 간 차이 정보 손실 |
+| 풀링 없음 (no pooling): 그룹별 완전 독립 | 표본이 적은 그룹이 극단적 추정값 |
+
+**부분 풀링 (partial pooling)** 은 두 극단 사이를 데이터 기반으로 최적 혼합한다. Part I Ch.5 의 8 schools 가 원형이다.
+
+### 기본 모델 — varying intercept
+
+$$
+y_{ij} \mid \alpha_j, \beta, \sigma^2 \sim N(\alpha_j + X_{ij}\beta, \ \sigma^2), \quad \alpha_j \mid \mu_\alpha, \tau^2 \sim N(\mu_\alpha, \tau^2)
+$$
+
+$j$ 는 그룹 인덱스, $i$ 는 그룹 내 관측. $\alpha_j$ (그룹별 절편) 는 **$\mu_\alpha$ 중심의 정규 분포** 로 묶여 있다. 이 층이 그룹 간 정보 공유를 만든다.
+
+::: {.callout-tip}
+## 직관 — 부분 풀링은 "이웃 그룹의 목소리도 듣는" 추정이다
+
+표본이 적은 그룹의 추정값은 **전체 평균 $\mu_\alpha$ 쪽으로 수축** 된다. 수축의 크기는 그룹 내 분산 $\sigma^2$ 과 그룹 간 분산 $\tau^2$ 의 비율로 자동 결정된다. $\tau^2 \to 0$ 이면 완전 풀링(모두 $\mu_\alpha$), $\tau^2 \to \infty$ 이면 풀링 없음(독립 추정). **베이즈는 이 균형점을 데이터가 스스로 말하게 한다** — 분석가가 풀링 강도를 임의로 고르지 않는다.
+:::
+
+### Varying slope · 2차 수준 회귀
+
+기울기도 그룹별로 변하게 확장.
+
+$$
+\beta_j \mid \mu_\beta, \Sigma_\beta \sim N(\mu_\beta, \Sigma_\beta)
+$$
+
+더 일반적으로 **그룹 수준 설명변수** $Z_j$ 가 있으면 2차 수준 회귀로 모델링.
+
+$$
+\beta_j \mid \alpha, \Sigma_\beta \sim N(Z_j \alpha, \Sigma_\beta)
+$$
+
+그룹 수준에서의 변동을 그룹 수준 변수로 설명 — 학교별 평균 점수의 차이를 학교 위치·예산으로 설명하는 식.
+
+### ANOVA 는 특수 사례
+
+$X$ 가 그룹 지시 변수로만 구성되면 계층 회귀 ≡ ANOVA. Gelman 은 **ANOVA 를 계층적 회귀의 관점에서 재해석하는 것이 해석력·확장성에서 우월** 하다고 주장한다. 분산 성분 $\sigma_\alpha^2, \sigma_\beta^2, \ldots$ 가 데이터 계층의 **변동 예산** 이 된다.
+
+### 구현 — 재매개변수화가 핵심
+
+[Part III Ch.12](./02-bayesian-part3-overview.qmd) 의 비중심 매개변수화 $\alpha_j = \mu_\alpha + \tau \eta_j$ ($\eta_j \sim N(0,1)$) 는 $\tau$ 가 작을 때 funnel 지형을 해소한다. Stan/PyMC 에서 계층 모형을 쓸 때 거의 항상 이 재매개변수화가 기본이다.
+
+[종단 데이터의 혼합 효과 모형](../LDA/30-mixed-effects-continuous-overview.qmd) 이 빈도주의 관점의 같은 구조를 다룬다 — 빈도주의 "혼합 효과" = 베이즈 "계층 선형 모형" 이 같은 수식의 두 이름이다.
+
+---
+
+## Ch.16 Generalized Linear Models — "선형의 제약에서 벗어나기"
+
+### GLM 세 요소
+
+[GLM 이론 기초](../glm/01-1-glm-theory-foundation.qmd) 에서 다루는 McCullagh & Nelder 의 프레임워크를 베이즈 관점에서 재조립.
+
+1. **선형 예측자**: $\eta = X\beta$
+2. **링크 함수**: $g(E[y \mid X]) = \eta$
+3. **반응 분포**: 지수족 $p(y \mid \theta)$
+
+베이즈는 여기에 **계층 + 사전분포 + MCMC** 의 세 요소를 더한다.
+
+### 대표 사례
+
+**로지스틱 회귀**. $y_i \mid p_i \sim \text{Bernoulli}(p_i), \ \text{logit}(p_i) = X_i \beta$. 약정보적 사전 $\beta_j \sim \text{Cauchy}(0, 2.5)$ 가 표준 (Gelman, 2008). **완전 분리 (complete separation)** — 데이터가 한 클래스를 완벽히 나누는 경우 MLE 가 발산하지만, Cauchy 사전이 계수를 유한한 범위로 끌어당긴다.
+
+**포아송 회귀**. $y_i \mid \lambda_i \sim \text{Poisson}(\lambda_i), \ \log \lambda_i = X_i \beta$. 과분산 (분산 > 평균) 이 흔하므로 개별 관측에 정규 오차를 추가한 **과분산 포아송** 으로 확장한다.
+
+$$
+y_i \mid \lambda_i \sim \text{Poisson}(\lambda_i), \quad \log \lambda_i = X_i \beta + \epsilon_i, \quad \epsilon_i \sim N(0, \sigma^2)
+$$
+
+$\epsilon_i$ 를 적분 소거하면 **음이항 분포** 와 유사한 marginal 이 나온다 ([음이항과 과분산](../glm/08-2-quasi-likelihood-independent.qmd)).
+
+::: {.callout-tip}
+## 직관 — 베이즈 GLM 은 "선형 회귀 + 계층 오차" 의 리듬
+
+빈도주의 GLM 은 IRLS (iteratively reweighted least squares) 로 푼다. 베이즈는 IRLS 단계에 **의사 데이터 근사** 를 도입하여 정규 선형 회귀로 변환한 뒤 Gibbs 를 돌린다. **핵심 공식** — GLM 의 사후분포도 "정규 사후분포 한 장" 으로 근사할 수 있다는 사실 (Ch.16 에서 유도).
+:::
+
+### 잠재 변수 해석
+
+프로빗 회귀는 **잠재 연속 변수** 의 이산화로 해석 가능하다.
+
+$$
+y_i = \mathbb{1}[z_i > 0], \quad z_i \sim N(X_i \beta, 1)
+$$
+
+이 잠재 표현이 Gibbs 표본추출을 크게 단순화 — $z_i$ 와 $\beta$ 를 교대로 뽑으면 두 단계 모두 정규 분포다 (Albert & Chib, 1993). **프로빗이 베이즈 관점에서 로지스틱보다 계산이 단순** 한 이유다.
+
+### 순서형 · 다항 · 로그선형
+
+순서형 회귀는 절단점 모델 $c_0 < c_1 < \cdots < c_K$ 과 잠재 변수 해석으로 처리. 다항 로짓 · 프로빗은 대응되는 다변량 잠재 변수 구조로 확장. **로그선형 모델** 은 분할표의 다변량 범주형 데이터를 포아송 회귀로 환산 — 반복 비례 적합법 (IPF) 으로 최빈값 계산.
+
+### MRP — 여론조사의 사후층화
+
+**Multilevel Regression with Poststratification (MRP)** 는 Ch.16 의 압권. 비대표성 표본(예: 온라인 여론조사) 을 계층적 로지스틱 회귀로 모델링한 뒤, 사후 분포를 **인구 구성 비율로 가중 평균** 하여 모집단 수준 추정을 만든다. 2016 년 미국 대선 이후 정치 통계학의 표준 도구가 되었다.
+
+---
+
+## Ch.17 Models for Robust Inference — "이상치에 둔감한 베이즈"
+
+### 정규 모델의 취약성
+
+8 schools 에서 한 학교의 관측값이 극단이면 정규 모집단 모델의 $\mu, \tau$ 추정이 모두 편향된다. [Part I Ch.5](./00-bayesian-part1-overview.qmd) 의 예시에서 확장 — Ch.17 은 이 문제를 **긴 꼬리 분포** 로 해결한다.
+
+### t 분포 혼합 표현
+
+$t_\nu$ 분포는 정규의 **분산 혼합** 으로 쓸 수 있다.
+
+$$
+y_i \mid V_i \sim N(\mu, V_i), \quad V_i \sim \text{Inv-}\chi^2(\nu, \sigma^2)
+$$
+
+$V_i$ 를 적분 소거하면 $y_i \mid \mu, \sigma^2, \nu \sim t_\nu(\mu, \sigma^2)$. **관측별 분산 $V_i$ 의 확률 모형** 이라는 관점이 직관적이다 — 큰 $V_i$ 를 가진 관측이 이상치로 분류된다.
+
+::: {.callout-tip}
+## 직관 — robust 는 "이상치를 제거" 하는 게 아니라 "이상치를 설명하는 모형" 이다
+
+빈도주의 robust 는 M-추정량·Huber loss 처럼 손실함수를 수정한다. 베이즈는 **오차 분포를 바꾼다**. 차이가 중요한 이유는 — 베이즈에서는 이상치의 불확실성이 $V_i$ 의 사후 분포로 명시되고, 이후 모든 추론이 일관되게 전파된다. "이상치를 빼고 분석" 이 아니라 "이상치도 모델의 일부" 로 다룬다.
+:::
+
+### Gibbs 구현
+
+혼합 표현 덕분에 Gibbs 가 단순하다. $V_i$ 를 샘플하면 $y_i \mid V_i \sim N$ 이 되어 조건부가 정규-역카이제곱 켤레로 들어간다.
+
+### Robit 회귀
+
+로지스틱·프로빗의 강건 대안. 잠재 변수 $u_i \sim t_\nu(X_i \beta, 1)$ 로 이산화. 꼬리가 긴 $t$ 가 극단 관측의 영향을 제한한다.
+
+### $\nu$ 의 민감도 분석
+
+자유도 $\nu$ 를 고정하지 않고 사전분포를 부여하거나, 여러 $\nu$ 값에서 추론이 어떻게 변하는지 확인하는 **민감도 분석** 이 권장된다. $\nu = \infty$ 이면 정규, $\nu = 1$ 이면 Cauchy. 데이터가 어느 쪽을 선호하는지를 사후가 말해준다.
+
+### 중요도 가중치로의 효율화
+
+정규 모델로 이미 MCMC 를 돌렸다면, **중요도 가중치** $w_i = p_t(y_i) / p_{\text{normal}}(y_i)$ 로 기존 표본을 재사용해 robust 사후를 근사할 수 있다. 전면 재샘플링의 비용을 줄이는 실무 트릭.
+
+---
+
+## Ch.18 Models for Missing Data — "있을 수도 있었던 값을 확률로 채운다"
+
+### 결측의 세 유형
+
+**MCAR (Missing Completely At Random)** — 결측 확률이 $y$ 에 무관.
+**MAR (Missing At Random)** — 결측 확률이 관측된 $y_{\text{obs}}$ 에는 의존, 결측된 $y_{\text{mis}}$ 에는 무관.
+**MNAR (Missing Not At Random)** — 결측 확률이 결측값 자체에 의존.
+
+$$
+p(I \mid y, \phi) = p(I \mid y_{\text{obs}}, y_{\text{mis}}, \phi)
+$$
+
+MAR ⟺ $p(I \mid y_{\text{obs}}, y_{\text{mis}}, \phi) = p(I \mid y_{\text{obs}}, \phi)$. **MAR + 파라미터 구별성** 이 만족되면 **결측 메커니즘은 무시가능 (ignorable)** 하다 — Part II Ch.8 의 핵심 개념과 직결된다.
+
+### 다중 대체 (Multiple Imputation, MI)
+
+결측값을 1 개로 대체하면 대체 불확실성이 사라진다. **다중 대체** 는 결측값의 $K$ 개 표본 $(y_{\text{mis}}^{(1)}, \ldots, y_{\text{mis}}^{(K)})$ 를 생성하여 각각에 대해 분석을 수행한 뒤 결합한다.
+
+$$
+T = \bar{W} + \left(1 + \frac{1}{K}\right) B
+$$
+
+- $\bar{W}$: 대체 내 분산 (within-imputation)
+- $B$: 대체 간 분산 (between-imputation)
+
+::: {.callout-tip}
+## 직관 — 다중 대체는 "결측 때문에 얼마나 덜 확신해야 하는지" 를 정량화한다
+
+단일 대체의 문제는 "실제로 뭐였을지 모름" 이라는 불확실성을 숨긴다는 점이다. 다중 대체의 $K$ 개 시나리오는 "결측이 어느 쪽일 수도, 다른 쪽일 수도" 라는 대안 현실을 그려주고, 그 분산을 추론에 합산한다. **모르는 것에 비례해 신뢰 구간이 넓어진다** — 정직한 추론이다.
+:::
+
+### 데이터 증대 (Data Augmentation, DA)
+
+베이즈 관점에서 결측값 $y_{\text{mis}}$ 는 **잠재 파라미터** 다. Gibbs 로 교대 추출.
+
+1. **I-step**: $y_{\text{mis}} \mid y_{\text{obs}}, \theta \sim p(y_{\text{mis}} \mid y_{\text{obs}}, \theta)$ — 조건부 대체
+2. **P-step**: $\theta \mid y_{\text{obs}}, y_{\text{mis}} \sim p(\theta \mid y_{\text{complete}})$ — 완전 데이터 사후
+
+이 구조는 [EM 알고리즘](../103-em-algorithm.qmd) 의 베이즈 버전이다 — E-step 을 대체 추출로, M-step 을 사후 추출로 바꾼 것.
+
+### 다변량 정규 모델에서의 결측
+
+$y_i = (y_{i,\text{obs}}, y_{i,\text{mis}})$ 이고 다변량 정규 $y_i \sim N(\mu, \Sigma)$ 라면, 조건부 대체 분포가 닫힌 형태.
+
+$$
+y_{i,\text{mis}} \mid y_{i,\text{obs}}, \mu, \Sigma \sim N(\mu_{\text{mis}} + \Sigma_{\text{mis,obs}} \Sigma_{\text{obs}}^{-1}(y_{i,\text{obs}} - \mu_{\text{obs}}), \ \Sigma_{\text{mis}} - \Sigma_{\text{mis,obs}} \Sigma_{\text{obs}}^{-1} \Sigma_{\text{obs,mis}})
+$$
+
+Gibbs 가 매 반복마다 이 분포에서 추출하는 것으로 DA 가 자동 실행된다.
+
+### Monotone 패턴과 시계열
+
+결측 패턴이 **monotone** 하면 (한 번 결측이면 이후 모두 결측) 순차적 회귀로 계산이 단순화된다. 여론조사 시계열 · 패널 데이터에서 흔한 구조.
+
+---
+
+## Part V 미리보기 — 비선형 · 비모수 · 혼합
+
+[Part V](./04-bayesian-part5-overview.qmd) 는 Ch.19~23 에서 비선형 회귀 (serial dilution, 약동학), 기저 함수 스플라인, Gaussian Process, 혼합 모형, Dirichlet Process 를 다룬다. Part IV 의 파라미터 회귀 프레임에서 **함수 자체가 사전분포의 대상이 되는 비모수 베이즈** 로의 확장이다.
+
+---
+
+## 빈도주의 대응과의 매핑
+
+| Part IV 장 | 빈도주의 대응 | 차이점 |
+|:---|:---|:---|
+| Ch.14 선형 | OLS · Ridge · LASSO | 정규화가 사전으로 해석됨, 예측 분포가 자연스러움 |
+| Ch.15 계층 | Mixed Model (lme4) | 분산 성분 추정이 더 안정적, shrinkage 가 자동 |
+| Ch.16 GLM | glm · statsmodels | 약정보적 사전이 완전 분리 문제 해결 |
+| Ch.17 Robust | M-estimators · Huber | 이상치 불확실성이 사후로 전파 |
+| Ch.18 결측 | EM · MICE | 다중 대체의 분산 합이 자연스럽게 도출 |
+
+**도구 매핑** — [GLM 시리즈](../glm/) 는 McCullagh & Nelder 의 빈도주의 프레임워크, Part IV 는 같은 문제를 Gelman 의 베이즈 프레임워크로 푸는 것. **교차 학습이 양쪽 이해를 깊게 한다**.
+
+---
+
+## 코드 예제 — 계층적 선형 회귀 (Ch.15, 8 schools 유형)
+
+그룹별 절편이 공통 분포에서 추출되는 전형적 구조. Part III 의 HMC 엔진으로 계산한다.
+
+### Step 1: 순수 Python — 데이터 생성 + 완전/부분 풀링 비교
+
+```python
+import math
+import random
+import statistics
+
+random.seed(42)
+
+J = 8
+true_mu = 10.0
+true_tau = 4.0
+true_alpha = [random.gauss(true_mu, true_tau) for _ in range(J)]
+n_j = [random.randint(5, 15) for _ in range(J)]
+
+y = []
+group = []
+for j in range(J):
+    for _ in range(n_j[j]):
+        y.append(random.gauss(true_alpha[j], 2.0))
+        group.append(j)
+
+# 풀링 없음 — 그룹별 독립 추정
+alpha_no_pool = []
+for j in range(J):
+    yj = [y[i] for i in range(len(y)) if group[i] == j]
+    alpha_no_pool.append(statistics.mean(yj))
+
+# 완전 풀링 — 모두 동일 추정
+alpha_full_pool = statistics.mean(y)
+
+# 부분 풀링 — EB 스타일: alpha_j_hat = (n_j * alpha_no_pool_j / sigma^2 + mu / tau^2) / (n_j / sigma^2 + 1 / tau^2)
+sigma2 = 4.0
+mu_hat = alpha_full_pool
+tau2 = statistics.variance(alpha_no_pool)
+alpha_partial_pool = []
+for j in range(J):
+    precision_data = n_j[j] / sigma2
+    precision_prior = 1.0 / tau2
+    alpha_hat = (precision_data * alpha_no_pool[j] + precision_prior * mu_hat) / (precision_data + precision_prior)
+    alpha_partial_pool.append(alpha_hat)
+
+print("True alpha:      ", [f"{a:.2f}" for a in true_alpha])
+print("No pool:         ", [f"{a:.2f}" for a in alpha_no_pool])
+print("Full pool:       ", [f"{alpha_full_pool:.2f}"] * J)
+print("Partial pool:    ", [f"{a:.2f}" for a in alpha_partial_pool])
+```
+
+부분 풀링 추정값이 no-pool 과 full-pool 사이에 위치하는 것이 확인된다. 표본이 적은 그룹일수록 전체 평균 쪽으로 더 많이 수축된다 — **shrinkage 의 가시적 확인**.
+
+### Step 2: PyMC — HMC 로 완전 베이즈 추론
+
+```python
+import numpy as np
+import pymc as pm
+
+J = 8
+n_j = np.array(n_j)
+y_np = np.array(y)
+group_np = np.array(group)
+
+with pm.Model() as hierarchical:
+    mu = pm.Normal("mu", mu=0.0, sigma=10.0)
+    tau = pm.HalfCauchy("tau", beta=5.0)
+    eta = pm.Normal("eta", mu=0.0, sigma=1.0, shape=J)  # 비중심 재매개변수화
+    alpha = pm.Deterministic("alpha", mu + tau * eta)
+    sigma = pm.HalfCauchy("sigma", beta=5.0)
+    obs = pm.Normal("obs", mu=alpha[group_np], sigma=sigma, observed=y_np)
+    trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.95, random_seed=42)
+
+print(pm.summary(trace, var_names=["mu", "tau", "sigma", "alpha"]))
+```
+
+`summary` 의 `r_hat` ≈ 1.00, `ess_bulk` 가 수천 단위면 수렴 건강. **`eta` 재매개변수화를 생략하면 $\tau$ 가 작을 때 funnel 이 만들어져 divergences 가 쏟아진다** — Part III Ch.12 의 비중심 매개변수화가 실전에서 왜 필수인지 확인하는 체크포인트다.
+
+---
+
+## 관련 주제
+
+**베이즈 시리즈**
+
+- [Part I: Fundamentals of Bayesian Inference](./00-bayesian-part1-overview.qmd) — Gelman BDA Ch.1~5
+- [Part II: Fundamentals of Bayesian Data Analysis](./01-bayesian-part2-overview.qmd) — Gelman BDA Ch.6~9
+- [Part III: Advanced Computation](./02-bayesian-part3-overview.qmd) — Gelman BDA Ch.10~13
+- [Part V: Nonlinear and Nonparametric Models](./04-bayesian-part5-overview.qmd) — Gelman BDA Ch.19~23 (작성 예정)
+
+**빈도주의 대응 (GLM 시리즈 — McCullagh & Nelder)**
+
+- [GLM 이론 기초](../glm/01-1-glm-theory-foundation.qmd) — 선형 예측자·링크·분포
+- [이항 자료 모델](../glm/03-3-models-binary-responses.qmd) — 로지스틱·프로빗의 빈도주의 관점
+- [Quasi-likelihood](../glm/08-2-quasi-likelihood-independent.qmd) — 과분산 대응 빈도주의 전략
+- [혼합 효과 연속형 모형](../LDA/30-mixed-effects-continuous-overview.qmd) — 계층 회귀의 빈도주의 버전
+
+**계산 · 기초**
+
+- [EM 알고리즘](../103-em-algorithm.qmd) — Ch.18 의 데이터 증대가 EM 의 베이즈 확장
+- [Monte Carlo Simulation](../36-monte-carlo-simulation.qmd) · [확률 표본의 생성](../95-generating-random-sample.qmd) — Part III 기초
+- [베이즈 구간](../113-bayesian-intervals.qmd) · [베이즈 검정](../157-bayesian-tests.qmd) — Part IV 사후분포의 요약 도구
+
+**후속 주제 (Chapter detail)**
+
+- Ch.14 Introduction to Regression Models — 정규 선형 회귀 상세 유도
+- Ch.15 Hierarchical Linear Models — 8 schools · 주별 투표 예측
+- Ch.16 Generalized Linear Models — 로지스틱·포아송·MRP
+- Ch.17 Models for Robust Inference — t 분포 혼합·robit
+- Ch.18 Models for Missing Data — 다중 대체·MAR·DA 알고리즘
+
+---
+
+## 참고자료
+
+- Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.). CRC Press. Part IV (Ch.14~18).
+- Gelman, A., & Hill, J. (2007). *Data Analysis Using Regression and Multilevel/Hierarchical Models*. Cambridge University Press.
+- Gelman, A., Jakulin, A., Pittau, M. G., & Su, Y.-S. (2008). A weakly informative default prior distribution for logistic and other regression models. *Annals of Applied Statistics*, 2(4), 1360–1383.
+- Albert, J. H., & Chib, S. (1993). Bayesian analysis of binary and polychotomous response data. *Journal of the American Statistical Association*, 88(422), 669–679.
+- Rubin, D. B. (1987). *Multiple Imputation for Nonresponse in Surveys*. Wiley.
+- Little, R. J. A., & Rubin, D. B. (2002). *Statistical Analysis with Missing Data* (2nd ed.). Wiley.

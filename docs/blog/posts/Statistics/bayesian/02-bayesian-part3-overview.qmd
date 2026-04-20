@@ -1,0 +1,436 @@
+---
+title: "Part III: Advanced Computation — 사후분포를 어떻게 실제로 계산하는가"
+subtitle: "Gelman BDA Ch.10~13 개관 — 시뮬레이션·MCMC·HMC·근사의 계산 지도"
+description: |
+  Gelman et al. *Bayesian Data Analysis* (3rd ed., 2013) 의 Part III 네 장을 한 장으로 조망한다.
+  Ch.10 기각·중요도 표본추출, Ch.11 Gibbs 와 Metropolis-Hastings 의 기본 MCMC,
+  Ch.12 HMC·NUTS·재매개변수화로 이어지는 효율적 MCMC, Ch.13 정규·EM·변분·EP 근사를
+  수식·직관·디버깅 규칙과 함께 정리한다. "분석의 의미" 를 다룬 Part I·II 뒤에서
+  "그 사후분포를 실제로 계산하는 엔진" 이 어떻게 조립되는지를 보여주는 지도.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/20/2026
+---
+
+## 왜 Part III 인가 — "수식" 과 "실행" 의 간극
+
+[Part I](./00-bayesian-part1-overview.qmd) 은 베이즈 추론의 언어를, [Part II](./01-bayesian-part2-overview.qmd) 는 모델 점검·비교·결정의 사이클을 정의했다. 두 Part 모두 **"사후분포 $p(\theta \mid y)$ 를 알고 있다"** 는 전제 위에서 논의를 전개했다. 그러나 현실에서는 이 전제가 가장 어려운 부분이다.
+
+::: {.callout-important}
+## Part III 의 한 줄 요약
+
+**"사후분포는 대부분 닫힌 형태로 존재하지 않으며, 실무 베이즈 분석의 99% 는 $p(\theta \mid y)$ 에서 표본을 뽑거나 근사하는 엔진을 돌리는 작업이다."**
+
+Part III 은 그 엔진 — 기각 표본추출·중요도 표본추출·Gibbs·Metropolis-Hastings·HMC·변분 추론 — 을 아래에서 위로 쌓아 올린다 (Gelman et al., 2013, Ch.10~13).
+:::
+
+Part III 의 구성은 다음과 같다.
+
+| 장 | 핵심 질문 | 한 줄 역할 |
+|:---:|:---|:---|
+| Ch.10 | **어떻게 추출하는가 (기초)** | 수치 적분·기각·중요도·SIR |
+| Ch.11 | **상관된 표본으로 어떻게 추론하는가** | Gibbs·Metropolis-Hastings·수렴 진단 |
+| Ch.12 | **고차원에서 어떻게 빠르게 섞는가** | HMC·NUTS·재매개변수화·Stan |
+| Ch.13 | **시뮬레이션 없이 어떻게 근사하는가** | 정규 근사·EM·변분 추론·EP |
+
+각 장을 **왜 필요한가 → 핵심 알고리즘 → 수식·직관 → 실무 지침** 순서로 정리한다. 상세 구현과 코드는 후속 포스트에서 챕터별로 다룬다.
+
+---
+
+## Ch.10 Introduction to Bayesian Computation — "직접 추출" 의 네 가지 도구
+
+### 왜 표본이 필요한가
+
+베이즈 추론의 모든 질문은 결국 사후 기대값이다.
+
+$$
+E[h(\theta) \mid y] = \int h(\theta) \, p(\theta \mid y) \, d\theta
+$$
+
+점 추정(`posterior mean`)은 $h(\theta) = \theta$, 사후 구간은 $h(\theta) = \mathbb{1}[\theta \in A]$, 사후 예측은 $h(\theta) = p(\tilde{y} \mid \theta)$. **전부 하나의 적분이다.** 이 적분이 닫힌 형태로 풀리는 건 Part I Ch.2~3 의 켤레 사례뿐이고, 일반 모델에서는 표본 $\theta^{(1)}, \ldots, \theta^{(S)} \sim p(\theta \mid y)$ 로 Monte Carlo 근사한다.
+
+$$
+\widehat{E}[h(\theta) \mid y] = \frac{1}{S} \sum_{s=1}^{S} h(\theta^{(s)})
+$$
+
+::: {.callout-tip}
+## 직관 — 베이즈 계산은 "적분 문제" 가 아니라 "표본 문제" 다
+
+대수의 법칙이 있는 한, **표본만 있으면 어떤 요약량도 계산할 수 있다**. 따라서 베이즈 계산의 핵심 질문은 "적분을 어떻게 풀까?" 가 아니라 **"$p(\theta \mid y)$ 에서 어떻게 표본을 뽑을까?"** 로 전환된다. Part III 전체가 이 질문의 변주다.
+:::
+
+[Monte Carlo Simulation](../36-monte-carlo-simulation.qmd) 의 수학적 근거와 [확률 표본의 생성](../95-generating-random-sample.qmd) 의 역변환·Box-Muller·기각·Metropolis 알고리즘은 이 장의 배경이 된다.
+
+### 비정규화 밀도로 작업하기
+
+대부분의 경우 우리는 정규화 상수 $p(y) = \int p(y \mid \theta) p(\theta) \, d\theta$ 를 모른다. 알고리즘은 **비정규화 사후분포** $q(\theta \mid y) = p(y \mid \theta) p(\theta)$ 만 필요로 하도록 설계된다.
+
+$$
+p(\theta \mid y) = \frac{q(\theta \mid y)}{\int q(\theta' \mid y) \, d\theta'}
+$$
+
+밀도비 $q(\theta^* \mid y) / q(\theta^{(t-1)} \mid y)$ 로 표본을 판정하는 알고리즘(기각·Metropolis·중요도) 은 전부 "정규화 상수가 약분된다" 는 성질을 이용한다.
+
+### 네 가지 기초 방법
+
+**1. 수치 적분 (grid 방법)**. 파라미터 공간을 격자로 쪼개 $q(\theta \mid y)$ 를 평가하여 근사. 저차원 (대략 $d \leq 3$) 에서만 실용적이며, **모드 확인·디버깅 도구** 로 가치가 크다.
+
+**2. 직접 시뮬레이션**. 켤레 구조가 있으면 $p(\theta \mid y)$ 에서 직접 추출한다. 다파라미터라면 $p(\theta_2 \mid y)$ 에서 뽑고 $p(\theta_1 \mid \theta_2, y)$ 에서 순차적으로 추출하는 **주변-조건부 분해** 를 쓴다 (Part I Ch.3 의 전략).
+
+**3. 기각 표본추출 (rejection sampling)**. 근사 분포 $g(\theta)$ 에서 $\theta^*$ 를 뽑고, 상한 $M$ 을 만족하는 $q(\theta \mid y) / g(\theta) \leq M$ 하에서 확률 $q(\theta^* \mid y) / (M g(\theta^*))$ 로 수락.
+
+$$
+\text{Accept } \theta^* \quad \text{if} \quad U \sim \text{Uniform}(0,1), \ U \leq \frac{q(\theta^* \mid y)}{M g(\theta^*)}
+$$
+
+::: {.callout-note}
+## 직관 — 기각은 "얇은 담요 아래 굵은 담요" 를 덮는 것
+
+$M g(\theta)$ 가 $q(\theta \mid y)$ 를 위에서 감싸는 "굵은 담요" 다. $(\theta^*, U \cdot M g(\theta^*))$ 를 담요 아래 균등 분포로 뽑고, 그 점이 "얇은 담요" $q(\theta \mid y)$ 아래에 있으면 수락한다. $M g$ 가 $q$ 에 꼭 맞을수록 수락률이 높고, 느슨할수록 대부분 버려진다. **고차원에서는 $M g$ 가 $q$ 를 너무 헐겁게 덮을 수밖에 없어 수락률이 지수적으로 0 으로 붕괴한다** — 기각이 저차원에서만 실용적인 이유다.
+:::
+
+**4. 중요도 표본추출 (importance sampling)**. 기각과 달리 표본을 버리지 않고 **가중치로 보정** 한다.
+
+$$
+E[h(\theta) \mid y] \approx \frac{\sum_{s=1}^{S} w(\theta^{(s)}) h(\theta^{(s)})}{\sum_{s=1}^{S} w(\theta^{(s)})}, \quad w(\theta) = \frac{q(\theta \mid y)}{g(\theta)}
+$$
+
+가중치 분산이 크면(꼬리에서 $g$ 가 $q$ 보다 얇으면) 소수 표본이 추정을 지배하여 **유효 표본 크기** 가 붕괴한다.
+
+$$
+S_\text{eff} \approx \frac{\left(\sum_s w_s \right)^2}{\sum_s w_s^2}
+$$
+
+$S_\text{eff}$ 가 $S$ 에 비해 너무 작으면(예: $S_\text{eff}/S < 0.1$) 제안 분포가 사후분포의 꼬리를 충분히 덮지 못하는 것이다. SIR(Sampling Importance Resampling) 은 가중치에 비례해 재표본추출하여 균등 가중 표본을 얻는다.
+
+### 실무 지침
+
+- **로그 스케일로 작업한다**. 우도 곱은 수치 오버플로 위험이 크므로 $\log q(\theta \mid y)$ 로 계산하고, 지수화는 마지막 순간에.
+- **조잡한 추정을 먼저 얻는다**. 정규 근사나 grid 로 사후 모드·스케일을 잡아둔 뒤에 본격적 표본추출기의 초기값·제안 분산을 결정한다. 디버깅 시 "진짜 값과 다른 방향으로 수렴하는가" 를 거를 수 있다.
+- **시뮬레이션 규모 $S$ 결정**. 사후 분위수 추정이면 꼬리에서의 Monte Carlo 오차가 지배적이다. 중앙 90% 구간의 경계는 $S = 1000$ 로 대체로 충분하지만, 극단 분위수·희귀 사건은 $S = 10{,}000 \sim 10^6$ 이 필요할 수 있다.
+
+---
+
+## Ch.11 Basics of Markov Chain Simulation — "표본을 뽑을 수 없을 때 체인을 건축한다"
+
+### 왜 MCMC 인가
+
+기각·중요도는 **독립 표본** 을 생성한다는 장점이 있지만, 제안 분포 $g$ 가 $q(\theta \mid y)$ 를 잘 근사해야 한다. 고차원에서 이는 사실상 불가능하다. MCMC 는 근본적으로 다른 전략을 쓴다.
+
+**사후분포 $p(\theta \mid y)$ 를 정상 분포로 갖는 마르코프 체인 $\{\theta^{(t)}\}$ 을 구축하고, 체인이 수렴한 후의 표본을 사용한다.** 독립성을 포기하는 대신 "어느 근사 분포에서 뽑을까" 라는 문제에서 해방된다.
+
+::: {.callout-tip}
+## 직관 — MCMC 는 "사후분포 위를 걸어다니는 일꾼"
+
+일꾼 한 명이 사후분포의 지형 위를 돌아다니는데, **방문 시간이 사후 밀도에 비례** 하도록 이동 규칙을 설계한다. 충분히 오래 걸어 다니면, 일꾼이 서 있던 장소들의 리스트가 곧 사후분포 표본이다. Part III Ch.11~12 는 이 일꾼이 어떻게 더 빠르게·더 효율적으로 돌아다닐지를 설계하는 방법이다.
+:::
+
+### Gibbs sampler
+
+파라미터를 $\theta = (\theta_1, \ldots, \theta_d)$ 로 나누고, 각 성분을 **다른 모든 성분의 현재 값에 조건부인 전체 조건부 분포** 에서 순차 추출.
+
+$$
+\theta_j^{(t)} \sim p(\theta_j \mid \theta_{-j}^{(t)}, y), \quad j = 1, \ldots, d
+$$
+
+여기서 $\theta_{-j}^{(t)} = (\theta_1^{(t)}, \ldots, \theta_{j-1}^{(t)}, \theta_{j+1}^{(t-1)}, \ldots, \theta_d^{(t-1)})$. 각 조건부 분포가 켤레 구조로 닫힌 형태이면 구현이 매우 단순하다. **계층 모형에서 특히 자연스럽다** — 데이터 · 저수준 · 상위 수준 파라미터가 계층 구조를 따라 조건부 독립이 되기 때문이다.
+
+한계 — 성분 간 사후 상관이 크면 이웃 성분에 **묶인 채** 느리게 움직인다. 예: 이변량 정규 $\rho = 0.8$ 에서 Gibbs 는 좁은 대각선 축을 따라 지그재그하며, 한 축 방향의 진전이 극도로 느리다.
+
+### Metropolis-Hastings
+
+대칭 또는 비대칭 제안 분포 $J(\theta^* \mid \theta^{(t-1)})$ 에서 후보를 뽑고, 밀도비로 수락·기각.
+
+$$
+r = \frac{q(\theta^* \mid y) / J(\theta^* \mid \theta^{(t-1)})}{q(\theta^{(t-1)} \mid y) / J(\theta^{(t-1)} \mid \theta^*)}, \quad \text{accept with probability } \min(r, 1)
+$$
+
+대칭 제안 $J(\theta^* \mid \theta^{(t-1)}) = J(\theta^{(t-1)} \mid \theta^*)$ 이면 밀도비가 단순 **밀도비** 로 줄어든다. 조건부 분포가 닫히지 않아 Gibbs 를 쓸 수 없는 경우에도 밀도 평가만 가능하면 적용된다.
+
+수락률이 너무 낮으면(예: < 0.1) 제안 분산이 과도하게 커서 후보가 밀도 낮은 영역으로만 제안된다. 너무 높으면(예: > 0.9) 제안 분산이 작아 이동이 미미하다. 일반적 경험칙 — **가우시안 제안 · 단변수는 0.44, 고차원은 0.23** 부근이 최적 (Roberts, Gelman, Gilks, 1997).
+
+### 수렴 진단 — $\hat{R}$ 과 $n_\text{eff}$
+
+MCMC 의 근본 위험은 **수렴 전의 표본을 표본인 양 쓰는 것** 이다. 두 진단이 표준이다.
+
+**$\hat{R}$ (potential scale reduction)** — 여러 독립 체인을 과분산된 시작점에서 실행하여, 체인 간 분산 $B$ 와 체인 내 분산 $W$ 를 비교한다.
+
+$$
+\hat{R} = \sqrt{\frac{\frac{n-1}{n} W + \frac{1}{n} B}{W}}
+$$
+
+$\hat{R} \to 1$ 이면 체인들이 같은 분포에 도달한 것이고, $\hat{R} > 1.1$ 이면 아직 수렴하지 못했거나 다중 모드 중 일부만 탐색했다는 신호다. 분할 $\hat{R}$ (체인의 전반부·후반부 분리) 을 쓰면 정상성까지 엄격히 점검한다.
+
+**유효 표본 크기 $n_\text{eff}$** — MCMC 표본은 자기상관이 있어 $n$ 개 표본이 $n$ 개 독립 표본만큼의 정보를 주지 않는다.
+
+$$
+n_\text{eff} = \frac{n}{1 + 2 \sum_{k=1}^{\infty} \rho_k}
+$$
+
+여기서 $\rho_k$ 는 시차 $k$ 자기상관이다. $n_\text{eff}$ 가 수백 단위 이하면 사후 요약이 불안정하다 — **Monte Carlo 표준오차** 는 $\sqrt{\text{Var}/n_\text{eff}}$ 로 평가한다.
+
+### 경계 사례 — 8 schools
+
+Ch.5 의 8 schools 를 다시 꺼내면, $\tau$ (그룹간 표준편차) 의 사후분포는 0 근처에서 mode 가 형성되기도 한다. Gibbs 는 $\tau$ 가 0 에 가까워지면 그룹 평균들을 같은 값으로 붙들어 두는 구간이 생겨 느리게 움직인다. 이 문제가 Ch.12 의 **재매개변수화** 와 **HMC** 동기로 이어진다.
+
+---
+
+## Ch.12 Computationally Efficient MCMC — "고차원에서 어떻게 빠르게 섞는가"
+
+### 왜 효율성인가
+
+현대 베이즈 모델은 수백~수만 파라미터를 가진다. 단순 Metropolis 의 수락률 최적 스케일 $c \approx 2.4 / \sqrt{d}$ 에서 알 수 있듯, **차원이 커질수록 랜덤 워크가 비효율적으로 된다**. Ch.12 는 네 가지 방향의 개선을 제시한다.
+
+### 1. 재매개변수화 (reparameterization)
+
+Gibbs 는 성분이 사후 독립일 때 가장 효율적이다. 선형 변환으로 **상관을 제거**. 회귀에서 $X$ 를 중심화·직교화하면 계수 간 사후 상관이 줄어든다. 계층 모형에서 대표적 기법이 **비중심 매개변수화 (non-centered parameterization)**.
+
+**중심 매개변수화**: $\theta_j \sim N(\mu, \tau^2)$
+**비중심 매개변수화**: $\theta_j = \mu + \tau \cdot \eta_j, \ \eta_j \sim N(0, 1)$
+
+결과는 수학적으로 동치지만, 후자는 $\tau$ 와 $\eta_j$ 간 사후 상관이 작아 MCMC 가 **funnel 형 지형** (τ 가 작아지면 좁아지는 깔때기) 을 훨씬 잘 탐색한다.
+
+### 2. 파라미터 확장 (parameter expansion)
+
+관심 없는 추가 파라미터 $\alpha$ 를 도입하여 사후 상관을 끊는다. 대표 예 — 계층 모형의 분산 파라미터에 스케일 $\alpha$ 를 곱해 $\sigma = \alpha \sigma_0, \ V_i = \alpha^2 V_{0i}$ 로 확장하면, Gibbs 가 $\sigma \to 0$ 영역에 갇히는 문제를 벗어난다.
+
+### 3. Hamiltonian Monte Carlo (HMC)
+
+HMC 는 MCMC 설계 철학을 근본적으로 바꾼다. 파라미터 $\theta$ 에 **운동량 변수** $\phi$ 를 도입하고, 확장된 공간 $(\theta, \phi)$ 의 해밀턴 역학으로 궤적을 생성한다.
+
+$$
+H(\theta, \phi) = -\log p(\theta \mid y) + \frac{1}{2} \phi^\top M^{-1} \phi
+$$
+
+시간 진화는 다음 방정식을 따른다.
+
+$$
+\frac{d\theta}{dt} = M^{-1} \phi, \quad \frac{d\phi}{dt} = -\nabla_\theta \left( -\log p(\theta \mid y) \right)
+$$
+
+수치 적분(leapfrog) 으로 궤적을 따라간 후 에너지 보존의 오차를 Metropolis 수락으로 보정한다.
+
+::: {.callout-tip}
+## 직관 — HMC 는 "공을 굴려 지형을 탐사" 한다
+
+랜덤 워크 Metropolis 는 무작위 방향으로 한 걸음 내디디는 취객이다. HMC 는 **사후분포의 기울기** (log-posterior gradient) 정보를 써서 공을 굴린다. 공은 높은 확률 지역을 따라 움직이며 관성으로 먼 거리를 한 번에 이동한다. 고차원에서도 효율적으로 섞이는 이유가 여기 있다 — 차원이 늘어도 기울기가 "갈 방향" 을 알려주기 때문이다.
+:::
+
+HMC 는 두 초매개변수에 민감하다 — 적분 스텝 크기 $\epsilon$ 과 스텝 수 $L$. **NUTS (No-U-Turn Sampler)** 는 $L$ 을 자동으로 선택하여 궤적이 "U-turn" 을 도는 순간에 멈춘다. Stan 은 NUTS 를 기본 샘플러로 사용하며, 대부분의 현대 베이즈 모델링 워크플로우의 엔진이다.
+
+### 4. 기타 기법
+
+- **슬라이스 표본추출**: 밀도 아래 영역의 균등 분포를 이용. 튜닝이 필요 없는 대신 어떤 구간에서는 느리다.
+- **가역 점프**: 차원이 다른 모델 간 이동을 허용하여 모델 평균화·성분 수 추정에 활용.
+- **병렬 템퍼링·simulated tempering**: 다중 모드 분포에서 온도가 다른 체인들 간 교환을 허용하여 전역 탐색성을 높인다.
+
+---
+
+## Ch.13 Modal and Distributional Approximations — "시뮬레이션 없이 근사"
+
+### 왜 근사인가
+
+MCMC 는 강력하지만 느리다. 복잡한 모델 · 대규모 데이터 · 실시간 예측이 필요한 상황에서는 **확률적 근사** 가 필요하다. Ch.13 은 두 갈래를 다룬다. (a) 사후분포의 **모드** 를 찾아 정규로 감싸는 고전적 방법과 (b) 사후분포 **전체** 를 단순 분포 가족으로 근사하는 현대적 방법.
+
+### 사후 모드 탐색
+
+목표는 $\hat{\theta} = \arg\max_{\theta} \log p(\theta \mid y)$.
+
+- **Newton-Raphson**: $\theta^{(t+1)} = \theta^{(t)} - H^{-1} \nabla \log p(\theta^{(t)} \mid y)$, $H$ 는 Hessian. 수렴이 빠르지만 Hessian 계산·역계산 비용이 크다.
+- **BFGS (준뉴턴)**: Hessian 을 기울기 이력으로 근사. 대규모 문제에서 표준.
+- **조건부 최대화 (stepwise ascent)**: 한 성분씩 최대화. Gibbs 의 최대화 버전.
+
+모드가 경계에 있으면(예: 분산 $\tau = 0$) 정규 근사가 왜곡된다. **경계 회피 사전분포** — Gamma(2, ·) 나 half-Cauchy 가 권장된다.
+
+### 정규 근사와 mixture 정규
+
+모드 $\hat{\theta}$ 와 곡률 $H = -\nabla^2 \log p(\hat{\theta} \mid y)$ 를 얻으면
+
+$$
+p(\theta \mid y) \approx N\left(\hat{\theta}, H^{-1}\right)
+$$
+
+이는 Part I Ch.4 의 **Bayesian Central Limit Theorem** 에 대응한다. 사후분포가 다중 모드거나 비대칭이면 **mixture 정규 근사** 로 확장. MCMC 초기값 · 중요도 제안 분포 · 빠른 사후 예측의 출발점으로 가치가 크다.
+
+### EM 알고리즘 — 주변 사후 모드
+
+[EM 알고리즘](../103-em-algorithm.qmd) 은 베이즈 관점에서 **주변 사후 모드 탐색** 으로 재해석된다. 관심 파라미터 $\theta$ 와 잠재 변수 $\gamma$ 가 있을 때, 주변 사후분포 $p(\theta \mid y) = \int p(\theta, \gamma \mid y) d\gamma$ 의 모드를 찾는다.
+
+$$
+\begin{aligned}
+\text{E-step:} & \quad Q(\theta \mid \theta^{(t)}) = E_{\gamma \mid y, \theta^{(t)}}[\log p(\theta, \gamma \mid y)] \\
+\text{M-step:} & \quad \theta^{(t+1)} = \arg\max_{\theta} Q(\theta \mid \theta^{(t)})
+\end{aligned}
+$$
+
+단조 수렴 정리가 보장되며, 계층 모형·혼합 모형·잠재 클래스 모형에서 표준 도구다.
+
+### 변분 추론 (Variational Inference, VI)
+
+사후분포 전체를 **단순 분포 가족** $q(\theta; \lambda)$ 로 근사하되 KL 발산을 최소화한다.
+
+$$
+\lambda^* = \arg\min_{\lambda} \text{KL}\left(q(\theta; \lambda) \,\|\, p(\theta \mid y)\right)
+$$
+
+**ELBO (Evidence Lower BOund) 최대화** 와 동치다.
+
+$$
+\text{ELBO}(\lambda) = E_{q}[\log p(y, \theta)] - E_{q}[\log q(\theta; \lambda)]
+$$
+
+대표 형태가 **mean-field 근사** — $q(\theta; \lambda) = \prod_j q_j(\theta_j; \lambda_j)$ 로 성분 간 독립 가정. 계산이 빠르지만 사후 상관을 포기한다.
+
+::: {.callout-tip}
+## 직관 — VI 는 "최적화" 문제, MCMC 는 "시뮬레이션" 문제
+
+MCMC 는 사후분포에서 표본을 "뽑는다" — 확률적 · 점근적으로 정확. VI 는 사후분포를 "맞추는" 최적화 — 결정론적 · 빠르지만 근사 족의 한계에 갇힌다. 대규모 데이터 · 신경망과 결합된 베이즈 모델 (VAE, Bayesian deep learning) 에서 VI 가 표준이 된 이유다.
+:::
+
+### 기대치 전파 (Expectation Propagation, EP)
+
+각 가능도 인자 $p(y_i \mid \theta)$ 를 순차적으로 정규 분포로 근사하여 전체 사후분포를 구성. 대규모 모델에서 VI 와 상보적 도구로 쓰인다. 수렴 보장은 약하지만, 특정 구조(가우시안 프로세스 · 확률적 그래프 모델) 에서 VI 보다 정확하다.
+
+---
+
+## Part IV 미리보기 — Part III 의 엔진으로 회귀·GLM·비모수를 돌린다
+
+[Part IV](./03-bayesian-part4-overview.qmd) 는 Ch.14~18 에서 **회귀 모형 (regression models)** 의 베이즈 분석을 다룬다. 선형 회귀 · 계층적 회귀 · GLM · 결측자료 모형이 Part III 에서 쌓아 올린 HMC · Stan · VI 를 엔진으로 구동된다. Part III 을 "엔진의 설계도" 로 읽고, Part IV 를 "엔진을 장착한 차" 로 읽는 것이 전체 구조를 잡는 방법이다.
+
+---
+
+## 빈도주의 계산과의 비교
+
+| 질문 | 빈도주의 | 베이즈 (Part III) |
+|:---|:---|:---|
+| 무엇을 계산하는가 | 점 추정 $\hat{\theta}$ + 표본 분포 | 사후분포 $p(\theta \mid y)$ 전체 |
+| 표준 엔진 | MLE (Newton-Raphson) · 부트스트랩 | MCMC (Gibbs · HMC · NUTS) · VI |
+| 불확실성 | 표준오차 · CLT · 부트스트랩 신뢰구간 | 사후 표본의 분위수 · 사후 예측 |
+| 계산 복잡도 | 대부분 저비용 (수 초~분) | 중~고비용 (분~시간) |
+| 고차원 확장 | L-BFGS · proximal methods | HMC+NUTS · VI · EP |
+
+**EM 알고리즘은 양쪽에서 같은 역할** — 빈도주의에서는 MLE, 베이즈에서는 주변 사후 모드. [EM 포스트](../103-em-algorithm.qmd) 는 두 관점을 모두 포괄한다.
+
+---
+
+## 코드 예제 — Metropolis-Hastings 직접 구현 (Ch.11)
+
+간단한 베르누이-베타 모형에서 **정규 제안 분포의 Metropolis-Hastings** 를 순수 Python 으로 구현하여, MCMC 가 무엇을 계산하는지 "수식 없이 코드로" 확인한다. 로지스틱 변환으로 $\theta \in (0,1)$ 제약을 실수 공간 $\eta = \text{logit}(\theta)$ 로 이동한 뒤 제안한다.
+
+### Step 1: 순수 Python — Metropolis-Hastings 체인 구축
+
+```python
+import math
+import random
+
+random.seed(42)
+
+y = [1] * 7 + [0] * 3
+
+def log_prior(theta):
+    # Beta(1,1) = Uniform(0,1)
+    if 0.0 < theta < 1.0:
+        return 0.0
+    return -math.inf
+
+def log_likelihood(theta):
+    s = sum(y)
+    n = len(y)
+    return s * math.log(theta) + (n - s) * math.log(1.0 - theta)
+
+def log_posterior(theta):
+    lp = log_prior(theta)
+    if lp == -math.inf:
+        return -math.inf
+    return lp + log_likelihood(theta)
+
+def propose_normal(theta_cur, scale=0.1):
+    # logit 공간에서 정규 제안 → sigmoid 로 되돌림
+    eta_cur = math.log(theta_cur / (1.0 - theta_cur))
+    eta_new = random.gauss(eta_cur, scale)
+    theta_new = 1.0 / (1.0 + math.exp(-eta_new))
+    # logit 변환 자코비안 보정
+    log_jac = math.log(theta_new * (1.0 - theta_new)) - math.log(theta_cur * (1.0 - theta_cur))
+    return theta_new, log_jac
+
+def metropolis_hastings(S=5000, theta0=0.5, scale=0.5):
+    samples = [theta0]
+    n_accept = 0
+    cur = theta0
+    for _ in range(S):
+        prop, log_jac = propose_normal(cur, scale)
+        log_r = log_posterior(prop) - log_posterior(cur) + log_jac
+        if math.log(random.random()) < log_r:
+            cur = prop
+            n_accept += 1
+        samples.append(cur)
+    return samples, n_accept / S
+
+samples, acc = metropolis_hastings(S=5000)
+burnin = 1000
+post = samples[burnin:]
+post_mean = sum(post) / len(post)
+print(f"Acceptance rate: {acc:.3f}")
+print(f"Posterior mean: {post_mean:.4f}")
+print(f"Analytic (Beta(1+7, 1+3)): {(1 + 7) / (2 + 10):.4f}")
+```
+
+수락률 0.2~0.5 사이가 관찰되고, 사후 평균은 Beta(8, 4) 의 분석적 평균 $8/12 \approx 0.667$ 로 수렴한다. **MCMC 로 구한 값과 Part I 의 켤레 사후 공식이 정확히 일치** 함을 눈으로 확인할 수 있다.
+
+### Step 2: PyMC — 실무 구현 (HMC/NUTS)
+
+```python
+import numpy as np
+import pymc as pm
+
+y_np = np.array([1] * 7 + [0] * 3)
+
+with pm.Model() as model:
+    theta = pm.Beta("theta", alpha=1.0, beta=1.0)
+    obs = pm.Bernoulli("obs", p=theta, observed=y_np)
+    trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.9, random_seed=42)
+
+print(pm.summary(trace, var_names=["theta"]))
+```
+
+PyMC 는 내부에서 NUTS 를 호출한다. `summary` 출력의 `r_hat`이 1.00 에 가깝고 `ess_bulk` 가 수천 단위면 수렴이 건강하다. **Part III 의 Ch.11 수렴 진단이 실제 도구에서 어떻게 표시되는지** 확인하는 체크포인트다.
+
+---
+
+## 관련 주제
+
+**베이즈 시리즈**
+
+- [Part I: Fundamentals of Bayesian Inference](./00-bayesian-part1-overview.qmd) — Gelman BDA Ch.1~5
+- [Part II: Fundamentals of Bayesian Data Analysis](./01-bayesian-part2-overview.qmd) — Gelman BDA Ch.6~9
+- [Part IV: Regression Models](./03-bayesian-part4-overview.qmd) — Gelman BDA Ch.14~18 (작성 예정)
+
+**계산 기초**
+
+- [Monte Carlo Simulation](../36-monte-carlo-simulation.qmd) — 대수의 법칙 기반 수치 근사
+- [확률 표본의 생성](../95-generating-random-sample.qmd) — 역변환·기각·Metropolis 기초
+- [EM 알고리즘](../103-em-algorithm.qmd) — 주변 사후 모드 탐색과 단조 수렴
+
+**빈도주의 대응**
+
+- [베이즈 구간](../113-bayesian-intervals.qmd) — Part III 표본으로 계산되는 신용 구간
+- [베이즈 검정](../157-bayesian-tests.qmd) — 사후 확률 기반 가설 비교
+
+**후속 주제 (Chapter detail)**
+
+- Ch.10 Introduction to Bayesian Computation — 기각·중요도·SIR 상세
+- Ch.11 Basics of MCMC — Gibbs·Metropolis-Hastings 상세 구현과 8 schools
+- Ch.12 Efficient MCMC — HMC·NUTS·Stan 심화
+- Ch.13 Modal and Distributional Approximations — VI·EP 상세
+
+---
+
+## 참고자료
+
+- Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.). CRC Press. Part III (Ch.10~13).
+- Neal, R. M. (2011). MCMC using Hamiltonian dynamics. In *Handbook of Markov Chain Monte Carlo* (Brooks, S. et al., eds.), Ch.5. CRC Press.
+- Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively setting path lengths in Hamiltonian Monte Carlo. *Journal of Machine Learning Research*, 15, 1593–1623.
+- Blei, D. M., Kucukelbir, A., & McAuliffe, J. D. (2017). Variational inference: A review for statisticians. *Journal of the American Statistical Association*, 112(518), 859–877.
+- Carpenter, B., Gelman, A., Hoffman, M. D., Lee, D., Goodrich, B., Betancourt, M., Brubaker, M., Guo, J., Li, P., & Riddell, A. (2017). Stan: A probabilistic programming language. *Journal of Statistical Software*, 76(1).

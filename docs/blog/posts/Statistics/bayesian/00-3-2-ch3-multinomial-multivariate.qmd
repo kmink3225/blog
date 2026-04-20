@@ -1,0 +1,616 @@
+---
+title: "Ch.3.4~3.6 — 다항 모델·다변량 정규의 공동 사후 심화"
+subtitle: "Gelman BDA Ch.3.4~3.6 상세 — Dirichlet·다변량 정규·Inverse-Wishart"
+description: |
+  Gelman et al. *Bayesian Data Analysis* (3rd ed., 2013) Ch.3 중반 세 절을 상세히 다룬다.
+  § 3.4 다항 모델과 Dirichlet 켤레 사전 (Beta 의 다차원 일반화)·1988 CBS 여론조사
+  $y = (727, 583, 137)$ 에서 $\theta_1 - \theta_2$ 의 사후 확률 > 99.9%·비정보 Dirichlet
+  선택과 사후 proper 조건, § 3.5 다변량 정규 $y \mid \mu, \Sigma \sim N(\mu, \Sigma)$ 의
+  켤레 사전·정밀도 행렬 가산 $\Lambda_n^{-1} = \Lambda_0^{-1} + n \Sigma^{-1}$·
+  조건부 부분 벡터의 회귀 형태 해석 (Part IV 선형 모형의 뿌리)·예측 분포,
+  § 3.6 미지 $(\mu, \Sigma)$ 의 Inverse-Wishart 켤레·4 하이퍼파라미터 갱신 공식·
+  $\mu$ 의 다변량 $t$ 주변·Jeffreys 비정보·Scaled Inverse-Wishart 와 LKJ 현대 대안까지
+  수식·직관·코드로 완결.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/20/2026
+---
+
+## 이 포스트의 위치 — Ch.3 심화의 두 번째 조각
+
+[§ 3.1~3.3 심화](./00-3-1-ch3-normal-marginalization.qmd) 가 단변량 정규의 공동 사후를 완전히 풀어냈다면, 이 포스트는 **같은 문법이 이산 다범주 (다항) 와 벡터 관측 (다변량 정규)** 에서 어떻게 작동하는지 심화한다. Part IV 회귀 모형의 수학적 뼈대가 여기 서 있다.
+
+::: {.callout-important}
+## § 3.4~3.6 의 한 줄 요약
+
+**"베이즈 켤레의 보편 구조 — 사후 = 사전 + 데이터 (정보량 가산) — 가 다항의 Dirichlet, 다변량 정규의 Inverse-Wishart 에서 정확히 같은 형태로 반복된다. 이 패턴이 Part IV 회귀 · Part V 비모수의 수학적 언어다."**
+
+다변량 정규의 **정밀도 행렬 가산** 은 모든 현대 계층 회귀·칼만 필터·가우시안 프로세스의 공통 엔진 (Gelman et al., 2013, Ch.3.4~3.6).
+:::
+
+---
+
+## § 3.4 다항 모델과 Dirichlet 사전
+
+### 이항의 다범주 일반화
+
+Ch.2 의 이항은 두 결과 ("성공/실패"). **다항 (multinomial)** 은 $k$ 개 결과.
+
+관측 $y = (y_1, \ldots, y_k)$, $y_j$ 는 $j$ 번째 범주 관측 수, $\sum_j y_j = n$.
+
+모수 $\theta = (\theta_1, \ldots, \theta_k)$, $\theta_j \geq 0$, $\sum_j \theta_j = 1$ — **단체 (simplex)** 위의 점.
+
+### 가능도
+
+$$
+p(y \mid \theta) = \frac{n!}{\prod_j y_j!} \prod_{j=1}^k \theta_j^{y_j} \propto \prod_{j=1}^k \theta_j^{y_j}
+$$
+
+$n$ 에 관한 다항 계수는 $\theta$ 와 무관 — 비례식에서 생략.
+
+### Dirichlet 켤레 사전
+
+Beta 의 다차원 일반화. 사전.
+
+$$
+p(\theta \mid \alpha) \propto \prod_{j=1}^k \theta_j^{\alpha_j - 1}, \quad \theta_j \geq 0, \sum_j \theta_j = 1
+$$
+
+하이퍼파라미터 벡터 $\alpha = (\alpha_1, \ldots, \alpha_k)$.
+
+### 사후
+
+가능도 × 사전.
+
+$$
+p(\theta \mid y) \propto \prod_{j=1}^k \theta_j^{y_j} \cdot \prod_{j=1}^k \theta_j^{\alpha_j - 1} = \prod_{j=1}^k \theta_j^{\alpha_j + y_j - 1}
+$$
+
+$$
+\theta \mid y \sim \text{Dirichlet}(\alpha_1 + y_1, \ldots, \alpha_k + y_k)
+$$
+
+**사후 = 사전 + 데이터** — 지수족 켤레의 보편 패턴.
+
+### 하이퍼파라미터의 가상 관측 해석
+
+Beta 에서 $(\alpha - 1, \beta - 1)$ 이 "가상 성공 · 실패" 였듯 — Dirichlet 에서 $\alpha_j - 1$ 이 **"범주 $j$ 의 가상 관측 수"**.
+
+$\alpha = (1, 1, \ldots, 1)$: 균등 (Laplace), 가상 관측 0
+$\alpha = (5, 3, 2)$: "범주 1 을 4 번, 범주 2 를 2 번, 범주 3 을 1 번 본 효과"
+$\alpha = (100, 100, \ldots, 100)$: 강정보, 각 범주 99 번 가상 관측
+
+### 비정보 Dirichlet 의 세 선택
+
+이항에서처럼 다항에서도 **여러 후보**.
+
+| 이름 | $\alpha_j$ | 해석 |
+|:---|:---:|:---|
+| Uniform (Laplace) | 1 | 단체 위 균등 |
+| Jeffreys | 1/2 | 불변 원리 |
+| Improper | 0 | $\log \theta_j$ 에 균등 |
+
+**Improper $\alpha_j = 0$** — 각 범주에 **최소 1 개 관측** 있어야 사후 proper. $y_j = 0$ 인 범주가 있으면 사후 발산.
+
+::: {.callout-tip}
+## 직관 — 이항 Beta(0, 0) 의 다차원 버전
+
+Ch.2.8 Haldane 사전 Beta(0, 0) 이 $y = 0$ 또는 $n$ 에서 improper 사후를 낳았듯, Dirichlet($0, \ldots, 0$) 은 어느 범주에서 관측이 0 이면 사후 발산. 범주 수가 많을수록 빈 범주 확률 증가 → **범주 많은 문제에서 Jeffreys 나 Laplace 선호**.
+:::
+
+### 1988 CBS 대선 여론조사 — 교재 상세 예제
+
+**데이터**. 1988년 10월 말 CBS News 미국 성인 1447 명 설문.
+
+| 범주 $j$ | 지지 후보 | $y_j$ |
+|:---:|:---|:---:|
+| 1 | George Bush | 727 |
+| 2 | Michael Dukakis | 583 |
+| 3 | 기타 / 무응답 | 137 |
+
+**모델**. 단순 무작위 표본 가정, $y \sim \text{Multinomial}(1447, (\theta_1, \theta_2, \theta_3))$.
+
+**사전**. 균등 Dirichlet(1, 1, 1).
+
+**사후**. $\theta \mid y \sim \text{Dirichlet}(728, 584, 138)$.
+
+**관심 추정량** — $\theta_1 - \theta_2$ (Bush 와 Dukakis 지지율 차이).
+
+### 파생량의 사후 — 시뮬레이션의 위력
+
+$\theta_1 - \theta_2$ 의 사후 분포는 닫힌 형태가 있지만 복잡. **시뮬레이션이 훨씬 간단**.
+
+1. $S = 1000$ 번 $(\theta_1, \theta_2, \theta_3) \sim \text{Dirichlet}(728, 584, 138)$
+2. 각 시뮬에서 $\theta_1^{(s)} - \theta_2^{(s)}$ 계산
+3. 히스토그램
+
+**결과** (교재 그림 3.2). 1000 시뮬 **모두** $\theta_1 > \theta_2$. 따라서
+
+$$
+\Pr(\theta_1 > \theta_2 \mid y) > 1 - 1/1000 = 0.999
+$$
+
+Bush 가 Dukakis 보다 지지율 높다는 사후 확률 **> 99.9%**.
+
+::: {.callout-tip}
+## 직관 — 다항 사후의 파생량은 시뮬로 자유롭게
+
+$\theta_1 - \theta_2$ 같은 차이, $\theta_1 / \theta_2$ 같은 비, "Bush 지지율 > 50%" 같은 확률 — **사후 시뮬 하나로 모든 파생량의 사후 분포** 를 얻는다. [§ 1.9](./00-1-3-ch1-computation-applied-exercises.qmd) 의 $S \times k$ 표 전략이 여기서 결정적 위력을 발휘.
+
+빈도주의라면 델타 방법·부트스트랩·붓스트랩 CI 등이 필요. 베이즈는 **같은 표** 에서 어떤 질문에도 답한다.
+:::
+
+### Dirichlet 의 주변 분포
+
+**$\theta_j$ 의 주변** — Dirichlet 의 중요한 성질.
+
+$$
+\theta_j \mid y \sim \text{Beta}(\alpha_j + y_j, \ (\alpha_0 + n) - (\alpha_j + y_j))
+$$
+
+여기서 $\alpha_0 = \sum_j \alpha_j$. 즉 **$j$ 번째 성분의 주변 = 단순 Beta** — "$j$ 범주 vs 나머지" 의 이항 관점.
+
+**부분 벡터의 주변** 도 Dirichlet 구조를 유지 — 계층 추론에 유용.
+
+### 실제 표본 설계의 복잡성
+
+교재의 단서.
+
+> "실제 CBS 조사는 독립 무작위 표본을 쓰지 않고 **층화 표본 (stratified sampling)** 의 변형을 사용한다. Ch.8.3 에서 표본 계획 지식을 이용한 개선된 분석을 다룬다." (교재)
+
+즉 단순 다항 모델은 **이상화** — 교재의 예제가 "방법론 시연" 이지 최종 결론이 아니다. Part II Ch.8 의 데이터 수집 모델링이 필요.
+
+### 복잡한 다항 문제 — 계층의 필요성
+
+범주 수 $k$ 가 크면 (예: 여러 설문 질문을 동시 분석) 모수 수도 폭증. 해결책.
+
+1. **정보적 사전** — Ch.5 계층 모형으로 범주 간 정보 공유
+2. **로그선형 모델** — Ch.16.7 에서 다항 모수에 구조 부여
+
+---
+
+## § 3.5 다변량 정규 (알려진 $\Sigma$)
+
+### 모델
+
+$d$-차원 관측 벡터 $y \sim N(\mu, \Sigma)$. $\mu \in \mathbb{R}^d$, $\Sigma$ — $d \times d$ 대칭 양정부호 공분산 행렬.
+
+가능도 (단일 관측).
+
+$$
+p(y \mid \mu, \Sigma) \propto |\Sigma|^{-1/2} \exp\left(-\frac{1}{2}(y - \mu)^\top \Sigma^{-1}(y - \mu)\right)
+$$
+
+iid $n$ 관측.
+
+$$
+p(y_1, \ldots, y_n \mid \mu, \Sigma) \propto |\Sigma|^{-n/2} \exp\left(-\frac{1}{2} \sum_{i=1}^n (y_i - \mu)^\top \Sigma^{-1}(y_i - \mu)\right) \tag{3.11}
+$$
+
+### 켤레 사전 (알려진 $\Sigma$)
+
+로그 가능도가 $\mu$ 에 대한 이차형식이므로 켤레는 **다변량 정규**.
+
+$$
+\mu \sim N(\mu_0, \Lambda_0)
+$$
+
+$\mu_0$ — 사전 평균 벡터, $\Lambda_0$ — 사전 공분산 행렬 ($d \times d$).
+
+### 사후 유도
+
+사전 × 가능도의 지수.
+
+$$
+-\frac{1}{2}\left[(\mu - \mu_0)^\top \Lambda_0^{-1}(\mu - \mu_0) + \sum_i (y_i - \mu)^\top \Sigma^{-1}(y_i - \mu)\right]
+$$
+
+$\mu$ 에 대한 이차 완성 (제곱 완성) 으로 정리.
+
+$$
+\mu \mid y, \Sigma \sim N(\mu_n, \Lambda_n)
+$$
+
+$$
+\mu_n = (\Lambda_0^{-1} + n\Sigma^{-1})^{-1}(\Lambda_0^{-1}\mu_0 + n\Sigma^{-1}\bar{y}), \quad \Lambda_n^{-1} = \Lambda_0^{-1} + n\Sigma^{-1} \tag{3.12}
+$$
+
+### 정밀도 행렬 가산
+
+**$\Lambda_n^{-1} = \Lambda_0^{-1} + n\Sigma^{-1}$** 이 핵심.
+
+- $\Lambda_0^{-1}$ — 사전 정밀도 행렬
+- $n\Sigma^{-1}$ — 데이터 정밀도 행렬 (표본 크기 × 관측 정밀도)
+- 합 = 사후 정밀도 행렬
+
+Ch.2.5 의 스칼라 정밀도 가산 $1/\tau_n^2 = 1/\tau_0^2 + n/\sigma^2$ 의 **행렬 버전**.
+
+::: {.callout-tip}
+## 직관 — 정밀도 행렬 가산의 기하
+
+행렬 $\Sigma^{-1}$ (정밀도) 은 "관측이 $\mu$ 에 대해 알려주는 정보의 **구조**" — 대각 요소는 각 성분의 정밀도, 비대각은 성분 간 상관 기반 결합 정보.
+
+두 독립 정보 (사전 + 데이터) 의 **정밀도가 행렬 덧셈으로 결합** 된다는 것은 — 같은 방향에서 같은 양의 정보를 제공하면 그 방향의 정밀도가 두 배, 다른 방향이면 각 방향에서 각각 증가.
+
+이 구조가 **칼만 필터** (시간 업데이트의 정밀도 누적), **가우시안 프로세스** (관측점마다 정밀도 누적), **Ridge 회귀** (정규화 강도가 사전 정밀도) 모두의 공통 엔진.
+:::
+
+### 사후 평균의 가중 평균 형태
+
+$\mu_n$ 을 $\bar{y}$ 와 $\mu_0$ 의 가중 평균으로 재표현.
+
+$$
+\mu_n = \Lambda_n(\Lambda_0^{-1}\mu_0 + n\Sigma^{-1}\bar{y}) = \Lambda_n\Lambda_0^{-1}\mu_0 + \Lambda_n \cdot n\Sigma^{-1}\bar{y}
+$$
+
+두 가중 행렬 $\Lambda_n\Lambda_0^{-1}$ 와 $\Lambda_n \cdot n\Sigma^{-1}$ 이 단위 행렬로 합쳐진다 (사후 평균은 사전과 표본 평균의 convex 조합 — Ch.2 의 shrinkage 일반화).
+
+### 부분 벡터의 조건부 사후 — 회귀의 원형
+
+$\mu = (\mu^{(1)}, \mu^{(2)})$ 로 분할. 다변량 정규의 조건부 공식.
+
+$$
+\mu^{(1)} \mid \mu^{(2)}, y \sim N(\mu_n^{(1)} + \beta^{1|2}(\mu^{(2)} - \mu_n^{(2)}), \Lambda^{1|2}) \tag{3.13}
+$$
+
+**회귀 계수**.
+
+$$
+\beta^{1|2} = \Lambda_n^{(12)} (\Lambda_n^{(22)})^{-1}
+$$
+
+**조건부 공분산**.
+
+$$
+\Lambda^{1|2} = \Lambda_n^{(11)} - \Lambda_n^{(12)} (\Lambda_n^{(22)})^{-1} \Lambda_n^{(21)}
+$$
+
+**Schur 보수 (complement)** 의 형태.
+
+::: {.callout-tip}
+## 직관 — "조건부 평균 = 회귀식" 은 우연이 아니다
+
+$\mu^{(1)} \mid \mu^{(2)}$ 의 평균이 $\mu^{(2)}$ 에 대한 **선형 함수** 라는 것이 정규 분포의 특징. 이것이 **선형 회귀의 수학적 근거** — Part IV Ch.14 에서 $(y, X)$ 를 공동 정규로 모델링하면 $y \mid X$ 의 평균이 자연스럽게 $X\beta$ 형태.
+
+베이즈 관점에서 — 다변량 정규 사후의 부분 벡터 조건부가 회귀 계수와 조건부 분산을 갖는다는 것이 Part IV 회귀·Part V 비모수 GP 의 **수학적 뿌리**.
+:::
+
+### 사후 예측 분포
+
+새 관측 $\tilde{y} \sim N(\mu, \Sigma)$ 의 주변 사후 예측.
+
+$$
+E(\tilde{y} \mid y) = \mu_n, \quad \text{var}(\tilde{y} \mid y) = \Sigma + \Lambda_n
+$$
+
+**예측 공분산 = 관측 $\Sigma$ + 평균 추정 $\Lambda_n$**. 단변량 $\sigma^2 + \tau_n^2$ 의 행렬 버전.
+
+### 비정보 사전
+
+$|\Lambda_0^{-1}| \to 0$ (모든 방향의 무한 사전 분산) 극한에서 $p(\mu) \propto 1$. 사후.
+
+$$
+\mu \mid \Sigma, y \sim N(\bar{y}, \Sigma/n)
+$$
+
+빈도주의 MLE 와 일치. Improper 하지만 proper 사후.
+
+---
+
+## § 3.6 다변량 정규 (미지 $\mu, \Sigma$)
+
+### Inverse-Wishart 사전
+
+단변량 $(\mu, \sigma^2)$ 의 $N\text{-Inv-}\chi^2$ 켤레가 다변량에서 **정규-Inverse-Wishart** 로 일반화.
+
+$$
+\Sigma \sim \text{Inv-Wishart}_{\nu_0}(\Lambda_0^{-1}), \quad \mu \mid \Sigma \sim N(\mu_0, \Sigma/\kappa_0)
+$$
+
+**하이퍼파라미터**.
+
+| 기호 | 의미 |
+|:---|:---|
+| $\mu_0$ | $\mu$ 의 사전 중심 |
+| $\kappa_0$ | $\mu$ 에 대한 사전 관측 수 |
+| $\nu_0$ | $\Sigma$ 의 사전 자유도 |
+| $\Lambda_0$ | $\Sigma$ 의 사전 스케일 행렬 |
+
+### 공동 사전의 밀도
+
+$$
+p(\mu, \Sigma) \propto |\Sigma|^{-((\nu_0 + d)/2 + 1)} \exp\left(-\frac{1}{2}\text{tr}(\Lambda_0 \Sigma^{-1}) - \frac{\kappa_0}{2}(\mu - \mu_0)^\top \Sigma^{-1}(\mu - \mu_0)\right)
+$$
+
+**Inverse-Wishart 부분** — $|\Sigma|^{-(\nu_0 + d + 1)/2} \exp(-\text{tr}(\Lambda_0 \Sigma^{-1})/2)$, 단변량 Inv-$\chi^2$ 의 행렬 버전.
+
+**$\mu \mid \Sigma$ 부분** — 조건부 정규.
+
+### 왜 $\mu$ 와 $\Sigma$ 가 독립이 아닌가
+
+§ 3.3 의 $N\text{-Inv-}\chi^2$ 와 동일한 이유 — **켤레성 보존** 을 위해 $\mu$ 의 사전 공분산이 $\Sigma$ 에 비례.
+
+$\mu \mid \Sigma \sim N(\mu_0, \Sigma/\kappa_0)$ 의 **$\Sigma/\kappa_0$** 이 "$\kappa_0$ 관측 가치" 의 사전 정보 — 단변량 $\sigma^2/\kappa_0$ 의 행렬 버전.
+
+### 사후 공동 분포
+
+$(\mu_0, \kappa_0, \nu_0, \Lambda_0) \to (\mu_n, \kappa_n, \nu_n, \Lambda_n)$ 의 갱신.
+
+$$
+\mu_n = \frac{\kappa_0}{\kappa_0 + n}\mu_0 + \frac{n}{\kappa_0 + n}\bar{y}
+$$
+
+$$
+\kappa_n = \kappa_0 + n, \quad \nu_n = \nu_0 + n
+$$
+
+$$
+\Lambda_n = \Lambda_0 + S + \frac{\kappa_0 n}{\kappa_0 + n}(\bar{y} - \mu_0)(\bar{y} - \mu_0)^\top
+$$
+
+여기서 **표본 제곱합 행렬**.
+
+$$
+S = \sum_{i=1}^n (y_i - \bar{y})(y_i - \bar{y})^\top
+$$
+
+**$\Lambda_n$ 의 세 항** — § 3.3 $\nu_n \sigma_n^2$ 의 3 항 분해와 구조 동일.
+
+1. $\Lambda_0$ — 사전 스케일
+2. $S$ — 표본 제곱합 ($d \times d$ 행렬)
+3. $\frac{\kappa_0 n}{\kappa_0 + n}(\bar{y} - \mu_0)(\bar{y} - \mu_0)^\top$ — 사전-데이터 평균 차이 항
+
+### 주변 사후 분포
+
+**$\Sigma$ 의 주변** — Inverse-Wishart.
+
+$$
+\Sigma \mid y \sim \text{Inv-Wishart}_{\nu_n}(\Lambda_n^{-1})
+$$
+
+**$\mu$ 의 주변** — 다변량 $t$.
+
+$$
+\mu \mid y \sim t_{\nu_n - d + 1}\left(\mu_n, \frac{\Lambda_n}{\kappa_n(\nu_n - d + 1)}\right)
+$$
+
+자유도 $\nu_n - d + 1$, 중심 $\mu_n$, 스케일 행렬 $\Lambda_n / (\kappa_n(\nu_n - d + 1))$. 단변량 $t_{n-1}$ 의 다변량 버전.
+
+### 공동 사후 표본 추출
+
+§ 3.1 의 패턴.
+
+1. $\Sigma \sim \text{Inv-Wishart}_{\nu_n}(\Lambda_n^{-1})$
+2. $\mu \mid \Sigma \sim N(\mu_n, \Sigma/\kappa_n)$
+
+$S$ 번 반복. 파생량 (예: 특정 조합 $c^\top \mu$, 상관 계수 $\Sigma_{12}/\sqrt{\Sigma_{11}\Sigma_{22}}$) 의 사후는 표본 후처리.
+
+### 사후 예측
+
+$$
+\tilde{y} \mid y \sim t_{\nu_n - d + 1}\left(\mu_n, \frac{\kappa_n + 1}{\kappa_n}\cdot\frac{\Lambda_n}{\nu_n - d + 1}\right)
+$$
+
+$\kappa_n + 1$ 계수가 새 관측의 추가 불확실성 반영 (단변량 $1 + 1/n$ 의 다변량 버전).
+
+### Jeffreys 비정보 사전
+
+다변량 Jeffreys.
+
+$$
+p(\mu, \Sigma) \propto |\Sigma|^{-(d+1)/2}
+$$
+
+이것은 $\kappa_0 \to 0, \nu_0 \to -1, |\Lambda_0| \to 0$ 의 극한. 사후.
+
+$$
+\Sigma \mid y \sim \text{Inv-Wishart}_{n-1}(S^{-1}), \quad \mu \mid \Sigma, y \sim N(\bar{y}, \Sigma/n)
+$$
+
+$\mu$ 의 주변 사후는 $t_{n-d}(\bar{y}, S/(n(n-d)))$.
+
+### Inverse-Wishart 의 문제점
+
+교재가 암묵적으로 지적하는 한계.
+
+- **대각 요소와 비대각 요소 (상관) 의 얽힘** — Inv-Wishart 는 전체 행렬에 대한 **단일 자유도**. 서로 다른 분산 스케일의 변수들에는 부적합
+- **상관이 0 근처에서의 bias** — 작은 표본에서 상관 추정이 0 에서 벗어나는 경향
+
+### Scaled Inverse-Wishart
+
+현대 실무의 개선.
+
+$$
+\Sigma = \text{Diag}(\xi) \, \Sigma_\eta \, \text{Diag}(\xi)
+$$
+
+- $\Sigma_\eta$ 는 Inverse-Wishart (주로 Inv-Wishart$_{d+1}(I)$ — **상관 행렬의 주변이 균등**)
+- $\xi$ 는 **스케일 벡터** 에 별도 약정보 사전
+
+이 분해가 **상관과 분산 스케일을 독립 모델링** — Ch.15 계층 회귀에서 varying-slope 모델의 random effect 공분산 추정에 표준.
+
+### LKJ 사전 — 최신 대안
+
+Lewandowski-Kurowicka-Joe (2009) 의 상관 행렬 사전.
+
+$$
+R \sim \text{LKJ}(\eta), \quad p(R) \propto |R|^{\eta - 1}
+$$
+
+- $\eta = 1$: 상관 행렬 공간 위 균등
+- $\eta > 1$: 단위 행렬 (상관 0) 쪽으로 집중
+- $\eta < 1$: 강한 상관 쪽으로 집중
+
+Stan · PyMC 등에서 계층 회귀 random effect 공분산의 **기본 권장**.
+
+::: {.callout-tip}
+## 직관 — 현대 베이즈 공분산 모델링의 진화
+
+**1970년대** — Inv-Wishart (Raiffa & Schlaifer 기본)
+**1990년대** — Jeffreys 다변량 ($|\Sigma|^{-(d+1)/2}$)
+**2000년대** — Scaled Inv-Wishart (Gelman & Hill)
+**2010년대** — LKJ + 스케일 별도 (Stan 표준)
+
+각 단계는 **Inv-Wishart 의 제약 완화** — 분산과 상관의 분리, 약정보 사전의 명시화, 확장성 개선. 현대 베이즈 계층 회귀는 거의 모두 LKJ + half-Cauchy 스케일 조합.
+:::
+
+---
+
+## 세 절의 구조적 통합
+
+| 절 | 이산/연속 | 모수 수 | 사전 | 사후 분포 |
+|:---:|:---:|:---:|:---|:---|
+| § 3.4 | 이산 다범주 | $k$ 개 비율 | Dirichlet | Dirichlet |
+| § 3.5 | 연속 $d$-차원 | $d$ 평균 ($\Sigma$ 고정) | 다변량 정규 | 다변량 정규 |
+| § 3.6 | 연속 $d$-차원 | $d + d(d+1)/2$ 모수 | 정규-Inv-Wishart | 다변량 $t$ (주변) |
+
+공통 — **"사후 하이퍼파라미터 = 사전 + 데이터"** 의 지수족 켤레 패턴. Ch.2 의 단변량 켤레가 벡터·행렬로 자연스럽게 확장.
+
+---
+
+## 빈도주의와의 대응
+
+| 질문 | 빈도주의 | 베이즈 (§ 3.4~3.6) |
+|:---|:---|:---|
+| 다항 비율 $\theta_j$ | 표본 비율 $y_j/n$ | Dirichlet 사후 |
+| 다항 차이 $\theta_1 - \theta_2$ | 델타 방법·붓스트랩 | Dirichlet 시뮬 |
+| 다변량 평균 $\mu$ | $\bar{y}$, $T^2$ 검정 | 다변량 $t$ 사후 |
+| 공분산 $\Sigma$ | 표본 공분산 $S/(n-1)$ | Inv-Wishart 사후 |
+| 상관 추론 | Fisher $z$ 변환 | 사후 표본 후처리 |
+
+**시뮬 하나로 모든 파생량** — 다변량에서 베이즈의 실용적 우월성이 더 명확.
+
+---
+
+## 코드 예제 — 1988 대선 Dirichlet 분석과 다변량 정규 시뮬
+
+### Step 1: 순수 Python — Dirichlet 시뮬로 $\theta_1 - \theta_2$ 사후
+
+```python
+import random
+
+random.seed(42)
+
+def sample_dirichlet(alpha):
+    # Gamma 비율로 Dirichlet 생성
+    gammas = [random.gammavariate(a, 1.0) for a in alpha]
+    total = sum(gammas)
+    return [g / total for g in gammas]
+
+# 1988 CBS 데이터
+y = [727, 583, 137]  # Bush, Dukakis, 기타
+alpha_prior = [1, 1, 1]  # 균등 Dirichlet(1, 1, 1)
+alpha_post = [a + yj for a, yj in zip(alpha_prior, y)]
+
+print(f"사후 Dirichlet 하이퍼파라미터: {alpha_post}")
+
+# 시뮬레이션
+S = 10000
+diffs = []
+bush_over_50 = 0
+for _ in range(S):
+    theta = sample_dirichlet(alpha_post)
+    diffs.append(theta[0] - theta[1])
+    if theta[0] > 0.5:
+        bush_over_50 += 1
+
+diffs.sort()
+mean_diff = sum(diffs) / S
+lo, hi = diffs[int(0.025 * S)], diffs[int(0.975 * S)]
+
+print(f"θ₁ - θ₂ 사후 평균: {mean_diff:.4f}")
+print(f"θ₁ - θ₂ 95% 구간: [{lo:.4f}, {hi:.4f}]")
+print(f"Pr(θ₁ > θ₂ | y) = {sum(1 for d in diffs if d > 0) / S:.4f}")
+print(f"Pr(θ₁ > 0.5 | y) = {bush_over_50 / S:.4f}")
+```
+
+**예상 출력** — $\theta_1 - \theta_2 \approx 0.1$ (Bush 10% 우세), 95% 구간이 0 을 포함하지 않음, $\Pr(\theta_1 > \theta_2)$ 실질적으로 1. **교재 결과 재현**.
+
+### Step 2: NumPy/scipy — 다변량 정규 Inv-Wishart 사후
+
+```python
+import numpy as np
+from scipy import stats
+
+np.random.seed(42)
+
+# 합성 데이터 — 3 변수, 50 관측
+n, d = 50, 3
+mu_true = np.array([1, 2, 3])
+Sigma_true = np.array([[2, 1, 0.5], [1, 3, 1], [0.5, 1, 2]])
+y = stats.multivariate_normal.rvs(mu_true, Sigma_true, size=n)
+
+# 표본 통계
+y_bar = y.mean(axis=0)
+S = (y - y_bar).T @ (y - y_bar)
+
+# 비정보 Jeffreys 극한: κ₀ = 0, ν₀ = -1, Λ₀ → 0
+# 사후: κ_n = n, ν_n = n - 1, μ_n = ȳ, Λ_n = S
+kappa_n, nu_n = n, n - 1
+mu_n = y_bar
+Lambda_n = S
+
+# 공동 사후 표본 — 1000 회
+S_samples = 1000
+mu_samples = np.zeros((S_samples, d))
+Sigma_samples = np.zeros((S_samples, d, d))
+
+for s in range(S_samples):
+    # Σ ~ Inv-Wishart_{ν_n}(Λ_n⁻¹) — scipy.stats.invwishart 사용
+    Sigma = stats.invwishart.rvs(df=nu_n, scale=Lambda_n)
+    mu = stats.multivariate_normal.rvs(mu_n, Sigma / kappa_n)
+    mu_samples[s] = mu
+    Sigma_samples[s] = Sigma
+
+# μ 주변 사후 — 각 성분의 95% 구간
+print(f"{'성분':<8} {'참값':<8} {'사후 평균':<12} {'95% 구간':<25}")
+for j in range(d):
+    lo, hi = np.percentile(mu_samples[:, j], [2.5, 97.5])
+    print(f"μ_{j+1:<6} {mu_true[j]:<8} {mu_samples[:, j].mean():<12.3f} [{lo:.3f}, {hi:.3f}]")
+
+# 상관 계수 ρ₁₂ = Σ₁₂ / √(Σ₁₁ Σ₂₂) 의 사후
+rho_12 = Sigma_samples[:, 0, 1] / np.sqrt(Sigma_samples[:, 0, 0] * Sigma_samples[:, 1, 1])
+rho_true = Sigma_true[0, 1] / np.sqrt(Sigma_true[0, 0] * Sigma_true[1, 1])
+lo, hi = np.percentile(rho_12, [2.5, 97.5])
+print(f"\nρ₁₂ 참값: {rho_true:.3f}")
+print(f"ρ₁₂ 사후 평균: {rho_12.mean():.3f}, 95% 구간: [{lo:.3f}, {hi:.3f}]")
+```
+
+**예상 관찰** — 참 $\mu, \Sigma$ 가 모두 사후 구간 내. 파생량 $\rho_{12}$ 도 시뮬에서 직접 계산 가능. **다변량 공동 사후의 시뮬레이션 기반 추론**.
+
+---
+
+## 관련 주제
+
+**Ch.3 의 다른 심화 포스트**
+
+- [Ch.3 개요](./00-3-ch3-multiparameter.qmd) — Ch.3 전체 훑기
+- [§ 3.1~3.3 심화](./00-3-1-ch3-normal-marginalization.qmd) — 주변화·정규 공동 사후
+- § 3.7~3.8 bioassay·요약 (작성 예정)
+
+**Ch.1~2 심화 (선행)**
+
+- [Ch.1 개요](./00-1-ch1-probability-inference.qmd) + [§ 1.1~1.4](./00-1-1-ch1-bayesian-process.qmd) · [§ 1.5~1.8](./00-1-2-ch1-probability-uncertainty.qmd) · [§ 1.9·1.10·1.12](./00-1-3-ch1-computation-applied-exercises.qmd)
+- [Ch.2 개요](./00-2-ch2-single-parameter.qmd) + [§ 2.1~2.4](./00-2-1-ch2-binomial-and-priors.qmd) · [§ 2.5~2.7](./00-2-2-ch2-normal-poisson-cancer.qmd) · [§ 2.8~2.11](./00-2-3-ch2-priors-exercises.qmd)
+
+**Part I~V 전체**
+
+- [Part I](./00-bayesian-part1-overview.qmd) · [Part II](./01-bayesian-part2-overview.qmd) · [Part III](./02-bayesian-part3-overview.qmd) · [Part IV](./03-bayesian-part4-overview.qmd) · [Part V](./04-bayesian-part5-overview.qmd)
+
+**빈도주의 대응**
+
+- [다변량 정규 · Hotelling](../55-common-families-overview.qmd)
+- [GLM 다항 로지스틱](../glm/04-3-multinomial-distribution.qmd) — 다항 모델의 GLM 관점
+- [Casella & Berger 다변량](../55-common-families-overview.qmd)
+
+---
+
+## 참고자료
+
+- Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.). CRC Press. Ch.3 (§ 3.4~3.6).
+- Raiffa, H., & Schlaifer, R. (1961). *Applied Statistical Decision Theory*. Harvard Business School.
+- Lewandowski, D., Kurowicka, D., & Joe, H. (2009). Generating random correlation matrices based on vines and extended onion method. *Journal of Multivariate Analysis*, 100(9), 1989–2001.
+- Barnard, J., McCulloch, R., & Meng, X.-L. (2000). Modeling covariance matrices in terms of standard deviations and correlations, with application to shrinkage. *Statistica Sinica*, 10(4), 1281–1311.
+- Gelman, A. (2006a). Prior distributions for variance parameters in hierarchical models. *Bayesian Analysis*, 1(3), 515–534.

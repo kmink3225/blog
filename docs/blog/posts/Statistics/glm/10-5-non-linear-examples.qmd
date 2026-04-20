@@ -1,0 +1,457 @@
+---
+title: "Non-Linear Parameters — Examples (McCullagh §11.5)"
+subtitle: "Bermuda 잔디 비료 반응면 · 살충제-상승제 복합모형 · 인슐린 혼합물 등효과선"
+description: |
+  McCullagh & Nelder (1989) §11.5 의 세 예제를 직관과 수식으로 함께 풀어낸다.
+  (1) 토양에 숨어 있는 비료 양 $\alpha_i$ 를 추정해 역선형 반응면을 적합하는 Bermuda 잔디 실험,
+  (2) 살충제의 역치 $\theta$ 와 상승제 포화 모수 $\delta$ 를 동시에 잡아내는 Morse-Mckinlay-Spurr 실험,
+  (3) 인슐린 유사체의 상대 효능 $\theta$ 를 $\log(x_1+\theta x_2)$ 로 추정하는 Darby-Ellis 실험을 다룬다.
+  각 예제에서 §11.4 의 선형화가 어떻게 구체적 보조 공변량으로 구현되는지, 프로파일 우도가 언제 비이차가 되는지,
+  표준오차가 왜 최종 반복에서 스케일되어야 하는지를 해석한다.
+categories:
+  - Statistics
+  - GLM
+  - Optimization
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — 세 예제를 하나로 꿰는 질문
+
+§11.2 부터 §11.4 까지 McCullagh & Nelder 는 "선형 예측자 바깥에 비선형 모수가 숨는 세 가지 통로" 를 순서대로 보였다.
+
+| 통로 | 모수 위치 | 대표 기법 |
+|---|---|---|
+| §11.2 | 분산 함수 $V(\mu;\zeta)$ | profile deviance · EQL |
+| §11.3 | 링크 함수 $g(\mu;\lambda)$ | Pregibon 선형화 · Box-Cox 링크 |
+| §11.4 | 공변량 $g(x;\theta)$ | Box-Tidwell 선형화 · 이중 IRLS |
+
+§11.5 는 이 이론을 **실제 데이터** 에 걸어 본다 (McCullagh & Nelder, 1989, §11.5). 세 예제는 겉으로는 농학·곤충학·약리학으로 서로 다르지만, 공통 질문은 하나다.
+
+> "적합해야 할 비선형 모수는 **공변량 안** 에 있다. 선형 예측자에 보조 공변량 하나를 추가해서 문제를 GLM 안으로 되돌릴 수 있는가?"
+
+답은 세 번 모두 '그렇다' 이지만, 데이터의 구조가 세 번 다르기 때문에 **같은 레시피가 어떻게 변주되는지** 가 공부 거리다.
+
+- Bermuda 잔디: 감마 오차 · 역수 링크 · 비선형 모수 **3개** ($\alpha_1, \alpha_2, \alpha_3$) 동시 추정
+- 살충제-상승제: 이항 오차 · 로짓 링크 · 비선형 모수 **2개** ($\theta, \delta$) 중 하나는 사실상 ill-determined
+- 인슐린 혼합: 정규 오차 · 항등 링크 · 비선형 모수 **1개** ($\theta$) 이지만 '혼합별 $\theta$' 확장으로 synergism 검정
+
+직관적으로 보면 세 실험은 같은 악기를 서로 다른 키로 연주하는 것과 같다. §11.4 의 선형화 공식 $\theta_1 = \theta_0 + \hat\gamma/\hat\beta$ 는 변하지 않지만, **어떤 보조 공변량을 넣을지** · **분산 행렬을 어떻게 재스케일할지** · **SE 를 어디서 신뢰할 수 없는지** 가 데이터에 따라 달라진다.
+
+## Bermuda 잔디 — 토양 속에 숨은 비료
+
+### 왜 '원점' 이 미지수인가
+
+Welch 외 (1963) 는 3요인 $4^3$ 요인 실험 (N, P, K, 각각 4 수준) 으로 해안 Bermuda 잔디의 수확량 $y$ (tons/acre) 를 측정했다. 원 데이터(Table 11.1) 는 0 수준 plot 의 수확량이 **이미 2 톤 내외** 라는 점을 보여 준다. 즉 비료를 전혀 주지 않아도 수확이 있다. 이유는 단순하다 — **토양에 이미 양분이 남아 있다**.
+
+표준적인 역다항식 반응면 (§7.3.3) 은 $\mu = \mu(x_1, x_2, x_3)$ 에서 $x_i$ 가 0 일 때 $\mu$ 가 정의되지 않거나 발산한다. 그러나 여기 데이터는 $x_i = 0$ 에서 유한한 수확을 낸다. Nelder (1966) 의 해법은 영점을 **데이터로부터 추정** 하는 것이다.
+
+$$
+\frac{1}{\mu} = \eta = \beta_0 + \beta_1 u_1 + \beta_2 u_2 + \beta_3 u_3, \qquad u_i = \frac{1}{x_i + \alpha_i}.
+$$
+
+여기서 $\alpha_i$ 는 토양에 이미 있는 $i$ 번째 양분의 유효량이다. $\alpha_i$ 를 알면 $u_i$ 를 만들어 역수 링크를 가진 감마 GLM 으로 풀린다 — 왜 감마인가? 수확량의 **비례 표준편차(CV)** 가 일정하다는 현장 경험 때문이다 (Ch.8).
+
+::: {.callout-tip}
+## 직관: $\alpha_i$ 는 "가상의 비료 보유량"
+
+만약 토양에 $\alpha_i$ 만큼의 양분이 이미 녹아 있다면, 실험자가 **추가로** $x_i$ 를 뿌렸을 때 식물이 체감하는 총량은 $x_i + \alpha_i$ 다. 역선형 반응면은 이 총량의 역수에 대해 선형이다. 문제는 토양의 기존 보유량이 현장에서 직접 측정되지 않는다는 것 — 따라서 데이터가 그 값을 "역추정" 한다.
+:::
+
+### §11.4 선형화의 구체화
+
+$\alpha_i$ 에 대한 편미분을 추가 공변량으로 삼는다.
+
+$$
+v_i = \frac{\partial u_i}{\partial \alpha_i} = -\frac{1}{(x_i + \alpha_i)^2} = -u_i^2.
+$$
+
+반복 $t$ 에서 현재 추정치 $a_i^{(t)}$ 로 $u_i, v_i$ 를 만들고, $\eta = \beta_0 + \sum \beta_i u_i + \sum \gamma_i v_i$ 를 감마 GLM 으로 적합한다. 그 다음
+
+$$
+\delta a_i = \frac{\hat\gamma_i}{\hat\beta_i} = \frac{c_i}{b_i}, \qquad a_i^{(t+1)} = a_i^{(t)} + \delta a_i
+$$
+
+로 갱신한다. $b_i$ 는 $u_i$ 의 계수, $c_i$ 는 $v_i$ 의 계수다.
+
+출발값은 데이터 탐색으로 정한다. 수확량의 역수를 N 주변부 · P 주변부 · K 주변부로 집계한 뒤 $u_i$ 에 대해 플롯을 그리고, $\alpha_i$ 를 몇 개 시도해서 가장 선형적으로 보이는 값을 고른다. 이렇게 얻은 출발점은
+
+$$a_1^{(0)} = 40, \quad a_2^{(0)} = 22, \quad a_3^{(0)} = 32.$$
+
+6 회 반복 후 수렴한 값은
+
+$$\hat\alpha_1 = 44.60, \quad \hat\alpha_2 = 15.56, \quad \hat\alpha_3 = 32.39$$
+
+이며, 57 자유도 상에서 편차(deviance) 0.1965 — 관측당 비례 표준편차로 환산하면 약 5.9% 다. Pearson $X^2 = 0.1986$ 과 거의 일치하는데, 이는 CV 가 작을 때 전형적으로 관찰되는 현상이다 (Ch.8).
+
+### 왜 SE 를 '마지막 반복에서 재스케일' 해야 하는가
+
+선형화 IRLS 의 최종 반복에서 $v_i$ 대신 $b_i v_i$ (즉, 보조 공변량에 최종 계수를 곱한 것) 을 쓰면, $\alpha_i$ 의 **점근 표준오차를 직접** 회귀 출력에서 읽을 수 있다. 이유는 다음과 같다.
+
+$v_i$ 자체로 회귀하면 회귀 계수는 $\hat\gamma_i = \hat\beta_i (\hat\alpha_i - \alpha_i^{(0)})$ 의 추정이다. 그런데 우리가 알고 싶은 것은 $\hat\alpha_i$ 의 분산이지 $\hat\gamma_i$ 의 분산이 아니다. $\hat\alpha_i = \hat\alpha_i^{(0)} + \hat\gamma_i/\hat\beta_i$ 에서 델타 방법으로 분산을 옮기면 $1/\hat\beta_i^2$ 만큼 곱해야 한다.
+
+이 스케일 조정을 **회귀 단계에서 미리 반영** 하는 트릭이 "$v_i \to b_i v_i$" 치환이다. 결과적으로 얻는 추정·표준오차는 다음과 같다.
+
+| 모수 | 추정치 | SE |
+|---|---|---|
+| $b_0$ (절편) | 0.0975 | 0.00963 |
+| $b_1$ (N 계수) | 13.5 | 1.35 |
+| $b_2$ (P 계수) | 0.701 | 0.457 |
+| $b_3$ (K 계수) | 1.336 | 0.956 |
+| $a_1$ (토양 N) | 44.6 | 4.18 |
+| $a_2$ (토양 P) | 15.6 | 8.44 |
+| $a_3$ (토양 K) | 32.4 | 19.1 |
+
+$a_i$ 와 $b_i$ 간 상관은 세 채널 모두 0.97 이상이다. 이는 **$\alpha_i$ 가 알려져 있다고 가정하면 $\beta_i$ 의 SE 가 4~6 배 줄어든다** 는 뜻 — 즉 토양 양분을 모르고 있기 때문에 비료 계수가 "풀려 있다". 토양 측정을 추가하면 실험 효율이 급상승한다는 현장 함의가 나온다.
+
+### 경고 — 정규 근사의 한계와 대안 모형 비교
+
+$\hat\alpha_2, \hat\alpha_3$ 의 표준오차는 **음수 값을 배제하지 못한다** (예: $\alpha_2 = 15.6 \pm 8.44$ 의 95% 구간은 $-1.0 \sim 32.2$ 를 포함). 그러나 $\alpha_i < 0$ 은 물리적으로 "토양이 양분을 뺏는다" 는 뜻이므로 불가능하다. 점근 정규성이 깨지고 있다는 신호이며, 여기서는 logit 혹은 log 변환 후 구간을 만드는 편이 안전하다.
+
+반응면의 **역선형성** 은 $u_i^2 = 1/(x_i + \alpha_i)^2$ 를 추가 항으로 넣어 검정한다. Deviance 는 0.1965 → 0.1938 로 **미미한 감소** — 자유도 3 에 대비해 유의하지 않다. 즉 2차 역다항식이 필요하지 않다.
+
+관측 (0, 3, 2) 의 수확 2.94 가 유일한 outlier 다. 적합값 2.43 과 꽤 차이가 난다. 현장 기록의 2.49 가 2.94 로 잘못 옮겨졌을 가능성이 의심되지만 제거해도 추정치에 큰 변화는 없다 (가장 영향이 큰 $b_2$ 가 조금 움직이는 정도).
+
+마지막으로, Nelder (1966) 가 보였듯 **2차 다항식 반응면(10 모수)** 은 **역선형 (7 모수)** 보다 적합이 나쁘다. 역선형 모형은 세 영양소에 대해 **가법적** 인 반면 다항식은 모든 2 요인 교호작용을 요구한다. 이는 "반응면에 미지 원점 1 개를 허용" 하는 것이 "교호작용 항 여러 개를 허용" 하는 것보다 **절약적** 이라는 교훈이다.
+
+## 살충제-상승제 — 역치와 포화를 동시에
+
+### 문제 설정
+
+Morse, Mckinlay, Spurr 는 메뚜기 *Melanoplus sanguinipes* 에 살충제 carbofuran ($z$) 과 상승제 piperonyl butoxide (PB, $x_2$) 를 조합 투여한다. 상승제는 살충제의 독성을 **증폭** 시키는 역할을 한다. 표본 크기 $m$, 사망 수 $y$ 의 데이터 15 조합 (Table 11.2).
+
+Hewlett (1969) 를 따라 로짓 링크 · 이항 오차로 시작한다.
+
+$$
+\eta = \alpha + \beta_1 x_1 + \frac{\beta_2 x_2}{\delta + x_2}, \qquad x_1 = \log z.
+$$
+
+상승제 항은 **쌍곡선(hyperbolic)** 형태다 — $x_2 \to \infty$ 에서 $\beta_2$ 로 수렴한다. 이는 "충분한 상승제가 있으면 그 효과가 포화된다" 는 약리학적 상식을 반영한다. 살충제의 기울기 $\beta_1$ 은 상승제 양에 무관하다고 가정한다 (뒤에서 검정한다).
+
+::: {.callout-note}
+## 직관: 쌍곡선이 포화 곡선인 이유
+
+$u = x_2/(\delta + x_2)$ 는 $x_2 = 0$ 에서 0, $x_2 = \delta$ 에서 $1/2$, $x_2 \to \infty$ 에서 1 로 가는 S 자 곡선이다. $\delta$ 는 "$u$ 가 절반에 도달하는 상승제 용량" 이다 — 작을수록 상승제가 적은 양으로도 빠르게 포화한다. 체감 경제학의 "한계 효용 체감" 과 수학적으로 동일하다.
+:::
+
+### 첫 모형의 실패 — 역치가 빠졌다
+
+$\delta$ 가 알려져 있으면 $u = x_2/(\delta + x_2)$ 를 한 공변량으로 넣어 평범한 GLM 이다. §11.4 를 따라 편미분 $\partial u/\partial \delta = -u^2/x_2$ 를 보조 공변량으로 추가한다. $\delta^{(0)} = 1$ 에서 출발해 4 회 반복으로 $\hat\delta = 1.763$ 에 수렴하지만 deviance 는 **53.34 / 11 d.f.** — 기준값 11 의 5 배에 달하는 심각한 과산포다.
+
+잔차를 살펴보면 **저용량 살충제** 에서 적합값이 관측치보다 훨씬 크다. 프로빗·cloglog 로 링크를 바꿔도 비슷하다. 이는 링크 문제가 아니라 **살충제의 로그 용량 자체가 적절하지 않다** 는 증거다. 구체적으로, 저용량에서 사망률이 모형 예측보다 훨씬 낮다는 것은 **역치 (threshold)** 존재를 시사한다 — 어느 수준 이하의 살충제는 사실상 무력하다.
+
+### 이중 비선형 모형
+
+역치 $\theta$ 를 새로 도입한다.
+
+$$
+\eta = \alpha + \beta_1 \log(z - \theta) + \frac{\beta_2 x_2}{\delta + x_2}.
+$$
+
+이제 비선형 모수가 두 개 — $\theta$ (역치)와 $\delta$ (포화) 다. 둘 다 공변량 안에 있으므로 §11.4 선형화를 **두 번** 쌓는다. 현재 값 $(\theta_0, \delta_0)$ 에서 Taylor 1차로
+
+$$
+\eta \doteq \alpha + \beta_1 \log(z - \theta_0) - \gamma_1 \frac{1}{z - \theta_0} + \beta_2 \frac{x_2}{\delta_0 + x_2} - \gamma_2 \frac{x_2}{(\delta_0 + x_2)^2}
+$$
+
+로 전개하고, $u_1 = \log(z - \theta_0)$, $v_1 = -1/(z - \theta_0)$, $u_2 = x_2/(\delta_0 + x_2)$, $v_2 = -x_2/(\delta_0 + x_2)^2$ 네 공변량으로 회귀한다. 갱신은
+
+$$\theta_1 = \theta_0 + \frac{\hat\gamma_1}{\hat\beta_1}, \qquad \delta_1 = \delta_0 + \frac{\hat\gamma_2}{\hat\beta_2}.$$
+
+출발점 $(\theta_0, \delta_0) = (1.5, 1.76)$ 에서 시작해 빠르게 수렴한다.
+
+| 모수 | 추정치 | SE | 주석 |
+|---|---|---|---|
+| $\alpha$ | $-2.896$ | 0.340 | 기준 log-odds |
+| $\beta_1$ | 1.345 | 0.143 | 살충제 log-dose 기울기 |
+| $\theta$ | 1.674 | 0.154 | 살충제 역치 |
+| $\beta_2$ | 1.708 | 0.241 | 상승제 포화 효과 |
+| $\delta$ | 2.061 | 1.49 | 상승제 반감점 (ill-determined) |
+
+Deviance 는 53.34 → **18.70 / 10 d.f.** 로 **거의 3 배 향상** 됐다. 동시에 $\beta_1$ 이 상승제 양에 따라 변하는지 검정하면 이제는 유의하지 않다 — 즉, 역치를 고려하지 않았을 때 "기울기가 변한다" 고 보였던 것은 사실 역치 편향이 기울기로 새어나간 것이다. 이는 **모형 명세의 편향이 어떻게 다른 모수의 '가짜 교호작용' 으로 위장하는지** 보여주는 교과서적 예시다.
+
+### $\delta$ 의 이상한 SE — 프로파일이 비이차인 경우
+
+$\delta = 2.061 \pm 1.49$ 의 95% 구간은 음수를 포함한다. 그러나 $\delta$ 는 반드시 양수여야 한다 (안 그러면 $x_2 = -\delta$ 에서 분모가 0 이 된다). 정규 근사가 깨지는 조짐이다.
+
+실제로 $\delta$ 를 고정한 채 deviance 를 플롯해 보면 **2 근방에서 비이차(non-quadratic)** 다. 이를 다루는 표준 처방은 $\sqrt{\delta}$ 스케일로 재모수화하는 것이다. $\sqrt\delta$ 스케일에서는 deviance 곡선이 훨씬 더 포물선에 가깝고, 신뢰구간도 여기서 계산해야 한다. 원래 스케일로 변환해 역매핑하면 비대칭 구간이 나온다.
+
+추가 검정으로 상승제 $x_2$ 의 각 수준에 **별도의 절편** 을 허용하는 모형(즉, 쌍곡선 가정을 버리고 각 수준이 자유롭게 움직이도록) 을 적합해 본다. deviance 감소가 **미미** 하다. 결론: 쌍곡선 포화 모형은 데이터와 일치하며, 기각할 이유가 없다.
+
+### 오즈 비율로의 해석
+
+| 처치 | 오즈 곱셈 인자 |
+|---|---|
+| 살충제 용량 **두 배** | $2^{\hat\beta_1} = 2^{1.345} = 2.54$ |
+| 상승제 **충분 용량** ($x_2 \to \infty$) | $\exp(\hat\beta_2) = \exp(1.708) = 5.52$ |
+| 상승제 **중간 용량** 19.5 단위 | $\exp(1.54) = 4.69$ |
+
+상승제-살충제 교호작용은 없다 — 이 곱셈 인자는 **상대 용량** 에 무관하게 작동한다. 실무적으로는 "살충제를 두 배 뿌리는 것" 과 "상승제를 충분히 뿌리는 것" 중 단가 대비 효율이 높은 쪽을 선택할 수 있는 근거다.
+
+## 인슐린 혼합 — 상대 효능과 등효과선
+
+### 약물 상승 효과와 등효과선
+
+두 약물이 **같은 반응** 을 유발할 때, 혼합 효과는 세 가지로 분류된다.
+
+| 관계 | 수학적 표현 |
+|---|---|
+| 가법적 (additive) | 약물 2 의 1 단위를 약물 1 의 $\theta$ 단위로 치환 가능 |
+| 양의 상승 (positive synergism) | 혼합 효과 > 개별 효과의 합 |
+| 음의 상승 (antagonism) | 혼합 효과 < 개별 효과의 합 |
+
+Darby 와 Ellis (1976) 는 고립 쥐 지방 세포에서 (3-³H) 포도당이 toluene 추출 지질로 전환되는 양 $y$ 을 측정했다. 두 약물은 (1) 표준 인슐린 ($x_1$), (2) A1-B29 suberoyl 인슐린 ($x_2$) — 후자는 전자의 합성 유사체다. 7 개 혼합 × 2 개 총용량 × 4 회 반복 = 56 관측치 (Table 11.4). 혼합 7 번은 $x_1 = 0$ (순수 약물 2) 이다.
+
+제안 모형은 **정규 오차 · 항등 링크** 의 GLM 이다.
+
+$$
+E(Y_{ijk}) = \alpha + \beta \log(x_{1ij} + \theta x_{2ij}),
+$$
+
+$i$ 는 혼합, $j$ 는 총용량, $k$ 는 반복 인덱스다.
+
+::: {.callout-tip}
+## 직관: $\theta$ 는 '상대 효능 환산 계수'
+
+$\theta$ 는 "약물 2 의 1 단위가 약물 1 기준으로 몇 단위의 효과를 내는가" 를 뜻한다. $\theta = 0$ 이면 약물 2 는 전혀 활성이 없고, $\theta = 1$ 이면 약물 1 과 동일 효능, $\theta > 1$ 이면 더 강한 효능이다. 가법 가정에서는 $\theta$ 가 혼합 비율에 무관해야 한다 — 혼합마다 $\theta$ 가 다르면 그것이 곧 **상승/길항** 의 증거다.
+:::
+
+### §11.4 선형화의 또 다른 변주
+
+$\theta_0$ 에서 Taylor 1차로
+
+$$
+\log(x_1 + \theta x_2) \doteq u + (\theta - \theta_0) v, \qquad u = \log(x_1 + \theta_0 x_2), \quad v = \frac{\partial u}{\partial \theta} = \frac{x_2}{x_1 + \theta_0 x_2}.
+$$
+
+이를 선형 예측자에 넣으면 $\alpha + \beta u + \gamma v$ — $\theta$ 갱신은 $\theta_1 = \theta_0 + \hat\gamma/\hat\beta$ 다 (§11.4 의 일반 공식 그대로).
+
+반복 수렴 후 결과:
+
+$$\hat\theta = 0.0461 \pm 0.0036, \qquad \text{deviance(= RSS)} = 244.0 / 53 \text{ d.f.}$$
+
+4 반복의 **replicate error** 는 154.8 / 42 d.f. = 3.686 (평균 제곱) 이다. 이를 "순수 오차 (pure error)" 로 삼아 F 검정:
+
+$$F(11, 42) = \frac{(244.0 - 154.8)/11}{3.686} = \frac{89.2/11}{3.686} = 2.20,$$
+
+5% 임계점 바로 위다. 즉 **모형 (11.2) 가 설명하지 못하는 체계적 편차** 가 약간 남아 있다.
+
+### 혼합별 $\theta$ 로 상승성 검정
+
+Darby-Ellis 의 핵심 질문은 "**$\theta$ 가 혼합마다 달라지는가**" 다. 각 혼합에 편미분 공변량을 따로 주는 확장 모형 (자유도 6 증가) 을 적합하면 deviance 는 244.0 → **194.6 / 48 d.f.** 로 떨어진다.
+
+$$F(6, 42) = \frac{(244.0 - 194.6)/6}{3.686} = \frac{49.4/6}{3.686} = 1.80,$$
+
+5% 에서 유의하지 않다. 즉 혼합별 $\theta$ 는 **공식적으로는** 필요 없다. 그러나 "괜찮은 적합" 은 아니다.
+
+잔차 분해를 해 보면 lack of fit 이 **거의 전부 혼합 1 (즉 $x_2 = 0$, 순수 약물 1)** 에 집중된다. 혼합 1 을 제외하고 적합하면
+
+$$\hat\theta = 0.0524, \quad \text{deviance} = 191.2 / 51 \text{ d.f.}, \quad F = \frac{36.4/9}{3.686} = \frac{4.04}{3.686} \approx 1.1,$$
+
+이제 잔차 평균 제곱이 replicate error 와 거의 같아졌다. 즉 **혼합 1 만 빼면 모형 (11.2) 가 완벽히 적합** 한다.
+
+### ANOVA 분해 — 무엇이 어디로 흡수되었는가
+
+Table 11.5 의 분해를 재구성하면
+
+| 성분 | S.S. | d.f. | m.s. |
+|---|---|---|---|
+| 전체 처치 | 906.6 | 13 | — |
+| 모형 (11.2) | 817.4 | 2 | 408.7 |
+| 혼합별 $\theta$ (상승 평가) | 49.4 | 5 | 9.88 |
+| 잔여 | 39.8 | 6 | 6.63 |
+| **대안 분해** | | | |
+| 혼합 1 제거 | 52.8 | 2 | 26.4 |
+| 잔여 | 36.4 | 9 | 4.04 |
+| 반복 내 (pure error) | 154.8 | 42 | 3.686 |
+
+결론:
+
+- 약물 2 의 1 단위는 **혼합비 1:1.85 이상** 에서는 약물 1 의 0.052 단위와 등가다 ($\hat\theta = 0.0524$).
+- 그러나 약물 2 가 없을 때 ($x_2 = 0$) 예측값은 12.9, 19.8 인데 실측은 14.5, 24.0 — **약물 1 단독 사용 시 모형이 예측하는 것보다 반응이 크다**.
+- 이는 순수 약물 1 이 혼합에서 작동하는 "상대 효능" 과 **다른 메커니즘** 으로 작동함을 시사한다. 두 약물이 공유하는 수용체 외에 약물 1 만의 독자적 경로가 있을 수 있다.
+
+::: {.callout-important}
+## 왜 "혼합 1 을 제거" 하는가
+
+혼합 1 은 $x_2 = 0$ 이므로 **$\theta$ 가 계수에 아예 들어가지 않는다**. 즉 $\theta$ 에 관한 정보를 전혀 제공하지 못하는 관측치다. 그러나 $\alpha, \beta$ 에는 강한 영향을 준다. 모형이 이 지점에서 계통적으로 벗어나면 $\alpha, \beta$ 가 왜곡되고, 그 왜곡이 다른 혼합의 $\theta$ 추정에도 간접적으로 영향을 미친다. 제거는 정당한 모형 정제이지 데이터 조작이 아니다.
+:::
+
+## 세 예제의 교훈 — 같은 레시피, 다른 맥락
+
+### 보조 공변량 카탈로그
+
+| 예제 | 모수 위치 | 보조 공변량 $v = \partial g/\partial \theta$ |
+|---|---|---|
+| Bermuda | $u_i = 1/(x_i + \alpha_i)$ | $-u_i^2$ |
+| 살충제 | $\log(z - \theta)$ | $-1/(z-\theta)$ |
+| 살충제 상승 | $x_2/(\delta + x_2)$ | $-x_2/(\delta+x_2)^2$ |
+| 인슐린 | $\log(x_1 + \theta x_2)$ | $x_2/(x_1+\theta x_2)$ |
+
+세 예제의 공식은 모두 § 11.4 의 일반 공식 $\theta_1 = \theta_0 + \hat\gamma/\hat\beta$ 로 수렴한다. 보조 공변량만 계산하면 나머지는 GLM 이 알아서 해 준다.
+
+### 프로파일 우도의 비이차성
+
+**Wald SE 를 신뢰할 수 없는 신호**:
+
+1. 추정치 $\pm 2$ SE 구간이 **물리적으로 불가능한 영역** 을 포함한다 (예: $\alpha_i < 0$, $\delta < 0$).
+2. 프로파일 deviance 곡선이 **비대칭** 이다.
+3. 재모수화 (예: $\sqrt\delta$ 또는 $\log\delta$) 후 곡선이 훨씬 이차에 가까워진다.
+
+이 신호들이 보이면 Wald 구간 대신 **프로파일 우도 구간** 을 계산해야 한다. McCullagh-Nelder 는 $\delta$ 사례에서 $\sqrt\delta$ 스케일을 권한다.
+
+### 편향의 위장 (Confounded Bias)
+
+살충제 예제의 핵심 교훈은 다음과 같다.
+
+- 원래 모형에서 "$\beta_1$ 이 상승제 수준에 따라 변한다" 는 현상이 deviance 를 절반 가까이 줄였다.
+- 역치 $\theta$ 를 추가하자 그 '교호작용' 이 **사라졌다**.
+- 즉 진짜 원인은 역치인데 이를 누락하자 편향이 **가짜 교호작용** 으로 새어 나왔다.
+
+이 패턴은 비선형 모형에서 흔히 발생한다. 수치 안정성이 나빠 수렴이 느려지거나, 잔차가 특정 공변량 값에서 계통적으로 치우친다면 **선형 예측자 안쪽** 에 비선형 모수가 숨어 있지는 않은지 점검해야 한다.
+
+## Python 구현 — Bermuda 잔디의 반복 적합
+
+GLM 소프트웨어 (statsmodels) 는 $u_i, v_i$ 를 **수동으로 제공** 하기만 하면 감마 GLM 을 풀 수 있다. 비선형 루프는 파이썬 레벨에서 구현한다.
+
+### Step 1: 순수 Numpy 로 이중 루프 구현
+
+```python
+import numpy as np
+import statsmodels.api as sm
+from itertools import product
+
+# Welch 외 (1963) 데이터 — 4^3 factorial
+levels_N = [0, 100, 200, 400]
+levels_P = [0, 22, 44, 88]
+levels_K = [0, 42, 84, 168]
+
+# Table 11.1 의 수확량 (N, P 고정 · K 0..3 순)
+yields = np.array([
+    [1.98, 2.13, 2.19, 1.97],
+    [2.38, 2.24, 2.10, 2.60],
+    [2.18, 2.56, 2.22, 2.47],
+    [2.22, 2.47, 2.94, 2.48],
+    [3.88, 3.91, 3.66, 4.07],
+    [4.35, 4.59, 4.47, 4.55],
+    [4.14, 4.36, 4.55, 4.35],
+    [4.26, 4.72, 4.83, 4.85],
+    [4.40, 4.91, 5.10, 5.23],
+    [5.01, 5.64, 5.68, 5.60],
+    [4.77, 5.69, 5.80, 6.07],
+    [5.17, 5.45, 5.85, 6.43],
+    [4.43, 5.31, 5.15, 5.87],
+    [4.95, 6.27, 6.49, 6.54],
+    [5.22, 6.27, 6.35, 6.72],
+    [5.66, 6.24, 7.11, 7.32],
+])
+
+# 설계 벡터 구성
+design = [(N, P, K, yields[i*4 + p, k])
+          for i, N in enumerate(levels_N)
+          for p, P in enumerate(levels_P)
+          for k, K in enumerate(levels_K)]
+X1 = np.array([d[0] for d in design], dtype=float)
+X2 = np.array([d[1] for d in design], dtype=float)
+X3 = np.array([d[2] for d in design], dtype=float)
+y  = np.array([d[3] for d in design])
+
+# 출발값 (주변부 역수 플롯에서 얻음)
+a = np.array([40.0, 22.0, 32.0])
+
+for iteration in range(10):
+    u1, u2, u3 = 1/(X1 + a[0]), 1/(X2 + a[1]), 1/(X3 + a[2])
+    v1, v2, v3 = -u1**2, -u2**2, -u3**2
+
+    # 감마 GLM · 역수 링크 · u·v 모두 설계행렬에 투입
+    X = np.column_stack([np.ones_like(u1), u1, u2, u3, v1, v2, v3])
+    fam = sm.families.Gamma(link=sm.families.links.inverse_power())
+    res = sm.GLM(y, X, family=fam).fit()
+
+    b = res.params[1:4]           # u_i 계수
+    c = res.params[4:7]           # v_i 계수
+    delta_a = c / b
+    a_new = a + delta_a
+
+    print(f"iter {iteration}: a = {a_new}, deviance = {res.deviance:.4f}")
+    if np.max(np.abs(delta_a)) < 1e-4:
+        break
+    a = a_new
+```
+
+**수렴 관찰 지점**:
+
+- 처음 2 회 반복에서 $a$ 가 크게 움직이고, 이후 수렴한다.
+- Deviance 가 각 반복마다 **단조 감소** 하지 않을 수 있다 — 2 차 근사라 overshoot 이 발생할 수 있다. 필요하면 step-halving (스텝 크기 $1/2$ 으로 축소) 을 도입한다.
+
+### Step 2: 최종 반복에서 SE 재스케일
+
+$\alpha_i$ 의 SE 를 직접 읽으려면 $v_i \to b_i v_i$ 치환을 한 **추가 한 번** 의 반복을 돈다.
+
+```python
+# 최종 iteration: v_i -> b_i * v_i 로 치환 후 한 번 더
+u1, u2, u3 = 1/(X1 + a[0]), 1/(X2 + a[1]), 1/(X3 + a[2])
+v1, v2, v3 = -u1**2, -u2**2, -u3**2
+
+X_rescaled = np.column_stack([
+    np.ones_like(u1), u1, u2, u3,
+    b[0]*v1, b[1]*v2, b[2]*v3,
+])
+res_final = sm.GLM(y, X_rescaled, family=fam).fit()
+
+# 새 설계에서 v_i 의 계수 = alpha_i 의 보정량이 직접 나오며, SE 도 함께 나온다
+print(res_final.summary())
+```
+
+출력의 5~7 번째 열 SE 가 $\hat\alpha_i$ 의 점근 SE 다.
+
+### Step 3: 프로파일 deviance 플롯으로 정규 근사 점검
+
+$\alpha_2$ 가 음수를 포함한 Wald 구간이 나왔으므로, **프로파일** 로 확인한다.
+
+```python
+import matplotlib.pyplot as plt
+
+def profile_deviance_for_alpha2(a2_grid, a1_fixed, a3_fixed):
+    devs = []
+    for a2 in a2_grid:
+        u1 = 1/(X1 + a1_fixed)
+        u2 = 1/(X2 + a2)
+        u3 = 1/(X3 + a3_fixed)
+        X = np.column_stack([np.ones_like(u1), u1, u2, u3])
+        res = sm.GLM(y, X, family=fam).fit()
+        devs.append(res.deviance)
+    return np.array(devs)
+
+a2_grid = np.linspace(1, 40, 40)
+devs = profile_deviance_for_alpha2(a2_grid, 44.6, 32.4)
+plt.plot(a2_grid, devs)
+plt.axhline(devs.min() + 3.84, ls='--', color='gray')  # 95% 경계
+plt.xlabel(r'$\alpha_2$ (soil P)')
+plt.ylabel('profile deviance')
+plt.show()
+```
+
+곡선이 포물선에서 크게 벗어나면 Wald 구간 대신 **deviance 차이 3.84 (chi² 1 자유도 95%)** 경계로 신뢰구간을 잡는다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Non-Linear Parameters in the Covariates — Box-Tidwell 선형화 (McCullagh §11.4)](./10-4-non-linear-parameters-in-covariates.qmd)
+- [Parameters in the Link Function — Pregibon · Box-Cox 링크 (McCullagh §11.3)](./10-3-parameters-in-link-function.qmd)
+- [Parameters in the Variance Function — 음이항 $k$ · profile likelihood (McCullagh §11.2)](./10-2-parameters-in-variance-function.qmd)
+- [Models with Additional Non-Linear Parameters — 개관 (McCullagh Ch.11)](./10-1-non-linear-parameters-overview.qmd)
+
+**직접 관련 — 같은 기법의 이전 응용**
+
+- [Gamma GLM Examples — 자동차 보험·혈액 응고·강수량·초파리 발생률 (McCullagh §8.4)](./07-4-gamma-examples.qmd) — 감마 분포 · 역수/로그 링크의 실무 응용
+- [이항 반응 모형 — 링크 함수·모수 해석 (McCullagh §4.3)](./03-3-models-binary-responses.qmd) — 로짓 · probit · cloglog 비교 (살충제 예제의 링크 선택 맥락)
+- [Dependent Observations — GEE 연결 (McCullagh §9.3)](./08-3-quasi-likelihood-dependent.qmd) — 반복 측정 구조에서의 비선형 확장
+
+**후속 주제**
+
+- [Model Checking — 스코어 검정·레버리지·영향력 (McCullagh Ch.12)](./11-1-model-checking-overview.qmd) — 비선형 모수 포함 모형의 진단 전략
+- [Models for Survival Data — 비례 위험·가속 고장 시간 (McCullagh Ch.13)](./12-1-survival-overview.qmd) — 다른 유형의 비선형 시간 구조

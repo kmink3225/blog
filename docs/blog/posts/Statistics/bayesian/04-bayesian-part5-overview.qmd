@@ -1,0 +1,503 @@
+---
+title: "Part V: Nonlinear and Nonparametric Models — 파라미터 회귀 너머의 베이즈"
+subtitle: "Gelman BDA Ch.19~23 개관 — 비선형·스플라인·GP·혼합·Dirichlet Process"
+description: |
+  Gelman et al. *Bayesian Data Analysis* (3rd ed., 2013) 의 Part V 다섯 장을 한 장으로 조망한다.
+  Ch.19 매개 비선형 모델(약동학·serial dilution), Ch.20 기저 함수·스플라인 회귀,
+  Ch.21 Gaussian Process 와 공분산 함수 설계, Ch.22 유한 혼합 모형과 라벨 스위칭,
+  Ch.23 Dirichlet Process 와 무한 혼합까지, 함수 자체가 사전분포의 대상이 되는
+  비모수 베이즈 프레임워크를 수식·직관·응용 예제와 함께 정리한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/20/2026
+---
+
+## Part IV 에서 Part V 로 — "파라미터의 수" 가 바뀌는 순간
+
+[Part IV](./03-bayesian-part4-overview.qmd) 의 회귀 모형은 **파라미터의 수가 고정** 된 모델이다. 선형 회귀의 $\beta \in \mathbb{R}^k$, 계층 모형의 $\alpha_j$ 모두 $k$·$J$ 가 사전에 결정된다. Part V 는 이 전제를 깬다.
+
+::: {.callout-important}
+## Part V 의 한 줄 요약
+
+**"함수 $\mu(x)$·분포 $F$ 자체를 확률 변수로 보고 사전분포를 부여하는 베이즈 비모수 — 파라미터 수가 데이터와 함께 커지거나, 무한히 많거나, 구조가 고정되지 않는 모델들을 한 프레임워크에서 다룬다."**
+
+Part III 의 MCMC·VI 엔진과 Part IV 의 계층 모형 아이디어를 끝까지 밀어붙였을 때 도달하는 지점이다 (Gelman et al., 2013, Ch.19~23).
+:::
+
+Part V 의 구성은 다음과 같다.
+
+| 장 | 핵심 질문 | 한 줄 역할 |
+|:---:|:---|:---|
+| Ch.19 | **파라미터 수는 고정인데 비선형인 경우** | 약동학·serial dilution 등 문제 특화적 모델 |
+| Ch.20 | **함수를 기저 함수 가중합으로 표현한다면** | B-spline·shrinkage·변수 선택 |
+| Ch.21 | **함수에 직접 사전분포를 부여한다면** | Gaussian Process·공분산 함수 |
+| Ch.22 | **관측값이 여러 하위 모집단에서 오면** | 유한 혼합·라벨 스위칭·EM |
+| Ch.23 | **모집단 수가 미지라면** | Dirichlet Process·stick-breaking·CRP |
+
+각 장을 **왜 필요한가 → 모델 수식 → 직관 → 계산·응용** 순서로 정리한다. 상세 구현과 데이터 예제는 후속 포스트에서 다룬다.
+
+---
+
+## Ch.19 Parametric Nonlinear Models — "선형으로 안 될 때"
+
+### 왜 비선형인가
+
+[GLM](../glm/01-3-glm-components.qmd) 은 $g(E[y]) = X\beta$ 라는 "선형 예측자의 링크 변환" 구조를 유지한다. 그러나 현실의 많은 과학 모델은 **파라미터가 본질적으로 비선형으로 결합** 한다.
+
+$$
+E[y_i] = \mu(X_i, \phi)
+$$
+
+$\mu$ 가 $\phi$ 에 대해 비선형. GLM 의 변환 트릭으로는 해소되지 않는다.
+
+### 대표 예제 — 약동학 (Pharmacokinetics)
+
+약물이 체내에서 어떻게 흡수·분포·소거되는지를 기술하는 구획 모델 (compartmental model). 단순 1-구획 정맥주사 모델.
+
+$$
+C(t) = \frac{D}{V} e^{-k_e t}
+$$
+
+$D$: 투여량, $V$: 분포용적, $k_e$: 소거 속도 상수. **파라미터 $(V, k_e)$** 는 지수의 속도와 초기값에 동시에 얽혀 있어 선형화가 불가능하다.
+
+### Serial Dilution Assay
+
+생화학 실험에서 농도 측정을 위해 표준 곡선을 비선형으로 적합한다. 4-parameter logistic.
+
+$$
+y_i = a + \frac{b - a}{1 + (x_i / c)^d} + \epsilon_i
+$$
+
+$a, b$ 는 플래토(하한·상한), $c$ 는 중간 농도, $d$ 는 경사. **광학 측정의 포화 현상** 을 자연스럽게 표현한다.
+
+### 계층적 비선형
+
+96웰 플레이트 실험에서 플레이트 간 변동과 시료 간 변동이 공존하면 **파라미터의 계층 구조** 로 확장.
+
+$$
+\phi_{jk} \mid \mu_\phi, \Sigma_\phi \sim N(\mu_\phi, \Sigma_\phi)
+$$
+
+Part IV Ch.15 의 계층 회귀 아이디어를 비선형에 접목 — 그룹별 독립 추정보다 정보 공유가 많아지고, 풀 데이터 추정보다 그룹 특수성이 유지된다.
+
+::: {.callout-tip}
+## 직관 — 비선형 모델은 "표준 메뉴가 없다"
+
+GLM·계층 회귀는 책의 템플릿을 따르면 된다. 비선형 모델은 **문제별로 물리·생화학 원리를 수식화** 해야 하고, 초기값·재매개변수화·식별성이 모두 문제별로 달라진다. 이 장이 추천하는 유일한 "일반 원칙" 은 **(1) 모델 구축 · (2) 사후 계산 · (3) 점검** 의 세 단계를 **문제 맥락에 맞게 특수화** 하라는 것이다.
+:::
+
+### 계산 — 초기값 · 외부 검증
+
+- **초기값**: 비선형 모드는 여러 개일 수 있어, 사전 지식 기반의 합리적 시작점이 중요하다. 빈도주의 NLS (nonlinear least squares) 적합의 MLE 를 초기값으로 쓰는 것이 표준.
+- **외부 검증 (external validation)**: 교차검증 이상으로, **모집단 수준 예측을 외부 데이터셋** 에서 확인. Part II Ch.7 의 확장판.
+
+---
+
+## Ch.20 Basis Function Models — "함수를 기저 함수의 가중합으로 쓴다"
+
+### 왜 기저 함수인가
+
+회귀 함수 $\mu(x)$ 의 형태를 모를 때, 미리 정해진 **기저 함수 $\{b_h(x)\}$** 의 선형 결합으로 근사한다.
+
+$$
+\mu(x) = \sum_{h=1}^{H} \beta_h b_h(x)
+$$
+
+**파라미터에 대해 선형** 이므로 Part IV Ch.14 의 선형 회귀 장치를 그대로 쓸 수 있다 — 켤레 사전, QR 분해, 닫힌 형태 사후. 기저 함수의 "비선형성" 이 전체 함수를 유연하게 만든다.
+
+### 대표 기저 함수
+
+**B-spline**. 구간별 연속 다항식. 매듭 (knot) $t_1 < t_2 < \cdots < t_m$ 으로 정의되며, 3차 B-spline 이 실무 표준. 매듭 위치와 개수가 유연성을 제어한다.
+
+**Gaussian radial basis**.
+$$
+b_h(x) = \exp\left(-\frac{(x - c_h)^2}{2 \sigma_h^2}\right)
+$$
+각 기저가 중심 $c_h$ 주변의 bump. 고차원 확장이 자연스럽다.
+
+### Shrinkage 사전 — 유연성과 안정성의 균형
+
+매듭이 많으면 유연하지만 과적합 위험이 커진다. 해결책 — **계수 $\beta_h$ 에 shrinkage 사전**.
+
+$$
+\beta_h \sim N(0, \kappa^{-1} \sigma^2)
+$$
+
+$\kappa$ 가 크면 계수가 0 쪽으로 수축 — 불필요한 기저가 "꺼진다". Part IV 의 Ridge 가 정확히 같은 구조다.
+
+### 변수 선택 혼합 사전
+
+유연성을 더 강하게 제어하고 싶다면 **점 질량 + 정규 혼합**.
+
+$$
+\beta_h \sim \pi_h \delta_0 + (1 - \pi_h) N(0, \kappa^{-1} \sigma^2)
+$$
+
+$\pi_h$ 확률로 $\beta_h = 0$ (기저가 꺼짐), 나머지 확률로 shrunken 정규. 베이즈 변수 선택의 전형적 형태. MCMC 로 모델 공간 $\{0, 1\}^H$ 를 탐색하고, 평균화로 모델 불확실성까지 반영된다.
+
+::: {.callout-tip}
+## 직관 — 스플라인 + shrinkage = "자동 선형-비선형 전환"
+
+데이터가 선형이면 shrinkage 가 모든 기저 계수를 0 에 가깝게 눌러 직선에 가까운 곡선이 된다. 데이터가 복잡하면 일부 계수가 살아나 곡선이 유연해진다. **분석가가 "선형으로 할까 곡선으로 할까" 를 고르지 않고 데이터가 결정하게** 한다.
+:::
+
+### 함수형 데이터 분석 (FDA) 과의 연결
+
+[FDA](../FDA/) 는 관측값 자체가 함수인 경우를 다룬다. 각 곡선을 기저 함수 전개로 표현하고 PCA·회귀를 수행. Ch.20 의 기저 함수 프레임이 FDA 의 기초 장치와 정확히 대응한다.
+
+---
+
+## Ch.21 Gaussian Process Models — "함수에 직접 사전분포"
+
+### 정의
+
+Gaussian Process (GP) 는 **임의의 유한 차원 주변 분포가 가우시안** 인 확률 과정이다. 평균 함수 $m(x)$ 와 공분산 함수 $k(x, x')$ 로 완전히 결정된다.
+
+$$
+\mu(\cdot) \sim GP(m(\cdot), k(\cdot, \cdot))
+$$
+
+임의의 유한 집합 $\{x_1, \ldots, x_n\}$ 에서의 함숫값 벡터 $\mu = (\mu(x_1), \ldots, \mu(x_n))^\top$ 가 다변량 정규.
+
+$$
+\mu \sim N(m, K), \quad K_{ij} = k(x_i, x_j)
+$$
+
+### 기저 함수 모델과의 관계
+
+**무한 기저 함수 극한** 과 동치. 계수 $\beta_h \sim N(0, \Sigma_\beta)$ 인 기저 함수 모델에서 $H \to \infty$ 로 보내면 GP 가 나온다. 공분산 함수 $k(x, x')$ 는 기저들의 "연속 합" 으로 해석된다.
+
+### 대표 공분산 — Squared Exponential
+
+$$
+k(x, x') = \tau^2 \exp\left(-\frac{\|x - x'\|^2}{2 \ell^2}\right)
+$$
+
+$\tau$ 는 출력 스케일 (함수 진폭), $\ell$ 은 **길이 스케일** (함수의 매끄러움). $\ell$ 이 크면 천천히 변하는 함수, 작으면 거칠게 변하는 함수.
+
+::: {.callout-tip}
+## 직관 — GP 는 "가까운 점은 비슷한 값" 을 확률로 표현
+
+$k(x, x')$ 가 크다는 것은 $\mu(x)$ 와 $\mu(x')$ 의 사후 상관이 강하다는 것. 가까운 입력에서의 함숫값이 비슷하다는 사전 신념을 **공분산 함수 모양 하나로** 인코딩. 데이터가 쌓이면 **관측점 근처에서 함수 불확실성이 줄고**, 멀어지면 사전 분포로 돌아간다. 회귀 예측의 불확실성이 점마다 다른 이유가 여기 있다.
+:::
+
+### 조건부 켤레성
+
+가우시안 관측 모델 $y_i = \mu(x_i) + \epsilon_i, \ \epsilon_i \sim N(0, \sigma^2)$ 하에서 GP 는 **조건부 켤레**. 사후 평균·공분산이 닫힌 형태.
+
+$$
+\begin{aligned}
+E[\mu(x^*) \mid y] &= m(x^*) + K_*^\top (K + \sigma^2 I)^{-1} (y - m) \\
+V[\mu(x^*) \mid y] &= k(x^*, x^*) - K_*^\top (K + \sigma^2 I)^{-1} K_*
+\end{aligned}
+$$
+
+여기서 $K_{*j} = k(x^*, x_j)$. **주된 계산 비용은 $(K + \sigma^2 I)^{-1}$ 의 $O(n^3)$** — 대규모 데이터에서는 희소 근사·기저 근사가 필수.
+
+### 비가우시안 관측 — 잠재 GP 모델
+
+관측이 이항·계수면 잠재 GP 로 우회.
+
+$$
+y_i \mid \mu(x_i) \sim p(y_i \mid g^{-1}(\mu(x_i))), \quad \mu(\cdot) \sim GP
+$$
+
+$g$ 는 링크 함수. Part IV Ch.16 의 GLM 구조와 결합되며, 분류·계수 회귀·생존 분석 등으로 확장.
+
+### 응용 — 생일 데이터의 5-컴포넌트 GP
+
+Gelman 은 40 년 치 미국 일별 출생 데이터를 **5 개 GP 의 합** 으로 분해.
+
+1. **장기 추세** (수십 년 주기, 큰 $\ell$)
+2. **연간 계절 패턴** (주기 GP, 주기 = 1년)
+3. **주간 준주기** (주기 = 7일)
+4. **특별일 효과** (지시 변수 + 짧은 $\ell$ GP)
+5. **단기 변동** (작은 $\ell$)
+
+다양한 시간 스케일의 패턴을 **공분산 함수의 가법 분해** 로 동시 모델링. GP 의 유연성이 극적으로 드러나는 예제다.
+
+---
+
+## Ch.22 Finite Mixture Models — "관측값이 여러 하위 모집단에서 온다"
+
+### 모델 구조
+
+관측 $y_i$ 가 $H$ 개 성분 분포의 가중합에서 생성.
+
+$$
+p(y_i \mid \theta, \lambda) = \sum_{h=1}^{H} \lambda_h f(y_i \mid \theta_h)
+$$
+
+$\lambda_h \geq 0, \ \sum_h \lambda_h = 1$ 은 혼합 비율. **잠재 지시 변수** $z_i \in \{1, \ldots, H\}$ 를 도입하면
+
+$$
+z_i \mid \lambda \sim \text{Categorical}(\lambda), \quad y_i \mid z_i = h, \theta \sim f(y_i \mid \theta_h)
+$$
+
+**적분 소거 전후의 동치성** 이 Gibbs 표본추출을 단순화한다 — $z_i$ 를 도입하면 조건부 분포가 각각 디리클레·성분별 독립 회귀가 된다.
+
+### 라벨 스위칭 (label switching)
+
+$(\theta_1, \theta_2)$ 와 $(\theta_2, \theta_1)$ 은 사후 밀도가 같다 — **모델이 성분 라벨에 대해 비식별** 이다. MCMC 가 두 모드 사이를 왕복하면 사후 평균이 무의미해진다.
+
+**해결책**:
+- 사전분포에 순서 제약: $\theta_1 < \theta_2 < \cdots$
+- 정보적 사전분포로 성분에 의미 부여 (예: "고 활성 성분" 을 주는 사전 정보)
+- 사후 후처리: 각 샘플을 특정 기준 (예: 성분 평균 순서) 으로 재정렬
+
+### 성분 수 $H$ 의 결정
+
+- **사후 예측 점검**: 다른 $H$ 값으로 적합하고 PPC 를 비교
+- **정보 기준**: WAIC · LOO-CV (Part II Ch.7)
+- **베이즈 변수 선택**: $H$ 를 파라미터로 두고 가역 점프 MCMC
+
+### 혼합의 두 해석
+
+::: {.callout-note}
+## 해석 1: 실제 하위 모집단
+
+혼합 성분이 생물학적·사회학적 실체를 나타낸다 — "조현병 환자의 주의력 결핍 여부에 따른 반응시간 분포". 이 경우 성분별 파라미터 해석이 중요하고, 라벨 스위칭 해결이 필수다.
+
+## 해석 2: 유연한 밀도 추정 도구
+
+비정규 · 다중 모드 분포를 근사하기 위해 혼합을 "통계적 도구" 로 사용. 성분별 해석보다 전체 밀도의 적합도가 중요. **클러스터 추론에 과도하게 의존하지 말라** 는 Gelman 의 경고가 여기 붙는다.
+:::
+
+### 연속 혼합과의 연결
+
+$t$ 분포 = 정규의 분산 혼합 (Part IV Ch.17), 음이항 = 포아송의 모수 혼합. 유한 혼합이 연속 혼합의 이산 근사라는 관점이 [robust 모형](./03-bayesian-part4-overview.qmd) 과 혼합 모형을 연결한다.
+
+---
+
+## Ch.23 Dirichlet Process Models — "성분 수 자체를 데이터가 결정"
+
+### 왜 DP 인가
+
+Ch.22 의 한계 — $H$ 를 분석가가 미리 정해야 한다. **Dirichlet Process (DP)** 는 이를 뛰어넘는다.
+
+### 정의
+
+DP 는 **분포 위의 분포** 다. 기저 측도 $P_0$ 와 정밀도 $\alpha > 0$ 로 매개변수화.
+
+$$
+P \sim DP(\alpha, P_0)
+$$
+
+임의의 가측 분할 $(B_1, \ldots, B_k)$ 에 대해
+
+$$
+(P(B_1), \ldots, P(B_k)) \sim \text{Dirichlet}(\alpha P_0(B_1), \ldots, \alpha P_0(B_k))
+$$
+
+즉 어떤 분할로 잘라도 확률 벡터가 디리클레를 따른다.
+
+### Stick-breaking 구성
+
+DP 의 실현을 직접 만들 수 있다.
+
+$$
+P(\cdot) = \sum_{h=1}^{\infty} \pi_h \delta_{\theta_h}(\cdot)
+$$
+
+$$
+\pi_h = V_h \prod_{l < h} (1 - V_l), \quad V_h \sim \text{Beta}(1, \alpha), \quad \theta_h \sim P_0
+$$
+
+::: {.callout-tip}
+## 직관 — Stick-breaking 은 "막대를 반복적으로 쪼개는" 이미지
+
+길이 1 의 막대를 $\text{Beta}(1, \alpha)$ 비율로 자르고, 자른 조각을 첫 성분의 가중치 $\pi_1$ 로 둔다. 남은 막대를 다시 같은 방식으로 자르고 $\pi_2$ 로 둔다. 무한 반복. **결과는 확률이 이산 값들에 집중된 분포** — 하지만 무한히 많은 이산 값. $\alpha$ 가 크면 많은 성분이 의미 있는 가중치를 가지고, 작으면 몇 개 성분에 집중된다.
+:::
+
+### DP 실현의 이산성 — DP Mixture 로 해결
+
+DP 에서 뽑힌 $P$ 는 이산 분포다. 연속 밀도 추정을 위해 **커널 혼합** 으로 감싼다.
+
+$$
+f(y \mid P) = \int K(y \mid \theta) \, dP(\theta)
+$$
+
+$K$ 는 커널 (예: 정규). $P \sim DP$ 이고 $K$ 가 연속이면 $f$ 는 연속 밀도. 이것이 **Dirichlet Process Mixture (DPM)** — 베이즈 비모수 밀도 추정의 표준.
+
+### Chinese Restaurant Process (CRP)
+
+$P$ 를 적분 소거하면 $\theta_i$ 의 조건부 분포가 Polya 항아리 구조.
+
+$$
+\theta_i \mid \theta_{1:i-1}, \alpha, P_0 \sim \frac{\alpha}{\alpha + i - 1} P_0 + \sum_{j=1}^{i-1} \frac{1}{\alpha + i - 1} \delta_{\theta_j}
+$$
+
+비유 — "$i$ 번째 손님은 이미 앉은 테이블 $j$ 에 $\frac{n_j}{\alpha + i - 1}$ 확률로 합류하고, $\frac{\alpha}{\alpha + i - 1}$ 확률로 새 테이블을 만든다". CRP 로 쉬운 Gibbs 구현이 가능해진다.
+
+### 성분 수의 자동 결정
+
+DPM 은 $H$ 를 고정하지 않는다. 데이터가 쌓이면 필요한 만큼 성분이 생기고, 필요 없는 성분은 가중치가 0 에 가까워진다. **"비모수" 의 의미는 "파라미터 없음" 이 아니라 "파라미터 수가 미지·무한"** 이다.
+
+### 계층적 DP (HDP)
+
+여러 그룹 (예: 문서 토픽 모델링의 문서별) 간 **성분을 공유** 하면서 그룹별 비율은 다르게. Topic model 의 LDA (Latent Dirichlet Allocation) 가 HDP 와 긴밀히 연결되어 있다.
+
+---
+
+## Part IV·V 의 전체 구조 — Gelman BDA 의 완성
+
+| Part | 초점 | 파라미터 차원 |
+|:---:|:---|:---|
+| I | 베이즈 언어·켤레·계층 | 저차원 (예시) |
+| II | 점검·비교·결정 사이클 | 모든 차원 |
+| III | 계산 엔진 (MCMC·VI) | 고차원 대응 |
+| IV | 회귀 모형 (파라미터 수 고정) | 수십~수천 |
+| V | **함수·분포 자체가 사전분포 대상** | 무한 (이론) · 데이터 적응적 (실제) |
+
+Part V 를 끝으로 Gelman BDA 는 완결된다. **기초 → 사이클 → 엔진 → 모델 → 비모수 확장** 의 5 막 구성이다.
+
+---
+
+## 빈도주의 대응 매핑
+
+| Part V 장 | 빈도주의 대응 | 차이점 |
+|:---|:---|:---|
+| Ch.19 비선형 | NLS · nlme | 계층적 구조와 불확실성 전파가 자연스러움 |
+| Ch.20 기저 함수 | GAM · penalized splines | 평활화 파라미터가 사전분포로 흡수됨 |
+| Ch.21 GP | kriging · kernel methods | 불확실성 정량화가 내장됨 |
+| Ch.22 혼합 | EM · k-means | 라벨 스위칭을 사후로 직접 다룸 |
+| Ch.23 DP | DPMM · CRP | 성분 수를 데이터가 결정 |
+
+비모수 베이즈 모델은 **딥러닝 시대에 다시 주목받고 있다** — GP 는 BO (Bayesian Optimization)·AutoML 의 핵심, DP/HDP 는 topic model·clustering 의 이론적 기반, 계층적 비선형은 약동학·제조 공정 최적화에서 여전히 표준이다.
+
+---
+
+## 코드 예제 — Gaussian Process Regression (Ch.21)
+
+1 차원 입력에서 GP 회귀의 사후 평균과 95% 신뢰 구간을 계산한다. Part III 의 MCMC 없이 **조건부 켤레 구조로 닫힌 형태** 계산이 가능하다.
+
+### Step 1: 순수 Python — 공분산 행렬 + 사후 공식
+
+```python
+import math
+import random
+
+random.seed(42)
+
+def squared_exp(x1, x2, tau=1.0, length=1.0):
+    return tau * tau * math.exp(-0.5 * (x1 - x2) ** 2 / length ** 2)
+
+def kernel_matrix(xs1, xs2, tau, length):
+    return [[squared_exp(a, b, tau, length) for b in xs2] for a in xs1]
+
+def add_diag(K, sigma2):
+    return [[K[i][j] + (sigma2 if i == j else 0.0) for j in range(len(K))] for i in range(len(K))]
+
+def matvec(A, v):
+    return [sum(A[i][j] * v[j] for j in range(len(v))) for i in range(len(A))]
+
+def solve_cholesky(A, b):
+    n = len(A)
+    L = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1):
+            s = sum(L[i][k] * L[j][k] for k in range(j))
+            if i == j:
+                L[i][j] = math.sqrt(max(A[i][i] - s, 1e-12))
+            else:
+                L[i][j] = (A[i][j] - s) / L[j][j]
+    y = [0.0] * n
+    for i in range(n):
+        y[i] = (b[i] - sum(L[i][k] * y[k] for k in range(i))) / L[i][i]
+    x = [0.0] * n
+    for i in reversed(range(n)):
+        x[i] = (y[i] - sum(L[k][i] * x[k] for k in range(i + 1, n))) / L[i][i]
+    return x
+
+x_train = [0.5, 1.2, 2.3, 3.5, 4.8, 6.0, 7.2]
+y_train = [math.sin(x) + random.gauss(0, 0.1) for x in x_train]
+x_test = [i * 0.2 for i in range(40)]
+
+tau, length, sigma2 = 1.0, 1.0, 0.01
+K = kernel_matrix(x_train, x_train, tau, length)
+K_noisy = add_diag(K, sigma2)
+K_star = kernel_matrix(x_test, x_train, tau, length)
+
+alpha = solve_cholesky(K_noisy, y_train)
+mean_post = [sum(K_star[i][j] * alpha[j] for j in range(len(y_train))) for i in range(len(x_test))]
+
+print("First 5 posterior mean predictions:")
+for i in range(5):
+    print(f"  x*={x_test[i]:.2f}, true sin={math.sin(x_test[i]):.3f}, GP mean={mean_post[i]:.3f}")
+```
+
+관측 영역 $[0.5, 7.2]$ 내부에서 GP 평균이 $\sin(x)$ 를 잘 복원하고, 경계 밖에서는 평균이 사전 분포 $m = 0$ 쪽으로 돌아간다. **GP 의 "데이터가 있는 곳 집중, 없는 곳 겸손"** 의 전형이다.
+
+### Step 2: PyMC — 완전 베이즈 (공분산 하이퍼파라미터 포함)
+
+```python
+import numpy as np
+import pymc as pm
+
+x_np = np.array(x_train)
+y_np = np.array(y_train)
+x_star_np = np.array(x_test)
+
+with pm.Model() as gp_model:
+    ell = pm.HalfCauchy("ell", beta=2.0)
+    tau = pm.HalfCauchy("tau", beta=2.0)
+    sigma = pm.HalfCauchy("sigma", beta=1.0)
+
+    cov = tau ** 2 * pm.gp.cov.ExpQuad(input_dim=1, ls=ell)
+    gp = pm.gp.Marginal(cov_func=cov)
+    _ = gp.marginal_likelihood("obs", X=x_np[:, None], y=y_np, noise=sigma)
+
+    trace = pm.sample(1000, tune=1000, chains=2, target_accept=0.9, random_seed=42)
+
+with gp_model:
+    f_star = gp.conditional("f_star", Xnew=x_star_np[:, None])
+    pred = pm.sample_posterior_predictive(trace, var_names=["f_star"], random_seed=42)
+
+print(pm.summary(trace, var_names=["ell", "tau", "sigma"]))
+```
+
+하이퍼파라미터 $\ell, \tau, \sigma$ 의 사후분포가 추출되고, 이에 따라 **예측 분포의 폭** (하이퍼파라미터 불확실성까지 포함) 이 Step 1 의 고정 커널 버전보다 넓어진다. 이것이 Part III~V 를 관통하는 "계층적 베이즈" 의 실무적 가치다.
+
+---
+
+## 관련 주제
+
+**베이즈 시리즈**
+
+- [Part I: Fundamentals of Bayesian Inference](./00-bayesian-part1-overview.qmd) — Gelman BDA Ch.1~5
+- [Part II: Fundamentals of Bayesian Data Analysis](./01-bayesian-part2-overview.qmd) — Gelman BDA Ch.6~9
+- [Part III: Advanced Computation](./02-bayesian-part3-overview.qmd) — Gelman BDA Ch.10~13
+- [Part IV: Regression Models](./03-bayesian-part4-overview.qmd) — Gelman BDA Ch.14~18
+
+**빈도주의 대응**
+
+- [GLM 비선형 모수](../glm/10-4-non-linear-parameters-in-covariates.qmd) — 비선형 회귀의 빈도주의 관점
+- [GLM 혼합 효과 연속형](../LDA/30-mixed-effects-continuous-overview.qmd) — 계층적 비선형의 기반
+- [FDA 폴더](../FDA/) — 기저 함수 확장의 함수형 데이터 분석 적용
+
+**계산 · 기초**
+
+- [EM 알고리즘](../103-em-algorithm.qmd) — 혼합 모형 적합의 고전 도구
+- [Monte Carlo Simulation](../36-monte-carlo-simulation.qmd) — Part III~V 의 기초
+
+**후속 주제 (Chapter detail)**
+
+- Ch.19 Parametric Nonlinear Models — 약동학·serial dilution 상세
+- Ch.20 Basis Function Models — B-spline · shrinkage 상세
+- Ch.21 Gaussian Process Models — 공분산 함수 설계와 생일 데이터 분해
+- Ch.22 Finite Mixture Models — 라벨 스위칭 해결·EM 상세
+- Ch.23 Dirichlet Process Models — stick-breaking·CRP·HDP 상세
+
+---
+
+## 참고자료
+
+- Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.). CRC Press. Part V (Ch.19~23).
+- Rasmussen, C. E., & Williams, C. K. I. (2006). *Gaussian Processes for Machine Learning*. MIT Press.
+- Wood, S. N. (2017). *Generalized Additive Models: An Introduction with R* (2nd ed.). Chapman & Hall/CRC.
+- Frühwirth-Schnatter, S. (2006). *Finite Mixture and Markov Switching Models*. Springer.
+- Ferguson, T. S. (1973). A Bayesian analysis of some nonparametric problems. *Annals of Statistics*, 1(2), 209–230.
+- Sethuraman, J. (1994). A constructive definition of Dirichlet priors. *Statistica Sinica*, 4, 639–650.
+- Teh, Y. W., Jordan, M. I., Beal, M. J., & Blei, D. M. (2006). Hierarchical Dirichlet processes. *Journal of the American Statistical Association*, 101(476), 1566–1581.
