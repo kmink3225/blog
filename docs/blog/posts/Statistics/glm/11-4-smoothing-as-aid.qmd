@@ -1,0 +1,312 @@
+---
+title: "Smoothing as an Aid to Informal Checks (McCullagh §12.4)"
+subtitle: "시각 진단의 밀도 편향·LOWESS·대역폭 선택·GLM 잔차 평활의 주의사항"
+description: |
+  McCullagh & Nelder (1989) §12.4 를 심화한다.
+  산점도의 **시각적 해석** 이 왜 어려운가 — 공변량 $x$ 의 밀도가 구간별로 달라지면
+  눈은 $y$ 범위 차이를 추세로 오인한다. 평활 곡선(LOWESS · kernel · spline) 이
+  이 밀도 편향을 어떻게 완화하는지, 대역폭(bandwidth) 선택의 편향-분산 트레이드오프가
+  진단에서 어떤 의미를 가지는지, 무작위 잔차에서도 평활이 그럴듯한 곡선을 내놓는
+  "환영(illusion)" 을 어떻게 감별할지, GLM 잔차에 평활을 적용할 때의 가중치·등정보 스케일
+  고려 사항까지를 직관과 수식으로 풀어낸다.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — 눈은 잔차 플롯을 공정하게 읽지 못한다
+
+Ch.12 의 비공식 진단은 **"패턴 없는 잔차" 가 좋은 모형을 의미한다** 는 원칙 위에 서 있다 (§12.2). 잔차를 공변량이나 적합값에 대해 플롯하고, 사람이 눈으로 패턴을 찾는다. 이 과정에서 세 가지 시각적 함정이 존재한다.
+
+1. **밀도 편향 (density bias)**: 어느 구간에 점이 많으면 $y$ 값의 **관측 범위** 가 자연히 넓어진다. 눈은 이것을 "그 구간의 분산이 크다" 또는 "거기서 평균이 기울어 있다" 로 오인한다.
+2. **무작위 패턴 인식**: 사람의 눈은 완전히 무작위한 점들에서도 **구조** 를 본다. 이것이 1 종 오류의 시각 버전이다.
+3. **스케일 편향**: 플롯의 축 스케일에 따라 같은 데이터가 극적으로 다르게 보인다.
+
+§12.4 는 이 세 함정 중 첫 번째(밀도 편향)를 완화하는 도구로 **평활(smoothing)** 을 제시한다. 핵심 발상은 단순하다 — 사람 눈이 적분할 수 없는 것을 **알고리즘이 대신 적분** 해 조건부 평균을 보여 준다.
+
+McCullagh-Nelder (1989, §12.4) 의 핵심 메시지는 두 가지다.
+
+1. **평활은 시각 진단을 도와주지만, 통계적 증거가 되지는 않는다**.
+2. **무작위 데이터에서도 평활은 그럴듯한 곡선을 낳을 수 있다** — 따라서 평활만으로 판단하지 말라.
+
+이 장에서는 이 두 원칙을 심화하고, LOWESS(Cleveland, 1979) 같은 구체 알고리즘의 작동 원리, 대역폭(bandwidth) 선택의 의미, GLM 잔차에 평활을 적용할 때의 특수 고려 사항을 다룬다.
+
+## 밀도 편향 — 왜 눈이 속는가
+
+### 시각적 착시의 구체적 구조
+
+공변량 $x$ 에 대해 관측치가 고르게 분포하지 않는다고 하자. 구간 $A$ 에는 100 개, 구간 $B$ 에는 10 개 점이 있다. 두 구간의 **조건부 평균과 분산이 정확히 같다** 고 가정하자 — 즉 모형이 옳다.
+
+- 구간 $A$ 에서 $y$ 값의 관측 범위: 약 $\pm 3\sigma$ (큰 표본이라 극값 관측).
+- 구간 $B$ 에서 $y$ 값의 관측 범위: 약 $\pm 1.6\sigma$ (작은 표본이라 극값 못 봄).
+
+산점도에서 $A$ 쪽이 **세로로 더 퍼진 구름** 처럼 보이고, $B$ 쪽은 **좁은 기둥** 처럼 보인다. 눈은 이를 "$x$ 에 따라 분산이 변한다" 또는 "$A$ 구간의 잔차 평균이 극단으로 끌린다" 로 해석한다. 하지만 이 모두는 **표본 크기의 인공물** 이다.
+
+::: {.callout-tip}
+## 직관: "범위 vs 평균" 혼동
+
+사람의 눈은 다음 두 가지를 잘 구별하지 못한다.
+
+- **범위 (range)**: 관측된 최댓값과 최솟값의 차. 표본 크기가 클수록 커진다.
+- **평균 또는 중앙값의 이동**: 분포 중심의 실제 이동.
+
+잔차 플롯에서 "여기가 부풀어 있다" 고 느낄 때 실제로 본 것은 대부분 범위 변화 (표본 밀도 효과) 이지, 평균 이동이 아니다. 평활은 **조건부 평균만 그려서** 범위를 제외한 정보를 분리해 준다.
+:::
+
+### 해결: 조건부 평균을 계산해서 보여 주기
+
+평활 곡선 $\widehat m(x)$ 는 정확히 "$x$ 에서의 조건부 평균" 을 데이터에서 추정해 그려 준다. 이것만 보면 밀도 편향이 사라진다 — $A$ 구간이든 $B$ 구간이든, 조건부 평균이 진짜 변하는 경우에만 곡선이 움직인다.
+
+## 평활 알고리즘 — LOWESS 를 중심으로
+
+### LOWESS (Cleveland, 1979) 의 정의
+
+**LOcally WEighted Scatterplot Smoothing** 또는 **LOESS** 로 불린다. 각 점 $x_0$ 에서의 평활값 $\widehat m(x_0)$ 을 다음 절차로 계산한다.
+
+1. $x_0$ 주변의 **이웃** $N(x_0)$ 를 결정한다. 대역폭 $h$ (또는 이웃 비율 $\alpha$) 로 조절.
+2. 이웃 각 점 $x_i \in N(x_0)$ 에 **거리 기반 가중치** $w_i = W(|x_i - x_0|/h)$ 를 부여한다. $W$ 는 보통 tricube: $W(u) = (1-u^3)^3$ for $|u| \leq 1$.
+3. 가중 **1 차 다항식** (또는 2 차) $y \sim \beta_0 + \beta_1 (x - x_0)$ 을 이웃에 적합한다.
+4. $\widehat m(x_0) = \widehat\beta_0$ — 적합한 다항식의 $x_0$ 값.
+
+각 $x_0$ 마다 이 국소 회귀를 돌리면 곡선이 만들어진다.
+
+### 왜 국소 다항식인가
+
+**상수 핵(kernel) 평활** (Nadaraya-Watson) 은 $\widehat m(x_0) = \sum w_i y_i / \sum w_i$ — 단순 가중 평균이다. 이는 경계 효과가 심하다: $x_0$ 이 데이터 끝에 있으면 이웃이 한쪽만 있어 평균이 편향된다.
+
+**1 차 다항식 LOWESS** 는 국소 선형 회귀로 경계 편향을 상당히 완화한다. 경계에서 기울기 정보가 살아 있어 외삽이 자연스럽다. 대부분의 실무 구현(R `loess`, `scipy.interpolate.lowess`) 이 1 차 또는 2 차를 쓰는 이유다.
+
+### 다른 평활기
+
+| 평활기 | 메커니즘 | 장단점 |
+|---|---|---|
+| **이동평균** | 고정 창 평균 | 직관적, 경계 편향 큼 |
+| **커널 (Nadaraya-Watson)** | 거리 가중 평균 | 부드러움 조절 쉬움, 경계 편향 |
+| **LOWESS** | 국소 가중 다항식 | 경계 강건, 1989년 이후 사실상 표준 |
+| **자연 스플라인** | 전역 부드러움 벌점화 | 수학적 깔끔, 대역폭 대신 $\lambda$ |
+| **B-spline** | 기저 함수 조합 | GAM 의 기반, 잘 구조화됨 |
+| **P-spline (Eilers-Marx)** | B-spline + 차이 벌점 | $\lambda$ 로 부드러움 제어 |
+
+McCullagh-Nelder 는 1989 년 저술이라 Cleveland (1979) 의 LOWESS 를 언급한다. 현대 실무에서는 GAM 의 평활 기저가 자주 쓰인다.
+
+## 대역폭 선택 — 편향-분산 트레이드오프
+
+### 이중 딜레마
+
+평활 정도를 조절하는 모수(대역폭 $h$, 스플라인 벌점 $\lambda$) 는 **편향-분산 트레이드오프** 위에 놓여 있다.
+
+- **좁은 대역폭** ($h \downarrow$): 국소 정보를 많이 사용 → **분산** 증가, 곡선이 들쭉날쭉.
+  - 장점: 편향 낮음 (실제 곡선을 가까이 따라감).
+  - 단점: 잡음을 곡선으로 과대 해석 가능.
+- **넓은 대역폭** ($h \uparrow$): 많은 이웃 평균 → **편향** 증가, 곡선이 밋밋.
+  - 장점: 잡음 평균화, 매끄러움.
+  - 단점: 진짜 구조를 놓침.
+
+::: {.callout-important}
+## 진단에서 대역폭의 역할
+
+모형 **적합** 에서는 대역폭을 교차검증으로 자동 선택하지만, **진단** 목적에서는 그게 늘 옳지는 않다.
+
+진단 질문은 "잔차에 구조가 있는가?" 이고, 이는 **넓은 구조** 를 찾는 질문이다. 좁은 대역폭으로 평활하면 **잡음의 국소 요동** 이 구조처럼 보여 오판한다. 진단에서는 **의도적으로 넓은 대역폭** 을 쓰는 편이 안전하다 — 넓은 대역폭에서도 드러나는 추세는 실제일 가능성이 높다.
+
+다만 실제 구조가 국소적 (특정 구간에만 있는 비선형) 이면 넓은 대역폭이 놓친다. 보수적 진단은 **여러 대역폭에서 같이 평활 곡선을 그려 비교** 하는 것이다.
+:::
+
+### 교차검증을 통한 대역폭 선택
+
+평활 자체의 최적 대역폭은 **Leave-One-Out 교차검증 (LOOCV)** 으로 선택한다.
+
+$$h^* = \arg\min_h \; \text{CV}(h), \qquad \text{CV}(h) = \frac{1}{n} \sum_{i=1}^n \left( y_i - \widehat m_{(-i)}(x_i; h) \right)^2.$$
+
+$\widehat m_{(-i)}$ 는 점 $i$ 를 제외하고 적합한 평활이다. LOWESS 계산에서는 영리한 공식으로 LOOCV 가 단일 적합에서 추출된다:
+
+$$\text{CV}(h) = \frac{1}{n} \sum_i \left( \frac{y_i - \widehat m(x_i; h)}{1 - H_{ii}(h)} \right)^2,$$
+
+$H_{ii}$ 는 평활 **햇 행렬** 의 대각 원소다 ($\widehat m = H y$ 근사).
+
+## McCullagh-Nelder 의 경고 — 평활은 환영을 낳는다
+
+### 무작위에서도 곡선이 만들어진다
+
+§12.4 는 다음 경고를 명시적으로 한다.
+
+> "평활 알고리즘은 **완전히 무작위한 점 구성에서도 설득력 있는 곡선** 을 낳을 수 있다."
+
+이 경고의 수학적 근거: 유한 표본에서 $x$ 를 따라 **우연한 국소 평균의 변동** 이 발생한다. 평활은 이 변동을 매끄럽게 이어 그럴듯한 곡선으로 만든다. 곡선이 그려졌다는 사실 자체는 **증거가 아니다**.
+
+### 평활을 신뢰할 수 있는지 판단하는 방법
+
+1. **신뢰 밴드 함께 그리기**: 평활 곡선에 점별 95% 신뢰 밴드를 얹는다. 밴드가 0 (또는 평행선) 을 가로지르면 통계적으로 유의한 추세가 없다.
+2. **대역폭 민감도 검사**: 여러 $h$ 에 대해 평활을 반복. 진짜 구조는 대역폭 변화에 **강건** 하다.
+3. **순열 검정 (permutation test)**: $y$ 를 $x$ 에 대해 무작위로 섞어 여러 번 평활을 그려 본다. 관측 곡선이 순열 곡선들과 구별되면 실제 구조가 있다.
+
+### 공식 검정과의 역할 분담
+
+평활은 **가설 생성** 도구다. "여기쯤에서 곡선이 휘는 것 같다" 는 가설이 세워지면, **공식 검정** (§12.3 의 스코어 검정, 채널 2 공변량 가족, 채널 3 링크 가족) 으로 확증한다. 평활만으로 결론 내리면 안 된다.
+
+## GLM 잔차를 평활할 때의 특수 고려 사항
+
+### 등정보 스케일에서 평활하기
+
+§12.6.1 에서 논의되듯, GLM 잔차 플롯의 가로축은 **등정보 스케일(constant-information scale)** 로 변환된 적합값을 쓴다.
+
+| 분포 | 등정보 스케일 |
+|---|---|
+| 정규 | $\widehat\mu$ |
+| 포아송 | $2\sqrt{\widehat\mu}$ |
+| 이항 | $2\arcsin\sqrt{\widehat\mu}$ |
+| 감마 | $2\log\widehat\mu$ |
+| 역가우시안 | $-2/\sqrt{\widehat\mu}$ |
+
+이 변환 후에 평활하면, 가로축의 **정보 단위** 가 균일해져 밀도 편향의 또 다른 원천(적합값 자체의 불균일 밀도)이 완화된다. 원래 $\widehat\mu$ 척도에서 평활하는 것보다 해석이 깔끔하다.
+
+### 가중 평활
+
+잔차의 **본질적 분산** 이 $x$ 에 따라 다른 경우 (예: 이항 GLM 에서 $\mu = 0.5$ 근방에 비해 $\mu \to 0, 1$ 에서 분산이 작아짐) 가중 평활이 필요하다.
+
+LOWESS 에 **관측 가중치** $w_i^{\text{obs}} = 1/\widehat{\text{var}}(r_i)$ 를 추가해 실제 정보량을 반영한다. 표준화 이탈도 잔차를 쓰면 대개 이 가중치는 상수 근처가 되어 추가 조정이 불필요하다 — 표준화가 이미 정보 균형을 맞춘다.
+
+### 이항 데이터의 함정
+
+§12.6.1 이 지적하듯, **이항 데이터에서는 잔차 플롯 자체가 구조적으로 경사진다**. 평활은 이 구조적 편향을 제거하지 못한다.
+
+대안: **부분 잔차 플롯** (partial residual plot) 또는 **추가 변수 플롯** 에 평활을 적용한다. 이들 플롯은 모형의 다른 공변량을 통제한 뒤 한 공변량의 효과를 보여 주므로, 이항이라도 정보가 남는다.
+
+Fowlkes (1987), Kay & Little (1987) 이 이진 데이터 전용 평활 진단을 다룬다.
+
+## Python 실전 — 포아송 GLM 진단에서의 LOWESS
+
+### 설정
+
+시뮬레이션 데이터에서 의도적으로 링크 misspecification (참 링크는 sqrt, 적합 링크는 log) 을 만들고, 잔차 플롯에 LOWESS 를 얹어 구조를 찾아 본다.
+
+```python
+import numpy as np
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+from statsmodels.nonparametric.smoothers_lowess import lowess
+
+np.random.seed(42)
+n = 500
+x = np.random.uniform(0.5, 4.0, n)
+
+# 참 모형: sqrt 링크, μ = (1 + 0.5x)^2
+eta_true = 1 + 0.5 * x
+mu_true = eta_true ** 2
+y = np.random.poisson(mu_true)
+
+# M_0: 로그 링크로 적합 (misspecified)
+X = sm.add_constant(x[:, None])
+m = sm.GLM(y, X, family=sm.families.Poisson(link=sm.families.links.log())).fit()
+
+# 잔차 계산
+mu_hat = m.fittedvalues
+r_D = m.resid_deviance  # 이탈도 잔차 (unstandardized)
+
+# 등정보 스케일: 포아송은 2*sqrt(μ)
+eta_plot = 2 * np.sqrt(mu_hat)
+
+# LOWESS 로 잔차 평활
+smooth = lowess(r_D, eta_plot, frac=0.3, return_sorted=True)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.scatter(eta_plot, r_D, alpha=0.3, s=10, label='deviance residuals')
+ax.plot(smooth[:, 0], smooth[:, 1], 'r-', lw=2, label='LOWESS (bandwidth 30%)')
+ax.axhline(0, ls='--', color='gray')
+ax.set_xlabel(r'Constant-information scale $2\sqrt{\hat\mu}$')
+ax.set_ylabel('Deviance residual')
+ax.set_title('링크 misspecification 이 평활 곡선으로 드러남')
+ax.legend()
+plt.show()
+```
+
+출력된 그림에서 평활 곡선이 **U 자 또는 역 U 자** 를 그리면 링크가 잘못됐다는 시각적 신호다. 위 시뮬레이션의 경우 로그 링크가 참 sqrt 링크보다 낮은 멱이므로 잔차에 상향 곡률이 나타난다.
+
+### 대역폭 민감도 검사
+
+```python
+frac_list = [0.1, 0.2, 0.3, 0.5, 0.8]
+fig, axes = plt.subplots(1, len(frac_list), figsize=(15, 3), sharey=True)
+
+for ax, f in zip(axes, frac_list):
+    smooth = lowess(r_D, eta_plot, frac=f, return_sorted=True)
+    ax.scatter(eta_plot, r_D, alpha=0.2, s=5)
+    ax.plot(smooth[:, 0], smooth[:, 1], 'r-', lw=2)
+    ax.axhline(0, ls='--', color='gray')
+    ax.set_title(f'frac={f}')
+    ax.set_xlabel(r'$2\sqrt{\hat\mu}$')
+plt.tight_layout()
+plt.show()
+```
+
+좁은 대역폭(0.1)은 들쭉날쭉한 곡선을 그려 잡음까지 추세처럼 보이고, 넓은 대역폭(0.8)은 전반적 추세를 보여 준다. 진단에서는 **중간~넓은** 대역폭 (0.3~0.5) 에서 일관된 구조가 드러나는지 확인한다.
+
+### 순열 검정으로 환영 감별
+
+```python
+n_perm = 100
+perm_smooths = []
+for _ in range(n_perm):
+    y_perm = np.random.permutation(y)
+    m_perm = sm.GLM(y_perm, X, family=sm.families.Poisson(link=sm.families.links.log())).fit()
+    r_perm = m_perm.resid_deviance
+    eta_perm = 2 * np.sqrt(m_perm.fittedvalues)
+    sm_perm = lowess(r_perm, eta_perm, frac=0.3, return_sorted=True)
+    perm_smooths.append(sm_perm)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+# 순열 곡선 다수를 회색으로
+for sp in perm_smooths:
+    ax.plot(sp[:, 0], sp[:, 1], color='gray', alpha=0.2, lw=0.5)
+# 관측 곡선을 빨강으로
+obs_smooth = lowess(r_D, eta_plot, frac=0.3, return_sorted=True)
+ax.plot(obs_smooth[:, 0], obs_smooth[:, 1], 'r-', lw=2, label='관측')
+ax.axhline(0, ls='--', color='black')
+ax.set_xlabel(r'$2\sqrt{\hat\mu}$')
+ax.set_ylabel('Deviance residual')
+ax.legend()
+plt.show()
+```
+
+관측 곡선이 순열 곡선 띠에서 **명확히 벗어나면** 구조는 실제다. 겹치면 밀도 편향 또는 무작위일 가능성이 크다.
+
+## 요약 — 평활은 가설 생성, 검정은 별도
+
+McCullagh-Nelder §12.4 의 짧은 메시지를 한 문장으로 압축하면 다음이다.
+
+> "평활은 **시각 진단의 확대경** 이지 **현미경** 이 아니다. 의심 가는 방향을 확인해 주지만, 의심 자체를 정당화하지는 못한다."
+
+실무 체크리스트:
+
+1. **등정보 스케일** 에 대해 표준화 이탈도 잔차를 플롯한다.
+2. **중간~넓은 대역폭 LOWESS** 를 얹어 조건부 평균을 본다.
+3. 보이는 추세에 대해 **순열 검정** 또는 **신뢰 밴드** 로 환영 여부를 확인한다.
+4. 살아남은 추세를 **공식 검정** (§12.3 스코어 검정) 으로 확증한다.
+5. 확증되면 embedding 채널 2-4 (§12.2) 중 하나로 모형을 확장해 재적합한다.
+
+평활만으로 판단을 끝내면 **모형 수정의 이유 없는 남용** 또는 **놓친 구조의 안전한 착각** 두 실수 중 하나로 빠진다. 평활 → 공식 검정 → 모형 수정의 **체인** 을 유지하는 것이 관건이다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Techniques in Model Checking — 비공식·공식 분업 (McCullagh §12.2)](./11-2-techniques-in-model-checking.qmd)
+- [Score Tests for Extra Parameters — 1-step 트릭 (McCullagh §12.3)](./11-3-score-tests-for-extra-parameters.qmd)
+- [Model Checking — 개관 (McCullagh Ch.12)](./11-1-model-checking-overview.qmd)
+- [GLM 잔차의 세 유형 — Pearson·Anscombe·Deviance (McCullagh §2.4)](./01-5-glm-residuals.qmd)
+
+**관련 개념**
+
+- [일반화 가법 모형 (GAM)](../../Machine_Learning/gam.qmd) — 평활을 모형의 일부로 통합
+- [커널 밀도 추정과 Nadaraya-Watson](../57-common-families-continuous-uniform.qmd)
+- [비모수 회귀 개관 (Casella-Berger 후속 토픽)](../126-anova-regression-overview.qmd)
+
+**후속 주제**
+
+- [The Raw Materials of Model Checking — 잔차·햇·삭제잔차 (McCullagh §12.5)](./11-5-raw-materials-of-model-checking.qmd)
+- [Checks for Systematic Departure — 분산·링크·공변량 척도 (McCullagh §12.6)](./11-6-checks-for-systematic-departure.qmd) — 평활을 각 축 진단에 적용
+- [Checks for Isolated Departure (McCullagh §12.7)](./11-7-checks-for-isolated-departure.qmd)
