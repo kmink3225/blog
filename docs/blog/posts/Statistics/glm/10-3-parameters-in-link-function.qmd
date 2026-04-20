@@ -11,8 +11,6 @@ categories:
   - Regression
 author: Kwangmin Kim
 date: 04/19/2026
-execute:
-  eval: false
 ---
 
 ## 서론 — 왜 링크 모수를 추정하는가
@@ -495,28 +493,68 @@ abline(h = min(devs, na.rm = TRUE) + qchisq(0.95, 1), col = "red", lty = 2)
 ### Step 4: 이항 링크 가족 — logit vs cloglog 검정
 
 ```python
-# 단일 모수 가족: lambda = 1 로지스틱, lambda -> 0 cloglog
-from scipy.special import expit
+import numpy as np
+from scipy.optimize import minimize_scalar
 
 rng = np.random.default_rng(7)
 n = 500
 x = rng.normal(size=n)
-# cloglog 로 데이터 생성
+# cloglog 로 데이터 생성 (lambda* -> 0)
 eta_true = -0.5 + 0.8 * x
 pi_true = 1 - np.exp(-np.exp(eta_true))
 y = rng.binomial(1, pi_true)
 
-def link_family_logit_cloglog(pi, lam):
-    """lam=1: logit, lam->0: cloglog 한계."""
+def inv_link(eta, lam, eps=1e-10):
+    """lam-링크의 역함수.
+    lam=1: logit (pi = expit(eta)),
+    lam->0 한계: cloglog (pi = 1 - exp(-exp(eta))).
+    """
     if abs(lam) < 1e-8:
-        return np.log(-np.log(1 - pi + 1e-12))
-    return np.log(((1 / (1 - pi + 1e-12)) ** lam - 1) / lam)
+        return 1.0 - np.exp(-np.exp(eta))
+    # log[((1/(1-pi))^lam - 1)/lam] = eta
+    # → (1/(1-pi))^lam = 1 + lam * exp(eta)
+    base = np.maximum(1.0 + lam * np.exp(eta), eps)
+    return 1.0 - base ** (-1.0 / lam)
 
-# lambda 격자에서 profile deviance 를 스캔해 최적 링크 검출
-# (실제 구현은 custom link 로 binomial GLM 을 적합)
+def neg_loglik_lambda(lam, x, y, n_iter=40, tol=1e-8):
+    """lam 고정 → beta 를 IRLS 로 적합 → 이항 로그우도의 음수 반환."""
+    X = np.column_stack([np.ones(len(y)), x])
+    beta = np.zeros(2)
+    for _ in range(n_iter):
+        eta = X @ beta
+        pi = np.clip(inv_link(eta, lam), 1e-10, 1 - 1e-10)
+        # d pi / d eta: 수치 미분 (custom 링크 일반화)
+        h = 1e-5
+        dpi_deta = (inv_link(eta + h, lam) - inv_link(eta - h, lam)) / (2 * h)
+        dpi_deta = np.maximum(dpi_deta, 1e-12)
+        V = pi * (1 - pi)
+        w = dpi_deta ** 2 / V
+        z = eta + (y - pi) / dpi_deta
+        WX = X * w[:, None]
+        beta_new = np.linalg.solve(X.T @ WX, X.T @ (w * z))
+        if np.max(np.abs(beta_new - beta)) < tol:
+            beta = beta_new
+            break
+        beta = beta_new
+    pi = np.clip(inv_link(X @ beta, lam), 1e-10, 1 - 1e-10)
+    return -np.sum(y * np.log(pi) + (1 - y) * np.log(1 - pi))
+
+# 격자 탐색
+lams = np.linspace(0.01, 1.5, 30)
+nlls = np.array([neg_loglik_lambda(l, x, y) for l in lams])
+lam_hat_grid = lams[np.argmin(nlls)]
+
+# Brent 법으로 정밀화
+res = minimize_scalar(neg_loglik_lambda, bounds=(0.01, 1.5),
+                      args=(x, y), method='bounded',
+                      options={'xatol': 1e-4})
+lam_hat = res.x
+
+print(f"lambda_hat (grid)  = {lam_hat_grid:.3f}")
+print(f"lambda_hat (Brent) = {lam_hat:.3f}   (true -> 0: cloglog)")
 ```
 
-이 코드는 cloglog 로 생성한 데이터에서 $\hat\lambda \approx 0$ 을 회수하는 것이 목표.
+예상 출력: `lambda_hat` 이 0 근처로 수렴해 cloglog 가 데이터에 맞음을 보여준다. 로지스틱 ($\lambda = 1$) 과의 이탈도 차이를 $\chi^2_1$ 에 대입하면 goodness-of-link 검정이 완성된다. 이 골격은 단일 모수 이항 링크 가족 전반에 적용 가능하며, 수치 미분 부분을 해석 미분으로 바꾸면 속도가 크게 향상된다.
 
 ## 진단과 실무 가이드
 
