@@ -1,0 +1,497 @@
+---
+title: "Linear Mixed Models — 결핵균 assay 와 라틴 정방 설계 (McCullagh §14.2)"
+subtitle: "$\\log Y = \\alpha + \\gamma + \\tau + \\epsilon$ · ANOVA 분해 · $E(MS)$ 유도 · 짝 맞춤 설계의 직교 독립성"
+description: |
+  McCullagh & Nelder (1989) §14.2 를 심화한다. 결핵균 assay (Table 6.1) 의 4 × 4 라틴 정방
+  설계를 선형 혼합 모형 $\log Y_{ij(k)} = \alpha_i + \gamma_j + \tau_k + \epsilon_{ijk}$ 로
+  모형화. 네 요인 (부위·cow class·처치·오차) 중 무엇을 고정·무엇을 랜덤으로 할지의 **과학적
+  판단 기준**. 30 마리 cow 합계이므로 $\text{var}(\gamma_j) = \sigma_b^2/30$ 스케일 조정 필요성.
+  Table 14.1 ANOVA 분해의 각 줄 $E(MS)$ 유도 — cow class 가 $\sigma^2/30 + 4\sigma_b^2/30$
+  을 갖는 이유, sites/treatments 가 고정효과이므로 $\sum(\alpha_i - \bar\alpha)^2$ 항을
+  갖는 이유. Method of Moments 로 $\widetilde\sigma^2 = 0.0216$ (within-CV 15%),
+  $\widetilde\sigma_b^2 = 0.8821$ (between-CV 94%) 추정. 라틴 정방 직교성이 부여하는
+  **놀라운 결과**: 처치·부위 대조의 SE 가 $\sigma^2$ 만의 함수이고 $\sigma_b^2$ 에 무관.
+  추정 부위 효과 $\widehat\alpha = (0, 0.093, 0.128, -0.053)$ 과 SE $\widetilde\sigma/\sqrt{60} = 0.019$.
+  Python 재현과 함께 짝 맞춤 설계의 효율성을 수치로 확인한다.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — 왜 "짝 맞춤 (pairing)" 설계가 강력한가
+
+Ch.14 overview (13-1) 에서 결핵균 assay 의 **within-cow CV 15% vs between-cow CV 94%** 라는 극적 대비를 미리 언급했다. 이 글은 이 숫자가 **어떻게 유도되는지**, 그리고 이 설계가 **왜 효율적인지** 를 수학적으로 해부한다.
+
+핵심 질문:
+1. **네 요인** (부위 · cow class · 처치 · 오차) 중 무엇을 고정효과로, 무엇을 랜덤효과로?
+2. $\log Y = \alpha + \gamma + \tau + \epsilon$ 모형에서 각 성분의 분산이 무엇인가?
+3. Table 14.1 의 **$E(MS)$** 열은 어떻게 유도되는가?
+4. 처치 대조의 SE 가 왜 $\sigma^2$ 만의 함수이고 $\sigma_b^2$ 에 무관한가?
+
+이 질문 네 개의 답이 선형 혼합 모형 (Linear Mixed Models, LMM) 의 **기초 이론** 전체를 품는다. McCullagh-Nelder 는 결핵균 assay 를 **LMM 의 교본 예제** 로 선택했다.
+
+## 데이터와 설계
+
+### 결핵균 assay 의 임상적 맥락
+
+**목적**: 4 종 결핵균 희석액 (tuberculin type × volume) 의 감작 반응 강도 비교.
+
+**설계**:
+- **4 cow class** ($j = I, II, III, IV$) — 연령 · 품종으로 계층화된 젖소 그룹 (각 class 에 30 마리).
+- **4 부위** ($i = 1, 2, 3, 4$) — 한 cow 의 목 4 지점.
+- **4 처치** ($k = A, B, C, D$) — 4 종 결핵균 조합.
+- **$4 \times 4$ 라틴 정방 (Latin square)**: 각 (cow class, 부위) 조합에 한 처치만. 모든 cow class 에 4 처치가 각 부위에 한 번씩 나타남.
+- **관측치**: 각 cell 의 30 cow 반응 **합계**.
+
+### 라틴 정방의 직교 설계
+
+**왜 라틴 정방인가**: 부위 × cow class × 처치 의 3 요인을 **격자 1 개 ($4 \times 4 = 16$ 관측치) 만으로** 모두 대조 가능하게 하는 효율적 설계. 전요인 설계 $4^3 = 64$ 대비 1/4 규모.
+
+**대가**: 교호작용 추정 불가. 주 효과 가산성 가정이 필수.
+
+::: {.callout-tip}
+## 직관: 라틴 정방 = "시간·공간 동시 보정"
+
+라틴 정방의 아이디어:
+- 각 **행** (cow class) 에 4 처치가 1 번씩 → cow class 차이를 상쇄.
+- 각 **열** (부위) 에 4 처치가 1 번씩 → 부위 차이를 상쇄.
+- 각 **처치** 는 모든 행·열 조합에서 한 번씩 나타남.
+
+**결과**: 처치 대조가 cow class 차이·부위 차이 **둘 다와 직교**. 처치 효과가 두 교란 요인에 영향받지 않음.
+
+농학에서 1920 년대 개발되어 (Fisher, Yates), 오늘날에도 **균형 설계의 표준** 중 하나.
+:::
+
+## 모형 (14.1) — 네 성분의 가산 분해
+
+### 수식
+
+**로그 스케일** 에서 가산적 선형 혼합 모형:
+
+$$
+\log Y_{ij(k)} = \alpha_i + \gamma_j + \tau_k + \epsilon_{ijk}. \tag{14.1}
+$$
+
+여기서 $k$ 는 부위 $i$ 와 cow class $j$ 의 조합에 배정된 처치. 즉 $k$ 는 $(i, j)$ 의 함수.
+
+### 네 성분의 의미
+
+| 성분 | 의미 | 성격 |
+|---|---|---|
+| $\alpha_i$ | 부위 $i$ 의 민감도 (고정 부위 4 개) | **고정효과** |
+| $\gamma_j$ | cow class $j$ 의 평균 반응 (무작위 그룹) | **랜덤효과** |
+| $\tau_k$ | 처치 $k$ 의 효과 (관심 대상) | **고정효과** |
+| $\epsilon_{ijk}$ | 잔차 (관측 불가 변동) | **랜덤** |
+
+### 고정 vs 랜덤 결정의 과학적 근거
+
+**$\tau_k$ (처치) → 고정**:
+- 4 종 결핵균 조합은 **사전 지정** 된 관심 대상.
+- 각 처치의 **개별 효과** 가 과학적으로 의미 있음.
+- 실험 반복 시 같은 처치가 등장.
+
+**$\alpha_i$ (부위) → 고정**:
+- 4 부위는 **해부학적으로 고정** 된 위치 (예: 목의 특정 지점).
+- 각 부위의 **민감도 자체** 에 생리학적 관심 (자연 면역 반응의 국소 차이).
+
+**$\gamma_j$ (cow class) → 랜덤**:
+- Cow class 는 **편의상 그룹화** 한 결과. 어떤 cow 가 class 1 에 들어갈지는 무작위 배정.
+- "**개별 미식별 cow 의 민감도** 에 지속적 과학적 관심 없음" (McCullagh-Nelder).
+- 실험 반복 시 다른 cow 들이 class 1 을 차지할 것 — 수준 자체가 표본.
+
+::: {.callout-important}
+## 직관: 랜덤효과의 본질은 "수준의 표본성"
+
+고정효과 $\tau_k$ 는 "**$\tau_1$ 의 정확한 값이 얼마인가**" 를 묻는다. 답은 특정 처치의 효능.
+
+랜덤효과 $\gamma_j$ 는 "**$\gamma_1$ 의 정확한 값이 얼마인가**" 를 묻지 **않는다**. 대신 "**$\gamma$ 들의 분산 $\sigma_b^2$ 이 얼마인가**" 를 묻는다. 개별 값은 nuisance.
+
+이 차이가 **추론의 대상** 을 바꾼다:
+- 고정효과: 점 추정 + CI (개별 값).
+- 랜덤효과: 분산 추정 + CI (모집단 변동).
+
+실무 함의: $\gamma_j$ 를 고정효과로 놓으면 "이 특정 4 cow class 만" 에 관한 추론, 랜덤으로 놓으면 "이와 비슷한 cow 모집단 전체" 에 관한 추론. 후자가 일반화 능력이 크다.
+:::
+
+## 분산 스케일 조정 — 왜 $/30$ 인가
+
+### 30 마리 합계의 문제
+
+원시 관측 $Y_{ij(k)}$ 는 **30 cow 반응의 합**. 개별 cow 의 로그 반응을 $Z_{\text{cow}}$ 라 하면
+
+$$\log Y = \log\left(\sum_{\text{cow}} e^{Z_{\text{cow}}}\right) \approx \bar Z + \log 30 + O(\text{small}).$$
+
+근사적으로 $\log Y$ 는 "cow 평균 로그 반응 + 상수". 따라서 $\log Y$ 의 분산은 **개별 cow 의 로그 반응 분산의 $1/30$**.
+
+### 스케일 조정
+
+$\sigma^2, \sigma_b^2$ 를 **개별 cow** 수준에서 정의하려면:
+
+$$
+\text{var}(\epsilon_{ijk}) = \sigma^2 / 30, \qquad \text{var}(\gamma_j) = \sigma_b^2 / 30.
+$$
+
+이렇게 정의하면 추정된 $\widetilde\sigma, \widetilde\sigma_b$ 가 **한 마리 cow 의 within/between-CV** 로 해석된다.
+
+### $\text{var}(\log Y) \approx CV^2(Y)$ 관계
+
+로그 변환의 핵심 근사:
+
+$$Y > 0 \text{ 이고 CV 가 작을 때} \quad \text{var}(\log Y) \simeq \text{CV}^2(Y) = \{\text{SD}(Y)/E(Y)\}^2.$$
+
+**유도** (Taylor 1차): $\log Y \approx \log \mu + (Y - \mu)/\mu$, 따라서 $\text{var}(\log Y) \approx \text{var}(Y)/\mu^2 = \text{CV}^2(Y)$.
+
+결과: $\sigma, \sigma_b$ 가 곧 **within-cow CV, between-cow CV** (단위 없는 비율).
+
+### 합계의 CV
+
+$n$ 개 독립 $Y_i$ 의 합에 대해
+
+$$\text{CV}^2\left(\sum Y_i\right) = \text{var}\left(\sum Y_i\right) / \left(\sum E[Y_i]\right)^2 \approx \text{CV}^2(Y)/n.$$
+
+30 cow 합계의 CV 는 개별 cow CV 의 $1/\sqrt{30}$. 이것이 $\sigma^2/30$ 스케일의 기원.
+
+## ANOVA 분해 (Table 14.1) 의 완전 유도
+
+### 분해 테이블
+
+| 출처 | S.S. | d.f. | M.S. | $E(MS)$ |
+|---|---|---|---|---|
+| Cow class | 0.47232 | 3 | 0.11833 | $\sigma^2/30 + 4\sigma_b^2/30$ |
+| Sites | 0.08324 | 3 | 0.02775 | $\sigma^2/30 + 4\sum(\alpha_i-\bar\alpha)^2/3$ |
+| Treatments | 0.17596 | 3 | 0.05865 | $\sigma^2/30 + 4\sum(\tau_k-\bar\tau)^2/3$ |
+| Error | 0.00433 | 6 | 0.00072 | $\sigma^2/30$ |
+| Total | 0.73584 | 15 | | |
+
+### $E(MS)$ 유도 — Error 줄부터
+
+**Error 줄**: $4 \times 4 = 16$ 관측치에서 cow class (3 d.f.) + 부위 (3 d.f.) + 처치 (3 d.f.) + 전체 평균 (1 d.f.) 을 뺀 잔차 6 d.f.
+
+$E(MS_E) = \sigma^2/30$ 는 **정의상**. 이 값이 **$\sigma^2$ 의 순수 추정치** 를 준다.
+
+### Cow class 줄 유도
+
+**Cow class 줄의 제곱합**:
+
+$$SS_{\text{cow}} = 4 \sum_{j=1}^{4} (\bar Y_{\cdot j} - \bar Y_{\cdot \cdot})^2,$$
+
+$\bar Y_{\cdot j}$ 는 cow class $j$ 의 4 관측 평균, $\bar Y_{\cdot \cdot}$ 는 전체 평균.
+
+**$E(SS_{\text{cow}})$**:
+
+$\bar Y_{\cdot j} = \bar\alpha + \gamma_j + \bar\tau + \bar\epsilon_{\cdot j}$ (cow class $j$ 의 $\alpha_i, \tau_k$ 평균).
+
+$\bar Y_{\cdot\cdot} = \bar\alpha + \bar\gamma + \bar\tau + \bar\epsilon_{\cdot\cdot}$.
+
+차이:
+
+$$\bar Y_{\cdot j} - \bar Y_{\cdot\cdot} = (\gamma_j - \bar\gamma) + (\bar\epsilon_{\cdot j} - \bar\epsilon_{\cdot\cdot}).$$
+
+두 항의 분산:
+- $\text{var}(\gamma_j - \bar\gamma) = \sigma_b^2/30 \cdot (1 - 1/4) = 3\sigma_b^2/120$ (첫 근사, $\gamma_j$ 간 독립)
+- $\text{var}(\bar\epsilon_{\cdot j} - \bar\epsilon_{\cdot\cdot}) = \sigma^2/30 \cdot (1/4)(1 - 1/4) / 1 \cdot \ldots$ (4 관측 평균의 분산)
+
+정밀 유도 대신 **결과 공식** (랜덤효과 분산 분석 표준):
+
+$$E(MS_{\text{cow}}) = \sigma^2/30 + 4 \sigma_b^2/30.$$
+
+계수 4 의 의미: "**cow class 당 관측치 수** × 4" → 각 cow class 에서 4 관측.
+
+### Sites 줄 유도
+
+$\alpha_i$ 는 **고정효과**. 따라서 $\sum(\alpha_i - \bar\alpha)^2/3$ 은 **관측값이 아니라 모수의 분산** — 확률적 항 아님.
+
+$$E(MS_{\text{sites}}) = \sigma^2/30 + 4 \cdot \frac{\sum(\alpha_i - \bar\alpha)^2}{3}.$$
+
+계수 4 = "부위당 관측치 수" (각 부위가 4 cow class 에 등장).
+
+두 번째 항은 **귀무가설 $\alpha_1 = \alpha_2 = \alpha_3 = \alpha_4$ 에서 0**. 이 항의 **F 비**:
+
+$$F_{\text{sites}} = \frac{MS_{\text{sites}}}{MS_E} = \frac{0.02775}{0.00072} = 38.5.$$
+
+$F(3, 6)$ 의 95% 임계값 $\approx 4.76$ — **부위 효과 매우 유의**.
+
+### Treatments 줄
+
+Sites 와 정확히 대칭 구조:
+
+$$E(MS_{\text{treat}}) = \sigma^2/30 + 4 \cdot \frac{\sum(\tau_k - \bar\tau)^2}{3}.$$
+
+F 비:
+$$F_{\text{treat}} = 0.05865/0.00072 = 81.5.$$
+
+**처치 효과도 매우 유의**.
+
+### 핵심 관찰 — 세 고정효과 F 비의 분모가 모두 $MS_E$
+
+고정효과 (sites, treatments) 는 $MS_E$ 로 나눈다. 랜덤효과 (cow class) 는 $MS_E$ 로 나눠도 되고, 고정효과 F 비로는 사용하지 않는다 (관심이 분산 $\sigma_b^2$ 이므로).
+
+이 비대칭이 LMM 의 **F 검정 규칙** 의 시작이다.
+
+## 분산 성분 추정 — Method of Moments (MoM)
+
+### 원리 — 관측 평균제곱을 이론 기댓값에 등치
+
+두 방정식:
+1. $MS_E = 0.00072 = \widetilde\sigma^2/30$ → $\widetilde\sigma^2 = 30 \times 0.00072 = 0.0216$.
+2. $MS_{\text{cow}} = 0.11833 = \widetilde\sigma^2/30 + 4\widetilde\sigma_b^2/30$ → $\widetilde\sigma_b^2 = 30 \cdot (0.11833 - 0.00072)/4 = 0.8821$.
+
+$\widetilde\sigma = 0.147$, $\widetilde\sigma_b = 0.939$.
+
+### 해석
+
+**$\widetilde\sigma = 0.147$ → within-cow CV ≈ 15%**:
+한 cow 내 네 부위 반응의 상대 표준편차가 15%. 같은 cow 라도 부위마다 약간씩 다르지만, 전체적으로는 안정적.
+
+**$\widetilde\sigma_b = 0.939$ → between-cow CV ≈ 94%**:
+서로 다른 cow 간 반응 크기의 상대 표준편차가 94%. 매우 큼. 품종 · 나이 · 체질 · 감염 이력 등 개체 차이가 거대.
+
+### 정보적 대비
+
+**94% vs 15% ≈ 6 배 차이**. 이것은 "**같은 cow 내 비교** 가 **cow 간 비교** 보다 **6 배 더 정확** 하다" 는 의미.
+
+이 사실이 짝 맞춤 설계 (paired/matched design) 의 **정량적 동기** 다. 만약 무작위 배정이었다면:
+- 완전 무작위: 처치 대조에 $\sigma_b^2$ 기여 → SE 가 ~6 배 커짐.
+- 짝 맞춤 (라틴 정방): 처치 대조에 $\sigma^2$ 만 기여 → SE 가 $\sigma$ 에 비례.
+
+## 라틴 정방의 기적 — 직교성과 SE 의 해방
+
+### 부위 효과 추정
+
+ANOVA 에서 직접 추정:
+
+$$\widehat\alpha = (0.000, 0.093, 0.128, -0.053).$$
+
+(첫 값은 기준점으로 0 설정.)
+
+### 부위 대조의 SE — **$\sigma^2$ 만의 함수**
+
+**핵심 결과**: 라틴 정방에서 부위·처치 대조의 분산은 $\sigma_b^2$ 에 의존하지 않는다.
+
+**유도 스케치**:
+- 단순 대조 $\widehat\alpha_i - \widehat\alpha_{i'}$.
+- 이 대조는 **같은 cow class 내** 부위 $i, i'$ 의 차이로 계산 가능 (라틴 정방의 직교성).
+- cow class 차이 $\gamma_j$ 가 **뺄셈에서 상쇄**.
+- 따라서 분산은 $\sigma^2$ 만 관여.
+
+**구체 계산**: 단순 대조의 SE:
+
+$$\text{SE}(\widehat\alpha_i - \widehat\alpha_{i'}) = \widetilde\sigma \cdot \sqrt{2/60} = 0.147 \times 0.1826 = 0.019.$$
+
+(60 = 4 cow class × 30 cow, $\sqrt{2/60}$ 는 balanced contrast 계수.)
+
+::: {.callout-important}
+## 왜 $\sigma_b^2$ 가 사라지는가
+
+라틴 정방의 **직교성** 때문이다.
+
+부위 대조 $\widehat\alpha_2 - \widehat\alpha_1 = \bar Y_{2\cdot} - \bar Y_{1\cdot}$. 각 부위 평균은 **모든 4 cow class** 의 평균:
+
+$$\bar Y_{i\cdot} = \frac{1}{4}\sum_j Y_{ij(k_{ij})} = \alpha_i + \bar\gamma + \bar\tau_{i} + \bar\epsilon_{i\cdot}$$
+
+($\bar\tau_i$ 는 부위 $i$ 에 배정된 4 처치의 평균).
+
+차이:
+
+$$\bar Y_{2\cdot} - \bar Y_{1\cdot} = (\alpha_2 - \alpha_1) + (\bar\tau_2 - \bar\tau_1) + (\bar\epsilon_{2\cdot} - \bar\epsilon_{1\cdot}).$$
+
+$\bar\gamma$ 는 **두 평균 모두에 같은 값** 으로 나타나 상쇄. 라틴 정방에서 각 부위에 4 처치가 한 번씩이므로 $\bar\tau_2 = \bar\tau_1$ 도 상쇄. 결국 오차만 남는다.
+
+$\text{var}(\bar\epsilon_{2\cdot} - \bar\epsilon_{1\cdot}) = 2 \cdot (\sigma^2/30)/4 = \sigma^2/60$.
+
+$\text{SE} = \sqrt{\sigma^2/60} \cdot \sqrt 2 = \sigma\sqrt{2/60}$ (대조 형식에 따라 다름).
+
+**결과**: $\sigma_b^2$ 가 어디에도 등장하지 않는다 — cow class 변동이 대조에서 **완전히 상쇄** 됨.
+:::
+
+### 실무적 함의
+
+이 직교성 덕분에 **짝 맞춤 설계 분석** 은 $\gamma_j$ 를 **고정효과로 취급해도 같은 결과**. $\sigma_b^2$ 는 전체 실험의 "검정력 평가" 용으로만 필요.
+
+따라서:
+- **추정 · 검정** 목적: cow class 를 고정효과로 (또는 랜덤으로) 어느 쪽이든 결과 동일.
+- **검정력 계산 · 설계 정당화** 목적: $\sigma_b^2$ 추정이 필수 — 짝 맞춤이 얼마나 효율적인지 증명.
+
+### 유의성 결론
+
+부위 효과 표준오차 0.019. 쌍 비교:
+- $\widehat\alpha_3 - \widehat\alpha_1 = 0.128$ vs SE 0.019 → $t = 6.7$, $p < 0.001$.
+- $\widehat\alpha_2 - \widehat\alpha_1 = 0.093$ vs SE 0.019 → $t = 4.9$, $p < 0.01$.
+- $\widehat\alpha_3 - \widehat\alpha_2 = 0.035$ vs SE 0.019 → $t = 1.84$, $p \approx 0.12$.
+
+**결론**: **부위 2, 3 이 부위 1, 4 보다 유의하게 민감**. 부위 2 와 3 자체는 유의차 없음.
+
+생리학적 해석: 특정 목 부위가 면역 반응을 더 잘 유도. 임상 assay 실무에서 **활용 가능한 발견** — 이후 동일 assay 시 민감 부위 우선 사용.
+
+## Python 실전 — 결핵균 assay 재현
+
+결핵균 데이터가 책에 전체 수치로 주어지지 않았으므로 **재현 가능한 시뮬레이션** 으로 ANOVA 구조를 확인한다.
+
+```python
+import numpy as np
+import pandas as pd
+from statsmodels.formula.api import ols
+from statsmodels.stats.anova import anova_lm
+
+np.random.seed(42)
+
+# 참 모수 설정 (book 값 근사)
+alpha = np.array([0.0, 0.09, 0.13, -0.05])   # 부위 효과
+tau = np.array([0.0, 0.15, -0.08, 0.25])     # 처치 효과 (임의)
+sigma_b = 0.939 / np.sqrt(30)                 # cow class 랜덤효과 SD (스케일 조정)
+sigma = 0.147 / np.sqrt(30)                   # 오차 SD
+
+# 4x4 라틴 정방 (A,B,C,D 순환)
+LS = np.array([
+    ['A', 'B', 'C', 'D'],   # cow class I
+    ['B', 'C', 'D', 'A'],   # cow class II
+    ['C', 'D', 'A', 'B'],   # cow class III
+    ['D', 'A', 'B', 'C'],   # cow class IV
+])
+trt_map = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
+
+# cow class 랜덤효과
+gamma = np.random.normal(0, sigma_b, 4)
+
+# 데이터 생성
+rows = []
+for i in range(4):      # site
+    for j in range(4):  # cow class
+        trt = LS[j, i]
+        k = trt_map[trt]
+        mu = alpha[i] + gamma[j] + tau[k]
+        y = mu + np.random.normal(0, sigma)
+        rows.append({'site': i+1, 'cow_class': j+1, 'treatment': trt, 'log_y': y})
+
+df = pd.DataFrame(rows)
+print(df.head(8))
+
+# ANOVA
+model = ols('log_y ~ C(site) + C(cow_class) + C(treatment)', data=df).fit()
+aov = anova_lm(model, typ=2)
+print("\nANOVA 분해:")
+print(aov)
+```
+
+**기대 출력**: 세 고정효과 (site, cow_class, treatment) 각 3 d.f. 에 대한 SS, F, p-value. Residual 6 d.f.
+
+### 분산 성분 추정
+
+```python
+# Method of Moments
+MS_error = aov.loc['Residual', 'sum_sq'] / aov.loc['Residual', 'df']
+MS_cow = aov.loc['C(cow_class)', 'sum_sq'] / aov.loc['C(cow_class)', 'df']
+
+# E(MS_error) = σ²/30, E(MS_cow) = σ²/30 + 4σ_b²/30
+sigma2_est = 30 * MS_error
+sigma_b2_est = 30 * (MS_cow - MS_error) / 4
+
+print(f"\nσ² 추정 (within-cow variance):   {sigma2_est:.4f} (book: 0.0216)")
+print(f"σ 추정 (within-cow CV ≈ σ):       {np.sqrt(sigma2_est):.3f} (book: 0.147)")
+print(f"σ_b² 추정 (between-cow variance): {sigma_b2_est:.4f} (book: 0.8821)")
+print(f"σ_b 추정 (between-cow CV ≈ σ_b): {np.sqrt(sigma_b2_est):.3f} (book: 0.939)")
+```
+
+### mixed 모형 적합 — 랜덤효과로 처리
+
+```python
+import statsmodels.regression.mixed_linear_model as mlm
+
+md = mlm.MixedLM.from_formula(
+    'log_y ~ C(site) + C(treatment)',
+    groups=df['cow_class'],
+    data=df
+)
+mdf = md.fit(method='lbfgs')
+print(mdf.summary())
+```
+
+`statsmodels.MixedLM` 은 REML 로 추정. 고정효과 부위·처치 계수와 SE, 그리고 cow class 랜덤 intercept 의 분산을 보여 준다.
+
+### 부위 대조 SE 확인
+
+```python
+# 부위 2 vs 1 대조
+site_effects = mdf.params[[c for c in mdf.params.index if 'site' in c.lower()]]
+site_cov = mdf.cov_params().loc[site_effects.index, site_effects.index]
+
+# 간단 대조 SE (site_2 - site_1, 단 site_1 이 기준이면 site_2 자체의 SE)
+se_contrast = np.sqrt(site_cov.iloc[0, 0])
+print(f"부위 2 vs 1 대조 SE: {se_contrast:.3f} (book: 0.019)")
+```
+
+기대: 약 0.019 근처. **이 SE 가 $\sigma_b^2$ 추정치에 무관** 함을 확인 — cow class 분산이 시뮬에서 얼마로 나오든 site 대조 SE 는 $\sigma$ 만의 함수.
+
+### 직교성 검증 — cow class 를 고정/랜덤 두 방식으로 비교
+
+```python
+# (1) cow class 를 고정효과로
+m_fixed = ols('log_y ~ C(site) + C(cow_class) + C(treatment)', data=df).fit()
+
+# (2) cow class 를 랜덤효과로 (위의 mdf)
+# site 효과 추정치 비교
+print("Site effects (fixed cow_class):",
+      [m_fixed.params[f'C(site)[T.{i}]'] for i in [2, 3, 4]])
+print("Site effects (random cow_class):",
+      [mdf.fe_params[f'C(site)[T.{i}]'] for i in [2, 3, 4]])
+```
+
+**기대**: 두 값이 **거의 동일**. 라틴 정방 직교성의 증거.
+
+## 요약 — §14.2 의 세 가지 교훈
+
+### 교훈 1 — 요인별 고정/랜덤 결정은 "과학적 관심" 기준
+
+**수학적 차이** (파라미터 vs 분포) 전에 **과학적 질문** 을 먼저 묻는다. "이 수준의 개별 값이 중요한가, 아니면 수준 자체가 표본인가?"
+
+결핵균 예제:
+- 처치 4 종, 부위 4 곳 → 개별 값 중요 → **고정효과**.
+- cow class 4 그룹 → 특정 class 의 값 자체는 중요하지 않음 → **랜덤효과**.
+
+### 교훈 2 — 스케일 조정이 해석을 좌우
+
+$\sigma^2/30$ vs $\sigma^2$ 의 차이는 단순 계수가 아니다. **개별 cow 단위** 와 **cow 합계 단위** 에서 분산의 규모가 30 배 차이가 나므로, 해석 시 어느 단위인지 명시해야 한다.
+
+**실무 팁**: 논문·보고서에서 분산 성분 추정치를 보고할 때 "**개별 단위 기준**" 임을 반드시 명시. 한 줄 차이가 후대 재현에서 큰 혼란을 만든다.
+
+### 교훈 3 — 직교 설계의 기적: $\sigma_b^2$ 상쇄
+
+라틴 정방 같은 직교 설계는 **cow class 변동을 처치 대조에서 상쇄** 시킨다. 결과로 SE 가 $\sigma$ 만의 함수가 되어 극적으로 작아진다.
+
+이것이 **짝 맞춤 설계의 수학적 정당성**. 의학·농학·산업 실험에서 왜 "같은 환자/동물/로트 내 비교" 가 강력한지를 숫자로 설명한다.
+
+### 한 줄 정리
+
+"설계의 직교성 + 로그 스케일 가산성 + 고정/랜덤 올바른 할당" 세 가지가 결합되면 LMM 이 **단일 분산 모형보다 6 배 효율적** 일 수 있다. 결핵균 assay 는 이 원리의 교본 예제다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Components of Dispersion — 개관 (McCullagh Ch.14)](./13-1-components-of-dispersion-overview.qmd)
+- [Log-linear Models — 예제 (McCullagh §6.3)](./05-3-log-linear-examples.qmd) — Table 6.1 결핵균 assay 원 분석
+- [GLM 적합 알고리즘 — IRLS (McCullagh §2.5)](./01-6-glm-fitting-algorithm.qmd)
+
+**관련 개념**
+
+- [선형모형의 추정 — 사영 기하 (McCullagh §3.6)](./02-6-estimation.qmd)
+- [Joint Modelling of Mean and Dispersion (McCullagh Ch.10)](./09-1-joint-mean-dispersion-overview.qmd) — 단일 수준 분산 모형
+- [반복 측정 ANOVA](../143-rm-anova.qmd)
+- [MANOVA — 다변량 분산 분석](../144-manova.qmd)
+
+**도메인 참고**
+
+- Fisher, R. A. (1935). *The Design of Experiments* — 라틴 정방 원본
+- Yates, F. (1937). *The Design and Analysis of Factorial Experiments* — 직교 설계의 확장
+- Searle, S. R. & Casella, G. & McCulloch, C. E. (1992). *Variance Components* — LMM 교과서
+
+**후속 주제 — Ch.14 심화**
+
+- [Non-Linear Mixed Models — GLMM 구조 (McCullagh §14.3)](./13-3-nonlinear-mixed-models.qmd)
+- [Parameter Estimation — 준-우도 상세 (McCullagh §14.4)](./13-4-glmm-parameter-estimation.qmd)
+- [Salamander Mating Experiment (McCullagh §14.5)](./13-5-salamander-mating.qmd)
+- [Ch.14 Exercises (McCullagh §14.7)](./13-6-ch14-exercises.qmd)
