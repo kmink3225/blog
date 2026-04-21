@@ -1,0 +1,472 @@
+---
+title: "Components of Dispersion — 개관 · GLMM 의 출발 (McCullagh Ch.14)"
+subtitle: "계층 데이터·군집내 상관·$\\sigma^2$ vs $\\sigma_b^2$·조건부 GLM + 정규 랜덤효과·준-우도 추정 전략"
+description: |
+  McCullagh & Nelder (1989) Ch.14 를 개관한다. 앞선 12 개 장이 모두 **독립 관측** 을
+  가정한 반면, 실무 데이터는 **계층 구조 (hierarchy)** 를 가진다 — 학교 안의 학급
+  안의 학생, 농장 안의 젖소 안의 부위 등. 같은 군집 내 단위는 **양의 상관**
+  을 가져, 단일 산포 $\phi$ 로 설명 불가. 해법은 **여러 분산 성분** (dispersion components)
+  $\sigma^2, \sigma_b^2, \ldots$ 을 각 계층에 할당. §14.2 의 선형 로그 모형
+  $\log Y = \alpha + \gamma + \tau + \epsilon$ 로 결핵균 assay 데이터의 within-cow CV 15% 와
+  between-cow CV 94% 를 분해. §14.3 의 비선형 (GLMM) 확장 — 조건부 평균 $M$ 과 분산
+  함수 $V(M)$ 은 GLM 으로 모형화, 거기에 정규 랜덤효과 $\gamma \sim N(0, \sigma_b^2)$ 을 추가.
+  **기대값 식 (14.4)·분산 식 (14.5)** 가 주변 분산 함수에 **이차항** 을 추가한다는
+  놀라운 사실. §14.4 의 준-우도 추정 방정식 $U = D^T V^{-1}(y - \mu) = 0$ 과 보조 방정식.
+  마지막으로 §14.5 salamander 교배 실험으로 GLMM 의 실제 적용을 소개.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — 왜 "분산 성분" 인가
+
+Ch.1 부터 Ch.13 까지 McCullagh-Nelder 는 **독립 관측치** 를 가정한 모형을 다뤘다. 각 관측치 $Y_i$ 의 변동은 단일 산포 모수 $\phi$ (또는 $\sigma^2$) 로 설명된다. 이 가정은 **교과서적 실험 설계** — 완전 무작위 배정, 독립 샘플링 — 에서 합리적이다.
+
+그러나 **실제 데이터의 대부분** 은 이 가정을 위반한다. 흔한 구조:
+
+- **교육**: 학교 안 학급 안 학생. 같은 학급 학생들은 같은 선생님·교실 환경 공유.
+- **의학**: 환자의 여러 방문 기록. 같은 환자 내 측정치는 서로 유사.
+- **농학**: 농장 안 가축 안 부위. 같은 가축의 여러 부위는 체질·환경 공유.
+- **사회 조사**: 가구 안 개인. 같은 가구 구성원은 사회경제적 배경 공유.
+
+공통 현상: **같은 군집 내 관측치가 양의 상관**. 독립 가정 위반.
+
+### 산포 성분 (Dispersion Components)
+
+McCullagh-Nelder 의 해법: 변동을 **여러 계층** 에 분해.
+
+$$
+\text{Var}(Y) = \underbrace{\sigma^2}_{\text{within-cluster}} + \underbrace{\sigma_b^2}_{\text{between-cluster}} + \cdots
+$$
+
+각 성분을 별도로 추정·해석. 이 장의 제목 "Components of dispersion" 이 이 구조를 가리킨다.
+
+용어:
+- **분산 성분 (variance components)**: 전통적 용어 (정규 분포 중심).
+- **산포 성분 (dispersion components)**: McCullagh-Nelder 의 일반화 용어 (GLM 전반).
+
+### 현대적 명칭 — GLMM
+
+1989 년 이후 이 분야는 **일반화 선형 혼합 모형 (Generalized Linear Mixed Models, GLMM)** 으로 발전. Ch.14 는 GLMM 의 **원형** 을 제시한다. 세부 기법 (PQL, Laplace 근사, Gauss-Hermite 적분, MCMC) 은 이후 30 년간 발전했지만 개념 틀은 Ch.14 가 이미 제시.
+
+이 포스트는 Ch.14 전체의 **지도** 를 제공한다. 후속 글 (13-2, 13-3, ...) 에서 선형 모형, 비선형 모형, 매개변수 추정, salamander 예제, 연습문제를 각각 심화.
+
+## Ch.14 의 전체 구조
+
+| 섹션 | 주제 | 후속 포스트 계획 |
+|---|---|---|
+| §14.1 | 도입 · 계층 구조 소개 | 이 글 |
+| §14.2 | 선형 혼합 모형 · 결핵균 assay | 이 글 + 13-2 |
+| §14.3 | 비선형 모형 (GLMM) · 조건부 GLM + 랜덤효과 | 이 글 + 13-3 |
+| §14.4 | 준-우도 추정 방정식 | 이 글 + 13-4 |
+| §14.5 | Salamander 교배 실험 (4 소절) | 13-5 |
+| §14.6 | Bibliographic notes | 스킵 |
+| §14.7 | Exercises | 13-6 |
+
+## §14.2 — 선형 혼합 모형
+
+### 결핵균 assay 예제 (§6.3.1 확장)
+
+Fisher 가 설계한 고전적 **$4 \times 4$ 라틴 정방 (Latin square)** 실험 (McCullagh §6.3).
+
+**설계**:
+- 4 cow class (연령·품종으로 계층화된 젖소 그룹) $j = I, II, III, IV$.
+- 각 class 에 30 마리 젖소, 각 젖소 목 4 부위에 결핵균 희석액 주사.
+- 4 tuberculin type + volume 조합 $k = A, B, C, D$ (고려 대상 처치).
+- 4 부위 $i = 1, 2, 3, 4$ (고정 부위).
+- 각 라틴 정방 cell 의 관측치: 30 cow × 그 조합 반응의 **합**.
+
+### 선형 모형
+
+**모형 14.1**:
+
+$$\log Y_{ij(k)} = \alpha_i + \gamma_j + \tau_k + \epsilon_{ijk}. \tag{14.1}$$
+
+여기서:
+- $\alpha_i$: 부위 고정 효과 (4 부위 중 $i$).
+- $\tau_k$: 처치 고정 효과 (관심 주 변수).
+- $\gamma_j$: cow class 효과 — **랜덤효과**.
+- $\epsilon_{ijk}$: 잔차.
+
+### 고정 vs 랜덤 결정 기준
+
+McCullagh-Nelder 의 명확한 기준:
+
+> "**개별 미식별 cow 의 민감도에 지속적 과학적 관심이 없다**. 따라서 $\gamma_j$ 는 독립 랜덤변수로 취급한다."
+
+**원칙**:
+- **고정효과** — 수준들 자체가 관심 대상. 특정 부위, 특정 처치.
+- **랜덤효과** — 수준은 더 큰 모집단에서 추출된 샘플. 개별 수준의 값이 아니라 **모집단 분산** 이 관심.
+
+cow class 의 경우 "어떤 cow 가 1 에 배정되었는지" 는 무작위 배정의 결과일 뿐. 같은 실험을 반복하면 다른 cow 들이 1 에 배정될 것. 따라서 **모집단 분산** $\sigma_b^2$ 만 과학적으로 의미 있음.
+
+::: {.callout-tip}
+## 직관: 고정/랜덤 결정의 네 질문
+
+어떤 효과를 고정으로 할지 랜덤으로 할지 결정할 때:
+
+1. **수준 자체가 관심 대상?** → YES → 고정. NO → 랜덤.
+2. **수준이 모집단에서 무작위 추출?** → YES → 랜덤. NO → 고정.
+3. **같은 실험을 반복할 때 같은 수준이 나타날까?** → YES → 고정. NO → 랜덤.
+4. **추론 대상이 수준 자체인가, 더 넓은 모집단인가?** → 수준 자체 → 고정. 모집단 → 랜덤.
+
+네 질문 모두 **같은 답** 을 주면 결정 쉽다. 답이 엇갈리면 도메인 맥락에 의존. 실무에서는 "의심 시 랜덤" 이 보통 더 일반적 — 추론이 conservative 해짐.
+:::
+
+### 분산 성분 식
+
+$Y$ 가 30 cow 의 **합계** 이므로
+
+$$\text{var}(\epsilon_{ijk}) = \sigma^2 / 30, \qquad \text{var}(\gamma_j) = \sigma_b^2 / 30.$$
+
+30 으로 나누는 이유: "개별 cow 분산" 과 "합계 분산" 을 구분하기 위함. $\sigma^2, \sigma_b^2$ 가 **개별 cow** 수준 분산이 되도록 맞춤.
+
+### 로그 분산의 CV 해석
+
+**핵심 근사**:
+
+$$\text{var}(\log Y) \simeq \text{CV}^2(Y), \qquad \text{CV}(Y) = \text{SD}(Y) / E(Y).$$
+
+이것은 로그 변환의 **분산 안정화** 성질. $Y > 0$ 이고 CV 가 작으면 로그 스케일 분산이 CV 제곱과 근사적으로 같음 (연습 14.10-11).
+
+따라서 $\sigma, \sigma_b$ 가 곧 **within-cow CV, between-cow CV**.
+
+### ANOVA 분해 (Table 14.1)
+
+라틴 정방의 4 원천 제곱합 분해:
+
+| 출처 | S.S. | d.f. | M.S. | $E$(M.S.) |
+|---|---|---|---|---|
+| Cow class | 0.47232 | 3 | 0.11833 | $\sigma^2/30 + 4\sigma_b^2/30$ |
+| Sites | 0.08324 | 3 | 0.02775 | $\sigma^2/30 + 4\sum(\alpha_i-\bar\alpha)^2/3$ |
+| Treatments | 0.17596 | 3 | 0.05865 | $\sigma^2/30 + 4\sum(\tau_k-\bar\tau)^2/3$ |
+| Error | 0.00433 | 6 | 0.00072 | $\sigma^2/30$ |
+| Total | 0.73584 | 15 | | |
+
+### 분산 성분 추정
+
+**Method of Moments** (고전적 방법): 관측 평균 제곱을 이론 기댓값에 등치.
+
+$$\widetilde\sigma^2 = 30 \times 0.00072 = 0.0216, \quad \widetilde\sigma = 0.147 \to \text{within-cow CV} \approx 15\%.$$
+
+Cow class M.S. 에서 $\sigma^2$ 를 빼고 4 로 나누면 $\sigma_b^2$ 추정:
+
+$$\widetilde\sigma_b^2 = 30 \times (0.11833 - 0.00072) / 4 = 0.8821, \quad \widetilde\sigma_b = 0.939 \to \text{between-cow CV} \approx 94\%.$$
+
+### 해석 — 왜 짝 맞춤 (pairing) 설계가 강력한가
+
+**between-cow CV 94%** vs **within-cow CV 15%** — 무려 6 배 차이.
+
+이것은 **cow 간 차이가 극도로 크고** (품종·연령·개체 차이로), cow **내부** 의 4 부위 차이는 훨씬 작다는 의미.
+
+라틴 정방 설계의 **천재적 면**: 처치 효과를 **같은 cow 내부** 에서 비교하므로 cow 간 차이 ($\sigma_b^2$) 가 **처치 대조의 분산에 들어오지 않는다**. 처치 대조의 SE 는 $\sigma/\sqrt{60}$ (cow 수·부위 수 조합). $\sigma$ 만 기여하고 $\sigma_b$ 는 무관.
+
+이 예제가 **짝 맞춤 설계** 의 효율성을 극적으로 보여 준다. 완전 무작위 설계였다면 SE 가 훨씬 커져 효과 감지 불가했을 것.
+
+## §14.3 — 비선형 모형 (GLMM)
+
+### 출발점 — 조건부 GLM
+
+**가정**: cow class 에 따른 조건부 평균·분산이
+
+$$
+E(Y_{ij(k)} \mid \gamma_j) = M_{ij(k)}, \qquad \text{var}(Y_{ij(k)} \mid \gamma_j) = \sigma^2 V(M_{ij(k)}),
+$$
+
+$V(\cdot)$ = 조건부 분산 함수. 같은 class 이든 다른 class 이든 **조건부 독립**.
+
+### 로그 선형 조건부 평균 (14.2)
+
+$$\log M_{ij(k)} = \alpha_i + \gamma_j + \tau_k. \tag{14.2}$$
+
+조건부 GLM: **랜덤효과 $\gamma_j$ 를 주어진 것으로 간주** 하고 log link + Poisson 또는 감마로 적합.
+
+### 랜덤효과 가정 (14.3)
+
+$$\gamma_j \sim N(0, \sigma_b^2) \text{ i.i.d.} \tag{14.3}$$
+
+정규 분포는 **편의적** — 로그 스케일에서 다루기 쉽고, 해석상 "중심 0 의 대칭 변동" 이 자연스럽다. 엄밀히는 다른 분포도 가능.
+
+### 조건부 vs 주변 (Marginal)
+
+조건부와 주변 관점의 대비:
+
+- **조건부 (conditional)**: $\gamma_j$ 를 안다고 가정. GLM 그대로.
+- **주변 (marginal)**: $\gamma_j$ 를 적분해 제거. 새로운 분산 구조 등장.
+
+### 핵심 결과 — 주변 분산의 이차항
+
+조건부 분산이 $V(M) = M$ (Poisson) 일 때 주변 분산은
+
+$$
+\text{var}(Y_{\cdot j(k)}) = \sigma^2 \mu_{\cdot j(k)} + \mu_{\cdot j(k)}^2 (e^{\sigma_b^2} - 1). \tag{14.5a}
+$$
+
+조건부 분산이 $V(M) = M^2$ (gamma) 일 때
+
+$$
+\text{var}(Y_{\cdot j(k)}) \simeq \mu_{\cdot j(k)}^2 \{\text{CV}^2(e^\gamma) + O(\sigma^2)\}. \tag{14.5b}
+$$
+
+**결정적 관찰**: 두 경우 모두 **평균의 제곱 항** 이 등장. 조건부가 Poisson 이어도 주변은 **음이항 (negative binomial) 같은 이차 분산 함수**.
+
+::: {.callout-important}
+## 직관: 주변 분산이 이차인 이유
+
+조건부 평균 $M$ 이 **랜덤** ($\gamma$ 때문에) 이므로:
+
+$$\text{var}(Y) = E[\text{var}(Y|\gamma)] + \text{var}[E(Y|\gamma)] = E[\sigma^2 V(M)] + \text{var}(M).$$
+
+첫 항 = **within-cluster 변동**. 두 번째 항 = **cluster 평균의 변동**. 후자가 $M^2$ 규모 (로그 스케일에서 $\gamma \to M e^\gamma$ 의 지수 변환이 곱셈 효과).
+
+결과: 원래 GLM 의 분산 함수 $V(\mu)$ 에 **이차항 $\mu^2 \sigma_b^2$ 가 더해진** 형태. 즉 랜덤효과가 **과산포 (overdispersion)** 를 자연스럽게 유도.
+
+이 통찰이 "랜덤효과 = 과산포 메커니즘" 이라는 현대적 이해의 기반. 실제로 음이항 회귀가 Poisson + 감마 랜덤효과와 **수학적 등가** 다.
+:::
+
+### 식별 불가 경우 — 랜덤효과의 필수성
+
+§14.3 의 가장 교훈적 부분: **어떤 설계에서는 처치 효과가 고정효과만으로 추정 불가**.
+
+**예**: 대체 설계 (Table 14.2). 각 cow class 가 단일 처치만 받음. 각 처치는 cow class 두 개에 반복.
+
+이 설계에서 처치 대조는 **cow class 대조와 별칭 (aliased)** — 고정효과 모형 (14.2) 에서 **추정 불가능**.
+
+**해결**: 랜덤효과 가정 (14.3) 추가. $\gamma_j$ 가 i.i.d. $N(0, \sigma_b^2)$ 이면 cow class 효과가 "무작위 변동" 으로 처리되어 처치 대조가 분리되어 추정 가능.
+
+### 유도 — 로그 스케일로의 환원
+
+식 (14.4):
+
+$$\log(\mu_{\cdot j(k)}) = \tau_k + \text{const}.$$
+
+관측 가능한 cow class 합계 $Y_{\cdot j(k)}$ 의 평균이 **$\tau_k$ 에만 의존** — 처치 효과 직접 추정 가능.
+
+식 (14.5) 의 분산 함수가 이차이므로 **감마 GLM + 로그 링크** 로 처리하면 됨. 8 관측치 (4 처치 × 2 반복) 의 분석이 4 d.f. 의 잔차로 이루어짐.
+
+### 과학적 의미
+
+"랜덤효과 가정이 **존재하지 않던 정보를 만들어낸다**" 는 것이 아니라, "고정효과로는 낭비될 정보를 **재활용** 한다" 는 것.
+
+- 고정효과: cow class 를 "nuisance" 로 버림 → 비교 불가.
+- 랜덤효과: cow class 의 변동을 "$\sigma_b^2$ 추정치" 로 흡수 → 처치 대조에 다시 사용 가능.
+
+이것이 반복 측정·계층 설계에서 혼합 모형이 **고정 효과보다 효율적** 인 근본 이유.
+
+## §14.4 — 준-우도 추정
+
+### 전체 우도 (MLE) 의 어려움
+
+GLMM 의 **완전 최대 우도** 는 랜덤효과를 적분해야 한다:
+
+$$
+L(\beta, \sigma^2, \sigma_b^2) = \prod_j \int f(y_{\cdot j} \mid \gamma_j) \cdot f(\gamma_j) d\gamma_j.
+$$
+
+**문제**:
+- 정규 오차 + 정규 랜덤효과 외에는 **닫힌 해 없음**.
+- 수치 적분 필요 (Gauss-Hermite 구적, Monte Carlo, Laplace 근사, MCMC).
+- 계산 비용 높음. 1989 년 당시에는 더욱.
+
+### McCullagh-Nelder 의 선택 — 준-우도
+
+**준-우도 추정 방정식 (quasi-likelihood estimating equations)** 을 사용한다 (Ch.9).
+
+$$
+U(\widehat\beta, \sigma^2) = D^T V^{-1} (y - \mu(\beta)) = 0. \tag{14.6}
+$$
+
+- $D = \partial \mu / \partial \beta^T$: 평균의 $\beta$ 미분.
+- $V = V(\mu, \sigma^2)$: 주변 공분산 행렬 — $\sigma^2, \sigma_b^2$ 에 의존.
+- $y - \mu(\beta)$: 잔차.
+
+### 핵심 특성
+
+1. **주변 평균·분산** 만 사용. 완전 분포 가정 불필요.
+2. 분포 가정은 **가중 방식** 에만 영향. 형식 단순.
+3. **짝 맞춤 방정식** — $\beta$ 추정에 $\sigma^2$ 필요, $\sigma^2$ 추정에 $\beta$ 필요 → 교대 반복.
+
+### 보조 방정식 — $\sigma^2$ 성분 추정
+
+$(U, W)^T$ 시스템:
+
+- $U$: $\beta$ 에 대한 점수 방정식.
+- $W$: $\sigma^2$ 성분들에 대한 추가 방정식 (예: Pearson 잔차 제곱의 기댓값 등치).
+
+상세 유도는 §14.4 의 후속 부분과 McCullagh-Nelder (1989, pp.437-442) 참조. 이 글의 범위를 넘어감.
+
+### 현대적 대안 — PQL, Laplace, MCMC
+
+준-우도 이후 30 년 발전:
+
+- **PQL (Penalized Quasi-Likelihood)** — Breslow-Clayton (1993): GLMM 으로 바로 확장.
+- **Laplace 근사** — Liu-Pierce (1994): 랜덤효과 적분을 이차 근사.
+- **Adaptive Gauss-Hermite** — Pinheiro-Chao (2006): 고정밀 수치 적분.
+- **MCMC (BUGS, Stan)** — 베이지안 전체 분포 추정.
+- **HGLM (Hierarchical GLM)** — Lee-Nelder (1996): 준-우도의 완전 확장.
+
+실무 도구 (R `lme4::glmer`, Python `statsmodels.genmod.bayes_mixed_glm`, Stan `brms`) 가 이들을 구현. McCullagh-Nelder 의 **개념 틀** 은 유지되지만 **계산 방법** 은 크게 진보.
+
+## §14.5 — Salamander 교배 실험 (미리 보기)
+
+### 실험 설정
+
+Salamander 교배 데이터는 McCullagh-Nelder 가 GLMM 의 **가장 도전적 예제** 로 선택. Crowder (1978) 원데이터.
+
+**목적**: 두 품종 (R, W) 의 교배 성공률을 비교. 특히 **R 수컷 × W 암컷** 이 다른 조합보다 낮은 성공률을 보이는 **품종 배리어** 존재 여부.
+
+**설계 복잡성**:
+- **교차 랜덤효과 (crossed random effects)**: 각 실험에 남-여 쌍. 같은 수컷이 여러 암컷과 교배, 같은 암컷이 여러 수컷과. 중첩 아닌 **교차** 구조.
+- **반복 측정**: 같은 쌍이 여러 시점에서 교배.
+- **이항 반응**: 교배 성공 (1) / 실패 (0).
+
+### GLMM 의 전형적 도전
+
+이 예제가 특별히 어려운 이유:
+1. **로지스틱 링크** — 정규 랜덤효과와 결합 시 닫힌 해 없음.
+2. **교차 랜덤효과** — 적분이 매우 고차원.
+3. **소표본** — 추정 분산이 큼.
+
+§14.5 의 4 소절은 이 도전을 단계적으로 풀어낸다.
+
+### 후속 포스트에서 상세히
+
+이 개관 포스트는 **개념 지도** 만 제공. 13-5 포스트에서 salamander 분석을 상세 재현. PQL 추정 과정, 분산 성분 해석, 현대 도구 (R `lme4`) 와 비교.
+
+## GLMM 의 세 가지 핵심 메시지
+
+### 메시지 1 — 계층 구조는 피할 수 없다
+
+거의 모든 실제 데이터가 계층 구조를 갖는다. 독립 가정을 무시하면 **SE 가 과소추정**, 유의성이 **과대 보고**. 반복 측정 · 군집 표본에서는 혼합 모형이 **기본** 이어야 함.
+
+### 메시지 2 — 랜덤효과는 과산포의 메커니즘
+
+주변 분산 함수의 이차항은 랜덤효과의 자연스러운 결과. 과산포를 **설명하는 구조** 가 랜덤효과. 음이항·베타-이항 등 많은 "과산포 분포" 가 실은 랜덤효과 모형의 위장.
+
+### 메시지 3 — 준-우도가 실용적 출발
+
+완전 우도는 계산 어렵지만 준-우도는 **평균·분산만 필요**. McCullagh-Nelder 의 철학: "우리가 확신할 수 있는 **최소 가정** 으로 시작해 점진적으로 확장". 이 철학이 GLM 전체의 설계 원리.
+
+## Python 간단 예제 — 조건부 vs 주변 변동 시뮬레이션
+
+랜덤효과가 주변 분산 함수를 이차로 만드는 현상을 시뮬레이션으로 확인.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+np.random.seed(42)
+n_clusters = 100
+n_per_cluster = 30
+sigma2 = 0.5           # within-cluster (포아송 산포)
+sigma2_b = 0.3         # between-cluster variance
+
+# 로그 평균 구조: 공변량 x, 랜덤효과 γ
+x_levels = np.linspace(0, 2, 5)
+means_by_x = np.exp(0.5 + 0.8 * x_levels)  # 조건부 평균
+
+# 클러스터 랜덤효과
+gamma = np.random.normal(0, np.sqrt(sigma2_b), n_clusters)
+
+# 관측치 시뮬레이션 (Poisson 조건부 + 랜덤효과)
+observations = []
+for i, mean_x in enumerate(means_by_x):
+    for j in range(n_clusters):
+        # 조건부 평균 M = μ exp(γ_j)
+        M = mean_x * np.exp(gamma[j])
+        # Poisson 표본
+        y = np.random.poisson(M, size=n_per_cluster)
+        cluster_sum = y.sum()
+        observations.append({
+            'x': mean_x, 'cluster': j, 'sum': cluster_sum
+        })
+
+import pandas as pd
+df = pd.DataFrame(observations)
+
+# 클러스터 합계의 주변 분산 vs 평균
+summary = df.groupby('x').agg(
+    mean_Y=('sum', 'mean'),
+    var_Y=('sum', 'var')
+).reset_index()
+
+print("조건부 Poisson 의 주변 분산은 평균의 이차:")
+print(summary)
+
+# 시각화: Var(Y) vs E(Y)
+fig, ax = plt.subplots(figsize=(7, 5))
+ax.scatter(summary['mean_Y'], summary['var_Y'], label='관측 (평균, 분산)')
+
+mu_grid = np.linspace(summary['mean_Y'].min(), summary['mean_Y'].max(), 100)
+ax.plot(mu_grid, mu_grid, '--', label='순수 Poisson V=μ', alpha=0.5)
+# 주변 이론 (14.5a)
+n_per = n_per_cluster
+var_theory = n_per * mu_grid + (n_per * mu_grid)**2 * (np.exp(sigma2_b) - 1) / n_per
+ax.plot(mu_grid, var_theory, '-', label='주변 이론 (14.5a)')
+
+ax.set_xlabel('E(Y)')
+ax.set_ylabel('Var(Y)')
+ax.set_title('랜덤효과가 분산 함수를 이차로 만든다')
+ax.legend(); ax.grid(alpha=0.3)
+plt.show()
+```
+
+기대: 관측 점들이 순수 Poisson 라인 위에 위치 (이차 과산포) → 식 (14.5a) 의 이차 이론 곡선과 일치.
+
+## 요약 — Ch.14 의 출발점
+
+이번 포스트는 Ch.14 의 **네 가지 핵심 개념** 을 지도 수준에서 다뤘다.
+
+### 요약 카드
+
+| 개념 | 내용 | 후속 |
+|---|---|---|
+| **분산 성분** | $\sigma^2$ (within) + $\sigma_b^2$ (between) + ... | 13-2 |
+| **고정/랜덤 결정** | 과학적 관심 + 모집단 표본 여부 | 13-2 |
+| **GLMM 구조** | 조건부 GLM + 정규 랜덤효과 | 13-3 |
+| **이차 주변 분산** | 랜덤효과 → 과산포 메커니즘 | 13-3 |
+| **준-우도 추정** | $U = D^T V^{-1}(y-\mu) = 0$ + 보조 방정식 | 13-4 |
+
+### 현대적 연결
+
+GLMM 은 현대 응용 통계의 주류. 다음 영역에서 필수:
+
+- **임상 시험** — 반복 측정 · 다기관 연구.
+- **교육 연구** — 학교·학급·학생 계층.
+- **환경 과학** — 사이트·날짜 교차 측정.
+- **유전학** — 가족 구성원 상관 처리.
+- **A/B 테스트** — 사용자 세션 · 반복 노출 (§Experimentation 카테고리와 크로스).
+
+Ch.14 의 아이디어는 이들 모든 분야의 뼈대가 된다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [GLM 적합 알고리즘 — IRLS (McCullagh §2.5)](./01-6-glm-fitting-algorithm.qmd)
+- [Quasi-likelihood Functions (McCullagh Ch.9)](./08-1-quasi-likelihood-overview.qmd) — 준-우도 추정의 이론적 기반
+- [Log-linear Models (McCullagh Ch.6)](./05-1-log-linear-overview.qmd)
+
+**직접 관련 — 교차 영역**
+
+- [Joint Modelling of Mean and Dispersion (McCullagh Ch.10)](./09-1-joint-mean-dispersion-overview.qmd) — 단일 수준 분산 모형화
+- [Over-dispersion in Binomial (McCullagh §4.5)](./03-5-overdispersion.qmd) — 랜덤효과의 특수 사례
+- [Poisson-Gamma Mixture → Negative Binomial](./10-2-parameters-in-variance-function.qmd) — 랜덤효과와 과산포의 수학적 등가
+
+**카테고리 밖 관련 주제**
+
+- [LDA/Mixed Model 개관](../LDA/) — GLMM 의 종단 데이터 응용
+- [반복 측정 ANOVA](../143-rm-anova.qmd)
+- [Hierarchical Bayesian Models](../bayesian/00-5-ch5-hierarchical.qmd)
+
+**후속 주제 — Ch.14 심화 (placeholder)**
+
+- [Linear Mixed Models — 결핵균 assay 상세 (McCullagh §14.2)](./13-2-linear-mixed-models.qmd)
+- [Non-Linear Mixed Models — GLMM 구조 (McCullagh §14.3)](./13-3-nonlinear-mixed-models.qmd)
+- [Parameter Estimation — 준-우도 상세 (McCullagh §14.4)](./13-4-glmm-parameter-estimation.qmd)
+- [Salamander Mating Experiment (McCullagh §14.5)](./13-5-salamander-mating.qmd)
+- [Ch.14 Exercises (McCullagh §14.7)](./13-6-ch14-exercises.qmd)
