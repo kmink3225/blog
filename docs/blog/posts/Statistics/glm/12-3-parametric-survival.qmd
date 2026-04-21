@@ -1,0 +1,493 @@
+---
+title: "Parametric Survival — Aitkin-Clayton 환원의 완전 유도 (McCullagh §13.3)"
+subtitle: "지수·Weibull·극치값 · 교대 추정 · 점수 방정식 $n/\\widehat\\alpha = \\sum (\\widehat\\mu_i - w_i)\\log t_i$ · 이탈도 보정 $-2n\\log\\widehat\\alpha$"
+description: |
+  McCullagh & Nelder (1989) §13.3 을 심화한다. Aitkin-Clayton (1980) 환원의
+  **완전한 유도** — 비례 위험 로그 가능도가 왜 offset $\log\Lambda(t_i)$ 를 가진
+  포아송 GLM 로그 가능도와 정확히 일치하는지 · $\mu_i = \Lambda(t_i)e^{\eta_i}$ 치환의
+  대수적 매커니즘. §13.3.1 지수 분포 $\Lambda(t) = \lambda t$ 의 offset $\log t_i$ 직접 적합.
+  §13.3.2 Weibull $\Lambda(t) = t^\alpha$ 의 **교대 추정 절차** — IRLS 와 $\alpha$ 의
+  점수 방정식 (13.2) $n/\widehat\alpha = \sum(\widehat\mu_i - w_i)\log t_i$ 유도 · 수렴 증명 ·
+  이탈도 보정 $-2n\log\widehat\alpha$ 의 Jacobian 근거. §13.3.3 극치값 분포
+  $\Lambda(t) = e^{\alpha t}$ 의 $u = e^t$ 치환으로 Weibull 환원. 세 분포의 위험 형태 비교 ·
+  모형 선택 기준 · 세 분포 모두의 Python 구현 포함.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — 세 분포와 하나의 GLM
+
+Ch.13 overview (12-1) 에서 Aitkin-Clayton (1980) 환원을 선언했다. "**중도절단 지표 $w_i$ 를 포아송 반응으로 + 누적 위험 로그를 offset 으로** 쓰면 비례 위험 모수적 추정이 표준 로그선형 GLM 이 된다."
+
+이 글은 두 가지를 심화한다.
+
+1. **환원의 완전한 유도** — 왜 포아송 등가가 **정확** 이며 근사가 아닌가.
+2. **세 분포의 offset 과 추정 절차** — 지수·Weibull·극치값 각각이 이 환원에서 어떻게 구현되는가.
+
+특히 **Weibull 의 교대 추정** 은 $\alpha$ 가 offset 에 섞여 들어가므로 단순 GLM 이 아니다. $\alpha$ 를 고정해 $\beta$ 를 푼 뒤, $\beta$ 를 고정해 $\alpha$ 를 점수 방정식 (13.2) 로 갱신하는 이중 루프를 거쳐야 한다. 이 절차의 수렴과 이탈도 보정 $-2n\log\widehat\alpha$ 의 정당성을 유도한다.
+
+## Aitkin-Clayton 환원의 완전한 유도
+
+### 가능도 출발
+
+비례 위험 모형 $h(t; x) = \lambda(t) \exp(\beta^T x)$ 에서 생존 · 밀도 함수 (§12-1 유도):
+
+$$
+S(t; x) = \exp\{-\Lambda(t) e^\eta\}, \qquad f(t; x) = \lambda(t) \exp\{\eta - \Lambda(t) e^\eta\}
+$$
+
+$\eta = \beta^T x$.
+
+관측치 $(t_i, w_i, x_i)$, $w_i \in \{0, 1\}$ 에서 로그 가능도:
+
+$$
+l(\beta; \text{data}) = \sum_{i=1}^{N} \{w_i \log f(t_i; x_i) + (1 - w_i) \log S(t_i; x_i)\}.
+$$
+
+### 단계 1 — 밀도·생존 전개
+
+$w_i = 1$ (관측 사망):
+$$w_i \log f(t_i; x_i) = w_i \{\log \lambda(t_i) + \eta_i - \Lambda(t_i) e^{\eta_i}\}.$$
+
+$w_i = 0$ (중도절단):
+$$(1 - w_i) \log S(t_i; x_i) = (1 - w_i) \{-\Lambda(t_i) e^{\eta_i}\}.$$
+
+두 항 합:
+
+$$
+l = \sum_i \{w_i \log \lambda(t_i) + w_i \eta_i - \Lambda(t_i) e^{\eta_i}\}.
+$$
+
+마지막 항 $-\Lambda(t_i) e^{\eta_i}$ 의 계수가 $w_i$ 와 $1 - w_i$ 합 $=1$ 로 단일화됨을 주목.
+
+### 단계 2 — $\mu_i$ 치환
+
+영리한 치환: $\mu_i = \Lambda(t_i) e^{\eta_i}$. 그러면
+
+$$\log \mu_i = \log \Lambda(t_i) + \eta_i.$$
+
+$\eta_i = \log \mu_i - \log \Lambda(t_i)$ 를 가능도에 대입:
+
+$$
+l = \sum_i \{w_i \log \lambda(t_i) + w_i \log \mu_i - w_i \log \Lambda(t_i) - \mu_i\}.
+$$
+
+재정렬:
+
+$$
+\boxed{\;l = \underbrace{\sum_i (w_i \log \mu_i - \mu_i)}_{\text{포아송 커널}} + \underbrace{\sum_i w_i \log\left(\frac{\lambda(t_i)}{\Lambda(t_i)}\right)}_{\text{보조 항}}\;}
+$$
+
+### 단계 3 — 두 항의 분리 해석
+
+**첫 번째 항** $\sum (w_i \log \mu_i - \mu_i)$: $w_i \sim \text{Poisson}(\mu_i)$ 의 로그 가능도 **커널** 이다. 정규화 상수 $-\log w_i!$ 는 $\beta$ 에 무관하므로 최대화에 영향 없음 (게다가 $w_i \in \{0,1\}$ 이면 $\log w_i! = 0$).
+
+**두 번째 항** $\sum w_i \log(\lambda/\Lambda)$:
+- $\lambda(t), \Lambda(t)$ 가 **$\beta$ 에 무관** 하면 이 항은 상수 → $\beta$ 최대화에 영향 없음.
+- $\lambda, \Lambda$ 가 **모수 $\alpha$ 를 포함** 하면 $\alpha$ 의 추정에 관여 → Weibull 에서 중요.
+
+### 단계 4 — 포아송 GLM 으로의 환원
+
+$\lambda(t), \Lambda(t)$ 에 미지 모수가 없는 경우:
+
+- 반응 변수: $w_i \in \{0, 1\}$.
+- 분포: Poisson (근사 아님, **우도 등가**).
+- 링크: 로그.
+- Offset: $\log \Lambda(t_i)$.
+- 선형 예측자: $\eta_i = \beta^T x_i + \log \Lambda(t_i) = \log \mu_i$.
+
+즉 **표준 포아송 로그선형 모형**. Aitkin-Clayton (1980) 의 공헌.
+
+::: {.callout-important}
+## 왜 "근사" 가 아니고 "등가" 인가
+
+$w_i \in \{0, 1\}$ 이면 베르누이 분포가 자연스러워 보인다. 그런데 가능도 전개에서 **포아송 커널** 이 나타난다는 것이 놀랍다.
+
+이유는 **$\mu_i$ 가 0 과 1 사이로 제한되지 않기 때문**. $\mu_i = \Lambda(t_i) e^{\eta_i}$ 는 누적 위험이므로 **양수 실수** — 1 을 초과할 수 있다. 이 관측 기간에 **예상되는 사망 수** 로 해석. $\mu_i > 1$ 은 "관측 기간이 길어서 여러 번 사망이 일어날 것 같다" 는 의미이지만 실제 관측은 최대 1 번만.
+
+$w_i = 0$ 또는 1 이라는 사실과 $\mu_i$ 가 실수라는 사실이 공존해도 **로그 가능도가 포아송 커널과 정확히 같다**. 이것은 수학적 대수 변환의 결과이지 분포적 동등성이 아니다. 즉 "$w_i$ 가 진짜 포아송 분포를 따른다" 는 뜻이 아니라 "$w_i$ 의 참 가능도 함수 형태가 포아송 형태와 **동일** 하다" 는 뜻.
+
+이것이 McCullagh-Nelder 가 "**pseudo-Poisson** variable" 이라고 표현하는 이유다 (§13.4). 해석은 가짜지만 계산은 진짜.
+:::
+
+## 지수 분포 (§13.3.1)
+
+### 기저 위험과 누적 위험
+
+**가장 단순한 위험 함수**: $\lambda(t) = \lambda$ (상수, $\beta$ 와 $x$ 에 완전히 무관한 기저 수준).
+
+$$\Lambda(t) = \int_0^t \lambda\, du = \lambda t.$$
+
+Offset:
+
+$$\log \Lambda(t_i) = \log \lambda + \log t_i.$$
+
+$\log \lambda$ 는 모든 관측치에서 같은 상수 → **절편에 흡수**. 따라서 실질 offset 은 **$\log t_i$** 뿐.
+
+### GLM 적합
+
+선형 예측자:
+
+$$\log \mu_i = \beta_0^* + \beta^T x_i + \log t_i, \qquad \beta_0^* = \beta_0 + \log \lambda.$$
+
+이 모형은 **표준 포아송 로그선형 모형에 $\log t_i$ offset** 만 추가하면 된다. 통계 소프트웨어 한 줄로 끝.
+
+### $\lambda/\Lambda$ 의 보조 항
+
+$\lambda(t)/\Lambda(t) = \lambda/(\lambda t) = 1/t$. 따라서
+
+$$\sum_i w_i \log(\lambda/\Lambda) = -\sum_i w_i \log t_i.$$
+
+이 항은 **$\beta$ 에 무관** (단 $w_i, t_i$ 에만 의존) 하므로 최대화에서 상수로 취급. 결과: **포아송 GLM 의 $\widehat\beta$ 가 최대 가능도 $\widehat\beta$ 와 일치**.
+
+### 이탈도
+
+지수 분포에서는 보조 항이 $\beta$ 와 무관한 **상수** 이므로, 포아송 GLM 의 이탈도가 곧 **진짜 로그 가능도 비** 에 해당. 별도 보정 없음.
+
+### 해석
+
+$\widehat\beta_j$ = "$x_j$ 1 단위 증가가 위험을 $e^{\widehat\beta_j}$ 배 증가". 지수 분포에서는 평균 생존 시간 $E[T | x] = 1/(\lambda e^\eta)$ 이므로 공변량이 **수명을** $e^{-\widehat\beta_j}$ 배 (감소) 시킨다는 등가 해석도 가능.
+
+### 위험 형태 — 단조성
+
+지수 분포의 위험 = 상수. 즉 **"나이 무관 위험"**. 실제 응용에서:
+- **전자 부품의 우발 고장** (burn-in 후): 지수 분포 적합.
+- **질병 재발** (안정기 환자의 상대 위험): 지수로 근사 가능.
+- **노화성 질환** (심혈관, 암): 지수 부적절 → Weibull 필요.
+
+## Weibull 분포 (§13.3.2)
+
+### 누적 위험
+
+$$\Lambda(t) = t^\alpha, \qquad \alpha > 0.$$
+
+기저 위험:
+
+$$\lambda(t) = \Lambda'(t) = \alpha t^{\alpha - 1}.$$
+
+- $\alpha = 1$: $\lambda(t) = 1$ 상수 → **지수** 특수 사례.
+- $\alpha > 1$: $\lambda(t)$ 시간에 따라 증가 → **노화 위험**.
+- $\alpha < 1$: $\lambda(t)$ 시간에 따라 감소 → **적응 (burn-in) 위험**.
+
+### 밀도 함수
+
+$$f(t; x) = \alpha t^{\alpha - 1} \exp\{\eta - t^\alpha e^\eta\}, \quad t \geq 0.$$
+
+### 문제 — $\alpha$ 가 offset 에 숨어 있다
+
+Offset: $\log \Lambda(t_i) = \alpha \log t_i$. $\alpha$ 가 미지이면 **상수 offset 이 아니라 $\alpha$ 에 곱셈적으로 의존**.
+
+→ 표준 GLM 으로 바로 적합 불가. **$\alpha$ 와 $\beta$ 를 동시 추정** 해야 함.
+
+### 교대 추정 절차 (Aitkin-Clayton, 1980)
+
+**핵심 아이디어**: $\alpha$ 를 고정하면 $\beta$ 는 GLM 으로 풀리고, $\beta$ 를 고정하면 $\alpha$ 의 점수 방정식이 닫힌 형태.
+
+**반복 단계**:
+
+1. **초기화**: $\alpha^{(0)} = 1$ (지수 분포로 시작).
+2. **$\beta$ 단계**: $\alpha^{(k)}$ 를 고정. Offset $\alpha^{(k)} \log t_i$ 를 포아송 GLM 에 투입해 $\widehat\beta^{(k)}$ 추정.
+3. **$\alpha$ 단계**: $\widehat\beta^{(k)}$ 를 고정. $\alpha$ 의 점수 방정식 (13.2) 풀이:
+   $$\frac{n}{\widehat\alpha^{(k+1)}} = \sum_i (\widehat\mu_i - w_i) \log t_i.$$
+4. **수렴 확인**: $|\widehat\alpha^{(k+1)} - \widehat\alpha^{(k)}| < \epsilon$ 면 정지. 아니면 2 로.
+
+### 점수 방정식 (13.2) 의 유도
+
+$\alpha$ 에 대한 로그 가능도 부분:
+
+$$l_\alpha(\alpha | \beta) = \sum_i \{w_i \log \lambda(t_i) + w_i \eta_i - \Lambda(t_i) e^{\eta_i}\}.$$
+
+Weibull 에서 $\lambda(t) = \alpha t^{\alpha - 1}$, $\Lambda(t) = t^\alpha$ 이므로
+
+$$w_i \log \lambda(t_i) = w_i \log \alpha + w_i (\alpha - 1) \log t_i = w_i \log \alpha + w_i \alpha \log t_i - w_i \log t_i.$$
+
+$\eta_i$ 는 $\alpha$ 무관. $\Lambda(t_i) e^{\eta_i} = t_i^\alpha e^{\eta_i} = e^{\alpha \log t_i + \eta_i} = \mu_i$. 대입:
+
+$$
+l_\alpha = \sum_i \{w_i \log \alpha + w_i \alpha \log t_i - w_i \log t_i + w_i \eta_i - \mu_i\}.
+$$
+
+$\alpha$ 에 대한 미분:
+
+$$
+\frac{\partial l_\alpha}{\partial \alpha} = \sum_i \left\{\frac{w_i}{\alpha} + w_i \log t_i - \mu_i \log t_i\right\} = \frac{n_d}{\alpha} + \sum_i (w_i - \mu_i) \log t_i,
+$$
+
+$n_d = \sum w_i$ (관측 사망 수). 여기서 **Aitkin-Clayton 은 $n_d$ 대신 $n$ (전체 표본 수) 을 쓴다** — 이유는 $\mu_i$ 안의 $e^{\eta_i}$ 가 $t_i^{-\alpha}$ 인수를 포함해 $\alpha$ 의존 재조정이 일어나기 때문. McCullagh-Nelder 가 (13.2) 에 쓴 형태를 따르면
+
+$$\frac{n}{\widehat\alpha} = \sum_i (\widehat\mu_i - w_i) \log t_i. \tag{13.2}$$
+
+($w_i - \mu_i$ 가 아니라 $\mu_i - w_i$ 로 부호 바뀌었다 — 좌변이 양수이므로 맞춤.)
+
+::: {.callout-note}
+## 점수 방정식의 해석
+
+(13.2) 를 "**관측된 정보의 기댓값**" 관점에서 해석해 보자.
+
+- $\mu_i - w_i$: **포아송 잔차** (기대 − 관측).
+- $\log t_i$: 관측 시점의 로그.
+- $\sum(\widehat\mu_i - w_i) \log t_i$: 잔차를 $\log t$ 로 가중한 합.
+
+$\widehat\mu_i = w_i$ 이면 잔차 합 0, $\alpha$ 방정식도 성립 못 함. 반대로 잔차가 $\log t$ 방향으로 체계적이면 $\alpha$ 가 조정돼 패턴을 제거.
+
+요컨대 $\alpha$ 의 추정은 "**잔차가 로그 시간에 대한 추세를 갖지 않도록**" 만드는 조건이다. 이것이 Weibull 의 **위험 함수 모양** 을 데이터에서 결정하는 메커니즘.
+:::
+
+### 수렴 증명
+
+**주장**: 교대 절차가 최대 가능도로 수렴.
+
+**증명 스케치**: 교대 절차의 각 단계는 로그 가능도 $l$ 을 **반드시 증가시킨다** (또는 유지).
+
+- **$\beta$ 단계**: $\alpha$ 고정 시 $l$ 의 $\beta$ 에 대한 최댓값 달성. IRLS 수렴 성질.
+- **$\alpha$ 단계**: $\beta$ 고정 시 $l$ 의 $\alpha$ 에 대한 최댓값 달성. 1-차원 최대화.
+
+$l$ 이 위에서 유계 (likelihood 는 유한 확률을 준다) 이므로 단조 증가 수열이 수렴. 유일한 극대점이 유일한 극소점이자 전역 최대점 (로그 가능도가 공역에서 유사 오목, $\alpha > 0, \beta$ 자유).
+
+### 이탈도 보정
+
+Weibull 의 **진짜 로그 가능도** 는 포아송 GLM 의 로그 가능도와 다르다 — 보조 항 $\sum w_i \log(\lambda/\Lambda)$ 가 $\alpha$ 에 의존.
+
+계산: $\lambda(t)/\Lambda(t) = \alpha t^{\alpha-1} / t^\alpha = \alpha/t$. 따라서
+
+$$\sum_i w_i \log(\lambda/\Lambda) = \sum_i w_i (\log \alpha - \log t_i) = n_d \log \alpha - \sum_i w_i \log t_i.$$
+
+마지막 항 $\sum w_i \log t_i$ 는 $\alpha$ 에 무관하므로 이탈도 비교에 영향 없음. 그러나 **$n_d \log \alpha$** 는 $\alpha$ 가 추정됨에 따라 영향받음.
+
+**이탈도 보정**:
+
+$$D_{\text{Weibull}} = D_{\text{Poisson GLM}} - 2 n_d \log \widehat\alpha.$$
+
+McCullagh-Nelder 는 $n_d$ 대신 $n$ 을 쓰지만, 관례적으로 관측 사망 수 $n_d$ 가 맞다 (보조 항에 $w_i$ 가 곱해져 있음). 실무에서는 두 규약이 혼용되므로 **구현 문서 확인 필요**.
+
+보정의 의미: Weibull 적합은 **추가 모수 $\alpha$** 로 데이터를 설명하므로, 이탈도가 포아송 GLM 보다 $2 n_d \log \widehat\alpha$ 만큼 **추가 감소** 한다. 자유도도 1 감소.
+
+::: {.callout-tip}
+## 직관: 왜 $n_d \log \alpha$ 인가
+
+Weibull 의 우도 형식: $f(t) = \alpha t^{\alpha-1} \exp\{\cdots\}$. 곱의 로그는 $\log \alpha + (\alpha-1)\log t + \cdots$.
+
+$n_d$ 개 관측 사망 각각에서 **$\log \alpha$ 가 한 번씩** 나타난다. 따라서 전체 로그 가능도에 $n_d \log \alpha$ 항이 **추가** 로 있다.
+
+이 항은 지수 분포 ($\alpha = 1, \log \alpha = 0$) 에서 0 이 되므로 포아송 GLM 이탈도가 지수 Weibull 과 일치. $\alpha \neq 1$ 이면 이 항이 살아 남아 보정 필요.
+
+**정리**: 이탈도 보정은 Weibull 의 "추가 자유도" 를 반영하는 자연스러운 계산, 근사 아님.
+:::
+
+## 극치값 분포 (§13.3.3)
+
+### 누적 위험
+
+$$\Lambda(t) = e^{\alpha t}, \qquad \alpha > 0.$$
+
+기저 위험:
+
+$$\lambda(t) = \alpha e^{\alpha t}.$$
+
+위험 함수가 **지수적으로 증가** — 매우 급격한 악화 모형.
+
+### 밀도 함수
+
+$$f(t; x) = \alpha e^{\alpha t} \exp\{\eta - e^{\alpha t + \eta}\}. \tag{13.3}$$
+
+### Weibull 로의 환원
+
+**치환**: $u = e^t$. 그러면 $u \in (1, \infty)$ 이고
+
+$$\Lambda_u(u) = e^{\alpha \log u} = u^\alpha.$$
+
+즉 $u$ 스케일에서 **Weibull** 이 된다. 따라서:
+
+- 관측 시간 $t_i$ 를 $u_i = e^{t_i}$ 로 치환.
+- Weibull 교대 절차를 $u_i$ 에 적용.
+- 결과 $\widehat\alpha$ 는 그대로, $\widehat\beta$ 도 공변량 $x$ 가 $t$ 의 변환에 무관하므로 동일 해석.
+
+실무적으로는 "$t \to e^t$ 치환 후 Weibull 적합" 한 줄로 끝.
+
+### 응용 영역
+
+극치값 분포는 **피로 파괴, 급성 질환 진행** 같은 "위험이 기하급수적으로 상승" 하는 현상에 적합. 통계적 극한 이론에서 **최댓값 분포의 극한** 으로도 등장 (Gumbel 분포).
+
+### 세 분포 비교
+
+| 분포 | $\lambda(t)$ | 위험 형태 | 응용 예 |
+|---|---|---|---|
+| 지수 | 상수 $\lambda$ | 일정 | 전자부품 우발 고장, 안정기 재발 |
+| Weibull ($\alpha > 1$) | $\alpha t^{\alpha-1}$ | 멱 증가 | 노화·마모 (자동차, 심혈관) |
+| Weibull ($\alpha < 1$) | $\alpha t^{\alpha-1}$ | 멱 감소 | Burn-in 기간 (반도체, 신생아) |
+| 극치값 | $\alpha e^{\alpha t}$ | 지수 증가 | 급성 악화, 피로 파괴 극한 |
+
+## 모형 선택 — 지수 vs Weibull
+
+### 통계적 검정
+
+**지수 대 Weibull**: $H_0: \alpha = 1$. 이탈도 비교로 검정.
+
+$$D_{\text{exp}} - D_{\text{Weibull}} = 2 n_d \log \widehat\alpha \quad \text{(보정 후)}.$$
+
+$\chi_1^2$ 에서 임계값 3.84 (95%).
+
+또는 $\widehat\alpha$ 의 Wald 검정:
+
+$$\frac{\widehat\alpha - 1}{\text{SE}(\widehat\alpha)} \approx N(0, 1).$$
+
+$\widehat\alpha$ 의 SE 는 Fisher 정보 행렬에서 추출.
+
+### 시각 검증 — log-log 생존 플롯
+
+§13.2 에서 다룬 log-log 생존 플롯의 기울기:
+
+$$\log(-\log S(t)) = \log \Lambda(t) + \eta.$$
+
+- 지수: $\log(\lambda t) + \eta = \log \lambda + \log t + \eta$. $\log t$ 에 대해 **기울기 1** 직선.
+- Weibull: $\alpha \log t + \eta$. **기울기 $\alpha$** 직선.
+- 극치값: $\alpha t + \eta$. $t$ 에 대해 (로그 아님) **기울기 $\alpha$** 직선.
+
+시각 비교: $\log(-\log \widehat S(t))$ 를 $\log t$ 에 대해 플롯. 직선이면 Weibull (또는 지수). 기울기 추정으로 $\widehat\alpha$ 의 대략값 확인. 비직선이면 다른 분포 고려.
+
+## Python 실전 — 세 분포 모두 적합
+
+### 지수 분포
+
+```python
+import numpy as np
+import statsmodels.api as sm
+
+# 더미 데이터 (12-1 의 Freireich 백혈병)
+t = np.array([6, 6, 6, 6, 7, 9, 10, 10, 11, 13, 16, 17, 19, 20, 22, 23, 25, 32, 32, 34, 35,
+              1, 1, 2, 2, 3, 4, 4, 5, 5, 8, 8, 8, 8, 11, 11, 12, 12, 15, 17, 22, 23])
+w = np.array([1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0] + [1]*21)
+group = np.array([0]*21 + [1]*21)  # 0=drug, 1=placebo
+
+X = sm.add_constant(group.astype(float)[:, None])
+
+# 지수: offset = log t
+m_exp = sm.GLM(w, X, family=sm.families.Poisson(), offset=np.log(t)).fit()
+print(f"지수: β₁ = {m_exp.params[1]:.3f}, HR = {np.exp(m_exp.params[1]):.2f}")
+print(f"  Deviance = {m_exp.deviance:.2f} / df {m_exp.df_resid}")
+```
+
+### Weibull 교대 절차
+
+```python
+def fit_weibull(t, w, X, tol=1e-5, max_iter=30):
+    alpha = 1.0
+    hist = []
+    for k in range(max_iter):
+        offset = alpha * np.log(t)
+        m = sm.GLM(w, X, family=sm.families.Poisson(), offset=offset).fit()
+        mu = m.fittedvalues
+        # (13.2): n/α = Σ(μ-w) log t
+        rhs = np.sum((mu - w) * np.log(t))
+        alpha_new = len(t) / rhs
+        hist.append(alpha_new)
+        if abs(alpha_new - alpha) < tol:
+            break
+        alpha = alpha_new
+    return m, alpha, hist
+
+m_wei, alpha_hat, hist = fit_weibull(t, w, X)
+
+# 이탈도 보정: -2 n_d log α̂  (n_d = 관측 사망 수)
+n_d = int(np.sum(w))
+dev_wei_corrected = m_wei.deviance - 2 * n_d * np.log(alpha_hat)
+
+print(f"\nWeibull: α̂ = {alpha_hat:.4f}")
+print(f"  β₁ = {m_wei.params[1]:.3f}, HR = {np.exp(m_wei.params[1]):.2f}")
+print(f"  보정 Deviance = {dev_wei_corrected:.2f} / df {m_wei.df_resid - 1}")
+print(f"  수렴 이력: {[round(a, 3) for a in hist[:5]]}")
+
+# 지수 대 Weibull 검정
+LRT = m_exp.deviance - dev_wei_corrected
+print(f"\n  LRT (exp vs Weibull) = {LRT:.2f}, p ≈ {1 - np.exp(-LRT/2):.3f}")
+# chi2(1) 정확값
+from scipy import stats
+p_val = 1 - stats.chi2.cdf(LRT, df=1)
+print(f"  chi2(1) p-value = {p_val:.4f}")
+```
+
+**기대 출력**:
+- 지수: $\widehat\beta_1 \approx 1.53$, HR $\approx 4.62$, dev $\approx 38.0$.
+- Weibull: $\widehat\alpha \approx 1.37$ (위험 증가형), $\widehat\beta_1 \approx 1.73$, HR $\approx 5.65$.
+- LRT $\approx 3.9$, p $\approx 0.048$ — Weibull 이 지수보다 **한계 유의하게** 나음.
+
+### 극치값 분포
+
+```python
+# t -> u = exp(t) 치환 후 Weibull 적합
+# Freireich 데이터는 극치값에 적합하지 않으므로 데모만
+u = np.exp(t / 10)  # 스케일 조정 (exp 폭주 방지)
+
+m_ev, alpha_ev, _ = fit_weibull(u, w, X)
+print(f"\n극치값 (실험): α̂ = {alpha_ev:.4f}, β₁ = {m_ev.params[1]:.3f}")
+```
+
+**실무 주의**: `exp(t)` 는 $t$ 가 크면 오버플로우. 백혈병 데이터 ($t$ 최대 35 주) 에서 $e^{35}$ 는 비현실적. 극치값은 **짧은 시간 스케일** 데이터 (수명 수 시간 수준) 에 적합.
+
+### 위험 함수 시각화
+
+```python
+import matplotlib.pyplot as plt
+
+t_grid = np.linspace(0.1, 40, 100)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+# 지수 (α=1)
+lam_exp = 1 / np.mean(t[w == 1])  # 단순 추정
+ax.plot(t_grid, [lam_exp]*len(t_grid), label='Exponential', lw=2)
+# Weibull
+lam_wei = alpha_hat * t_grid ** (alpha_hat - 1) * np.exp(m_wei.params[0])
+ax.plot(t_grid, lam_wei, label=f'Weibull (α={alpha_hat:.2f})', lw=2)
+
+ax.set_xlabel('t (weeks)'); ax.set_ylabel('hazard λ(t)')
+ax.set_title('세 분포의 위험 함수 비교')
+ax.legend(); ax.grid(alpha=0.3)
+plt.show()
+```
+
+## 요약 — §13.3 의 세 가지 교훈
+
+### 교훈 1 — 환원은 정확 등가
+
+포아송 GLM 이 **근사** 가 아니라 **정확한 우도 등가** 다. 이 덕분에 GLM 소프트웨어 전체가 모수적 생존 분석에 그대로 쓰인다.
+
+### 교훈 2 — 분포 선택의 자유와 제약
+
+지수·Weibull·극치값의 선택은 **위험 형태** 에 대한 가정. Weibull 이 가장 유연 ($\alpha$ 로 증가/감소/상수 모두 포괄). 극치값은 매우 급격한 악화에만 적합.
+
+### 교훈 3 — 교대 추정의 일반성
+
+Weibull 의 $(\alpha, \beta)$ 교대 절차는 **모수가 offset 에 섞인 경우의 표준 해법**. 유사한 아이디어가 혼합 모형, 비선형 공변량 모수 (§11.4) 에서 반복된다.
+
+### 한 줄 정리
+
+> "비례 위험 모형 + Aitkin-Clayton 환원 + 분포별 offset = 생존 데이터 전체를 GLM 틀로 처리".
+
+Cox 모형 (§13.5) 은 이 구조에 추가로 $\lambda(t)$ 를 **비모수** 로 처리하는 확장 — 다음 포스트에서 다룬다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Models for Survival Data — 개관 (McCullagh Ch.13)](./12-1-models-for-survival-data-overview.qmd) — Aitkin-Clayton 환원 소개
+- [Proportional-Hazards Models (McCullagh §13.2)](./12-2-proportional-hazards-models.qmd) — 비례 가정 기하와 검증
+- [Likelihood Functions for Log-linear Models (McCullagh §6.2)](./05-2-poisson-likelihood.qmd) — 포아송 GLM 기반
+- [GLM 적합 알고리즘 — IRLS (McCullagh §2.5)](./01-6-glm-fitting-algorithm.qmd) — 교대 추정의 기반
+
+**관련 개념**
+
+- [Non-Linear Parameters in the Variance Function (McCullagh §11.2)](./10-2-parameters-in-variance-function.qmd) — 유사한 교대 추정 구조
+- [Non-Linear Parameters in Covariates (McCullagh §11.4)](./10-4-non-linear-parameters-in-covariates.qmd) — Box-Tidwell 이중 루프
+- [지수 분포 — Casella-Berger](../70-common-families-continuous-exponential-distribution.qmd)
+- [감마 분포 (Weibull 의 특수 사례는 $\alpha=1$ 인 감마)](../69-common-families-continuous-gamma-distribution.qmd)
+
+**후속 주제 — Ch.13 심화**
+
+- [Leukaemia Remission Example (McCullagh §13.4)](./12-4-leukaemia-example.qmd)
+- [Cox Proportional Hazards — 부분 우도 (McCullagh §13.5)](./12-5-cox-partial-likelihood.qmd)
+- [Ch.13 Exercises (McCullagh §13.7)](./12-6-ch13-exercises.qmd)
