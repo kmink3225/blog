@@ -1,0 +1,458 @@
+---
+title: "Further Topics — 편향 보정·Bartlett 조정·GAM (McCullagh Ch.15)"
+subtitle: "$O(n^{-1})$ MLE 편향의 보조 회귀 · LRT 의 $O(n^{-2})$ 향상 · Hastie-Tibshirani back-fitting"
+description: |
+  McCullagh & Nelder (1989) Ch.15 Further Topics 전체를 개관한다. 책의 마지막 본문 장으로
+  세 가지 현대 주제를 압축 소개: (1) §15.2 **편향 보정** — MLE 의 $O(n^{-1})$ 편향
+  $b^r = -\frac{1}{2}\kappa^{r,s}\kappa^{t,u}\kappa_{s,t,u}$ 이 canonical link 에서
+  **보조 선형 회귀** $b = (X^TWX)^{-1}X^TW\xi$ 로 단순화되는 이유, non-canonical 모형에서
+  $\xi_i = -\frac{1}{2}(\mu''/\mu')Q_{ii}$ 로의 변형, 이항 모형의 **$1 - p/m_\cdot$ shrinkage**
+  근사. (2) §15.3 **Bartlett 조정** — 우도비 통계량 $\Lambda$ 의 기대값이
+  $p(1 + b_p) + O(n^{-2})$, 조정 $\Lambda' = \Lambda/(1+b_p)$ 가 $\chi_p^2$ 에 $O(n^{-2})$ 정확,
+  복합 귀무가설의 $b_{pq} = (pb_p - qb_q)/(p-q)$. (3) §15.4 **Generalized Additive Models**
+  (Hastie-Tibshirani, 1986) — 선형 $\sum\beta_j x_j$ 를 평활 $\sum f_j(x_j)$ 로 확장하는
+  back-fitting 알고리즘, running-lines/cubic-spline 평활, span 교차검증, effective d.f.
+  $\text{tr}(2S - S^TWSW^{-1})$. 세 주제가 GLM 를 확장하는 세 가지 방향 — 정확도 개선 ·
+  점근 근사 개선 · 함수 형태 일반화.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — 책의 마지막 장이 남긴 세 가지 확장 방향
+
+Ch.15 는 McCullagh-Nelder (1989) 의 **마지막 본문 장**. 책 전체를 관통하는 "작고 확신할 수 있는 가정 → GLM 틀 → 필요 시 확장" 철학에서, **필요한 확장** 이 되는 세 가지 주제를 간결히 소개한다.
+
+| 확장 방향 | Ch.15 섹션 | 핵심 기법 |
+|---|---|---|
+| **추정의 정확도** | §15.2 | 편향 보정 $O(n^{-1})$ → 0 |
+| **점근 근사의 정확도** | §15.3 | Bartlett 조정 $O(n^{-1})$ → $O(n^{-2})$ |
+| **함수 형태 일반화** | §15.4 | GAM — 선형 → 평활 |
+
+세 주제 모두 **Ch.1-14 의 표준 GLM 이 할 수 있는 것** 을 각자의 방향에서 **한 단계 더 정밀하게** 만든다. 작은 표본 · 정밀 가설 검정 · 비선형 공변량 효과 같은 실무 이슈에 대응.
+
+1989 년 당시에는 "**미래 연구 방향**" 성격이 강했지만, 이후 30 년간 각각이 **표준 도구** 로 정착했다. GAM 은 특히 **현대 머신러닝과 통계학의 경계** 에서 왕성하게 발전 중.
+
+이번 포스트는 세 주제를 개관한다. 각 주제 심화는 Ch.15 안에 이미 있지만 (15.2.3 Lizard, 15.3.3 exponential regression), **대부분의 후속 발전은 Ch.15 바깥** 에서 일어났다. 현대 실무 연결점을 맺으면서 McCullagh-Nelder 의 틀이 어떻게 확장됐는지 맥락을 제시한다.
+
+## §15.2 — 편향 보정
+
+### 문제 — MLE 의 $O(n^{-1})$ 편향
+
+MLE $\widehat\beta$ 는 일치성 (consistency) 을 갖지만 **유한 표본에서 편향**. 점근 전개:
+
+$$E(\widehat\beta - \beta) = b_1/n + O(n^{-2}).$$
+
+$b_1/n$ 이 **$O(n^{-1})$ 편향 항**. 표본 크기 $n$ 이 크면 SE 와 비교해 무시 가능, 작으면 **SE 의 10-30%** 에 달할 수 있음.
+
+### 언제 편향 보정이 필요한가
+
+실무 기준:
+
+1. **$n$ 이 작다** (몇십 수준).
+2. **모수 수 $p$ 가 $n$ 에 비해 크다** ($p/n > 0.1$).
+3. **이항 로지스틱 · 포아송 회귀** 에서 극단 확률 / 희귀 이벤트.
+
+이 조건에서 $O(n^{-1})$ 편향이 **점 추정과 SE 모두를 왜곡**. 보정이 SE 의 2-10% 수준에서 추정을 교정.
+
+### Canonical Link 의 공식 (15.1)
+
+**Canonical link 모형** (이항 로짓, Poisson 로그, Gamma 역수, 정규 항등) 에서 편향 벡터:
+
+$$b^r = -\frac{1}{2} \kappa^{r,s} \kappa^{t,u} \kappa_{s,t,u}. \tag{15.1}$$
+
+(tensor notation, 반복 지표 summation.)
+
+- $\kappa^{r,s}$: 역 Fisher 정보 행렬 $(X^TWX)^{-1}$ 의 $(r,s)$ 원소.
+- $\kappa_{s,t,u} = \sum_i x_s^i x_t^i x_u^i \kappa_{3i}$: **세 지표 누율 배열**. $\kappa_{3i}$ 는 관측치 $i$ 의 3차 누율.
+
+### 보조 선형 회귀로의 환원 (15.3)
+
+직접 (15.1) 을 계산하기보다 **보조 GLM**:
+
+$$b = (X^T W X)^{-1} X^T W \xi = \text{regression of } \xi \text{ on } X \text{ with weight } W. \tag{15.3}$$
+
+**$\xi$ 벡터**:
+
+$$\xi_i = -\frac{1}{2} Q_{ii} \frac{\kappa_{3i}}{\kappa_{2i}}, \quad Q = X(X^TWX)^{-1}X^T$$
+
+$Q_{ii}$ = 햇 행렬 대각 원소 (= 레버리지). $\kappa_{2i}, \kappa_{3i}$ = 2, 3차 누율.
+
+### 해석 — "레버리지 × 왜도" 의 가중 잔차
+
+공식 구조의 직관:
+
+$$\xi_i \propto h_i \cdot \text{skewness}_i.$$
+
+- **레버리지 $h_i$** 큰 점: 공변량 공간의 외톨이. 적합에 강한 영향.
+- **3차 누율 / 분산** (= 왜도): 분포의 비대칭 정도. 포아송 $\kappa_3/\kappa_2 = 1$, 이항 $\kappa_3/\kappa_2 = 1 - 2\pi$.
+
+**핵심**: $\xi_i$ 는 "**비대칭 분포 + 고레버리지**" 점에서 큼. 이런 점들이 MLE 편향의 주 원천.
+
+### Non-Canonical 모형 (15.2.2)
+
+링크가 non-canonical (예: 이항 probit, cloglog) 이면 $\xi$ 공식이 변형:
+
+$$\xi_i = -\frac{1}{2} \frac{\mu''_i}{\mu'_i} Q_{ii}. \tag{15.4}$$
+
+$\mu', \mu''$ 는 역링크의 1, 2차 미분.
+
+일반 링크별 $\xi_i$:
+
+| Link | $\xi_i$ |
+|---|---|
+| identity | 0 |
+| log | $-Q_{ii}/2$ |
+| logit | $Q_{ii}(\pi_i - 1/2)$ |
+| probit | $Q_{ii}\eta_i/2$ |
+| c-log-log | $Q_{ii}(e^{\eta_i} - 1)/2$ |
+
+### 이항 모형의 근사 (15.5)
+
+이항 로지스틱 모형에서 **근사 공식**:
+
+$$b \simeq p\beta/m_{\cdot}, \qquad m_{\cdot} = \sum m_i.$$
+
+$p$ = 모수 수, $m_{\cdot}$ = 총 binomial denominators.
+
+**수정된 MLE**: $\widehat\beta^{\text{corrected}} = \widehat\beta - \widehat b \simeq \widehat\beta (1 - p/m_{\cdot})$.
+
+::: {.callout-tip}
+## 직관: 편향 보정 = "원점으로 축소 (shrinkage)"
+
+$(1 - p/m_{\cdot})$ 배로 축소. 이것은 **Stein-type shrinkage** 의 특수 사례.
+
+- $m_{\cdot} \gg p$ (큰 표본): 거의 1 — 보정 미미.
+- $m_{\cdot} \sim p$: 수축 현저 — 거의 0 으로 당김.
+
+**수축 방향**: MLE 가 극단 추정치를 내는 경향 (특히 perfect separation 근방) 을 **원점 방향으로 완화**. 이것이 편향 보정의 실용적 해석.
+
+Firth (1993) 가 이 아이디어를 일반화해 **"penalized likelihood"** 로 모든 이항 MLE 를 **항상 유한하게** 만드는 기법을 제안. 현대 Logistic regression 패키지의 `firth=TRUE` 옵션이 이것.
+:::
+
+### 현대적 연결 — Firth · penalized MLE
+
+- **Firth (1993)**: 편향 벡터의 선형 보정이 아니라 **penalized log-likelihood** $l^*(\beta) = l(\beta) + \frac{1}{2}\log|I(\beta)|$ 를 최대화해 같은 편향 보정 달성. $\widehat\beta^{\text{Firth}}$ 는 항상 유한.
+- **Puhr 외 (2017)**: 희귀 이벤트 로지스틱 회귀에서 Firth 가 표준. `R logistf` 패키지.
+- **Bayesian 축소**: 편향 보정이 **weak prior 하의 사후 평균** 과 유사한 역할 — DA/PM 해석.
+
+## §15.3 — Bartlett 조정
+
+### 문제 — 우도비 통계량의 $\chi^2$ 근사 오차
+
+**단순 귀무가설** $H_0: \theta = \theta_0$ 에 대한 우도비:
+
+$$\Lambda = 2\{l(\widehat\theta) - l(\theta_0)\} = D(Y; \theta_0) - D(Y; \widehat\theta).$$
+
+점근적으로 $\Lambda \sim \chi^2_p$, $p = \dim(\theta)$.
+
+**문제**: 유한 표본에서 $E(\Lambda) \neq p$. 오차:
+
+$$E(\Lambda) = p + \epsilon_p + O(n^{-2}) = p(1 + b_p) + O(n^{-2}).$$
+
+$b_p = \epsilon_p/p$ 가 **Bartlett 조정 인수**. $O(n^{-1})$ 크기.
+
+### 조정 통계량 (Bartlett 1937)
+
+**조정된 통계량**:
+
+$$\Lambda' = \Lambda / (1 + b_p).$$
+
+**주장**: $\Lambda'$ 의 cumulant 가 $\chi^2_p$ 의 cumulant 와 **$O(n^{-2})$ 까지** 일치. 즉 **한 차수 더 정확** 한 $\chi^2$ 근사.
+
+### 모든 cumulant 동시 보정
+
+놀라운 수학적 사실 (식 15.6):
+
+$$\kappa_r(\Lambda) = (r-1)! \cdot 2^{r-1} \cdot p \cdot (1 + b_p)^r + O(n^{-2}).$$
+
+우변의 $(r-1)! \cdot 2^{r-1} \cdot p$ 는 **$\chi^2_p$ 의 $r$-차 cumulant**. 즉 $\Lambda$ 의 모든 cumulant 가 $\chi^2$ cumulant 의 **$(1 + b_p)^r$ 배**.
+
+따라서 $\Lambda' = \Lambda/(1 + b_p)$ 의 cumulant 는:
+
+$$\kappa_r(\Lambda') = \kappa_r(\Lambda) / (1 + b_p)^r = (r-1)! \cdot 2^{r-1} \cdot p + O(n^{-2}).$$
+
+**모든 차수 cumulant** 가 $\chi^2_p$ 과 일치. 분포 수렴 자동.
+
+::: {.callout-important}
+## 직관: 왜 단일 스칼라 조정이 모든 cumulant 를 맞추는가
+
+일반적으로 분포의 모양을 맞추려면 **여러 모수** 를 조정해야 한다 (평균, 분산, 왜도, 첨도...). 그런데 우도비 통계량의 경우 **한 개 스칼라** $b_p$ 만 조정하면 된다.
+
+이유: $\Lambda$ 가 점근적으로 **$\chi^2$ 의 스케일 교란** 형태로 근사. 즉 $\Lambda \approx (1 + b_p) \chi^2_p$. 단일 스케일 인수를 보정하면 $\chi^2$ 자체가 된다.
+
+이 깔끔한 구조가 Bartlett 조정의 수학적 우아함이다. Fisher 가 초기에 이 현상을 "cumulant 비례" 로 관찰했고, Bartlett (1937) 이 정식 이론화.
+:::
+
+### 복합 귀무가설 (15.7-15.8)
+
+실무에서 더 흔한 상황: **중첩된** 귀무가설. $H_0: \theta \in \Theta_0$, $\dim(\Theta_0) = q < p$.
+
+**복합 우도비**:
+
+$$\Lambda(\widehat\theta, \widehat\theta_0) = 2\{l(\widehat\theta) - l(\widehat\theta_0)\} = D(Y; \widehat\theta_0) - D(Y; \widehat\theta).$$
+
+점근적으로 $\chi^2_{p-q}$.
+
+**Bartlett 조정 인수** (15.8):
+
+$$b_{pq} = \frac{p b_p - q b_q}{p - q} = \frac{\epsilon_p - \epsilon_q}{p - q}.$$
+
+두 전체 모형의 조정 인수의 **가중 차이**.
+
+### Lattice Case 의 한계
+
+McCullagh-Nelder 경고: **이산 반응** (lattice case, 예: 이항 · Poisson) 에서 Bartlett 조정이 **연속 분포만큼 도움이 되지 않을 수 있다**. 오차가 $O(n^{-1/2})$ 에 묶여서 더 줄지 않음.
+
+실무 함의: **연속 반응 (정규, Gamma, 역 가우시안)** 에서는 Bartlett 조정을 확신 있게 쓸 수 있고, 이산 반응에서는 신중하게.
+
+### 현대적 연결
+
+- **Cordeiro (1983, 1987)**: GLM 의 구체적 Bartlett 공식. 컴퓨터 계산 용이.
+- **Lawley-Bartlett 식 확장**: 다변량 분석, VC 모형 등으로 확장.
+- **Bootstrap-Bartlett**: 이론적 $b_p$ 대신 **bootstrap 평균** 으로 $\widehat b_p$ 를 추정. 계산 간단.
+- **Saddlepoint 근사** vs Bartlett: 두 기법이 보완적. Saddlepoint 가 꼬리 정확, Bartlett 이 중심 정확.
+
+## §15.4 — Generalized Additive Models (GAM)
+
+### 동기 — 선형 예측자의 경직성
+
+표준 GLM 의 선형 예측자:
+
+$$\eta = \sum_j \beta_j x_j.$$
+
+**가정**: 각 공변량이 **선형적으로** 기여. 비선형 관계가 있으면:
+- §12.6.4 의 부분 잔차 플롯으로 탐지.
+- Box-Cox 멱 변환으로 교정.
+- **수동** 변환 필요 → 분석자 시간 · 판단.
+
+### Hastie-Tibshirani (1986, 1987ab) 의 제안
+
+**Generalized Additive Model**:
+
+$$\eta = \alpha + \sum_j f_j(x_j),$$
+
+$f_j(\cdot)$ 는 **데이터로부터 추정된 평활 함수**. 형태는 데이터가 결정.
+
+**두 특성**:
+1. **가산적** (additive) — 공변량 간 교호작용 없음 (기본 모형).
+2. **비선형** — 각 $f_j$ 가 임의 형태.
+
+### 평활 함수의 식별성
+
+$f_j$ 는 **상수까지** 식별 가능. $f_j$ 와 $f_j + c$ 가 동일 적합값. 규약: $\sum_i f_j(x_{ij}) = 0$ 으로 중심화.
+
+이는 요인 (factor) 변수에서 reference level 을 정하는 것과 유사.
+
+### Local Scoring Algorithm
+
+GAM 적합의 Hastie-Tibshirani 절차:
+
+**Step 1 — 초기화**:
+- $f_j^{(0)}(x_j) = 0$, $\widehat\alpha^{(0)} = g(\bar y)$ — 절편만 있는 GLM 에서 시작.
+
+**Step 2 — 반복**: for $i = 0, 1, \ldots$ 까지 수렴까지:
+
+1. 현재 적합값 $\widehat\mu^{(i)}$, 조정 종속변량 $z^{(i)}$, 가중치 $W^{(i)}$ 계산 (IRLS 표준).
+2. **Back-fitting** 시작:
+   - For $j = 1, \ldots, p$:
+     - 부분 잔차 $r_j = z - \widehat\eta + \widehat f_j(x_j)$.
+     - $r_j$ 를 $x_j$ 에 대해 **평활** (running-lines, cubic spline, LOWESS 등) → 새 $\widehat f_j$.
+3. $\widehat\alpha$ 업데이트, $\widehat\eta$ 재계산.
+4. Deviance 수렴 확인.
+
+### Back-fitting 의 직관
+
+Back-fitting 은 **"각 함수를 다른 함수들 고정한 상태로 개별 업데이트"**. 다변량 최적화의 **block coordinate descent** 와 같은 원리.
+
+Hastie-Tibshirani 의 증명: back-fitting 이 (mild 조건 하) **수렴** 하며 유일 해를 준다.
+
+::: {.callout-tip}
+## 직관: Back-fitting 은 "부분 잔차 + 평활" 의 반복
+
+$f_j$ 업데이트에서 부분 잔차 $r_j$ 는 **"$x_j$ 만의 효과" 를 남기고 다른 효과 제거** 한 것. 이것을 $x_j$ 로 평활하면 $f_j$ 의 **새 추정**.
+
+다른 공변량의 효과가 바뀌면 $r_j$ 가 바뀌고, 따라서 $f_j$ 도 바뀐다. 이 순환이 수렴할 때까지 반복.
+
+원리는 단순하지만 결과는 강력 — 임의의 비선형 관계를 자동 탐지.
+:::
+
+### Span 선택
+
+**Span** (이웃 크기) $= $ 평활에 사용할 점 비율. 보통 0.4-0.5 사용.
+
+- **Span ↑**: 부드러운 곡선, 편향 크고 분산 작음.
+- **Span ↓**: 들쭉날쭉 곡선, 편향 작고 분산 큼.
+
+§12.4 Smoothing 포스트 (11-4) 에서 논의한 **편향-분산 trade-off** 와 같은 구조.
+
+**교차검증 (CV) 최적화**:
+
+$$\text{span}^* = \arg\min_{\text{span}} \text{CV deviance}.$$
+
+자동 선택 가능. R `mgcv::gam()`, Python `statsmodels.gam` 이 이 절차 제공.
+
+### Effective Degrees of Freedom
+
+평활이 **비모수** 이므로 전통적 d.f. 개념 부적절. 대안:
+
+$$\text{eff d.f.} = \text{tr}(2S - S^T W S W^{-1}),$$
+
+$S$ = 평활 햇 행렬 ($z$ 를 $\widehat f$ 로 사상), $W$ = GLM 가중치. Running-lines 평활에서 $\text{tr}(S)$ 로 단순화.
+
+**해석**: "몇 개 자유 모수" 를 쓴 듯한 effective 복잡도. Span ↓ → eff d.f. ↑. 선형 회귀 ($f_j = \beta_j x_j$) 는 eff d.f. = 1.
+
+### 평활 방법 선택
+
+McCullagh-Nelder 가 언급:
+
+| 평활기 | 특성 | 구현 복잡도 |
+|---|---|---|
+| **Running-lines** | 국소 선형 회귀 | 쉬움, 기본값 |
+| **Cubic spline** | 벌점화 스플라인 | 중간, GCV 선택 |
+| **Running-median** | 비선형, 이상점 강건 | 중간 |
+| **Local likelihood** | 각 이웃에서 우도 최대화 | 어려움 |
+
+현대 실무: **Cubic spline (P-splines, thin-plate)** 이 Wood (2017) 이후 표준. `mgcv` 패키지.
+
+### GAM 의 두 용도
+
+1. **서술 도구**: 공변량의 **개별 기여 함수** 를 시각화. "나이가 어떻게 사망률에 영향?" 같은 질문 답.
+2. **탐색 도구**: 적절한 변환을 **제안**. GAM 곡선이 로그 형태면 $\log x$ 를 GLM 에 투입하는 근거.
+
+McCullagh-Nelder 의 조언: **"GAM 은 서술/탐색용, 최종 모형은 더 조심스럽게"**. 랜덤 잡음에 과적합 위험.
+
+### Partially Additive Models
+
+일부 공변량은 선형, 일부는 평활:
+
+$$\eta = \sum_{j \in L} \beta_j x_j + \sum_{j \in S} f_j(x_j).$$
+
+**현실적 균형**: 이론이 명확한 공변량 (지수, 멱지수 등) 은 선형 / 파라메트릭, 비선형성이 불확실한 공변량은 GAM. 현대 실무의 표준 접근.
+
+### GAM 의 확장 — 교호작용 · 공간 · 시계열
+
+McCullagh-Nelder (1989) 는 간단히 언급하지만 이후 30 년간 큰 발전:
+
+- **교호작용 $f_{12}(x_1, x_2)$**: thin-plate splines, tensor products.
+- **공간 효과** $f(\text{lat}, \text{lon})$: Gaussian random fields, SPDE.
+- **시계열 / 주기성** $f(t)$: cyclic splines, Fourier 기저.
+- **랜덤효과 GAM (GAMM)**: Ch.14 GLMM + GAM 결합. `mgcv::gamm()`.
+
+**Wood (2017)** "*Generalized Additive Models: An Introduction with R*" 이 현대 GAM 의 결정적 교재.
+
+## 세 주제의 공통 교훈
+
+### 교훈 1 — "작은 개선이 실무에선 중요"
+
+| 기법 | 개선 크기 |
+|---|---|
+| 편향 보정 | SE 의 5-30% (작은 표본) |
+| Bartlett 조정 | p-value 의 10-20% |
+| GAM | 복잡한 비선형에서 질적 개선 |
+
+첫 두 개는 **양적 개선**, GAM 은 **질적 개선**. 용도에 따라 선택.
+
+### 교훈 2 — 모두 GLM 틀 안에서 작동
+
+세 기법 모두 **GLM 을 대체하지 않고 확장**:
+
+- 편향 보정: 보조 GLM 회귀.
+- Bartlett: 우도비 통계량의 스케일 조정.
+- GAM: GLM 의 선형 예측자만 평활로 교체.
+
+이것이 McCullagh-Nelder 의 일관된 철학 — **"기본 틀을 깨지 말고 방법을 추가하라"**.
+
+### 교훈 3 — 이후 30 년의 발전
+
+세 주제 모두 1989 년 이후 대폭 확장:
+
+- **편향 보정** → Firth penalized, Bayesian weak priors, bias-reduction library.
+- **Bartlett** → saddlepoint, bootstrap calibration, 모수 검정의 높은 차수 근사.
+- **GAM** → GAMM, 교호작용 tensor, Bayesian GAM (`brms`, Stan), 최근 Deep Learning 과의 hybrid.
+
+**McCullagh-Nelder (1989) 는 이 발전들의 출발점** 을 제공했다.
+
+## Ch.1-15 시리즈 완주
+
+이번 포스트로 McCullagh-Nelder (1989) 의 **모든 본문 장** 을 블로그에서 다뤘다. Ch.15 연습문제 (§15.6) 는 후속 포스트 (14-2) 로 남겨 둔다.
+
+### 전체 지도
+
+| 장 | 주제 | 블로그 포스트 수 |
+|---|---|---|
+| Ch.1-2 | GLM 이론 기초 | 00 + 01-1 ~ 01-8 (9) |
+| Ch.3 | 정규 선형 모형 | 02-1 ~ 02-10 (10) |
+| Ch.4 | 이항 데이터 | 03-1 ~ 03-6 (6) |
+| Ch.5 | 다범주 데이터 | 04-1 ~ 04-7 (7) |
+| Ch.6 | 로그선형 모형 | 05-1 ~ 05-7 (7) |
+| Ch.7 | 조건부 우도 | 06-1 ~ 06-5 (5) |
+| Ch.8 | Gamma · 상수 CV | 07-1 ~ 07-5 (5) |
+| Ch.9 | 준-우도 | 08-1 ~ 08-7 (7) |
+| Ch.10 | 공동 평균·분산 | 09-1 ~ 09-9 (8) |
+| Ch.11 | 비선형 모수 | 10-1 ~ 10-6 (6) |
+| Ch.12 | Model Checking | 11-1 ~ 11-10 (10) |
+| Ch.13 | 생존 데이터 | 12-1 ~ 12-6 (6) |
+| Ch.14 | 분산 성분 (GLMM) | 13-1 ~ 13-6 (6) |
+| **Ch.15** | **Further Topics** | **14-1** (이 포스트) |
+| **합계** | | **~100 포스트** |
+
+### 책 전체의 지적 유산
+
+McCullagh-Nelder (1989) 가 통계학사에 남긴 공헌:
+
+1. **지수족 GLM 이라는 통일 언어**: Normal, Poisson, Binomial, Gamma 등을 **한 틀** 로.
+2. **IRLS 알고리즘**: 현대 통계 소프트웨어의 엔진.
+3. **Deviance 개념**: 모형 적합도 · 모형 비교의 표준.
+4. **Quasi-likelihood**: 분포 가정 최소화한 추정.
+5. **Model Checking 체계**: 체계적 vs 개별 이상점의 분리.
+6. **GLMM 의 원형**: 준-우도 + 랜덤효과.
+
+이 틀 위에서 30 년간:
+- **Bayesian 혁명** (BUGS → Stan)
+- **비모수·반모수 통계** (GAM, boosting)
+- **머신러닝과의 융합** (GBM, neural nets with GLM readout)
+- **인과 추론** (IPW, propensity scores)
+
+모두 McCullagh-Nelder 의 틀을 **기본 시작점** 으로 삼았다.
+
+## 관련 주제
+
+**선행 지식 — GLM 이론 전반**
+
+- [GLM 이론 기초 (McCullagh §2)](./01-1-glm-theory-foundation.qmd)
+- [GLM 적합 알고리즘 — IRLS (McCullagh §2.5)](./01-6-glm-fitting-algorithm.qmd)
+- [Model Checking 개관 (McCullagh Ch.12)](./11-1-model-checking-overview.qmd)
+- [Components of Dispersion (McCullagh Ch.14)](./13-1-components-of-dispersion-overview.qmd)
+
+**§15.2 편향 보정 관련**
+
+- [점근 편향 및 소표본 추론 (Casella-Berger Ch.10)](../123-asymptotic-hypothesis-testing.qmd)
+- Firth, D. (1993). "Bias reduction of maximum likelihood estimates." *Biometrika* 80: 27-38.
+- R `logistf`, Python `statsmodels` 의 Firth 옵션
+
+**§15.3 Bartlett 관련**
+
+- [LRT 와 Wald 검정 (McCullagh §12.3 Score tests)](./11-3-score-tests-for-extra-parameters.qmd)
+- Cordeiro, G. M. (1987). "On the corrections to the likelihood ratio statistics." *Biometrika* 74: 265-274.
+
+**§15.4 GAM 관련**
+
+- [Smoothing as an Aid (McCullagh §12.4)](./11-4-smoothing-as-aid.qmd) — 평활 기법의 기초
+- [부분 잔차 플롯 (McCullagh §12.6.4)](./11-6-checks-for-systematic-departure.qmd) — GAM 의 시각적 동기
+- Hastie, T. & Tibshirani, R. (1990). *Generalized Additive Models*. Chapman & Hall.
+- Wood, S. N. (2017). *Generalized Additive Models: An Introduction with R* (2nd ed.). CRC.
+- R `mgcv`, Python `pygam`, `statsmodels.gam`
+
+**카테고리 밖 참고**
+
+- [Machine Learning — GBM, boosting](../../Machine_Learning/) — GAM 과의 관계
+- [Deep Learning 기초](../../Deep_Learning/) — 최근 GAM-NN hybrid
+
+**후속 주제**
+
+- [Ch.15 Exercises (McCullagh §15.6)](./14-2-ch15-exercises.qmd) — 책의 마지막 연습문제
