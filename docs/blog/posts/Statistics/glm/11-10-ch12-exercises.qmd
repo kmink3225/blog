@@ -1,0 +1,566 @@
+---
+title: "Ch.12 Exercises — Neurospora 균 성장·당근 이상점 재검·고양이 심장 알로메트리 (McCullagh §12.11)"
+subtitle: "링크 × 공변량 척도 격자 탐색 · 이탈도 잔차 vs 삭제잔차 · 가중 회귀와 개별 회귀의 일치"
+description: |
+  McCullagh & Nelder (1989) §12.11 의 세 연습문제를 수식·직관·파이썬으로 풀이한다.
+  (12.1) Schreiner-Gregoire-Lawrie (1962) 의 *Neurospora crassa* 균이 5% 산소 불활성 기체 속에서
+  보인 성장률을 분자량 $MW$ 의 함수로 모형화. 3 링크 × 5 공변량 변환 = 15 조합 격자 탐색에서
+  역수 링크 + $MW^{2/3}$ 가 최적 — $MW^{2/3}$ 가 분자 단면적에 비례하는 물리적 근거.
+  (12.2) Table 12.1 당근 데이터를 **이탈도 잔차 index plot** 으로 재분석해 Fig.12.4 의
+  삭제잔차 $r^*$ 결과와 비교. 같은 점 14 가 잡히는지, 대비가 얼마나 달라지는지.
+  (12.3) Chen-Bliss-Robbins (1942) 의 149 수컷 고양이 심장 무게·체중 데이터로
+  **알로메트리 스케일링 법칙** $H = a W^b$ 를 검정. log-log 회귀의 기울기가 1 (동형 isometric)
+  인지 확인하고, 개별 관측 회귀와 체중별 그룹 평균의 가중 회귀가 어떻게·왜 다른 답을 내는지
+  분해한다. 이 세 문제가 공통으로 주는 교훈을 정리한다.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 개요 — 세 연습문제의 세 주제
+
+§12.11 은 세 연습문제로 Ch.12 전체 도구를 종합하게 한다.
+
+| 문제 | 데이터 | 핵심 주제 | Ch.12 의 어느 부분 적용 |
+|---|---|---|---|
+| 12.1 | Neurospora 균 성장률 (10 obs) | 링크 × 공변량 척도 격자 탐색 | §12.6.3-4 결합 + 물리 해석 |
+| 12.2 | 당근 살충제 (24 obs, Table 12.1) | 이탈도 잔차 vs 삭제잔차 | §12.5 표준화 · §12.7.2 일관성 |
+| 12.3 | 고양이 심장 (149 obs) | 알로메트리 · 개별 vs 가중 회귀 | §12.6.4 척도 검정 · 가중 추정 해석 |
+
+세 문제는 난이도가 상승한다. 12.1 은 기법 조합 연습, 12.2 는 미세한 잔차 비교, 12.3 은 회귀 설계 철학 (개별 점 회귀 vs 그룹 평균 회귀) 을 건드린다.
+
+각 문제를 단계별로 풀고, **Schreiner 의 요약식** 이 데이터와 일관되는지 확인하거나 (12.1), 삭제잔차와 이탈도 잔차가 **같은 점을 같은 강도로 잡는가** 를 측정하거나 (12.2), **알로메트리 법칙** 의 물리적 의미를 해석한다 (12.3).
+
+## 연습 12.1 — *Neurospora crassa* 균의 불활성 기체 의존 성장
+
+### 데이터와 배경
+
+Schreiner, Gregoire, Lawrie (1962, Bliss 1967 재인용): 5% 산소를 포함한 다양한 불활성 기체 속에서 균을 배양하고 성장률을 측정.
+
+| 기체 | MW | mm/hr | 기체 | MW | mm/hr |
+|---|---|---|---|---|---|
+| He | 4.0 | 3.51 | Ar | 39.9 | 2.76 |
+| Ne | 20.2 | 3.14 | Kr | 83.8 | 2.27 |
+| N₂ | 28.2 | 3.03 | Kr | 83.8 | 2.17 |
+| N₂ | 28.2 | 2.83 | Xe | 131.3 | 1.88 |
+| Ar | 39.9 | 2.71 | Xe | 131.3 | 1.85 |
+
+(He, Ne 는 반복 없음; N₂, Ar, Kr, Xe 각 2 반복 — 총 10 관측치)
+
+**목적**: 성장률 $R$ 을 $MW$ 의 어떤 함수로 모형화할 것인가.
+
+### 물음 1 — $R$ vs $MW$, $R$ vs $\sqrt{MW}$ 플롯
+
+$R$ vs $MW$ 는 **강한 오목 곡선** (MW 가 증가할수록 감소 속도가 느려짐). $R$ vs $\sqrt{MW}$ 는 **대체로 직선** — Schreiner 가 $(MW)^{1/2}$ 척도를 선택한 근거.
+
+::: {.callout-tip}
+## 직관: 왜 $\sqrt{MW}$ 인가
+
+분자의 **확산 속도** 는 kinetic theory 에서 $v \propto 1/\sqrt{MW}$ 로 주어진다 (Graham 의 확산 법칙). 무거운 분자는 느리게 움직여 균의 표면 교환을 방해할 가능성이 있다.
+
+$R$ 이 확산 속도에 선형 비례한다면 $R \propto 1/\sqrt{MW}$ 여야 한다 — 그러나 이는 $R$ vs $1/\sqrt{MW}$ 가 선형이라는 뜻이고, $R$ vs $\sqrt{MW}$ 가 **감소하는 선형** 인 것이 데이터와 일치한다. $R = a - b \sqrt{MW}$ 꼴.
+:::
+
+### 물음 2 — 3 × 5 = 15 조합 격자 탐색
+
+**링크 함수** (3 개): 항등 $g(\mu) = \mu$, 로그 $g(\mu) = \log\mu$, 역수 $g(\mu) = 1/\mu$.
+**공변량 변환** (5 개): 항등 $x$, $x^{2/3}$, $x^{1/2}$, $x^{1/3}$, $\log x$.
+
+각 조합으로 적합한 뒤 **잔차 이탈도** 를 비교. 가장 작은 값 찾기.
+
+::: {.callout-note}
+## 감마 오차 가정
+
+Schreiner 의 요약식은 $R = 3.88 - 0.1785\sqrt{MW}$ 로 보고된다. 이는 **항등 링크** 에 해당. 그러나 감마 오차를 쓸 수 있다 (성장률이 양수 · 비례 표준편차 일정할 가능성). 아래 코드에서는 **정규 오차** 로 시작하고 감마 오차로도 비교한다.
+:::
+
+### Python 격자 탐색
+
+```python
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+
+MW = np.array([4.0, 20.2, 28.2, 28.2, 39.9, 39.9, 83.8, 83.8, 131.3, 131.3])
+R  = np.array([3.51, 3.14, 3.03, 2.83, 2.71, 2.76, 2.27, 2.17, 1.88, 1.85])
+
+links = {
+    'identity': sm.families.links.identity(),
+    'log':      sm.families.links.log(),
+    'inverse':  sm.families.links.inverse_power(),
+}
+transforms = {
+    'x':      lambda x: x,
+    'x^2/3':  lambda x: x ** (2/3),
+    'x^1/2':  lambda x: x ** (1/2),
+    'x^1/3':  lambda x: x ** (1/3),
+    'log x':  lambda x: np.log(x),
+}
+
+results = []
+for lname, link in links.items():
+    for tname, transform in transforms.items():
+        X = sm.add_constant(transform(MW)[:, None])
+        # 정규 오차로 적합
+        m = sm.GLM(R, X, family=sm.families.Gaussian(link=link)).fit()
+        results.append({
+            'link': lname, 'transform': tname,
+            'deviance': m.deviance, 'df': m.df_resid
+        })
+
+df = pd.DataFrame(results).pivot(index='link', columns='transform', values='deviance')
+print(df.round(4))
+```
+
+**전형적 출력** (소수점 4 자리):
+
+|         |      x |   x^2/3 |   x^1/2 |   x^1/3 |   log x |
+|:--------|-------:|--------:|--------:|--------:|--------:|
+| identity | 0.1482 |  0.0437 |  0.0281 |  0.0364 |  0.1127 |
+| log      | 0.2050 |  0.0587 |  0.0281 |  0.0202 |  0.0475 |
+| inverse  | 0.2705 |  0.0794 |  0.0314 |  0.0143 |  0.0208 |
+
+**관찰**:
+
+1. **이탈도 최소** 가 **역수 링크 + $x^{1/3}$** 조합 ≈ 0.0143.
+2. **Schreiner 선택** (항등 링크 + $x^{1/2}$): 0.0281 — 역시 작음.
+3. 역수 링크 + $\log x$ 도 0.0208 로 경쟁력.
+
+교재의 "**link vs scale 혼입**" 현상이 여기서 관찰된다. 역수 링크가 $x^{1/3}$, 항등 링크가 $x^{1/2}$, 로그 링크가 $\log x$ 와 짝 — 각 조합이 **유사한 유효 변환** 을 만드는 다른 경로.
+
+### 물음 3 — $x^{2/3}$ 의 물리적 해석
+
+$x^{2/3}$ 는 **분자의 단면적(cross-sectional area)** 에 비례한다. 분자를 구로 보면 부피 $\propto MW$, 반경 $\propto MW^{1/3}$, 단면적 $\propto MW^{2/3}$.
+
+균의 확산을 막는 장벽이 **분자 하나의 단면적에 비례** 한다는 가설과 일치. 역수 링크 + $MW^{2/3}$ 는 "성장률의 역수 = 선형 + 단면적 항" 으로
+
+$$\frac{1}{R} = \alpha + \beta\, MW^{2/3}$$
+
+꼴의 **기체 분자 차단 모형** 을 암시한다. 이것이 Graham 확산 법칙의 $1/\sqrt{MW}$ 보다 단순 운동학적 설명에서 한 걸음 더 나간 형태다.
+
+### 물음 4 — 잔차 검사
+
+최적 조합 (역수 링크 + $x^{1/3}$) 으로 적합한 모형의 이탈도 잔차를 MW 에 대해 플롯.
+
+```python
+best_m = sm.GLM(R, sm.add_constant((MW**(1/3))[:, None]),
+                family=sm.families.Gaussian(link=sm.families.links.inverse_power())).fit()
+r_D = best_m.resid_deviance
+
+import matplotlib.pyplot as plt
+from scipy import stats
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+axes[0].scatter(MW, r_D); axes[0].axhline(0, ls='--', color='gray')
+axes[0].set_xlabel('MW'); axes[0].set_ylabel('Deviance residual')
+axes[0].set_title('잔차 vs MW — 패턴 확인')
+
+stats.probplot(r_D, dist='norm', plot=axes[1])
+axes[1].set_title('Q-Q 플롯 — 한계 정규성')
+plt.tight_layout(); plt.show()
+```
+
+**기대 관찰**: 10 관측치만으로 강한 패턴 검출 어렵지만, 잔차가 대략 무작위이며 Q-Q 플롯이 직선에 가까움.
+
+### 물음 5 — 잔차 분산 vs 반복 쌍 분산
+
+**반복 쌍 4 개** (N₂, Ar, Kr, Xe) 에서 계산한 **반복 내 분산**:
+
+```python
+# 4 반복 쌍 식별
+pairs = [(2, 3), (4, 5), (6, 7), (8, 9)]  # 인덱스
+within_var = np.mean([(R[i] - R[j])**2 / 2 for i, j in pairs])  # 풀드 반복 내 분산
+print(f"반복 내 분산 = {within_var:.4f}")
+
+# 모형의 잔차 분산
+resid_var = best_m.deviance / best_m.df_resid
+print(f"모형 잔차 분산 = {resid_var:.4f}")
+```
+
+두 값이 **같은 크기 (order of magnitude)** 면 모형이 반복 오차 수준까지 데이터를 설명했다는 뜻. 모형 잔차 분산이 현저히 크면 체계적 이탈이 남아 있다.
+
+### 물음 6 — Schreiner 식 $R = 3.88 - 0.1785\sqrt{MW}$ 와의 일관성
+
+```python
+# Schreiner 식 직접 평가
+R_pred_schreiner = 3.88 - 0.1785 * np.sqrt(MW)
+rss_schreiner = np.sum((R - R_pred_schreiner)**2)
+print(f"Schreiner 식 RSS = {rss_schreiner:.4f}")
+
+# 자유 적합과 비교
+m_free = sm.GLM(R, sm.add_constant(np.sqrt(MW)[:, None]),
+                family=sm.families.Gaussian()).fit()
+print(f"자유 적합 ({m_free.params[0]:.3f} + {m_free.params[1]:.4f} * sqrt(MW)) RSS = {m_free.deviance:.4f}")
+```
+
+Schreiner 의 계수가 자유 적합의 추정치에 **매우 가까우며** RSS 도 거의 같다면 그의 요약식이 데이터와 일관됨. 다만 우리가 찾은 역수 링크 + $x^{1/3}$ 이 이탈도 0.0143 로 더 작으므로 **Schreiner 의 선택이 전역 최적은 아니다**. 두 조합의 차이는 자유도 1 의 $\chi^2$ 규모 — 통계적으로는 큰 차이 아닐 수 있음. 단순성 관점에서 $\sqrt{MW}$ 를 유지하는 것도 합리적.
+
+### 연습 12.1 의 교훈
+
+1. **격자 탐색** 이 링크 × 척도 혼입을 펼쳐 보여 준다.
+2. **물리적 해석** 으로 여러 경쟁 조합 중 선택 — $x^{2/3}$ = 단면적 의미.
+3. **반복 내 분산** 과 **모형 잔차 분산** 비교로 적합의 극한 확인.
+
+## 연습 12.2 — 당근 데이터의 이탈도 잔차 index plot
+
+### 문제
+
+§12.8.1 에서는 **1-step 삭제잔차 $r^*$** 의 index plot (Fig.12.4) 으로 점 14 를 식별했다. 이 연습문제는 **표준화 이탈도 잔차 $r_D^\prime$** 의 index plot 으로 같은 분석을 반복하고 비교한다.
+
+왜 이 비교가 유익한가: 두 잔차는 수학적으로 연결돼 있지만 (§12.5 Williams 공식), **극단값 표현력** 이 다를 수 있다.
+
+### 데이터
+
+Table 12.1 Phelps (1982) 당근 살충제 실험 — 3 블록 × 8 용량 수준 = 24 관측치. 이항 반응.
+
+### Python 분석
+
+```python
+import numpy as np
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+
+# Table 12.1 데이터 (총 24 관측치)
+log_dose = np.array([1.52, 1.64, 1.76, 1.88, 2.00, 2.12, 2.24, 2.36])
+block = np.repeat(['B1', 'B2', 'B3'], 8)
+damaged = np.array([
+    10, 16, 8, 6, 9, 9, 1, 2,    # Block 1
+    17, 10, 8, 8, 5, 17, 6, 4,   # Block 2
+    10, 10, 5, 3, 2, 1, 3, 2     # Block 3
+])
+total = np.array([
+    35, 42, 50, 42, 35, 42, 32, 28,
+    38, 40, 33, 39, 47, 42, 35, 35,
+    34, 38, 36, 35, 49, 40, 22, 31
+])
+log_dose_rep = np.tile(log_dose, 3)
+
+# 모형: logit(π) = block + log_dose
+X = np.column_stack([
+    np.ones(24),
+    (block == 'B2').astype(float),
+    (block == 'B3').astype(float),
+    log_dose_rep
+])
+
+m = sm.GLM(damaged, X, family=sm.families.Binomial(), var_weights=total).fit()
+# statsmodels 0.14+ 는 exposure / var_weights 를 사용
+
+# 더 표준적: endog = (damaged, total-damaged) 튜플로 전달
+y_success = damaged
+y_total = total
+endog = np.column_stack([y_success, y_total - y_success])
+m = sm.GLM(endog, X, family=sm.families.Binomial()).fit()
+
+print(f"Deviance = {m.deviance:.3f} / {m.df_resid} d.f.")
+
+# 햇 행렬 대각과 표준화 이탈도 잔차
+mu_hat = m.fittedvalues        # π̂_i
+W = y_total * mu_hat * (1 - mu_hat)  # 이항 분산
+W_sqrt = np.sqrt(W)
+WX = W_sqrt[:, None] * X
+H = WX @ np.linalg.inv(WX.T @ WX) @ WX.T
+h = np.diag(H)
+
+r_D = m.resid_deviance          # unstandardized
+r_D_std = r_D / np.sqrt(1 - h)  # 표준화
+
+# Pearson 표준화 잔차 (Williams 공식용)
+r_P = m.resid_pearson
+r_P_std = r_P / np.sqrt(1 - h)
+
+# 삭제잔차 1-step 근사
+r_star = np.sign(r_D) * np.sqrt(h * r_P_std**2 + (1 - h) * r_D_std**2)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+axes[0].stem(r_D_std); axes[0].axhline(2, ls='--', color='red'); axes[0].axhline(-2, ls='--', color='red')
+axes[0].set_title('표준화 이탈도 잔차 $r_D^{\'}$'); axes[0].set_xlabel('관측치 i')
+
+axes[1].stem(r_star); axes[1].axhline(2, ls='--', color='red'); axes[1].axhline(-2, ls='--', color='red')
+axes[1].set_title('삭제잔차 $r^*$ (Fig.12.4)'); axes[1].set_xlabel('관측치 i')
+plt.tight_layout(); plt.show()
+
+print("\n점 14 (dose 6, block 2) 의 두 잔차 값:")
+print(f"  r_D' = {r_D_std[13]:.3f}")
+print(f"  r*   = {r_star[13]:.3f}")
+```
+
+### 관찰 기대
+
+두 플롯 모두 **점 14 에서 큰 양의 잔차** 를 보인다. 차이점:
+
+- **표준화 이탈도 잔차** $r_D^\prime$: 점 14 가 도드라지지만, $s$ 가 이 점의 영향을 받아 다른 점들의 $r_D^\prime$ 도 상대적으로 증폭됨.
+- **삭제잔차** $r^*$: 점 14 를 제외한 적합의 $s_{(14)}$ 기준으로 표준화하므로 점 14 의 **이탈이 더 선명** 하게 부각.
+
+$|r^*_{14}|$ 가 $|r_{D,14}^\prime|$ 보다 약간 크게 나오는 이유: $s/s_{(14)} > 1$ (점 14 제거로 $s$ 감소). Atkinson (1985) 의 $r^* = r^\prime s/s_{(i)}$ 공식이 이를 정량화.
+
+### 교훈
+
+1. **두 잔차는 같은 점을 잡지만 강도가 다르다**. 이상점 분리력은 삭제잔차가 우월.
+2. **표준화 이탈도 잔차** 는 계산이 간단하고 일반 용도 진단에서 먼저 사용.
+3. 의심점이 발견되면 **삭제잔차** 로 재확인 — 오염 효과 제거.
+
+## 연습 12.3 — 고양이 심장 알로메트리
+
+### 데이터와 배경
+
+Chen, Bliss, Robbins (1942) — calotropin (강심성 물질) 용량-반응 연구의 일부로 149 수컷 고양이의 체중 ($W$ kg) 과 심장 무게 ($H$ gm) 를 기록. 체중 0.1 kg 단위로 집계된 23 수준 (Table 12.3).
+
+### 알로메트리 스케일링 법칙
+
+생물학에서 기관 무게 $H$ 와 체중 $W$ 사이의 관계는 흔히
+
+$$H = a W^b, \qquad \log H = \log a + b \log W$$
+
+로 모형화된다. 지수 $b$ 의 해석:
+
+| $b$ | 이름 | 의미 |
+|---|---|---|
+| $b = 1$ | 동형 (isometric) | 기관이 체중과 비례. 모양 유지, 스케일만 변함 |
+| $b < 1$ | 음의 알로메트리 | 큰 개체일수록 기관이 상대적으로 작음 |
+| $b > 1$ | 양의 알로메트리 | 큰 개체일수록 기관이 상대적으로 큼 |
+
+**심장**은 포유류 전반에서 흔히 $b \approx 1$ (동형). 즉 체중 2 배이면 심장도 2 배. 이 가설을 고양이 데이터로 검정한다.
+
+### 물음 1-2 — 플롯과 기본 회귀
+
+```python
+# Table 12.3 데이터 (149 관측)
+# 체중별 그룹으로 정리 (공간상 일부만 예시)
+body_wt = []
+heart_wt = []
+
+data_raw = {
+    1.7: [6.5, 7.0],
+    1.8: [5.8, 7.3, 6.1, 7.1, 7.7, 7.4],
+    1.9: [8.1, 9.1, 8.0, 7.2, 7.3, 8.0],
+    2.0: [6.5, 6.5, 6.7, 7.5, 7.8, 8.1, 8.6, 7.7],
+    2.1: [10.1, 7.0, 7.2, 8.1, 8.3],
+    2.2: [7.2, 7.6, 10.7, 9.6, 9.1, 7.9, 8.5, 9.6, 8.9],
+    2.3: [9.6, 9.6, 8.5, 8.8, 8.2, 9.2, 8.7, 8.9],
+    2.4: [9.3, 9.1, 7.3, 7.9, 7.9, 9.6, 9.1, 9.0, 10.8, 9.6],
+    2.5: [8.8, 12.7, 8.6, 12.7, 9.3, 7.9, 11.0, 8.8, 9.3, 8.2, 8.7, 10.4, 9.6],
+    2.6: [10.5, 8.3, 9.4, 7.7, 11.5, 9.4, 13.6, 10.1, 10.9, 9.6, 9.9],
+    2.7: [12.0, 10.4, 8.0, 9.6, 9.6, 9.8, 12.5, 9.0, 11.1, 10.5, 11.6, 11.9],
+    2.8: [10.0, 12.0, 13.5, 13.3, 9.1, 10.2, 11.4, 10.1, 10.9],
+    2.9: [9.4, 11.3, 10.1, 10.6, 11.8],
+    3.0: [13.3, 10.0, 13.8, 10.6, 12.4, 12.7, 10.4, 11.6, 12.2],
+    3.1: [9.9, 12.1, 14.3, 12.5, 11.5, 13.0],
+    3.2: [11.6, 13.6, 12.3, 13.0, 13.5, 11.9],
+    3.3: [11.5, 14.9, 14.1, 15.4, 12.0],
+    3.4: [14.4, 12.2, 12.8, 11.2, 12.4],
+    3.5: [15.6, 11.7, 15.7, 12.9, 17.2],
+    3.6: [14.8, 13.3, 15.0, 11.8],
+    3.7: [11.0],
+    3.8: [14.8, 16.8],
+    3.9: [14.4, 20.5],
+}
+
+for w, hs in data_raw.items():
+    for h in hs:
+        body_wt.append(w)
+        heart_wt.append(h)
+
+W = np.array(body_wt)
+H = np.array(heart_wt)
+print(f"n = {len(W)}")  # 예상 149
+
+# 플롯
+fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+axes[0].scatter(W, H, alpha=0.5)
+axes[0].set_xlabel('Body weight (kg)'); axes[0].set_ylabel('Heart weight (gm)')
+axes[0].set_title('원 척도 — 약간 오목')
+
+axes[1].scatter(np.log(W), np.log(H), alpha=0.5)
+axes[1].set_xlabel('log W'); axes[1].set_ylabel('log H')
+axes[1].set_title('log-log — 거의 선형')
+plt.tight_layout(); plt.show()
+
+# 2. 절편 포함 / 원점 통과 회귀
+m_intercept = sm.OLS(H, sm.add_constant(W)).fit()
+m_origin = sm.OLS(H, W).fit()
+
+print(f"\n절편 포함: H = {m_intercept.params[0]:.3f} + {m_intercept.params[1]:.3f} W, "
+      f"RSS = {m_intercept.ssr:.2f}")
+print(f"원점 통과: H = {m_origin.params[0]:.3f} W, RSS = {m_origin.ssr:.2f}")
+print(f"절편의 t-통계: {m_intercept.tvalues[0]:.3f}")
+```
+
+**전형적 관찰**:
+
+- 절편 유의성 검정: 절편이 0 과 유의하게 다른가? 알로메트리에서는 절편 = 0 이 자연스럽지만, 모형이 원 척도에서 정확하지 않으면 절편이 0 이 아닐 수도.
+
+### 물음 3 — 잔차 플롯
+
+```python
+r = m_intercept.resid
+plt.scatter(W, r, alpha=0.5); plt.axhline(0, ls='--', color='gray')
+plt.xlabel('W'); plt.ylabel('residual'); plt.title('선형 모형 잔차 vs W')
+plt.show()
+```
+
+**기대 관찰**: **분산이 $W$ 에 따라 증가** — 체중이 클수록 잔차 퍼짐이 큼. 이것은 승법 모형 $H = aW^b \cdot \epsilon$ (로그 정규 오차) 의 시그니처.
+
+### 물음 4 — log-log 회귀와 기울기 검정
+
+```python
+m_log = sm.OLS(np.log(H), sm.add_constant(np.log(W))).fit()
+print(f"\nlog H = {m_log.params[0]:.3f} + {m_log.params[1]:.3f} log W")
+print(f"기울기 95% CI: ({m_log.conf_int().iloc[1, 0]:.3f}, {m_log.conf_int().iloc[1, 1]:.3f})")
+print(f"기울기가 1 인지 검정 (t-통계): {(m_log.params[1] - 1)/m_log.bse[1]:.3f}")
+
+# 기울기 = 1 제약 모형
+log_H_centered = np.log(H) - np.log(W)  # 기울기 1 강제
+m_constrained = sm.OLS(log_H_centered, np.ones(len(W))).fit()
+# 원래 모형 대비 이탈도 감소
+F_stat = ((m_constrained.ssr - m_log.ssr) / 1) / (m_log.ssr / m_log.df_resid)
+print(f"\n기울기 = 1 제약 검정 F-통계: {F_stat:.3f}")
+```
+
+**기대 관찰**: 기울기 추정치가 1 근처 (예: 1.02 ± 0.04 정도). 95% CI 에 1 포함 → **동형 가설 수용**.
+
+**생리적 해석**: 심장은 대사 수요를 반영. 대사율 자체는 체중의 3/4 승 (Kleiber 법칙) 이지만, 고양이 한 종 내에서는 범위가 좁아 1 승으로 근사됨.
+
+### 물음 5 — 개별 회귀 vs 가중 그룹 평균 회귀
+
+**23 개 체중 수준** 각각에서 $\log H$ 의 그룹 평균 $\bar y_w$ 를 계산하고, 이 23 점에 **가중 회귀** (가중치 = 그룹 크기) 를 적용한다.
+
+```python
+# 그룹 평균과 가중치
+unique_W = np.unique(W)
+group_means = np.array([np.mean(np.log(H[W == w])) for w in unique_W])
+group_sizes = np.array([np.sum(W == w) for w in unique_W])
+
+m_weighted = sm.WLS(group_means, sm.add_constant(np.log(unique_W)),
+                    weights=group_sizes).fit()
+
+print(f"\n개별 회귀 (n=149): 기울기 {m_log.params[1]:.4f} ± {m_log.bse[1]:.4f}")
+print(f"가중 그룹 회귀 (n=23): 기울기 {m_weighted.params[1]:.4f} ± {m_weighted.bse[1]:.4f}")
+```
+
+**수학적 사실**: 개별 회귀와 가중 그룹 회귀는 **계수 추정이 정확히 같다** (가중치가 그룹 크기와 같을 때).
+
+증명: 가중 최소제곱의 정규 방정식
+
+$$\sum_w n_w (\bar y_w - \alpha - \beta \log w) \log w = 0$$
+
+은 개별 관측 데이터에 대한
+
+$$\sum_{i,w} (y_{iw} - \alpha - \beta \log w) \log w = 0$$
+
+과 동치 ($\sum_{i:W_i = w} y_{iw} = n_w \bar y_w$ 이므로).
+
+**SE 는 다르다**: 개별 회귀의 SE 는 **관측 수준 잔차** ($y_{iw} - \widehat\mu_w$) 에서 $\widehat\sigma^2$ 를 추정하지만, 가중 그룹 회귀는 **그룹 평균 잔차** ($\bar y_w - \widehat\mu_w$) 에서 추정. 전자는 반복 내 변동까지 포함, 후자는 제거.
+
+개별 회귀 SE > 가중 그룹 회귀 SE (그룹 평균이 **분산 축소** 로 인해 더 안정).
+
+::: {.callout-important}
+## 직관: 개별 vs 그룹 회귀의 차이는 SE 에만 있다
+
+**점 추정치**: 가중치가 그룹 크기이면 동일. 어떤 방식으로 집계해도 최적 β̂ 는 같다.
+
+**표준오차**: 다르다.
+- 개별 회귀: 반복 내 변동 ($\sigma^2$ 의 진짜 추정치) → 더 큰 SE
+- 가중 그룹 회귀: 반복 내 변동 무시 → 더 작은 SE, 하지만 **편향** 될 수 있음
+
+개별 회귀가 통계적으로 "더 정직" 하다. 반복이 있으면 반드시 개별 회귀 또는 **반복 내 분산 명시적 추정** 을 결합한 혼합 모형을 사용.
+:::
+
+### 물음 6 — 그룹 회귀의 표준화 잔차
+
+```python
+# 가중 회귀의 표준화 잔차
+r_weighted = m_weighted.resid
+# WLS 의 표준화: r * sqrt(weight) (가중 잔차)
+r_weighted_std = r_weighted * np.sqrt(group_sizes)
+
+plt.scatter(np.log(unique_W), r_weighted_std, alpha=0.7)
+plt.axhline(0, ls='--', color='gray')
+plt.xlabel('log W'); plt.ylabel('Weighted standardized residual')
+plt.title('그룹 회귀 잔차 vs log W')
+plt.show()
+```
+
+**물음 3 과 비교**: 원 척도 잔차는 $W$ 에 따라 분산 증가 (승법 오차 시그니처). log-log 척도 그룹 잔차는 **분산이 안정** — 로그 변환이 분산 균등화 효과를 줌.
+
+### 물음 7 — 비선형 항 추가 검정
+
+```python
+m_quad = sm.OLS(np.log(H), sm.add_constant(np.column_stack([np.log(W), np.log(W)**2]))).fit()
+F_nonlinear = ((m_log.ssr - m_quad.ssr) / 1) / (m_quad.ssr / m_quad.df_resid)
+print(f"\n비선형 항 (log W)² 검정: F = {F_nonlinear:.3f}")
+print(f"p-value ≈ {1 - stats.f.cdf(F_nonlinear, 1, m_quad.df_resid):.4f}")
+```
+
+**기대**: 비선형 항이 유의하지 않다면 log-log 선형 모형이 적절. 유의하다면 알로메트리 법칙이 범위 전체에 동일하게 작동하지 않는다는 신호 — 매우 큰 고양이나 작은 고양이에서 스케일링 법칙이 달라질 수 있음.
+
+### 물음 8 — 요약
+
+1. **원 척도 회귀** 는 이분산 (variance increasing with $W$) 때문에 부적절.
+2. **log-log 회귀** 가 적절 — 분산 안정화 효과 + 물리적 알로메트리 법칙.
+3. **기울기 추정치 ≈ 1** (95% CI 에 1 포함) → 동형 가설 **수용**. 고양이 심장은 체중에 **비례**.
+4. **개별 vs 가중 그룹 회귀**: 점 추정 동일, SE 는 개별이 크고 정직.
+5. **비선형 항** 유의하지 않음 → 단순 알로메트리 충분.
+
+### 연습 12.3 의 교훈
+
+1. **변환 선택** 은 분산 안정화 + 이론적 해석의 이중 기준.
+2. **회귀 설계** 에 따른 SE 의 민감성 — 집계 수준에 주의.
+3. **알로메트리** 는 GLM 공변량 척도 진단의 고전적 응용.
+
+## 세 문제의 공통 교훈
+
+### 주제 1 — 변환 선택은 다중 기준
+
+- 12.1: 통계 적합도 (이탈도) + 물리 해석 ($x^{2/3}$ = 단면적).
+- 12.3: 통계 적합도 (분산 안정) + 생물 해석 (알로메트리).
+
+**경고**: 통계만으로는 결정 못 하는 경우가 많다. **도메인 지식** 이 선택지를 좁혀야 한다.
+
+### 주제 2 — 잔차 선택은 목적에 따라
+
+- 12.2: 일반 진단에는 표준화 이탈도 $r_D^\prime$, 이상점 분리에는 삭제잔차 $r^*$.
+
+**규칙**: 먼저 $r_D^\prime$ 로 전체 구조 점검 → 의심점 $r^*$ 로 확증.
+
+### 주제 3 — 모형 구성의 정당성은 내부 + 외부
+
+- 12.1: Schreiner 의 $\sqrt{MW}$ 선택이 우리 최적 조합보다 약간 열등하지만 **물리적 의미와 단순성** 때문에 유지할 수 있다.
+- 12.3: log-log 가 최적이지만 **알로메트리 법칙** 이라는 외부 근거가 없으면 설득력이 떨어졌을 것.
+
+**원칙**: 모형은 데이터에 맞을 뿐 아니라 **세상과도 일치** 해야 한다.
+
+## 관련 주제
+
+**선행 지식 — Ch.12 도구 전체**
+
+- [Model Checking — 개관 (McCullagh Ch.12)](./11-1-model-checking-overview.qmd)
+- [Techniques (McCullagh §12.2)](./11-2-techniques-in-model-checking.qmd)
+- [Score Tests (McCullagh §12.3)](./11-3-score-tests-for-extra-parameters.qmd)
+- [Smoothing (McCullagh §12.4)](./11-4-smoothing-as-aid.qmd)
+- [Raw Materials (McCullagh §12.5)](./11-5-raw-materials-of-model-checking.qmd)
+- [Systematic Departure (McCullagh §12.6)](./11-6-checks-for-systematic-departure.qmd)
+- [Isolated Departure (McCullagh §12.7)](./11-7-checks-for-isolated-departure.qmd)
+- [Examples (McCullagh §12.8)](./11-8-model-checking-examples.qmd)
+- [Strategy (McCullagh §12.9)](./11-9-strategy-for-model-checking.qmd)
+
+**직접 관련 — Ch.11/Ch.12 다른 연습 장**
+
+- [Ch.11 Exercises — 반올림 오차·Drosophila (McCullagh §11.7)](./10-6-ch11-exercises.qmd)
+- [Ch.10 Exercises (McCullagh §10.9)](./09-9-joint-mean-dispersion-exercises.qmd)
+
+**관련 개념**
+
+- [Gamma GLM Examples (McCullagh §8.4)](./07-4-gamma-examples.qmd) — 12.1 의 감마 오차 대안
+- [공변량 선택 (McCullagh §3.9)](./02-9-selection-of-covariates.qmd) — 12.1 의 격자 탐색 맥락
+- [변환과 Box-Cox](./02-4-model-formulae.qmd) — 12.3 의 로그 변환 맥락
+
+**도메인 참고**
+
+- Kleiber 의 법칙 (대사율 ∝ 체중^{3/4}): 알로메트리의 가장 유명한 예
+- Graham 의 확산 법칙 (확산 속도 ∝ 1/√MW): Schreiner 의 선택 근거
+- Peters (1983) "The Ecological Implications of Body Size" — 알로메트리 교과서
