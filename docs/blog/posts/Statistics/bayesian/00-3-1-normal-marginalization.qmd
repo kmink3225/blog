@@ -1,0 +1,621 @@
+---
+title: "Ch.3.1~3.3 — 주변화와 정규 $(\\mu, \\sigma^2)$ 의 공동 사후 심화"
+subtitle: "Gelman BDA Ch.3.1~3.3 상세 — nuisance 주변화·Newcomb 광속·정규-Inv-$\\chi^2$ 켤레"
+description: |
+  Gelman et al. *Bayesian Data Analysis* (3rd ed., 2013) Ch.3 전반 세 절을 교재
+  원문 수준으로 심화한다. § 3.1 nuisance 모수 주변화의 두 등가 형태와 시뮬레이션
+  전략·Gibbs 의 원형, § 3.2 정규 $(\mu, \sigma^2)$ 비정보 사전 하의 공동 사후
+  완전 유도·$\bar{y}$ 와 $s^2$ 의 충분성·조건부 $\mu \mid \sigma^2 \sim N(\bar{y}, \sigma^2/n)$·
+  주변 $\sigma^2 \mid y \sim \text{Inv-}\chi^2(n-1, s^2)$·주변 $\mu \mid y \sim t_{n-1}(\bar{y}, s^2/n)$·
+  사후 예측 $t_{n-1}(\bar{y}, s\sqrt{1 + 1/n})$·Newcomb 광속 (1882) 예제의 진짜 값
+  33.0 이 95% 구간 밖에 있는 모델 실패 신호, § 3.3 정규-Inv-$\chi^2$ 켤레 가족의
+  $\mu \mid \sigma^2 \sim N(\mu_0, \sigma^2/\kappa_0)$ 구조와 사후 4 하이퍼파라미터 갱신
+  공식까지, 수식·직관·코드로 완결.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/20/2026
+---
+
+## 이 포스트의 위치 — Ch.3 심화의 첫 조각
+
+[Ch.3 개요](./00-3-0-multiparameter.qmd) 가 Ch.3 전체 (§ 3.1~3.8) 를 훑었다면, 이 포스트는 **§ 3.1~3.3 을 교재 원문 수준으로 풀어 쓴** 심화편이다. 세 절이 함께 묶이는 이유 — **§ 3.1 의 주변화 원리를 § 3.2~3.3 의 정규 $(\mu, \sigma^2)$ 공동 추론에서 최초로 본격 적용** 하기 때문.
+
+::: {.callout-important}
+## § 3.1~3.3 의 한 줄 요약
+
+**"다모수 베이즈의 모든 계산은 '공동 사후 분해' — 조건부 × 주변으로 — 와 '순차적 시뮬레이션' 이라는 두 문장으로 압축된다. 정규 $(\mu, \sigma^2)$ 모델이 이 패턴의 완전한 닫힌 형태 예시다."**
+
+정규-Inv-$\chi^2$ 켤레는 Ch.11 Gibbs 의 원형이자 Ch.14 회귀 분산 추론의 수학적 토대 (Gelman et al., 2013, Ch.3.1~3.3).
+:::
+
+---
+
+## § 3.1 Nuisance 모수의 주변화
+
+### 문제 설정
+
+$\theta = (\theta_1, \theta_2)$ 로 분할, 각각이 벡터일 수 있음. 현재 관심사는 $\theta_1$ 만, $\theta_2$ 는 **nuisance 모수**.
+
+정규 예제. $y \mid \mu, \sigma^2 \sim N(\mu, \sigma^2)$, 두 모수 모두 미지, 관심사는 $\mu$ → $\theta_1 = \mu$, $\theta_2 = \sigma^2$.
+
+### 관심 분포
+
+관측 데이터 조건부 $\theta_1$ 분포 — **$p(\theta_1 \mid y)$**. 공동 사후에서 유도.
+
+$$
+p(\theta_1, \theta_2 \mid y) \propto p(y \mid \theta_1, \theta_2) \, p(\theta_1, \theta_2)
+$$
+
+$\theta_2$ 에 대한 **주변화 (marginalization)**.
+
+$$
+p(\theta_1 \mid y) = \int p(\theta_1, \theta_2 \mid y) \, d\theta_2
+$$
+
+### 분해 형태 — 식 (3.1)
+
+공동 밀도를 조건부 × 주변으로 분해하면.
+
+$$
+p(\theta_1 \mid y) = \int p(\theta_1 \mid \theta_2, y) \, p(\theta_2 \mid y) \, d\theta_2 \tag{3.1}
+$$
+
+**관심 사후 = nuisance 조건부 사후들의 혼합**. 가중치 $p(\theta_2 \mid y)$ 가 "가능한 nuisance 값" 에 대한 중요도.
+
+### 두 등가 관점
+
+**관점 1: "평균 내기"** — $\theta_2$ 의 각 값에서 $\theta_1$ 의 조건부 사후를 계산하고, $\theta_2$ 의 사후 밀도로 가중 평균. 적분의 직접 정의.
+
+**관점 2: "조건부 + 주변 분해"** — 공동 사후를 **$p(\theta_2 \mid y) \times p(\theta_1 \mid \theta_2, y)$** 로 쓰고 $\theta_2$ 를 적분.
+
+두 관점이 동치지만 **계산 전략에 차이**. 두 번째 관점이 실무에서 쓰이는 **순차 시뮬레이션** 을 정당화.
+
+::: {.callout-tip}
+## 직관 — Nuisance 모수의 불확실성이 관심 모수로 전파된다
+
+빈도주의 접근 — $\sigma^2$ 의 점 추정 $\hat{\sigma}^2 = s^2$ 를 대입한 뒤 $\mu$ 추론. 이는 $\sigma^2$ 의 불확실성을 **무시**.
+
+베이즈 접근 — $\sigma^2$ 의 사후 분포 전체를 $\mu$ 추론에 **가중 평균으로 반영**. 결과는 **$\sigma^2$ 불확실성이 자동으로 $\mu$ 의 사후 구간 폭에 기여**. 이것이 $t_{n-1}$ (베이즈) vs $N$ (빈도주의 가정 분산) 차이의 근원.
+:::
+
+### Nuisance 의 일반성
+
+교재의 확장 해석.
+
+> "Nuisance 모수 $\theta_2$ 는 **일반적으로 해석** 될 수 있다. 예를 들어 $\theta_2$ 는 **서로 다른 가능한 하위 모델을 나타내는 이산 성분** 을 포함할 수 있다." (교재)
+
+즉 주변화는 **모델 평균화** (Bayesian model averaging) 의 씨앗. $\theta_2$ 가 "어느 모델을 쓸까" 라는 이산 지표면, 식 (3.1) 은 모델 불확실성까지 반영한 추론이 된다.
+
+### 시뮬레이션 전략
+
+식 (3.1) 의 명시적 적분은 거의 수행하지 않는다 — 대신 **조건부-주변 분리 시뮬레이션**.
+
+1. $\theta_2^{(s)} \sim p(\theta_2 \mid y)$ (주변 사후)
+2. $\theta_1^{(s)} \sim p(\theta_1 \mid \theta_2^{(s)}, y)$ (조건부 사후)
+3. $(\theta_1^{(1)}, \theta_1^{(2)}, \ldots, \theta_1^{(S)})$ 를 $\theta_1$ 의 사후 표본으로 사용
+
+이 두 단계가 식 (3.1) 의 **적분을 간접 수행** 한다. $S$ 개 표본의 히스토그램이 $p(\theta_1 \mid y)$ 의 근사.
+
+::: {.callout-tip}
+## 직관 — Gibbs 표본추출기의 원형
+
+§ 3.1 의 시뮬레이션 전략은 **Ch.11 Gibbs 표본추출기의 가장 단순한 형태**. Gibbs 는 더 일반적 — 모든 모수의 조건부를 순환 업데이트 — 이지만 **2 블록 버전이 정확히 § 3.1 의 절차**.
+
+- **§ 3.1**: $(\theta_1, \theta_2)$, 주변 $\theta_2$ 에서 독립 추출 후 조건부 $\theta_1$
+- **Gibbs**: 복잡한 조건부 구조, 서로 의존하는 여러 블록의 순환 업데이트
+
+정규 $(\mu, \sigma^2)$ 처럼 **한 블록의 주변이 닫힌 형태** 일 때 § 3.1 의 독립 표본이 가능. 다른 경우는 Gibbs 가 필요. 수학적 구조는 같은 아이디어의 일반화.
+:::
+
+---
+
+## § 3.2 정규 $(\mu, \sigma^2)$ 비정보 사전
+
+### 모델과 사전
+
+iid 관측 $y = (y_1, \ldots, y_n)$, $y_i \sim N(\mu, \sigma^2)$, **둘 다 미지**.
+
+**비정보 사전** — 위치·스케일 모수 독립 가정, 위치 균등, 로그 스케일 균등.
+
+$$
+p(\mu, \sigma^2) \propto (\sigma^2)^{-1}
+$$
+
+이는 $p(\mu, \log \sigma) \propto 1$ 과 동치. 각 성분의 비정보 선택의 **곱 형태** — 모수 간 사전 독립.
+
+### 공동 사후 유도
+
+가능도.
+
+$$
+p(y \mid \mu, \sigma^2) = \prod_{i=1}^n \frac{1}{\sqrt{2\pi}\sigma} \exp\left(-\frac{(y_i - \mu)^2}{2\sigma^2}\right) \propto \sigma^{-n} \exp\left(-\frac{1}{2\sigma^2}\sum_{i=1}^n (y_i - \mu)^2\right)
+$$
+
+**핵심 대수 — 제곱합 분해**.
+
+$$
+\sum_{i=1}^n (y_i - \mu)^2 = \sum_{i=1}^n (y_i - \bar{y})^2 + n(\bar{y} - \mu)^2 = (n-1)s^2 + n(\bar{y} - \mu)^2
+$$
+
+여기서 $s^2 = \frac{1}{n-1} \sum (y_i - \bar{y})^2$ 이 표본 분산.
+
+사전 × 가능도.
+
+$$
+p(\mu, \sigma^2 \mid y) \propto \sigma^{-n-2} \exp\left(-\frac{1}{2\sigma^2}\left[(n-1)s^2 + n(\bar{y} - \mu)^2\right]\right) \tag{3.2}
+$$
+
+### 충분통계량
+
+식 (3.2) 가 $(\bar{y}, s^2)$ 에만 의존 → **$(\bar{y}, s^2)$ 가 $(\mu, \sigma^2)$ 에 대한 충분통계량**.
+
+::: {.callout-tip}
+## 직관 — 제곱합 분해의 중요성
+
+$\sum (y_i - \mu)^2$ 을 $\mu$ 에 대한 이차식으로 전개하면 두 항.
+
+- **$(n-1)s^2$** — $\mu$ 와 무관, $\sigma^2$ 정보만
+- **$n(\bar{y} - \mu)^2$** — $\mu$ 에 대한 이차식
+
+이 분해 덕에 **조건부 $\mu \mid \sigma^2$ 이 깔끔한 정규** (두 번째 항만 관여), **주변 $\sigma^2$ 가 Inv-$\chi^2$** (첫 번째 항만 관여) 가 된다. 빈도주의의 Gosset $t$ 유도와 구조적으로 같은 분해.
+:::
+
+### 조건부 $p(\mu \mid \sigma^2, y)$
+
+식 (3.2) 에서 $\sigma^2$ 고정. $\mu$ 에 대한 함수는 $\exp(-n(\bar{y}-\mu)^2/(2\sigma^2))$ — 정규.
+
+$$
+\mu \mid \sigma^2, y \sim N(\bar{y}, \sigma^2/n) \tag{3.3}
+$$
+
+Ch.2.5 의 결과 (알려진 $\sigma^2$ + 균등 $\mu$ 사전) 와 정확히 일치 — **확인**.
+
+### 주변 $p(\sigma^2 \mid y)$
+
+식 (3.2) 에서 $\mu$ 적분.
+
+$$
+p(\sigma^2 \mid y) \propto \int \sigma^{-n-2} \exp\left(-\frac{1}{2\sigma^2}[(n-1)s^2 + n(\bar{y}-\mu)^2]\right) d\mu
+$$
+
+$\mu$ 에 대한 적분은 정규 적분 — $\int e^{-n(\bar{y}-\mu)^2/(2\sigma^2)} d\mu = \sqrt{2\pi\sigma^2/n}$.
+
+$$
+p(\sigma^2 \mid y) \propto \sigma^{-n-2} \exp\left(-\frac{(n-1)s^2}{2\sigma^2}\right) \cdot \sqrt{\sigma^2/n} \propto (\sigma^2)^{-(n+1)/2} \exp\left(-\frac{(n-1)s^2}{2\sigma^2}\right) \tag{3.4}
+$$
+
+이것은 **스케일된 역 $\chi^2$ 분포**.
+
+$$
+\sigma^2 \mid y \sim \text{Inv-}\chi^2(n-1, s^2) \tag{3.5}
+$$
+
+### 빈도주의와의 대응
+
+**사후 $\sigma^2 \mid y \sim \text{Inv-}\chi^2(n-1, s^2)$** 는 **$(n-1)s^2/\sigma^2 \mid \sigma^2 \sim \chi^2_{n-1}$** (빈도주의 결과) 의 "뒤집힌" 버전. 같은 수학적 객체, 다른 조건화.
+
+빈도주의의 피벗 양 $(n-1)s^2/\sigma^2$ 의 분포가 $\sigma^2$ 에 무관한 $\chi^2_{n-1}$ — 이 무관성이 **Ch.2.8 피벗 기반 비정보 사전** 의 근거. 같은 결과를 베이즈에서 재현.
+
+### 공동 사후 표본 추출
+
+분해 덕분에 **두 단계 독립 추출** 가능.
+
+1. $\sigma^{2(s)} \sim \text{Inv-}\chi^2(n-1, s^2)$
+2. $\mu^{(s)} \mid \sigma^{2(s)} \sim N(\bar{y}, \sigma^{2(s)}/n)$
+
+$S$ 번 반복하면 $(\mu^{(s)}, \sigma^{2(s)})$ 가 공동 사후 표본.
+
+### $\mu$ 의 해석적 주변 사후
+
+식 (3.1) 의 공식을 적용 — $\mu$ 의 사후는 **정규들의 혼합 (Inv-$\chi^2$ 로 가중)**.
+
+$$
+p(\mu \mid y) = \int_0^\infty p(\mu \mid \sigma^2, y) \, p(\sigma^2 \mid y) \, d\sigma^2
+$$
+
+이 적분을 직접 수행. 변수 변환 $z = A/(2\sigma^2)$, $A = (n-1)s^2 + n(\mu - \bar{y})^2$.
+
+$$
+p(\mu \mid y) \propto A^{-n/2} \int_0^\infty z^{(n-2)/2} e^{-z} dz \propto [(n-1)s^2 + n(\mu - \bar{y})^2]^{-n/2}
+$$
+
+정리.
+
+$$
+p(\mu \mid y) \propto \left[1 + \frac{n(\mu - \bar{y})^2}{(n-1)s^2}\right]^{-n/2}
+$$
+
+이것은 **$t_{n-1}(\bar{y}, s^2/n)$ 분포**.
+
+$$
+\frac{\mu - \bar{y}}{s/\sqrt{n}} \mid y \sim t_{n-1}
+$$
+
+### 빈도주의 $t$ 통계량과의 두 얼굴
+
+| 프레임워크 | 진술 | 해석 |
+|:---|:---|:---|
+| 빈도주의 | $\frac{\bar{y} - \mu}{s/\sqrt{n}} \mid \mu, \sigma^2 \sim t_{n-1}$ | 추정량의 표본 분포 (피벗) |
+| 베이즈 | $\frac{\mu - \bar{y}}{s/\sqrt{n}} \mid y \sim t_{n-1}$ | 모수의 사후 분포 |
+
+**같은 $t_{n-1}$**, **같은 값**, **다른 조건화**. 95% 구간 $\bar{y} \pm t_{n-1, 0.975} s/\sqrt{n}$ 이 양쪽에서 동일한 수치.
+
+::: {.callout-tip}
+## 직관 — 피벗 양의 사후 불변성
+
+피벗 양 $(\bar{y} - \mu)/(s/\sqrt{n})$ — 그 **표본 분포가 모수에 무관** (빈도주의 정의). 베이즈로 옮기면 그 **사후 분포가 데이터에 무관** — 둘 다 $t_{n-1}$.
+
+이것이 교재가 말하는 "**$y - \theta$ 가 사후에서도 피벗이려면 $p(\theta)$ 가 균등해야 한다**" 의 구체 사례 (Ch.2.8). 피벗 원리가 비정보 사전을 정당화.
+:::
+
+### 사후 예측 분포
+
+새 관측 $\tilde{y} \sim N(\mu, \sigma^2)$ 의 예측 분포.
+
+**표본 추출 알고리즘**.
+
+1. $(\mu, \sigma^2) \sim$ 공동 사후
+2. $\tilde{y} \sim N(\mu, \sigma^2)$
+
+**해석적 결과**.
+
+$$
+\tilde{y} \mid y \sim t_{n-1}(\bar{y}, s\sqrt{1 + 1/n})
+$$
+
+유도 — $\tilde{y} \mid \sigma^2, y \sim N(\bar{y}, (1 + 1/n)\sigma^2)$ (조건부 $\mu$ 를 적분 후 $\tilde{y}$ 와 $\mu$ 의 공동 정규), 그 뒤 $\sigma^2$ 주변화.
+
+**분산 구조**.
+
+- $\sigma^2$ — 새 관측의 표본 변동
+- $\sigma^2/n$ — $\mu$ 의 모수 불확실성
+- 합 $\sigma^2(1 + 1/n)$ — 사후 예측 분산
+
+$n \to \infty$ 이면 예측 분산 $\to \sigma^2$ (모수 불확실성 소멸), $n = 1$ 이면 예측 분산 $\to 2\sigma^2$ (데이터와 같은 불확실성 추가).
+
+### Newcomb 광속 예제
+
+**배경**. Simon Newcomb 1882 년 실험 — 빛이 7442 m 이동하는 시간 측정. 66 개 관측 (24,800 나노초 편차).
+
+**요약 통계**. $\bar{y} = 26.2$, $s = 10.8$.
+
+**95% 사후 구간**.
+
+$$
+\bar{y} \pm t_{65, 0.975} \cdot s/\sqrt{66} = 26.2 \pm 1.997 \cdot 1.330 = [23.6, 28.8]
+$$
+
+시뮬레이션 — $S = 1000$ 번 $(\sigma^2, \mu)$ 추출, $\mu$ 의 2.5·97.5 분위수 → 역시 약 $[23.6, 28.9]$.
+
+**주의**. 현재 공인된 광속 기반 "진짜 $\mu$" 는 **33.0** — **95% 구간 밖**.
+
+> "이는 사후 추론이 **오직 모델과 그 데이터를 생성한 실험만큼만 좋다** 는 사실을 강조한다." (교재 원문)
+
+데이터의 두 개 이상치 (low outliers) 가 정규 가정 위반. Ch.6 의 사후 예측 점검이 이 실패를 체계적으로 진단한다.
+
+::: {.callout-tip}
+## 직관 — 모델 실패의 정량적 증거
+
+"진짜 값이 95% 구간 밖" 은 단순 운 나쁨이 아니라 **모델의 구조적 문제**. 이상치 두 개가 $\bar{y}$ 를 아래로 끌어내렸고 $s$ 를 왜곡.
+
+베이즈의 해결 — $t$ 분포 (꼬리 두꺼운) 가능도 또는 혼합 모델 (Ch.17 robust inference). 이상치 하나에 덜 민감한 모델로 교체하면 $\mu$ 사후가 더 높이 이동, 33.0 이 구간 내로 들어올 수 있다.
+
+**정규 모델은 미지 값이 아니라 모델을 의심해야 한다는 신호를 준다** — 베이즈의 3 단계 프로세스 (§ 1.1) 의 3 단계 실행.
+:::
+
+---
+
+## § 3.3 정규 켤레 사전
+
+### 켤레 가족의 구조
+
+§ 3.2 의 비정보 사전을 일반화 — **적절한 (proper) 켤레 사전** 가족. 식 (3.2) 의 사후 형태를 역으로 보면, 사전도 같은 형태로 쓸 수 있다.
+
+$$
+\mu \mid \sigma^2 \sim N(\mu_0, \sigma^2/\kappa_0), \quad \sigma^2 \sim \text{Inv-}\chi^2(\nu_0, \sigma_0^2)
+$$
+
+공동 밀도.
+
+$$
+p(\mu, \sigma^2) \propto \sigma^{-1} (\sigma^2)^{-(\nu_0/2 + 1)} \exp\left(-\frac{1}{2\sigma^2}[\nu_0 \sigma_0^2 + \kappa_0(\mu_0 - \mu)^2]\right) \tag{3.6}
+$$
+
+이름 — **$N\text{-Inv-}\chi^2(\mu_0, \sigma_0^2/\kappa_0; \nu_0, \sigma_0^2)$**.
+
+### 네 개 하이퍼파라미터의 역할
+
+| 하이퍼파라미터 | 의미 |
+|:---|:---|
+| $\mu_0$ | $\mu$ 의 사전 평균 |
+| $\kappa_0$ | $\mu$ 에 대한 사전 "관측 수" (precision scale) |
+| $\nu_0$ | $\sigma^2$ 의 사전 자유도 |
+| $\sigma_0^2$ | $\sigma^2$ 의 사전 스케일 |
+
+해석 — 이 사전은 **"$\kappa_0$ 개 가상 관측, 평균 $\mu_0$, 분산 $\sigma_0^2$, 자유도 $\nu_0$"** 의 사전 경험에 해당.
+
+### 왜 $\mu$ 와 $\sigma^2$ 가 독립이 아닌가
+
+**중요한 관찰** — 이 켤레 공동 사전에서 $\mu$ 와 $\sigma^2$ 는 **독립이 아니다**. $\mu$ 의 조건부 분포 $N(\mu_0, \sigma^2/\kappa_0)$ 가 $\sigma^2$ 에 의존.
+
+이 의존성이 **수학적 편의** (켤레성 보존) 뿐 아니라 **직관적으로도 합리적**.
+
+::: {.callout-tip}
+## 직관 — 관측 스케일과 사전 정밀도의 결합
+
+교재의 논평.
+
+> "$\mu \mid \sigma^2$ 의 조건부 분포에 $\sigma^2$ 가 나타난다는 것은 $\mu$ 와 $\sigma^2$ 가 공동 켤레 사전에서 **필연적으로 의존** 한다는 뜻이다. 즉 **$\sigma^2$ 가 크면 $\mu$ 의 사전 분포가 분산이 큰** 것이 유도된다. 편의 때문에 주로 쓰이는 켤레 사전에서 이 의존성은 주목할 만하다."
+
+"숙고해 보면 **$\mu$ 의 사전 분산이 $\sigma^2$ (관측의 표본 분산) 와 묶여 있는 것이 종종 합리적** 이다. 이런 방식으로 $\mu$ 에 대한 사전 신념이 $y$ 의 측정 스케일에 의해 보정되며, 이 스케일에서 $\kappa_0$ 사전 측정에 해당한다."
+
+**예시**. 키 측정 ($\sigma \approx 10$ cm) 과 온도 측정 ($\sigma \approx 0.5$°C) 에서 "$\mu$ 사전 표준편차 = $\sigma/\sqrt{\kappa_0}$" 이 자동으로 측정 단위에 맞춰 조정. $\kappa_0 = 1$ 은 **"관측 1 개 가치의 사전 정보"**.
+:::
+
+### 사후 계산
+
+(3.6) × 가능도 → 공동 사후.
+
+$$
+p(\mu, \sigma^2 \mid y) = N\text{-Inv-}\chi^2(\mu, \sigma^2 \mid \mu_n, \sigma_n^2/\kappa_n; \nu_n, \sigma_n^2) \tag{3.7}
+$$
+
+**사후 하이퍼파라미터**.
+
+$$
+\mu_n = \frac{\kappa_0}{\kappa_0 + n} \mu_0 + \frac{n}{\kappa_0 + n} \bar{y}
+$$
+
+$$
+\kappa_n = \kappa_0 + n
+$$
+
+$$
+\nu_n = \nu_0 + n
+$$
+
+$$
+\nu_n \sigma_n^2 = \nu_0 \sigma_0^2 + (n-1)s^2 + \frac{\kappa_0 n}{\kappa_0 + n}(\bar{y} - \mu_0)^2
+$$
+
+### 갱신 공식의 해석
+
+**$\mu_n$** — 사전 평균과 표본 평균의 가중 평균. 가중치는 각자의 "관측 수" ($\kappa_0$ vs $n$) 에 비례.
+
+**$\kappa_n = \kappa_0 + n$** — 관측 수 가산.
+
+**$\nu_n = \nu_0 + n$** — 자유도 가산.
+
+**$\nu_n \sigma_n^2$** — 세 성분의 합.
+
+1. $\nu_0 \sigma_0^2$ — 사전 제곱합
+2. $(n-1)s^2 = \sum (y_i - \bar{y})^2$ — 표본 제곱합
+3. $\frac{\kappa_0 n}{\kappa_0 + n}(\bar{y} - \mu_0)^2$ — **사전 평균과 표본 평균의 차이** 에 의한 추가 불확실성
+
+::: {.callout-tip}
+## 직관 — 세 번째 항의 의미
+
+"$\bar{y} - \mu_0$ 가 크다" = 사전과 데이터 평균이 다르다. 이 경우 **$\sigma^2$ 의 사후 분산 추정이 커진다**. 왜?
+
+모델 관점에서 — 사전과 데이터가 일치하지 않으면 그 차이를 "모집단 분산이 크다" 는 쪽으로 해석. $\sigma_0^2$ 와 $s^2$ 만 보면 $\sigma^2$ 가 작다고 말할 수 있지만, "사전과 데이터 충돌" 이 $\sigma^2$ 추정을 키운다.
+
+이 항이 빠지면 (즉 $\mu_0 = \bar{y}$ 이면) 사후 $\sigma_n^2$ 가 자유도 가중 평균 — 단순. 차이가 날수록 사전-데이터 충돌이 분산 추정에 반영.
+:::
+
+### 조건부 사후
+
+$$
+\mu \mid \sigma^2, y \sim N(\mu_n, \sigma^2/\kappa_n) \tag{3.8}
+$$
+
+이 공식의 두 번째 표현.
+
+$$
+\mu \mid \sigma^2, y \sim N\left(\frac{\frac{\kappa_0}{\sigma^2} \mu_0 + \frac{n}{\sigma^2} \bar{y}}{\frac{\kappa_0}{\sigma^2} + \frac{n}{\sigma^2}}, \frac{1}{\frac{\kappa_0}{\sigma^2} + \frac{n}{\sigma^2}}\right)
+$$
+
+**정밀도 가산** — Ch.2.5 의 결과와 정확히 일치. 사전 정밀도 $\kappa_0/\sigma^2$ + 데이터 정밀도 $n/\sigma^2$.
+
+### 주변 사후
+
+$$
+\sigma^2 \mid y \sim \text{Inv-}\chi^2(\nu_n, \sigma_n^2) \tag{3.9}
+$$
+
+자유도 $\nu_n$, 스케일 $\sigma_n^2$.
+
+### $\mu$ 의 주변 사후
+
+§ 3.2 와 같은 기법으로 $\sigma^2$ 적분.
+
+$$
+p(\mu \mid y) \propto \left[1 + \frac{\kappa_n(\mu - \mu_n)^2}{\nu_n \sigma_n^2}\right]^{-(\nu_n + 1)/2} = t_{\nu_n}(\mu_n, \sigma_n^2/\kappa_n)
+$$
+
+**자유도 $\nu_n$ 의 $t$ 분포**. 중심 $\mu_n$, 스케일 $\sigma_n/\sqrt{\kappa_n}$.
+
+$\nu_0 = 0, \kappa_0 \to 0, \mu_0 \to ?$ 의 비정보 극한에서 **$t_{n-1}(\bar{y}, s^2/n)$** 로 환원 (§ 3.2 결과).
+
+### 공동 사후 표본 추출
+
+§ 3.2 와 같은 분해 전략.
+
+1. $\sigma^{2(s)} \sim \text{Inv-}\chi^2(\nu_n, \sigma_n^2)$
+2. $\mu^{(s)} \mid \sigma^{2(s)} \sim N(\mu_n, \sigma^{2(s)}/\kappa_n)$
+
+### 비정보 극한
+
+교재가 명시하지 않지만 **유용한 확인** — 켤레 사전의 극한에서 § 3.2 의 비정보 사후가 복원.
+
+$\kappa_0 \to 0, \nu_0 \to -1, \sigma_0^2 \to 0$ 에서.
+
+- $\mu_n \to \bar{y}$
+- $\kappa_n \to n$
+- $\nu_n \to n - 1$
+- $\nu_n \sigma_n^2 \to (n-1)s^2$
+
+사후 $\text{Inv-}\chi^2(n-1, s^2)$ 와 $N(\bar{y}, \sigma^2/n)$ — § 3.2 의 결과와 일치.
+
+### 비정보 사전의 위치
+
+> "비정보 사전 극한은 켤레 가족의 **특수 경계** 로 볼 수 있다." — 암묵적 교재 논리
+
+즉 Ch.3 의 두 접근 (비정보 vs 켤레) 이 **연속 스펙트럼** 의 양 끝이고, **약정보적 사전** (Ch.2.9) 이 그 사이의 실용적 중도.
+
+---
+
+## 세 절의 구조적 통합
+
+| 절 | 핵심 기법 | 특징 |
+|:---|:---|:---|
+| § 3.1 | 공동 → 조건부 × 주변 분해 | 시뮬레이션 전략의 원형 |
+| § 3.2 | 비정보 $(\mu, \sigma^2)$ 공동 사후 | $t_{n-1}$ 주변, Newcomb 실패 사례 |
+| § 3.3 | $N\text{-Inv-}\chi^2$ 켤레 | 네 하이퍼파라미터, 스케일 결합 구조 |
+
+공통 패턴.
+
+1. 공동 사후 구성
+2. 조건부 × 주변으로 분해
+3. 주변에서 먼저 표본, 조건부에서 순차 표본
+4. 필요하면 주변을 해석적으로 유도 (정규 × Inv-$\chi^2$ → $t$)
+
+---
+
+## 빈도주의와의 대응 재확인
+
+| 질문 | 빈도주의 | 베이즈 (§ 3.2~3.3) |
+|:---|:---|:---|
+| $\mu$ 점 추정 | $\bar{y}$ | 사후 평균 $\mu_n$ 또는 $\bar{y}$ (비정보) |
+| $\mu$ 구간 추정 | $t$-신뢰 구간 | $t$-사후 구간 |
+| $\sigma^2$ 점 추정 | $s^2$ | 사후 평균 또는 $s^2$ (비정보) |
+| 사전-데이터 충돌 | 검출 어려움 | $\sigma_n^2$ 의 세 번째 항 |
+| $\tilde{y}$ 예측 | 정규 근사 + 수동 보정 | $t$ 예측 분포 자연스럽게 |
+
+**수치 동일, 해석 차이** 가 비정보 사전에서 공통. 켤레 사전 쓰면 **정보적 shrinkage** 가 빈도주의에는 없는 효과.
+
+---
+
+## 코드 예제 — Newcomb 광속 공동 사후 완전 재현
+
+### Step 1: 순수 Python — $N\text{-Inv-}\chi^2$ 표본과 $t$ 사후 검증
+
+```python
+import math
+import random
+
+random.seed(42)
+
+# Newcomb 데이터 요약
+y_bar, s, n = 26.2, 10.8, 66
+
+def sample_inv_chi2(nu, s2):
+    chi2 = sum((random.gauss(0, 1)) ** 2 for _ in range(int(nu)))
+    return nu * s2 / chi2
+
+def sample_normal(mu, sd):
+    return random.gauss(mu, sd)
+
+# 비정보 사전 ($\kappa_0 = 0, \nu_0 = -1, \sigma_0^2 = 0$) 극한
+# ν_n = n - 1 = 65, σ_n² = s², κ_n = n = 66, μ_n = ȳ
+S = 10000
+mu_samples = []
+sigma2_samples = []
+
+for _ in range(S):
+    sigma2 = sample_inv_chi2(n - 1, s ** 2)
+    mu = sample_normal(y_bar, math.sqrt(sigma2 / n))
+    mu_samples.append(mu)
+    sigma2_samples.append(sigma2)
+
+mu_sorted = sorted(mu_samples)
+mu_median = mu_sorted[S // 2]
+mu_lo, mu_hi = mu_sorted[int(0.025 * S)], mu_sorted[int(0.975 * S)]
+
+print(f"μ 사후 중앙값: {mu_median:.2f}")
+print(f"μ 95% 사후 구간 (시뮬): [{mu_lo:.2f}, {mu_hi:.2f}]")
+
+# 해석적 t 구간과 비교 — t_{65, 0.975} ≈ 1.997
+t_crit = 1.997
+t_lo = y_bar - t_crit * s / math.sqrt(n)
+t_hi = y_bar + t_crit * s / math.sqrt(n)
+print(f"μ 95% 해석적 t 구간:   [{t_lo:.2f}, {t_hi:.2f}]")
+
+# 진짜 값 33.0 이 포함되지 않음을 확인
+p_above = sum(1 for m in mu_samples if m >= 33.0) / S
+print(f"Pr(μ ≥ 33.0 | y) = {p_above:.4f}")
+```
+
+**예상 출력** — 시뮬 구간과 해석적 구간 거의 일치 ([23.6, 28.8]). 진짜 값 33.0 의 사후 확률 0 — 모델 실패 정량화.
+
+### Step 2: 정보적 사전과 비정보 사전의 결과 비교
+
+```python
+import numpy as np
+from scipy import stats
+
+np.random.seed(42)
+
+y_bar, s, n = 26.2, 10.8, 66
+S = 10000
+
+# 세 가지 사전 — 비정보, 약정보, 강정보
+priors = [
+    ("비정보 (κ₀=0, ν₀=-1)",   0.0001, -1, y_bar,  s**2),  # 거의 비정보
+    ("약정보 (κ₀=1, ν₀=1)",    1,       1, 30.0,   100.0),
+    ("강정보 (κ₀=100, ν₀=50)", 100,    50, 33.0,   100.0),  # 진짜 값 근처
+]
+
+print(f"{'Prior':<30} {'사후 μ 중앙값':<15} {'μ 95% 구간':<25}")
+for name, kappa0, nu0, mu0, sigma02 in priors:
+    kappa_n = kappa0 + n
+    nu_n = nu0 + n
+    mu_n = (kappa0 * mu0 + n * y_bar) / kappa_n
+    sigma_n2 = (nu0 * sigma02 + (n-1) * s**2 + kappa0 * n * (y_bar - mu0)**2 / kappa_n) / nu_n
+
+    # 사후 t_{ν_n}(μ_n, σ_n²/κ_n) 분위수
+    scale = math.sqrt(sigma_n2 / kappa_n)
+    t_lo = stats.t.ppf(0.025, df=int(nu_n)) * scale + mu_n
+    t_hi = stats.t.ppf(0.975, df=int(nu_n)) * scale + mu_n
+    print(f"{name:<30} {mu_n:.3f}           [{t_lo:.2f}, {t_hi:.2f}]")
+```
+
+**예상 출력** — 강정보 사전 (진짜 값 33.0 가까이) 이 사후를 33 쪽으로 끌어당김. 약정보는 약간만, 비정보는 데이터만 반영.
+
+**해석** — 데이터에 모델 불일치가 있으면 강정보 사전이 사후를 "진짜" 값 쪽으로 안내. 그러나 사전이 없으면 데이터의 왜곡이 그대로 사후에 반영 — 사전이 "상식의 울타리" 역할을 한다는 § 2.9 의 교훈 재확인.
+
+---
+
+## 관련 주제
+
+**Ch.3 의 다른 심화 포스트 (후속)**
+
+- [Ch.3 개요](./00-3-0-multiparameter.qmd) — § 3.1~3.8 훑기
+- § 3.4~3.6 다항·다변량 정규 (작성 예정)
+- § 3.7~3.8 bioassay·모델링 전략 (작성 예정)
+
+**Ch.1~2 심화 (선행)**
+
+- [Ch.1 개요](./00-1-0-probability-inference.qmd) + 세 심화: [§ 1.1~1.4](./00-1-1-bayesian-process.qmd) · [§ 1.5~1.8](./00-1-2-probability-uncertainty.qmd) · [§ 1.9·1.10·1.12](./00-1-3-computation-applied-exercises.qmd)
+- [Ch.2 개요](./00-2-0-single-parameter.qmd) + 세 심화: [§ 2.1~2.4](./00-2-1-binomial-and-priors.qmd) · [§ 2.5~2.7](./00-2-2-normal-poisson-cancer.qmd) · [§ 2.8~2.11](./00-2-3-priors-exercises.qmd)
+
+**Part I~V 전체**
+
+- [Part I](./00-bayesian-part1-overview.qmd) · [Part II](./01-bayesian-part2-overview.qmd) · [Part III](./02-bayesian-part3-overview.qmd) · [Part IV](./03-bayesian-part4-overview.qmd) · [Part V](./04-bayesian-part5-overview.qmd)
+
+**빈도주의 대응**
+
+- [변환과 기대값 개요](../50-transformations-expectations-overview.qmd) — $t$ 분포와 피벗 양
+- [신뢰 구간](../108-interval-estimation-overview.qmd) — 빈도주의 $t$-구간
+- [MLE · 점 추정](../101-maximum-likelihood-estimators.qmd)
+
+---
+
+## 참고자료
+
+- Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.). CRC Press. Ch.3 (§ 3.1~3.3).
+- Stigler, S. M. (1977). Do robust estimators work with *real* data? *Annals of Statistics*, 5(6), 1055–1098.
+- Box, G. E. P., & Tiao, G. C. (1973). *Bayesian Inference in Statistical Analysis*. Addison-Wesley.
+- Raiffa, H., & Schlaifer, R. (1961). *Applied Statistical Decision Theory*. Harvard Business School.
+- Newcomb, S. (1891). Measures of the velocity of light made under the direction of the Secretary of the Navy during the years 1880-82. *Astronomical Papers*, 2, 107–230.
