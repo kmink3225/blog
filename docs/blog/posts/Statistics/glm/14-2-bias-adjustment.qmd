@@ -1,0 +1,547 @@
+---
+title: "Bias Adjustment — MLE 의 $O(n^{-1})$ 편향을 보조 회귀로 교정 (McCullagh §15.2)"
+subtitle: "텐서 공식 $b^r = -\\frac{1}{2}\\kappa^{r,s}\\kappa^{t,u}\\kappa_{s,t,u}$ · Canonical 단순화 · Non-canonical $\\xi_i = -\\frac{1}{2}(\\mu''/\\mu')Q_{ii}$ · Firth 연결"
+description: |
+  McCullagh & Nelder (1989) §15.2 를 심화한다. MLE $\widehat\beta$ 는 점근적으로
+  일치 추정량이지만 유한 표본에서 $O(n^{-1})$ 편향을 갖는다. Cox-Snell (1968) 과
+  McCullagh (1987, Ch.7) 의 점근 전개로 편향 벡터
+  $b^r = -\frac{1}{2} \kappa^{r,s} \kappa^{t,u} \kappa_{s,t,u}$ (15.1) 을 얻는다.
+  Canonical link 모형 (logit, log, inverse) 에서 이 텐서 공식이 **보조 가중 선형 회귀**
+  $b = (X^TWX)^{-1}X^TW\xi$ (15.3) 로 환원되며, 응답 벡터 $\xi_i = -\frac{1}{2}Q_{ii}\kappa_{3i}/\kappa_{2i}$
+  가 "**레버리지 × 왜도**" 의 해석을 갖는다. Non-canonical 모형에서는 $\xi$ 가
+  $-\frac{1}{2}(\mu''/\mu')Q_{ii}$ (15.4) 로 변형 — 링크별 공식 표.
+  이항 모형의 근사 $b \simeq p\beta/m_\cdot$ (15.5) 이 "$1 - p/m_\cdot$ 수축" 으로 해석되며
+  Firth (1993) 의 penalized likelihood 와 등가. §15.2.3 의 Lizard 예제로 $\widehat\beta - \widehat b$
+  가 $\widehat\beta$ 의 SE 10% 내로 이동하는 구체적 수치 재현까지.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — MLE 의 숨은 편향
+
+최대가능도 추정량 (MLE) 은 **점근적 일치성** 을 가진다: $n \to \infty$ 에서 $\widehat\beta \xrightarrow{p} \beta$. 그러나 유한 표본에서는
+
+$$
+E(\widehat\beta) = \beta + \frac{b_1}{n} + O(n^{-2}).
+$$
+
+**$b_1/n$ = $O(n^{-1})$ 편향**. $n$ 이 충분히 크면 SE ($O(n^{-1/2})$) 에 비해 무시 가능하지만, 작은 표본 · 많은 모수에서는 **SE 의 10-30%** 수준에 이를 수 있다.
+
+McCullagh & Nelder (1989) 의 §15.2 는 이 편향을 **계산 가능한 공식** 으로 바꾸고, **보조 선형 회귀** 로 실무에서 구할 수 있게 만든다. 이 글은 공식의 유도와 실무 구현을 깊이 들여다본다.
+
+overview 포스트 (14-1) 에서 편향 보정을 "한 페이지" 로 요약했다면, 이번 글은 **텐서 공식 (15.1) 의 유도 구조**, **canonical link 에서 보조 회귀 (15.3) 로의 축약**, **non-canonical $\xi$ 의 링크별 형태 표**, **이항 모형의 수축 근사 (15.5)**, **Lizard 예제 완전 재현**, 그리고 **Firth (1993) penalized MLE 와의 동등성** 까지를 일관된 흐름으로 풀어낸다.
+
+## 왜 MLE 가 편향되는가 — Cox-Snell 전개
+
+### 점수 방정식에서의 Taylor 전개
+
+MLE 의 점수 방정식:
+
+$$
+U(\widehat\beta) = \left. \frac{\partial l}{\partial \beta} \right|_{\widehat\beta} = 0.
+$$
+
+참값 $\beta$ 근방에서 Taylor 전개:
+
+$$
+0 = U(\widehat\beta) \simeq U(\beta) + \mathcal{H}(\beta) \cdot (\widehat\beta - \beta) + \frac{1}{2} \mathcal{T}(\beta) \cdot (\widehat\beta - \beta)^{\otimes 2}.
+$$
+
+$\mathcal{H}$ = Hessian (2차 미분), $\mathcal{T}$ = 3차 미분 텐서.
+
+### 편향의 1차 항
+
+$\widehat\beta - \beta \simeq -\mathcal{H}^{-1} U$ 가 **1차 근사** (일치성의 기초). 이것을 위 식에 **재대입** 하고 $E(\cdot)$ 을 취하면:
+
+$$
+E(\widehat\beta - \beta) = -\mathcal{H}^{-1} \{ E(U) + \frac{1}{2} \mathcal{T} E[(\widehat\beta - \beta)^{\otimes 2}] \} + O(n^{-2}).
+$$
+
+$E(U) = 0$ (점수의 기본 성질), $E[(\widehat\beta - \beta)^{\otimes 2}] = \text{Var}(\widehat\beta) \simeq -\mathcal{H}^{-1}$ (정보 부등식 등호). 대입하면
+
+$$
+E(\widehat\beta - \beta) \simeq -\frac{1}{2} \mathcal{H}^{-1} \mathcal{T} \mathcal{H}^{-1}.
+$$
+
+**텐서 표현**으로 정리 (Fisher 정보의 역 $\kappa^{r,s}$, 3차 cumulant $\kappa_{s,t,u}$):
+
+$$
+\boxed{\; b^r = E(\widehat\beta^r - \beta^r) \simeq -\frac{1}{2} \kappa^{r,s} \kappa^{t,u} \kappa_{s,t,u}. \;} \tag{15.1}
+$$
+
+### 공식의 요소 해석
+
+- $\kappa^{r,s} = [(X^TWX)^{-1}]_{rs}$: 역 Fisher 정보의 $(r, s)$ 원소.
+- $\kappa_{s,t,u} = \sum_i x_s^i x_t^i x_u^i \kappa_{3i}$: 설계 행렬과 3차 cumulant 의 3-선형 곱.
+- $\kappa_{3i}$: 관측치 $i$ 의 반응 변수 3차 cumulant.
+
+::: {.callout-tip}
+## 직관: 편향은 "비대칭 + 곡률" 에서 생긴다
+
+Taylor 전개의 **2차 항**: $\frac{1}{2} \mathcal{T} (\widehat\beta - \beta)^{\otimes 2}$.
+
+이 항이 기대값 0 이 아니려면:
+- **$\mathcal{T} \neq 0$**: 로그 우도의 **곡률 변화율** (왜도 반영).
+- **$E[(\widehat\beta - \beta)^{\otimes 2}] \neq 0$**: 추정량의 분산.
+
+두 조건이 만나면 편향. 완전 대칭 분포 (Gaussian) + 선형 모형은 $\mathcal{T} = 0$ 이라 편향 없음.
+
+**$\kappa_3$ 가 큰** 관측치 (Poisson 작은 $\mu$, 이항 극단 $\pi$) 가 편향의 주 원천.
+:::
+
+## Canonical Link 의 단순화 — (15.3)
+
+### 구조적 단순화
+
+Canonical link 모형 (로짓, 로그, 역수 등) 에서 (15.1) 이 **극적으로 단순화**. 이유: canonical link 하에서
+
+$$
+W = \text{cov}(Y), \qquad \kappa_{3i} = \frac{\partial \kappa_{2i}}{\partial \theta_i} = \frac{\partial V(\mu_i)}{\partial \theta_i}.
+$$
+
+$\theta$ = canonical parameter, $W$ = IRLS 가중치가 공분산과 일치.
+
+### $b_s$ 중간 형태
+
+(15.1) 을 $r$ 에 대해 먼저 합산하기 전 단계:
+
+$$
+b_s = -\frac{1}{2} \kappa_{s,t,u} \kappa^{t,u} = -\frac{1}{2} \sum_i x_s^i \kappa_{3i} \cdot (x_t^i x_u^i \kappa^{t,u}).
+$$
+
+**핵심 관찰**: $x_t^i x_u^i \kappa^{t,u}$ 는 "**관측치 $i$ 의 예측 분산**" 이다. 구체적으로 $Q = X(X^TWX)^{-1}X^T$ 의 $(i, i)$ 원소.
+
+**$Q_{ii}$ = $\widehat\eta_i$ 의 근사 분산** = 레버리지.
+
+따라서:
+
+$$
+b_s = -\frac{1}{2} \sum_i x_s^i \cdot \kappa_{3i} \cdot Q_{ii} = -\frac{1}{2} \sum_i x_s^i \cdot w_i \cdot \xi_i,
+$$
+
+$w_i = \kappa_{2i}$ (IRLS 가중치), $\xi_i = -Q_{ii} \kappa_{3i}/(2\kappa_{2i})$.
+
+**매트릭스 표기**: $b_s = (X^TW\xi)_s$.
+
+### 전체 편향 벡터 (15.3)
+
+$b^r = \kappa^{r,s} b_s$, 즉 $b = (X^TWX)^{-1} X^TW\xi$.
+
+**이것이 $X$ 에 대한 $\xi$ 의 가중 선형 회귀 계수** 와 동일:
+
+$$
+\boxed{\;b = \text{Weighted OLS coefficient of } \xi \text{ on } X \text{ with weights } W\; } \tag{15.3}
+$$
+
+### 보조 회귀의 구체적 구현
+
+```
+[보조 회귀 레시피]
+1. 원 GLM 적합 → β̂, μ̂, W (가중치 행렬), Q_{ii} (햇 대각)
+2. 각 i 에 대해:
+   ξ_i = -(1/2) · Q_{ii} · κ_{3i} / κ_{2i}
+3. ξ 를 반응 변수로, X 를 설계 행렬로, W 를 가중치로 갖는
+   **항등 링크 가중 선형 회귀** 적합 → 계수 b̂
+4. 편향 교정: β̂_corrected = β̂ - b̂
+```
+
+한 번의 추가 선형 회귀만 필요. 기존 GLM 소프트웨어로 구현 가능.
+
+### $\xi_i$ 의 직관
+
+$$\xi_i = -\frac{1}{2} \cdot Q_{ii} \cdot \frac{\kappa_{3i}}{\kappa_{2i}} = -\frac{1}{2} \cdot (\text{레버리지}) \cdot (\text{왜도})$$
+
+- **$Q_{ii}$ 큰 점**: 외톨이 (공변량 공간의 끝). 적합을 강하게 견인.
+- **$\kappa_{3i}/\kappa_{2i}$ 큰 점**: 반응 분포가 비대칭. Poisson 작은 $\mu$ 나 이항 극단 $\pi$.
+
+두 요인이 결합된 점이 **편향의 진원지**. $\xi_i$ 가 이들 점에서 큰 값을 갖는다.
+
+::: {.callout-important}
+## 설계 단계에서의 편향 예측
+
+$\xi_i$ 가 크면 편향 크다. 설계 단계에서 $\xi_i$ 를 **예측** 할 수 있다:
+
+1. **Balanced 설계** ($Q_{ii}$ 일정): 모든 $\xi_i \propto \kappa_{3i}/\kappa_{2i}$. 편향이 왜도에만 의존.
+2. **극단 레버리지 회피**: 공변량 공간 외곽 관측치 수 늘리기.
+3. **비대칭 분포 영역 회피**: 가능하면 $\pi$ 를 0.5 근처, $\mu$ 를 $>5$ 로.
+
+이러한 설계 원칙이 **편향 적은 추정** 을 자연스럽게 유도한다. 편향 보정은 사후 처리, 좋은 설계는 사전 예방.
+:::
+
+## Non-canonical Link — $\mu''/\mu'$ 공식 (15.4)
+
+### 변형된 $\xi$
+
+Non-canonical link (probit, cloglog 등) 에서 canonical 의 "깔끔한 cancellation" 이 안 일어난다. 유도가 복잡해져 (15.1) 의 바로 매트릭스 환원이 어렵다.
+
+그러나 **비슷한 구조** 의 보조 회귀 여전히 가능. $\xi$ 만 다르게:
+
+$$
+\boxed{\;\xi_i = -\frac{1}{2} \left(\frac{\mu_i''}{\mu_i'}\right) Q_{ii}\;} \tag{15.4}
+$$
+
+여기서 $\mu'_i = \partial \mu_i/\partial \eta_i$, $\mu''_i = \partial^2 \mu_i/\partial \eta_i^2$ = 역링크의 1, 2차 미분.
+
+**가중치**는 여전히 IRLS 표준 가중치 $W_i = (\mu'_i)^2 / \kappa_{2i}$.
+
+### 링크별 $\xi$ 공식 표
+
+McCullagh-Nelder 가 제시하는 표:
+
+| Link | $g(\mu)$ | $\mu = g^{-1}(\eta)$ | $\mu'$ | $\mu''$ | $\xi_i$ |
+|---|---|---|---|---|---|
+| identity | $\mu$ | $\eta$ | 1 | 0 | 0 |
+| log | $\log\mu$ | $e^\eta$ | $e^\eta = \mu$ | $\mu$ | $-Q_{ii}/2$ |
+| logit | $\log\{\mu/(1-\mu)\}$ | $\pi$ | $\pi(1-\pi)$ | $\pi(1-\pi)(1-2\pi)$ | $Q_{ii}(\pi - 1/2)$ |
+| probit | $\Phi^{-1}(\mu)$ | $\Phi(\eta)$ | $\phi(\eta)$ | $-\eta\phi(\eta)$ | $Q_{ii}\eta/2$ |
+| c-log-log | $\log\{-\log(1-\mu)\}$ | $1 - e^{-e^\eta}$ | $e^{\eta}(1-\mu)$ | $(1-e^\eta)e^\eta(1-\mu)$ | $Q_{ii}(e^\eta - 1)/2$ |
+
+### 각 공식의 의미
+
+**Identity (정규 회귀)**: $\mu'' = 0$ → $\xi = 0$ → **편향 없음**. 익숙한 사실의 수식 확증.
+
+**Log link (로그선형/Poisson)**: $\xi = -Q_{ii}/2$. **왜도 무관, 레버리지만 영향**. 모든 점이 음의 편향에 기여. 이유: 로그 링크에서 $\mu$ 가 작으면 $\widehat\mu$ 가 아래 편향되는 경향.
+
+**Logit**: $\xi = Q_{ii}(\pi - 1/2)$. **$\pi > 1/2$ 에서 양, $\pi < 1/2$ 에서 음**. 중앙 $\pi = 0.5$ 에서 편향 0. 극단으로 갈수록 편향 증가.
+
+**Probit**: $\xi = Q_{ii}\eta/2$. **$\eta$ 에 선형**. 극단 $|\eta|$ 에서 편향 큼.
+
+**C-log-log**: $\xi = Q_{ii}(e^\eta - 1)/2$. **비대칭** — 큰 $\eta$ 에서 매우 빠르게 증가.
+
+### 이항 링크의 비교
+
+세 이항 링크 (logit, probit, cloglog) 의 편향 패턴이 다르다:
+
+- **Logit 의 대칭성**: 편향이 $\pi = 0.5$ 에 대해 대칭. 보수적.
+- **Probit 의 선형성**: $\eta$ 가 크면 편향 크지만 양쪽 대칭.
+- **Cloglog 의 비대칭**: 한 쪽 꼬리 편향이 극단적. 지수 증가.
+
+일반 지침: **작은 표본 이항 회귀에서 logit 선호**. 편향이 더 잘 통제됨.
+
+## 이항 모형의 수축 근사 — (15.5)
+
+### 근사 공식
+
+이항 로지스틱 모형에서 **대략적 근사**:
+
+$$
+b \simeq \frac{p \beta}{m_{\cdot}}, \qquad m_{\cdot} = \sum_i m_i, \; p = \dim(\beta). \tag{15.5}
+$$
+
+### 유도 (조건 충족 시)
+
+**조건**: (i) 근사 quadratic balance ($Q_{ii} \approx \text{const}$), (ii) 작은 $|\beta|$ ($|\eta|$ 도 작음).
+
+Logit 공식 $\xi_i = Q_{ii}(\pi_i - 1/2)$ 에 $\pi_i - 1/2 \approx \eta_i / 4$ (Taylor at $\eta = 0$). $\eta_i = x_i^T \beta$ 대입:
+
+$$
+\xi_i \approx Q_{ii} \cdot x_i^T \beta / 4.
+$$
+
+회귀 $\xi = X \beta'$ 의 계수 $\beta' = (X^TWX)^{-1}X^TW\xi$. $\xi_i = Q_{ii} x_i^T\beta/4$ 이 $X\beta$ 의 배수이고 weight $W$ 로 가중하면 정확히 $\beta$ 배수가 나와야 한다.
+
+$Q_{ii} \approx p/m_{\cdot}$ (balanced 근사, 평균 레버리지) 대입:
+
+$$
+b \simeq \frac{p}{m_{\cdot}} \cdot \beta / 4 \cdot 4 = \frac{p\beta}{m_{\cdot}}.
+$$
+
+(계수 4 는 $(\pi(1-\pi))$ 가 $1/4$ 로 단순화되는 과정에서 상쇄.)
+
+### 수축 해석
+
+$\widehat\beta^{\text{corrected}} = \widehat\beta - \widehat b \simeq \widehat\beta (1 - p/m_{\cdot})$.
+
+**$1 - p/m_{\cdot}$ 배 수축**:
+
+- $m_{\cdot} \gg p$: 거의 1 — 수축 미미.
+- $m_{\cdot} = p$: 계수가 0 으로 수축 (극단 case).
+- $m_{\cdot} = 10p$: 10% 수축.
+
+::: {.callout-tip}
+## 직관: 왜 편향 보정이 수축 형태인가
+
+MLE 의 **편향 방향**은 "0 에서 멀어지는" 쪽. 이유: perfect separation 근방에서 MLE 가 $\pm\infty$ 로 발산. 유한 $n$ 에서도 그 방향으로 **과대 추정**.
+
+수축 = 이 과대 추정을 원점 방향으로 끌어당김. 기하적으로 **MLE 의 "원점에서 멀어지는 편향"** 과 정확히 반대 방향.
+
+Stein 수축, Ridge 회귀, Bayesian prior 이 모두 같은 가족 — **정규화 (regularization)** 의 다른 이름들.
+:::
+
+### 수축 인수와 정보량
+
+$m_{\cdot}$ = 전체 정보량 (binomial denominators 합). **정보가 많을수록** 수축이 작음.
+
+**Rule of thumb**:
+- $m_{\cdot} \geq 10p$: MLE 직접 사용 OK.
+- $5p \leq m_{\cdot} < 10p$: 편향 보정 권장.
+- $m_{\cdot} < 5p$: 편향 보정 또는 Firth penalized MLE 필수.
+- **Perfect separation**: Firth 만 가능 (MLE 는 $\pm\infty$).
+
+## §15.2.3 — Lizard 데이터 재현
+
+### 배경
+
+§4.24 의 이항 로지스틱 모형 (Lizard 서식지 선호 데이터, Table 4.5). $\mu$ (절편), $H$ (높이), $D$ (지름), $S$ (햇빛 여부), $T(2), T(3)$ (시간대) 6 모수.
+
+### 원래 결과와 $\widehat\xi, \widehat b$
+
+첫 6 관측치의 적합량:
+
+| 관측 | $\widehat\pi$ | $\widehat Q_{ii}$ | $\widehat\xi_i$ | $\widehat w_i$ |
+|---|---|---|---|---|
+| 1 | 0.8749 | 0.1161 | 0.0435 | 2.4085 |
+| 2 | 0.8977 | 0.1333 | 0.0530 | 0.8266 |
+| 3 | 0.7699 | 0.1246 | 0.0336 | 1.4171 |
+| 4 | 0.9558 | 0.1506 | 0.0687 | 0.5488 |
+| 5 | 0.9645 | 0.1749 | 0.0812 | 0.2740 |
+| 6 | 0.9120 | 0.1530 | 0.0630 | 0.9634 |
+
+**$\widehat w_i = m_i \widehat\pi_i(1-\widehat\pi_i)$** = 이항 IRLS 가중치.
+
+**$\widehat\xi_i = \widehat Q_{ii}(\widehat\pi_i - 1/2)$**: logit 공식. 모두 양수 ($\pi > 1/2$ 이므로).
+
+### 편향 벡터 $\widehat b$
+
+$\widehat\xi$ 에 대한 $X$ 의 가중 회귀:
+
+| 모수 | $\widehat\beta$ | SE | $\widehat b$ | $\widehat\beta - \widehat b$ | 수정 / SE |
+|---|---|---|---|---|---|
+| $\mu$ | 1.9447 | 0.3408 | 0.0436 | 1.9011 | 12.8% SE |
+| $H$ | 1.1300 | 0.2568 | 0.0238 | 1.1062 | 9.3% SE |
+| $D$ | $-0.7626$ | 0.2112 | $-0.0090$ | $-0.7536$ | 4.3% SE |
+| $S$ | $-0.8473$ | 0.3217 | $-0.0302$ | $-0.8171$ | 9.4% SE |
+| $T(2)$ | 0.2271 | 0.2500 | $-0.0009$ | 0.2280 | 0.4% SE |
+| $T(3)$ | $-0.7368$ | 0.2988 | $-0.0095$ | $-0.7273$ | 3.2% SE |
+
+### 해석
+
+**편향이 SE 의 $\sim$10%** 수준. 일반 임상/실무 판단에서는 **해석 변경 없음**.
+
+그러나 McCullagh-Nelder 는 주목: 원래 분석에서 **$S$ (햇빛) 의 유의성** 이 의심스러웠는데 ($t = -0.847/0.322 = -2.64$), 편향 보정 후 $t = -0.817/0.322 = -2.54$ — 소폭 감소. 한계 유의도 유지.
+
+**구조적 관찰**:
+- **절편 $\mu$** 가 가장 큰 편향 (0.044). Logit 공식에서 $\widehat\pi$ 가 평균적으로 $> 1/2$ 이므로 모든 $\xi_i > 0$, 절편이 양의 편향 흡수.
+- **이항 denominator 개수가 적은** 고립 관측치들이 $\xi_i$ 큰 값에 기여.
+
+### Lizard 예제의 교훈
+
+1. **작은 표본에서 편향 보정은 판단을 크게 바꾸지 않지만**, 한계 유의 결정에서 **참고 자료** 가 된다.
+2. **절편은 편향 더 큼** — 로그-오즈 평균이 원점에서 멀수록.
+3. **보정 후 추정치가 0 에 가까워짐** — 수축 원칙 확인.
+
+## Firth (1993) 와의 연결 — 현대적 구현
+
+### Firth Penalized Likelihood
+
+Firth (1993) 은 편향 보정을 **가능도 함수 수정** 으로 재구성:
+
+$$
+l^*(\beta) = l(\beta) + \frac{1}{2} \log |I(\beta)|,
+$$
+
+$I(\beta) = X^TW(\beta)X$ = Fisher 정보. $|I|$ = 행렬식.
+
+### 왜 이것이 편향 보정 역할을 하는가
+
+$l^*$ 을 최대화한 $\widehat\beta^{\text{Firth}}$ 는:
+
+1. **첫째 차수 편향이 없다** — Firth 가 증명.
+2. **Jeffreys prior 하의 posterior mode** — 베이지안 해석.
+3. **항상 유한** — perfect separation 에도 $\pm\infty$ 안 됨.
+
+### Firth vs McCullagh-Nelder (15.3) 의 차이
+
+| 측면 | (15.3) 보조 회귀 | Firth |
+|---|---|---|
+| 접근 | 사후 보정 (post-hoc) | 사전 보정 (modification) |
+| 유한 표본 보장 | 없음 | **항상 유한** |
+| 계산 | 1 회 추가 회귀 | 수정 IRLS (반복) |
+| 함수 | 선형 근사 | 정확 비선형 |
+| 구현 | 기본 GLM 툴 | 전용 `logistf`, `brglm` |
+
+### 언제 무엇을 쓰는가
+
+**(15.3) 사용 상황**:
+- MLE 이 이미 수렴 · 유한함.
+- 편향 크기 "확인" 용.
+- 교육적 설명.
+
+**Firth 사용 상황**:
+- Perfect separation / quasi-separation.
+- 희귀 이벤트 (이항 $\pi \to 0$ 또는 $1$).
+- 규제 분야 (재현 가능 · 안정적 추정 필요).
+
+현대 실무는 **Firth 기본값**. `R logistf::logistf()`, `brglm2::brglm_fit()` 등이 표준.
+
+## Python 실전 — 편향 보정 직접 구현
+
+### Lizard 시뮬레이션 재현
+
+```python
+import numpy as np
+import statsmodels.api as sm
+import pandas as pd
+
+np.random.seed(42)
+
+# 간단 시뮬레이션: 30 cases, 5 공변량 + 이항 반응
+n = 30
+p = 5
+X_raw = np.random.randn(n, p-1)
+X = sm.add_constant(X_raw)  # (n, p) 설계 행렬
+beta_true = np.array([1.5, 0.8, -0.5, -0.3, 0.2])
+eta_true = X @ beta_true
+pi_true = 1 / (1 + np.exp(-eta_true))
+y = np.random.binomial(1, pi_true)
+
+# MLE 적합
+m = sm.GLM(y, X, family=sm.families.Binomial()).fit()
+print(f"\nMLE β̂:")
+print(m.params)
+print(f"\nSE:")
+print(m.bse)
+```
+
+### 편향 벡터 계산
+
+```python
+pi_hat = m.fittedvalues
+eta_hat = X @ m.params
+
+# 가중치 W = m_i π̂ (1 - π̂). 여기서 m_i = 1 (Bernoulli)
+W = pi_hat * (1 - pi_hat)
+
+# 햇 행렬 Q = X (X' W X)^-1 X'
+W_sqrt = np.sqrt(W)
+WX = W_sqrt[:, None] * X
+XtWX_inv = np.linalg.inv(X.T @ np.diag(W) @ X)
+Q = X @ XtWX_inv @ X.T
+Q_ii = np.diag(Q)
+
+# ξ_i = Q_ii (π̂ - 1/2)  for logit
+xi = Q_ii * (pi_hat - 0.5)
+
+# 보조 가중 회귀: b = (X'WX)^-1 X'W ξ
+b_hat = XtWX_inv @ X.T @ (W * xi)
+
+print(f"\n편향 벡터 b̂:")
+print(b_hat)
+print(f"\n보정된 β̂ - b̂:")
+print(m.params - b_hat)
+print(f"\n편향/SE 비율 (%):")
+print(100 * b_hat / m.bse)
+```
+
+### Firth 와의 비교
+
+Firth 구현은 Python 에서 직접 없으므로 R 호출 또는 수동 IRLS 수정 필요. R 의 `logistf`:
+
+```r
+# R code
+library(logistf)
+fit_firth <- logistf(y ~ X1 + X2 + X3 + X4, data=df)
+summary(fit_firth)
+```
+
+또는 Python `statsmodels` 에서 수동 Firth IRLS 구현 (약 20 줄).
+
+### 반복 시뮬레이션으로 편향 경험
+
+```python
+n_sim = 1000
+beta_mle_all = []
+
+for _ in range(n_sim):
+    y_sim = np.random.binomial(1, pi_true)
+    try:
+        m_sim = sm.GLM(y_sim, X, family=sm.families.Binomial()).fit(disp=0)
+        beta_mle_all.append(m_sim.params)
+    except:
+        continue  # separation case 제외
+
+beta_mle_all = np.array(beta_mle_all)
+mean_mle = beta_mle_all.mean(axis=0)
+observed_bias = mean_mle - beta_true
+
+print(f"\n시뮬레이션 관찰 편향 (1000 회 평균):")
+print(observed_bias)
+print(f"\n이론 예측 편향 b̂ (한 번의 적합에서):")
+print(b_hat)
+print(f"\n비율 (observed / theoretical):")
+print(observed_bias / b_hat)
+```
+
+**기대**: 이론 예측 $\widehat b$ 와 관찰 편향이 **같은 부호, 비슷한 크기**. 완벽 일치는 아니지만 $\pm 30\%$ 이내면 이론이 유효.
+
+## 요약 — §15.2 의 세 가지 교훈
+
+### 교훈 1 — 편향의 텐서 구조가 보조 회귀로 변환
+
+(15.1) 의 3 차 텐서 공식이 canonical link 에서 **단순 가중 회귀** (15.3) 로 환원. 텐서 계산 없이 기본 GLM 도구만으로 편향 보정 가능.
+
+### 교훈 2 — $\xi_i$ 의 "레버리지 × 왜도" 해석
+
+$\xi_i$ 는 편향의 **관측치별 기여**. 고레버리지 + 비대칭 분포 = 큰 편향 기여. 설계 단계에서 $\xi_i$ 를 낮추면 편향 없는 추정.
+
+### 교훈 3 — 이항 모형의 $1 - p/m_\cdot$ 수축
+
+간단한 근사 (15.5) 가 Stein-type shrinkage 의 통계 버전. Firth (1993) 의 penalized MLE 가 같은 원리를 exact 하게 구현 — 현대 희귀 이벤트 로지스틱 회귀의 표준.
+
+### 실무 체크리스트
+
+```
+[1] 모수/관측치 비율 확인: p/m_· 가 10% 초과?
+    YES → 편향 보정 고려
+    NO → MLE 충분
+
+[2] Perfect separation 있나?
+    YES → Firth 필수
+    NO → (15.3) 또는 Firth 선택 가능
+
+[3] 규제/재현성 중요?
+    YES → Firth (사전 보정 · 재현 용이)
+    NO → (15.3) 또는 MLE
+
+[4] 편향 규모 확인:
+    보조 회귀로 b̂ 계산 → |b̂| / SE 가 10% 넘으면 보정 유의미
+```
+
+## 관련 주제
+
+**선행 지식**
+
+- [Further Topics — Ch.15 개관](./14-1-further-topics-overview.qmd)
+- [GLM 이론 기초 — IRLS (McCullagh §2)](./01-1-glm-theory-foundation.qmd)
+- [이항 반응 모형 (McCullagh §4.3)](./03-3-models-binary-responses.qmd)
+- [Lizard 서식지 예제 (McCullagh §4.6)](./03-4-likelihood-functions-binary.qmd)
+
+**관련 개념**
+
+- [Model Checking — 햇 행렬과 레버리지 (McCullagh §12.5)](./11-5-raw-materials-of-model-checking.qmd) — $Q_{ii}$ 의 기원
+- [Checks for Isolated Departure (McCullagh §12.7)](./11-7-checks-for-isolated-departure.qmd) — 레버리지 해석
+- [점근 이론 — Casella-Berger Ch.10](../117-point-estimation-consistency.qmd)
+
+**현대 참고 문헌**
+
+- Firth, D. (1993). "Bias reduction of maximum likelihood estimates." *Biometrika* 80: 27-38. — **반드시 읽어야 할 후속 논문**.
+- Heinze, G. & Schemper, M. (2002). "A solution to the problem of separation in logistic regression." *Statistics in Medicine* 21: 2409-2419. — Firth 실무 응용.
+- Kosmidis, I. & Firth, D. (2009). "Bias reduction in exponential family nonlinear models." *Biometrika* 96: 793-804.
+- Puhr, R. 외 (2017). "Firth's logistic regression..." *Statistics in Medicine* 36: 2302-2317. — 희귀 이벤트 설정 비교.
+
+**실무 패키지**
+
+- **R**: `logistf`, `brglm2`, `bayesglm` (`arm`).
+- **Python**: `statsmodels.GLM(..., method='firth')` (일부 버전), 직접 구현.
+- **SAS**: `PROC LOGISTIC` 의 `FIRTH` 옵션.
+
+**후속 주제**
+
+- [Bartlett Adjustment — §15.3](./14-3-bartlett-adjustment.qmd) — 우도비 통계량의 정확 보정
+- [Generalized Additive Models — §15.4](./14-4-generalized-additive-models.qmd)
+- [Ch.15 Exercises — §15.6](./14-5-ch15-exercises.qmd)
