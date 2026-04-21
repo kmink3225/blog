@@ -1,0 +1,691 @@
+---
+title: "Generalized Additive Models — 선형 예측자에서 평활 함수로 (McCullagh §15.4)"
+subtitle: "Hastie-Tibshirani local scoring · Back-fitting 수렴 · 평활기 비교 · Effective d.f. $\\text{tr}(2S-S^TWSW^{-1})$"
+description: |
+  McCullagh & Nelder (1989) §15.4 Generalized Additive Models (GAM) 를 심화한다.
+  Hastie-Tibshirani (1986, 1987ab) 의 제안은 선형 예측자
+  $\eta = \sum_j \beta_j x_j$ 를 $\eta = \alpha + \sum_j f_j(x_j)$ 로 확장해 각 공변량의
+  기여를 **데이터가 결정하는 평활 함수** 로 바꾼다. §15.4.1 의 **local scoring
+  알고리즘** (IRLS 와 동일한 outer loop + 공변량별 평활 inner loop) 과
+  **back-fitting** (부분 잔차 + 평활의 반복) 을 수학적으로 풀어낸다. 각 $f_j$ 의
+  식별성 제약 ($\sum_i f_j(x_{ij}) = 0$), 수렴 조건, block coordinate descent 해석.
+  §15.4.2 의 네 가지 평활기 (running-lines · cubic spline · running-median ·
+  local likelihood) 비교와 span 의 **교차검증** 결정. **Effective degrees of
+  freedom** $\text{tr}(2S - S^T W S W^{-1})$ 공식의 의미 — 선형 smoother 의 "유효
+  모수 수". §15.4.3 의 GAM 의 두 용도 (**서술 vs 탐색**) 와 **partially
+  additive model** 제안. 1989 년 이후 발전: P-spline (Eilers-Marx), GCV 자동 선택
+  (Wood 2004), GAMM (일반화 가법 혼합 모형), Bayesian GAM (`brms`). Python 실전
+  (`pygam`, `statsmodels.gam`) 으로 비선형 회귀의 현대적 해법 시연.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — GLM 의 선형 제약, GAM 의 유연성
+
+Ch.1-14 전체에서 반복적으로 등장한 표준 GLM 의 **선형 예측자**:
+
+$$
+\eta_i = \sum_j \beta_j x_{ij}.
+$$
+
+공변량 $x_j$ 는 **선형적으로** 기여한다. 실제 관계가 비선형이면:
+
+1. **사전 변환**: $\log x$, $\sqrt x$, $x^\theta$ 등 수동 선택 (Ch.11).
+2. **다항 항 추가**: $x, x^2, x^3, \ldots$.
+3. **Box-Cox 멱 가족** (McCullagh §11.4): $x^\theta$ 의 $\theta$ 추정.
+
+세 접근 모두 **분석자가 변환 형태를 사전 가정** 해야 한다. 데이터가 **진짜로 어떤 형태** 를 선호하는지 모를 때 난감.
+
+### Hastie-Tibshirani (1986) 의 제안
+
+**Generalized Additive Model (GAM)**:
+
+$$
+\eta_i = \alpha + \sum_j f_j(x_{ij}),
+$$
+
+$f_j(\cdot)$ 는 **데이터가 결정하는 평활 함수**. 선형 가정을 완전히 놓고, **가산적 (additive)** 구조만 유지.
+
+**두 핵심 차이**:
+1. **선형 → 평활**: $\beta_j x_j$ 대신 임의의 $f_j(x_j)$.
+2. **가산성 유지**: $f_j(x_j) + f_k(x_k)$ 로 교호작용 없음 (기본).
+
+McCullagh-Nelder 가 Ch.15 의 마지막 주제로 GAM 을 선택한 이유: **GLM 에서 진짜 벗어나는 확장** 중 가장 성숙하고 실용적.
+
+### Ch.15 Overview 와의 차이
+
+14-1 포스트에서 GAM 을 "back-fitting 으로 적합" 정도로 요약했다. 이 글은:
+
+1. **Local scoring 알고리즘의 단계별 유도**.
+2. **Back-fitting 의 수학적 수렴** 증명 아이디어.
+3. **네 가지 평활기의 물리적 차이** — running-lines, cubic spline, running-median, local likelihood.
+4. **Effective d.f. 공식 유도** — 왜 $\text{tr}(2S - S^TWSW^{-1})$ 인가.
+5. **Span 교차검증** 의 실무 구현.
+6. **GAMM · P-spline · Bayesian GAM** 등 1989 년 이후 30 년 발전의 맥락.
+7. **Python 실전** — `pygam`, `statsmodels.gam`.
+
+## 모형 정의와 식별성
+
+### 모형 (15.12 유사)
+
+$$
+g(\mu_i) = \eta_i = \alpha + \sum_{j=1}^{p} f_j(x_{ij}),
+$$
+
+- $g$ = 링크 함수 (표준 GLM 과 동일).
+- $\alpha$ = 전체 절편.
+- $f_j$ = **데이터로부터 추정되는** 평활 함수.
+
+### 식별성 제약
+
+$f_j \to f_j + c_j$ 와 $\alpha \to \alpha - \sum_j c_j$ 가 **같은 $\eta$** 를 준다. 즉 각 $f_j$ 는 **상수 shift** 까지만 식별 가능.
+
+**표준 규약**:
+
+$$
+\sum_i f_j(x_{ij}) = 0, \quad \forall j.
+$$
+
+각 평활 함수를 **0 주변으로 중심화**. 이는 factor 변수의 reference level 선택과 유사.
+
+### 함수 공간
+
+이론적으로 $f_j$ 는 "적절한 함수 공간" 에 속한다. 가장 자연스러운 선택:
+
+- **$L^2$ 공간**: 적분 가능 함수.
+- **Sobolev 공간**: 미분이 있는 매끄러운 함수.
+- **RKHS (Reproducing Kernel Hilbert Space)**: 평활 선호를 수식화.
+
+실무는 이 공간의 **유한 근사** — 즉 기저 함수 (B-spline, cubic spline 등) 의 선형 조합. 적합은 유한 차원 최적화.
+
+### GAM 의 두 용도 (§15.4.3)
+
+McCullagh-Nelder 의 구분:
+
+| 용도 | 설명 |
+|---|---|
+| **서술 (Descriptive)** | 공변량별 "개별 기여 함수 $f_j$" 를 시각화 |
+| **탐색 (Exploratory)** | GLM 의 변환 $h(x;\theta)$ 형태를 제안받기 |
+
+서술 용도는 GAM 자체가 최종 모형. 탐색 용도는 GAM 결과를 **GLM 으로 재환원** 하기 위한 가이드 — "$f_j(x)$ 가 로그 형태로 보이면 $\log x$ 사용".
+
+## Local Scoring 알고리즘 — 단일 변수
+
+### IRLS 재방문
+
+§2.5 IRLS 의 골격:
+
+```
+초기화: β̂ = 적당한 시작점
+반복:
+    η̂ = X β̂
+    μ̂ = g^{-1}(η̂)
+    W = 가중치 (μ̂ 의존)
+    z = η̂ + (Y - μ̂) · g'(μ̂)  [조정 종속변량]
+    β̂ = (X' W X)^{-1} X' W z  [가중 LS]
+수렴까지 반복
+```
+
+**핵심**: 각 반복에서 **$z$ 를 $X\beta$ 에 대해 가중 최소제곱 회귀**.
+
+### GAM 의 변형
+
+가중 최소제곱 단계를 **평활 (smoothing)** 으로 교체:
+
+```
+초기화: α̂ = g(Ȳ),  f̂(x) = 0
+반복:
+    η̂_i = α̂ + f̂(x_i)
+    μ̂_i = g^{-1}(η̂_i)
+    W_i = 가중치
+    z_i = η̂_i + (Y_i - μ̂_i) · g'(μ̂_i)
+    f̂ = 평활 (z − α̂) on x  with  weights W  [핵심 변경]
+    α̂ = 가중 평균 of (z − f̂)
+수렴까지 반복
+```
+
+**핵심 변경**: "가중 LS 회귀" → "가중 평활". 나머지는 IRLS 와 동일.
+
+### Running-Lines 평활의 구체화
+
+McCullagh-Nelder 가 기본으로 제시하는 평활:
+
+각 $x_0$ 에서:
+1. **이웃** $N(x_0)$ 정의 — $x$-축상 가장 가까운 일정 비율의 점들 (span 파라미터).
+2. **국소 선형 회귀** — $N(x_0)$ 에서 $z \sim \alpha + \beta(x - x_0)$ 적합.
+3. **예측값** — $\widehat f(x_0) = \widehat\alpha$ (국소 절편).
+
+이 절차를 모든 $x_i$ 에서 반복하면 "부드러운 곡선" 이 만들어진다.
+
+**특징**:
+- **경계 효과 완화**: 국소 선형이라 경계에서 외삽 자연스러움.
+- **효율**: 인접 이웃 재사용으로 업데이트 빠름.
+- **선형 smoother**: $\widehat f = S z$ (S = smoothing 행렬, $z$ 에 선형).
+
+::: {.callout-tip}
+## 직관: Running-Lines = "움직이는 자"
+
+각 점에서 **"그 주변만 보는 작은 자"** 로 선형 근사. 자의 길이 = span.
+
+자가 이동하면서 선형 근사가 **연속적으로 변함** → 부드러운 곡선. 자가 짧으면 (span 작음) 곡선이 더 굽고, 길면 (span 큼) 더 직선에 가까움.
+
+**고전적 LOWESS** (Cleveland 1979) 도 running-lines 의 일종이지만 **가중치 함수** 까지 추가 (tri-cube 가중치). 실무는 LOWESS 가 더 인기.
+:::
+
+## Back-Fitting — 다변량 GAM
+
+### 문제 — 여러 공변량 동시 추정
+
+단일 변수 GAM 은 간단하지만 **다변량**:
+
+$$
+\eta = \alpha + f_1(x_1) + f_2(x_2) + \cdots + f_p(x_p)
+$$
+
+에서 **모든 $f_j$ 를 동시에 추정** 해야 한다. 각 $f_j$ 가 다른 $f_k$ 에 의존.
+
+### Back-Fitting 절차
+
+**Block Coordinate Descent** 접근:
+
+```
+For j = 1, ..., p:
+    부분 잔차 r_j = z − α̂ − Σ_{k≠j} f̂_k(x_k)
+    f̂_j = 평활 of r_j on x_j with weights W
+Repeat until convergence
+```
+
+각 단계에서 **$j$ 번째 함수만** 업데이트, 나머지는 고정. 순환적으로 반복.
+
+### 해석 — "$x_j$ 만 남긴 데이터"
+
+$r_j = z - \widehat\eta + \widehat f_j(x_j)$ 는 "**$z$ 에서 $x_j$ 효과만 남긴 부분 잔차**". 이것을 $x_j$ 에 대해 평활 = "$x_j$ 의 순수 기여 곡선" 추정.
+
+§12.6.4 의 **부분 잔차 플롯** (partial residual plot) 이 이 연산의 **시각적 버전**. GAM 은 partial residual plot 을 **공식화 + 자동화**.
+
+### 수렴
+
+Hastie-Tibshirani (1986) 가 증명: Back-fitting 이 **mild 조건** 하에서 수렴.
+
+**조건** (간략):
+- 평활 행렬 $S_j$ 가 **대칭 · 수축** (shrinkage): $\|S_j\|_W \leq 1$ (가중 노름).
+- 공변량들이 **엄밀 공선** 아님.
+
+**수렴의 기하**:
+- 각 단계에서 목적 함수 (penalized negative log-likelihood) 가 **단조 감소**.
+- 아래에서 유계이므로 수렴.
+
+**수렴 속도**: 일반적으로 **선형 수렴** — 각 반복에서 오차가 일정 비율로 감소. 강한 공선성에서는 느릴 수 있음.
+
+::: {.callout-important}
+## Back-Fitting vs Local Scoring — 이중 루프
+
+GAM 의 전체 적합은 **이중 루프**:
+
+- **Outer loop (Local Scoring)**: $W, z$ 를 업데이트 (IRLS 와 동일).
+- **Inner loop (Back-Fitting)**: 현재 $W, z$ 고정 상태에서 $f_j$ 들 업데이트.
+
+각 outer 반복에서 inner 반복이 수렴할 때까지 돈다. 결국 전체 이탈도 최소화.
+
+이 구조는 IRLS 의 **가중 LS 단계** 를 **가중 평활** 로 바꾼 것과 수학적으로 동등. GLM 의 단순한 확장 철학을 유지한다.
+:::
+
+## 평활기 비교
+
+McCullagh-Nelder 가 §15.4.2 에서 논의하는 네 가지 평활기.
+
+### Running-Lines Smoother (기본)
+
+- 각 점에서 **국소 선형 회귀**.
+- **선형 평활기**: $\widehat f = S z$.
+- **빠름**: 인접 이웃 업데이트 효율.
+
+### Cubic Spline Smoother
+
+**정의**: $\widehat f$ 가 전 구간에서 **삼차 스플라인**. 불확실성 (penalty) 최소화:
+
+$$
+\widehat f = \arg\min_f \; \sum w_i (z_i - f(x_i))^2 + \lambda \int (f''(x))^2 dx.
+$$
+
+$\lambda$ = 평활 강도 (smoothness penalty).
+
+- **장점**: 매끄러움 명시적 제어. 이론 풍부 (RKHS, Wahba 1990).
+- **단점**: $\lambda$ 선택 필요 (GCV 로 자동 선택 가능).
+
+### Running-Median Smoother
+
+- 이웃의 **중앙값** 계산.
+- **비선형 평활기**: $\widehat f \neq S z$.
+- **강건성**: 이상점에 둔감. outlier-heavy 데이터에 유리.
+- **단점**: 불연속성 (jumps). 매끄러움 희생.
+
+### Local Likelihood
+
+각 이웃에서 **국소 가능도 최대화** — GLM 을 이웃마다 적합.
+
+- **비선형 평활기**.
+- **장점**: 분포 가정 정확히 반영.
+- **단점**: 계산 비쌈. 실무에서 running-lines 와 큰 차이 없음 (McCullagh-Nelder).
+
+### 비교표
+
+| 평활기 | 선형성 | 매끄러움 | 이상점 강건성 | 계산 |
+|---|---|---|---|---|
+| Running-lines | O | 보통 | 낮음 | 빠름 |
+| Cubic spline | O | 높음 | 낮음 | 중간 |
+| Running-median | X | 낮음 | **높음** | 보통 |
+| Local likelihood | X | 보통 | 중간 | 느림 |
+
+**일반 권장**: Cubic spline (penalty = $\lambda$ GCV) 이 현대 표준. 이상점 문제 있으면 running-median 또는 M-estimation.
+
+## Span / Penalty 선택 — 교차검증
+
+### Span 의 의미
+
+Running-lines 의 **span** = 국소 이웃에 포함되는 점 비율. 예: span = 0.4 → 각 점에서 가장 가까운 40% 점들로 선형 회귀.
+
+**편향-분산 trade-off**:
+- **Span 작음**: 분산 큼 (들쭉날쭉), 편향 작음 (실제 곡률 포착).
+- **Span 큼**: 분산 작음 (매끄러움), 편향 큼 (세부 놓침).
+
+### Cross-Validation (CV)
+
+**Leave-One-Out CV**:
+
+$$
+\text{CV}(\text{span}) = \sum_i (z_i - \widehat f_{-i}(x_i))^2 w_i,
+$$
+
+$\widehat f_{-i}$ = $i$ 번째 점 제외하고 적합. 모든 점에서 예측 오차 합.
+
+**최적 span**:
+
+$$
+\text{span}^* = \arg\min_{\text{span}} \text{CV}(\text{span}).
+$$
+
+### Generalized CV (GCV)
+
+Leave-One-Out 은 $n$ 번 재적합 필요 → 비쌈. **GCV** 는 근사:
+
+$$
+\text{GCV}(\lambda) = \frac{n \sum (z_i - \widehat f(x_i))^2}{(n - \text{tr}(S))^2}.
+$$
+
+$\text{tr}(S)$ = 평활의 **유효 모수 수**. 분모의 $(n - \text{tr}(S))^2$ 가 penalty.
+
+**장점**: 단일 적합으로 계산 가능. Wood (2004) 가 GCV 를 GAM 의 표준 선택 방법으로 정착시켰다.
+
+### McCullagh-Nelder 의 span 권장값
+
+**span 0.4-0.5** 가 일반적. 작은 데이터셋에서는 0.5-0.7 까지 확대. 경계 효과가 나타나면 span 조정.
+
+자동 선택 원하면 **GCV** 사용. 단 GCV 가 종종 **과적합** (작은 span 선호) — 보수적으로 **AIC** 나 **REML** 대안.
+
+## Effective Degrees of Freedom
+
+### 공식
+
+평활 모형의 "유효 모수 수" 를 정의해야 AIC · F 검정 등에 사용 가능. McCullagh-Nelder 의 식:
+
+$$
+\text{eff d.f.} = \text{tr}(2S - S^T W S W^{-1}).
+$$
+
+$S$ = 평활 행렬 ($\widehat f = S z$), $W$ = GLM 가중치.
+
+### 단순화
+
+**정규 회귀 + 동분산** ($W = I$):
+
+$$
+\text{eff d.f.} = \text{tr}(2S - S^T S).
+$$
+
+**Idempotent smoother** ($S^2 = S$, 예: 선형 회귀): $\text{tr}(2S - S^2) = \text{tr}(S)$. 일반적으로 $\text{tr}(S) \leq p$.
+
+**Running-lines 와 cubic spline**: 일반적으로 non-idempotent. $\text{tr}(2S - S^TS) > \text{tr}(S)$. 즉 "유효 모수 수" 가 단순 trace 보다 약간 큼.
+
+### 유도 직관
+
+**$\text{tr}(S)$**: "$\widehat f$ 에 의한 $z$ 의 자유도 감소". 선형 회귀에서 $p$ 와 같음.
+
+**$\text{tr}(S^TS)$**: "$\widehat f$ 의 분산 기여" — 더 보수적 추정.
+
+**$2\text{tr}(S) - \text{tr}(S^TS)$**: 두 측도의 **보정된 평균**. Buja-Hastie-Tibshirani (1989) 가 "degrees of freedom for smoothers" 로 정식화.
+
+**해석**: Smooth 가 얼마나 "자유" 한가. span 작을수록 (자유도 ↑), span 크면 (자유도 ↓).
+
+### AIC · BIC 활용
+
+$\text{eff d.f.}$ 를 알면 정보 기준 사용 가능:
+
+$$
+\text{AIC} = \text{Deviance} + 2 \cdot \text{eff d.f.}
+$$
+
+$$
+\text{BIC} = \text{Deviance} + \log(n) \cdot \text{eff d.f.}
+$$
+
+**GAM 모형 선택** — AIC/BIC 최소 모형 선택. span, penalty 등을 이 기준으로 결정.
+
+## Partially Additive Model
+
+### 개념
+
+McCullagh-Nelder 가 §15.4.3 에서 제안: **일부 공변량은 선형, 일부는 평활**.
+
+$$
+\eta = \beta_0 + \sum_{j \in L} \beta_j x_j + \sum_{j \in S} f_j(x_j).
+$$
+
+$L$ = linear covariates, $S$ = smooth covariates.
+
+### 언제 사용
+
+**L 에 두는 공변량**:
+- 이론이 선형 형태 보장 (예: 로그 용량 response).
+- 추론 · 가설 검정 대상 — 단일 모수로 깔끔한 해석.
+- 정책 변수 — 효과 크기 필요.
+
+**S 에 두는 공변량**:
+- 비선형성 의심 but 명확 형태 모름.
+- 제어 변수 (교란 요인) — 정확한 형태보다 "충분한 보정" 중요.
+
+### 실무 예
+
+**의학**: 치료 효과 (linear), 나이 (smooth — 비선형 위험곡선), 체질량지수 (smooth), 흡연 여부 (linear, binary).
+
+**경제**: 정책 더미 (linear), 시간 추세 (smooth), 계절성 (smooth with cyclic constraint).
+
+**환경**: 오염물 농도 (linear — dose-response 가정), 온도 (smooth), 위치 (smooth on (lat, long)).
+
+**현대 GAM 의 기본 설정**. R `mgcv::gam(y ~ x1 + s(x2) + s(x3))`, Python `pygam.LinearGAM(s(0) + l(1) + s(2))`.
+
+### Product Terms
+
+McCullagh-Nelder 가 언급: 교호작용을 원하면 **product term** $f_{12}(x_1 x_2)$ 추가 가능.
+
+**경고**: 모든 이변량 함수가
+
+$$
+f_1(x_1) + f_2(x_2) + f_{12}(x_1, x_2)
+$$
+
+형태로 표현되지는 않는다. 일반 2 차원 함수는 **3 성분 분해 불가** — 고차 상호작용 필요.
+
+### 현대적 해결 — Tensor Product / Thin-Plate
+
+Wood (2003, 2017) 의 **tensor product spline**:
+
+$$
+f_{12}(x_1, x_2) = \sum_{k, l} \theta_{kl} B_k(x_1) B_l(x_2).
+$$
+
+$B_k, B_l$ = 각 변수의 기저 함수. $\theta_{kl}$ 이 계수 행렬.
+
+**Thin-plate spline**: 2D 대칭 평활. $\int (f_{xx}^2 + 2 f_{xy}^2 + f_{yy}^2) dA$ penalty. 자연스러운 등방성 (isotropy).
+
+**실무**: `mgcv::gam(y ~ te(x1, x2))` (tensor product) 또는 `s(x1, x2)` (thin-plate).
+
+## 1989 년 이후 — GAM 의 성숙
+
+McCullagh-Nelder 가 "future research" 로 소개한 GAM 이 30 년간 **성숙한 표준 도구** 로 발전.
+
+### 주요 발전
+
+**1. P-spline (Eilers-Marx 1996)**
+
+B-spline 기저 + 차이 penalty:
+
+$$
+\int (f''(x))^2 dx \approx \sum_k (\Delta^2 \theta_k)^2.
+$$
+
+계산 간단, 구현 널리 퍼짐.
+
+**2. GCV 자동 선택 (Wood 2004)**
+
+$\lambda$ 의 GCV 또는 REML 기반 자동 선택. `mgcv::gam` 의 기본 방식. 거의 분석자 개입 없이 좋은 평활 얻음.
+
+**3. GAMM (Generalized Additive Mixed Models)**
+
+GAM + 랜덤효과 (Ch.14) 통합. Wood (2011) 의 이론. `mgcv::gamm`, `gamm4::gamm4` 구현.
+
+**4. Bayesian GAM**
+
+Stan / `brms` 패키지. 평활 강도에 prior 둘 수 있음. 불확실성 정량화 자연스러움.
+
+**5. Boosting + GAM**
+
+Hothorn 외 (2010): `mboost::gamboost()`. Component-wise boosting 으로 GAM 학습. 고차원 (p >> n) 에서 효과적.
+
+**6. Deep Learning 과의 hybrid**
+
+Agarwal 외 (2021): **Neural Additive Models (NAM)**. 각 $f_j$ 를 신경망으로. 해석가능 ML 의 한 흐름.
+
+### 실무 도구 비교
+
+| 언어 | 패키지 | 특징 |
+|---|---|---|
+| R | `mgcv::gam` | **표준** — GCV/REML 자동, tensor product, GAMM |
+| R | `gam::gam` | Hastie 원 구현 (local scoring + back-fitting) |
+| R | `VGAM` | Extended GAM (로케이션-스케일) |
+| Python | `pygam` | mgcv 스타일, P-spline 기반 |
+| Python | `statsmodels.gam` | 일반 가법 모형 (제한적) |
+| Python | `sklearn` | GAM 직접 없음 (splines 조합으로 구현) |
+
+**실무 권장**: R 에서는 `mgcv`, Python 에서는 `pygam` 또는 R 호출.
+
+## Python 실전 — Motor Trend (mtcars) 예제
+
+### 데이터와 전통적 GLM
+
+```python
+import numpy as np
+import pandas as pd
+from pygam import LinearGAM, s, l
+
+# 유명 mtcars 데이터 재구성
+data = pd.DataFrame({
+    'mpg': [21.0, 21.0, 22.8, 21.4, 18.7, 18.1, 14.3, 24.4, 22.8, 19.2,
+            17.8, 16.4, 17.3, 15.2, 10.4, 10.4, 14.7, 32.4, 30.4, 33.9,
+            21.5, 15.5, 15.2, 13.3, 19.2, 27.3, 26.0, 30.4, 15.8, 19.7,
+            15.0, 21.4],
+    'hp':  [110, 110, 93, 110, 175, 105, 245, 62, 95, 123,
+            123, 180, 180, 180, 205, 215, 230, 66, 52, 65,
+            97, 150, 150, 245, 175, 66, 91, 113, 264, 175,
+            335, 109],
+    'wt':  [2.620, 2.875, 2.320, 3.215, 3.440, 3.460, 3.570, 3.190, 3.150, 3.440,
+            3.440, 4.070, 3.730, 3.780, 5.250, 5.424, 5.345, 2.200, 1.615, 1.835,
+            2.465, 3.520, 3.435, 3.840, 3.845, 1.935, 2.140, 1.513, 3.170, 2.770,
+            3.570, 2.780]
+})
+```
+
+### 전통적 선형 모형
+
+```python
+import statsmodels.api as sm
+
+# log-link Gaussian (또는 Gamma + log)
+X = sm.add_constant(data[['hp', 'wt']])
+m_linear = sm.OLS(data['mpg'], X).fit()
+print(m_linear.summary())
+
+# 잔차 vs 적합값 플롯 → 비선형 패턴 탐지?
+import matplotlib.pyplot as plt
+plt.scatter(m_linear.fittedvalues, m_linear.resid)
+plt.axhline(0, ls='--')
+plt.xlabel('fitted'); plt.ylabel('residual')
+plt.title('잔차 플롯 — 곡선 패턴 확인')
+plt.show()
+```
+
+### GAM 적합 — pygam
+
+```python
+from pygam import LinearGAM, s
+
+# mpg ~ s(hp) + s(wt)  (두 평활 항)
+gam = LinearGAM(s(0) + s(1)).fit(data[['hp', 'wt']], data['mpg'])
+print(gam.summary())
+```
+
+기대 출력:
+- 각 평활 항의 effective d.f.
+- AIC · GCV 값
+- 평활 강도 λ
+
+### 평활 함수 시각화
+
+```python
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+for i, (ax, name) in enumerate(zip(axes, ['hp', 'wt'])):
+    XX = gam.generate_X_grid(term=i)
+    ax.plot(XX[:, i], gam.partial_dependence(term=i, X=XX))
+    ax.plot(XX[:, i],
+             gam.partial_dependence(term=i, X=XX, width=0.95)[1],
+             c='r', ls='--', alpha=0.5)
+    ax.scatter(data[name], data['mpg'] - data['mpg'].mean(), alpha=0.4)
+    ax.set_xlabel(name); ax.set_ylabel(f'f({name})')
+    ax.set_title(f'부분 기여 — {name}')
+
+plt.tight_layout()
+plt.show()
+```
+
+**관찰**:
+- `hp` 효과: 보통 비선형 (중간 출력 차에서 MPG 가장 높음).
+- `wt` 효과: 대략 선형 (무거울수록 MPG 낮음) 또는 약간 비선형.
+
+### Partially Additive Model
+
+```python
+# hp 는 선형, wt 는 평활
+from pygam import l
+
+gam_partial = LinearGAM(l(0) + s(1)).fit(data[['hp', 'wt']], data['mpg'])
+print(gam_partial.summary())
+
+# AIC 비교
+print(f"\nFull GAM AIC: {gam.statistics_['AIC']:.1f}")
+print(f"Partial GAM AIC: {gam_partial.statistics_['AIC']:.1f}")
+```
+
+**해석**: AIC 가 낮은 모형 선호. 비선형이 유의미하면 GAM 권장, 아니면 선형.
+
+### Span 교차검증
+
+`pygam` 에서는 **λ (smoothing parameter)** 로 span 과 유사한 역할. `gam.gridsearch()` 로 GCV 최적화:
+
+```python
+gam_cv = LinearGAM(s(0) + s(1))
+gam_cv.gridsearch(data[['hp', 'wt']], data['mpg'],
+                  lam=np.logspace(-3, 3, 20))
+print(f"최적 λ: {gam_cv.lam}")
+print(f"GCV: {gam_cv.statistics_['GCV']:.2f}")
+```
+
+### 이항 반응 GAM
+
+```python
+from pygam import LogisticGAM
+
+# 합성 이진 반응 예제
+np.random.seed(42)
+x1 = np.random.uniform(-3, 3, 200)
+x2 = np.random.uniform(-3, 3, 200)
+eta = 1.5 * np.sin(x1) - 0.5 * x2**2
+p = 1 / (1 + np.exp(-eta))
+y = np.random.binomial(1, p)
+
+df = pd.DataFrame({'x1': x1, 'x2': x2})
+logit_gam = LogisticGAM(s(0) + s(1)).fit(df, y)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+for i, ax in enumerate(axes):
+    XX = logit_gam.generate_X_grid(term=i)
+    ax.plot(XX[:, i], logit_gam.partial_dependence(term=i, X=XX))
+    ax.set_title(f'Logit GAM — s(x{i+1})')
+plt.show()
+```
+
+**$x_1$ 의 사인 곡선** 과 **$x_2$ 의 이차 곡선** 이 평활 함수로 자동 발견됨.
+
+## 요약 — §15.4 의 네 가지 교훈
+
+### 교훈 1 — GAM 은 "GLM 의 자연스러운 확장"
+
+Local scoring + back-fitting 이 IRLS 의 **가중 LS 를 가중 평활로 교체** 한 것뿐. GLM 의 구조적 관점 그대로 유지.
+
+### 교훈 2 — 평활기 선택은 맥락에 따라
+
+- **Cubic spline (GCV)**: 현대 표준, 매끄러움 선호.
+- **Running-lines**: 단순, 빠름, 설명 쉬움.
+- **Running-median**: 이상점 강건.
+- **Local likelihood**: 이론적으로 정확, 계산 부담.
+
+### 교훈 3 — Partially Additive Model 이 실무 최적
+
+모든 변수 평활화는 **과도**. **관심 변수 + 이론 선형** 은 선형, **통제 변수 + 비선형성 의심** 은 평활. 해석과 유연성의 균형.
+
+### 교훈 4 — GAM 의 두 역할
+
+1. **서술 (Descriptive)**: 공변량 기여 함수 시각화 — 최종 모형.
+2. **탐색 (Exploratory)**: 적절한 변환 형태 제안 — GLM 으로 환원.
+
+McCullagh-Nelder 의 권고: **과적합 경계**. 랜덤 잡음에도 그럴듯한 곡선 그려짐. **cross-validation + AIC** 로 검증 필수.
+
+## Ch.15 완주까지 한 포스트 남음
+
+이 글로 §15.2-15.4 본문 3 섹션을 모두 심화했다. 마지막 §15.6 exercises (14-5) 가 **McCullagh-Nelder (1989) 블로그 시리즈의 마지막 포스트** 가 된다.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Further Topics — Ch.15 개관](./14-1-further-topics-overview.qmd)
+- [Bias Adjustment — §15.2](./14-2-bias-adjustment.qmd)
+- [Bartlett Adjustment — §15.3](./14-3-bartlett-adjustment.qmd)
+- [GLM 적합 알고리즘 — IRLS (McCullagh §2.5)](./01-6-glm-fitting-algorithm.qmd)
+- [Smoothing as an Aid (McCullagh §12.4)](./11-4-smoothing-as-aid.qmd) — 평활의 기초
+- [Checks for Systematic Departure (McCullagh §12.6)](./11-6-checks-for-systematic-departure.qmd) — 부분 잔차 플롯
+
+**관련 개념**
+
+- [Non-Linear Parameters in the Covariates (McCullagh §11.4)](./10-4-non-linear-parameters-in-covariates.qmd) — Box-Cox 변환 (GAM 의 모수적 대안)
+- [Components of Dispersion (McCullagh Ch.14)](./13-1-components-of-dispersion-overview.qmd) — GAMM 의 기초
+
+**참고 문헌 — GAM 의 역사**
+
+- Hastie, T. & Tibshirani, R. (1986). "Generalized additive models." *Statist. Sci.* 1: 297-318. **원 논문**.
+- Hastie, T. & Tibshirani, R. (1990). *Generalized Additive Models*. Chapman & Hall. **GAM 교과서**.
+- Wood, S. N. (2017). *Generalized Additive Models: An Introduction with R* (2nd ed.). CRC. **현대 표준 교재**.
+- Eilers, P. H. C. & Marx, B. D. (1996). "Flexible smoothing with B-splines and penalties." *Statist. Sci.* 11: 89-121.
+- Wahba, G. (1990). *Spline Models for Observational Data*. SIAM.
+- Buja, A., Hastie, T., Tibshirani, R. (1989). "Linear smoothers and additive models." *Ann. Statist.* 17: 453-510. — back-fitting 이론.
+
+**실무 패키지**
+
+- **R**: `mgcv` (표준), `gam`, `gamm4`, `mboost::gamboost`, `brms` (Bayesian)
+- **Python**: `pygam`, `statsmodels.gam`, `sklearn` + splines
+- **Stan / PyMC**: Bayesian GAM
+
+**현대 확장**
+
+- NAM (Neural Additive Models, Agarwal 외 2021)
+- Explainable Boosting Machines (Microsoft InterpretML)
+- GAMLSS (Rigby & Stasinopoulos 2005) — 위치-스케일-형태-왜도 4원 모형
+
+**후속 주제**
+
+- [Ch.15 Exercises — §15.6](./14-5-ch15-exercises.qmd) — 책의 마지막 포스트
