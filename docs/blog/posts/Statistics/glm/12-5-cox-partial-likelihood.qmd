@@ -1,0 +1,508 @@
+---
+title: "Cox's Proportional-Hazards Model — 부분 우도·동률 처리·Whitehead 포아송 환원 (McCullagh §13.5)"
+subtitle: "비중심 초기하 유비 · (13.4) 기본 식 · Cox (13.5) vs Peto (13.6) vs 단순 (13.7) · 다항 로그선형 vs 포아송 GLM"
+description: |
+  McCullagh & Nelder (1989) §13.5 의 Cox (1972a) 비례 위험 모형을 심화한다.
+  **부분 우도 (partial likelihood)** 의 유도 — 각 실패 시점 $t_j$ 의 위험집합
+  $R(t_j)$ 안에서 "누가 실패했는가" 의 조건부 확률 (13.4)
+  $\Pr = \exp(\beta^T x_j) / \sum_R \exp(\beta^T x)$ 이 **$\lambda(t_j)$ 와 무관** 한
+  이유. §7.3.2 의 비중심 초기하 분포와의 일반화 관계 — "고정 공변량·무작위 실패 시간"
+  을 "고정 실패 시간·무작위 공변량 선택" 으로 역전시키는 Cox 의 코페르니쿠스적 전환.
+  §13.5.2 의 세 가지 동률 처리 — Cox (13.5) 의 쌍 집합 합 (정확) · Peto (13.6) 의
+  순열 합 (grouped data 정확) · 단순 복원 추출 (13.7) — 비교와 선택 기준.
+  §13.5.3 의 계산 방법 세 가지 — 직접 WLS · 다항 로그선형 (k_j 범주) · Whitehead (1980)
+  의 **artificial Poisson + failure-time blocking factor** 트릭. 포아송과 다항의
+  쌍대성 (§6.4) 이 Cox 와 GLM 을 연결. Python 구현과 실무 권고.
+categories:
+  - Statistics
+  - GLM
+author: Kwangmin Kim
+date: 04/21/2026
+execute:
+  eval: false
+---
+
+## 서론 — "반모수" 의 의미
+
+§13.3 의 모수적 비례 위험 모형은 **세 모수 집합** 을 추정한다.
+
+- 선형 예측자 모수 $\beta$ — 공변량 효과.
+- 분산 모수 $\phi$ (해당 분포에서 필요 시).
+- **분포 모수** $\alpha$ 또는 분포 형태 자체 — Weibull, 극치값 등.
+
+Cox (1972a) 의 혁신은 세 번째 집합을 **완전히 포기** 하는 것이다.
+
+$$h(t; x) = \lambda(t) \exp(\beta^T x).$$
+
+$\lambda(t)$ 를 **임의의 음이 아닌 함수** 로 두고, 어떤 모수 형태도 부과하지 않는다. 추정에서는 **$\beta$ 만** 다룬다. $\lambda(t)$ 는 nuisance — 사용하지 않는다.
+
+이 접근이 왜 작동하는지, 어떻게 계산하는지, 동률을 어떻게 다루는지가 §13.5 의 내용이다.
+
+Ch.13 overview (12-1) 에서 Cox 모형의 개념을 간략히 언급했다. 이 포스트는 **부분 우도의 수학적 유도**, **동률 처리의 세 변종**, **Whitehead (1980) 의 포아송 GLM 환원** 까지 상세히 다룬다.
+
+## 부분 우도 (§13.5.1)
+
+### 핵심 관찰 — 실패 시점만 중요
+
+Cox 의 출발점: "**실패가 일어난 시점들** 만 우도에 기여한다. 실패가 없는 시간 구간은 $\lambda(t) = 0$ 으로 둬도 가능성에 영향 없음."
+
+수학적으로, $[0, T]$ 를 실패 시점들 $t_1 < t_2 < \cdots < t_J$ 로 분할. 각 구간 $(t_{j-1}, t_j)$ 에서 위험을 0 으로 해도 **관측된 사건열의 확률** 은 변하지 않는다.
+
+따라서 우도 구성에서 "$\lambda(t)$ 가 각 $t_j$ 에서 얼마" 인지만 중요하다. 연속성이나 매끄러움 가정 없이 **이산적 기여** 로 처리 가능.
+
+### 위험 집합 (risk set)
+
+$t_j$ 직전에 **관찰 중이고 아직 실패·중도절단되지 않은** 개체들의 집합:
+
+$$R(t_j) = \{l : t_l \geq t_j \text{ and not yet failed or censored before } t_j\}.$$
+
+$|R(t_j)| = k_j$ 라 하자.
+
+### 조건부 확률 (13.4) 의 유도
+
+**가정**: 동률 없음. $t_j$ 에서 **정확히 한 명** 이 실패. 이것을 **조건** 으로 걸면:
+
+$$\Pr(\text{$R(t_j)$ 중에서 정확히 한 명이 $t_j$ 에 실패}) \quad \text{는 사건}.$$
+
+이 조건 하에서, **누가** 실패했는가의 확률:
+
+$$\Pr(\text{individual } l \text{ fails at } t_j \mid \text{one failure in } R(t_j) \text{ at } t_j) = \frac{h(t_j; x_l)}{\sum_{m \in R(t_j)} h(t_j; x_m)}.$$
+
+비례 위험 모형 $h(t_j; x_l) = \lambda(t_j) \exp(\beta^T x_l)$ 대입:
+
+$$
+\Pr = \frac{\lambda(t_j) \exp(\beta^T x_l)}{\sum_{m \in R(t_j)} \lambda(t_j) \exp(\beta^T x_m)} = \frac{\exp(\beta^T x_l)}{\sum_{m \in R(t_j)} \exp(\beta^T x_m)}. \tag{13.4}
+$$
+
+**$\lambda(t_j)$ 가 분자·분모에서 상쇄** 된다. 조건부 확률이 **기저 위험에 완전히 무관**.
+
+### 부분 우도 정의
+
+실제 실패자가 $x_j$ 라 할 때, 실패 시점들 전체의 **조건부 확률 곱**:
+
+$$
+L_P(\beta) = \prod_{j=1}^{J} \frac{\exp(\beta^T x_j)}{\sum_{m \in R(t_j)} \exp(\beta^T x_m)}.
+$$
+
+이것이 **부분 우도 (partial likelihood)**. "부분" 이라는 이유는 **완전 우도 (full likelihood) 가 아니기** 때문. 실패 시점 $t_j$ 의 정보는 담지만 **생존 기간** 자체의 정보는 담지 않는다.
+
+::: {.callout-important}
+## 왜 "부분" 인가 — 우도의 두 성분
+
+완전 우도는 두 성분으로 분해된다.
+
+1. **실패 시점 성분**: "실패가 $t_1, \ldots, t_J$ 에 일어난다" 는 확률.
+2. **누가 실패했나 성분**: "그 시점에 $R(t_j)$ 중 누가 실패했나" 의 조건부 확률.
+
+(1) 은 $\lambda(t)$ 에 의존. (2) 는 $\lambda(t)$ 에 무관.
+
+Cox 는 **(2) 만** 써서 $\beta$ 를 추정한다. (1) 의 정보는 버린다. 따라서 **"부분"** 이다.
+
+놀라운 사실: (1) 의 버림에도 불구하고 $\widehat\beta_{\text{partial}}$ 가 **점근적으로** 참 모수적 MLE 과 거의 같은 효율을 가진다 (Efron 1977, Oakes 1977, §13.4 에서 언급). 이유는 **$\beta$ 와 $\lambda(t)$ 의 점근 직교성**.
+:::
+
+## 비중심 초기하 분포와의 연결
+
+### §7.3.2 복습
+
+비중심 초기하 분포: 흰 공 $w$ 개, 검은 공 $b$ 개 상자에서 **복원 없이** $n$ 개 뽑는데, 각 공이 뽑힐 확률이 상수가 아니라 **오즈비** $\psi$ 로 가중. 뽑힌 흰 공의 수의 분포.
+
+### (13.4) 가 일반화된 비중심 초기하
+
+(13.4) 를 이렇게 해석: "$R(t_j)$ 는 $k_j$ 개 공변량 벡터의 **유한 모집단**. 각 벡터 $x_l$ 의 **선택 가중치** 는 $\exp(\beta^T x_l)$. 이 가중치로 **1 개 추출** 하는 확률이 (13.4)."
+
+$x$ 가 이진 (0/1) 이면 이것이 정확히 비중심 초기하의 일반화:
+- $\psi = e^\beta$ (오즈비).
+- $\beta$ 가 이 오즈비의 로그.
+
+### 역할 역전 — Cox 의 코페르니쿠스 전환
+
+McCullagh-Nelder 가 강조하는 개념적 전환:
+
+**전통적 관점** (모수적 §13.3):
+- **실패 시간 $T$** 는 무작위. 분포 $f(t;x)$ 로 모형화.
+- **공변량 $x$** 는 고정 (실험 설계).
+- 우도: $\prod f(t_i; x_i)$ 또는 $\prod S(t_i; x_i)$.
+
+**Cox 의 관점** (부분 우도 §13.5):
+- **실패 시간 $t_j$** 는 고정 (관측된 바).
+- 각 $t_j$ 에서 **누가 실패했나** 가 무작위 — $R(t_j)$ 에서의 가중 추출.
+- 우도: $\prod \Pr(x_j \text{ chosen from } R(t_j))$.
+
+즉 "**시간은 무작위, 공변량은 고정**" 에서 "**공변량 선택이 무작위, 시간은 고정**" 으로 역할을 바꿨다.
+
+::: {.callout-tip}
+## 직관: 도서관 비유
+
+도서관에서 "언제 어느 책이 대출됐나" 를 분석한다고 하자.
+
+**전통적 관점**: 각 책이 대출되는 **시간** 이 무작위 변수. 책의 인기도 $x$ 가 대출 시간의 분포를 결정.
+
+**Cox 관점**: 대출 **시점** 은 고정 (관측된 로그). 각 시점에 "어느 책이 빌려졌나" 가 무작위 — 그 시점에 대출 가능한 책들 중에서 인기도 $e^{\beta x}$ 에 비례한 확률로 뽑힘.
+
+Cox 는 **대출 시간 자체의 분포** 를 포기하고 "특정 시점에 어느 책이 뽑혔나" 만 본다. 시간 분포를 모형화하지 않아도 **책의 인기도 $\beta$** 는 잘 추정된다.
+:::
+
+## 동률 처리 (§13.5.2)
+
+### 문제 — 실무의 불가피한 동률
+
+(13.4) 는 $t_j$ 가 **고유 시점** 을 가정. 실제 데이터에서는 시간이 **이산적** 으로 기록 (주·일·월) 되어 **동률 (ties)** 이 흔하다. Freireich 백혈병 데이터 (§13.4) 에서도 여러 동률 발생.
+
+동률을 다루는 세 접근이 있다.
+
+### Cox 의 정확 공식 (13.5) — 부분 집합 합
+
+**가정**: $t_j$ 에서 정확히 $m$ 명 동시 실패. 그들의 공변량 벡터 합 $s_j = \sum_{l: t_l = t_j, w_l=1} x_l$.
+
+**공식**:
+
+$$L_j = \frac{\exp(\beta^T s_j)}{\sum_{\text{all } m\text{-subsets}} \exp\{\beta^T (\text{subset sum})\}}. \tag{13.5}$$
+
+분모 = $R(t_j)$ 에서 **크기 $m$ 인 모든 부분집합** 의 $x$ 합의 지수 합.
+
+**예**: $|R(t_j)| = 10$, $m = 3$ 이면 $\binom{10}{3} = 120$ 개 부분집합 합산.
+
+**장점**: 정확. 이산 시간 모형 관점에서 진정한 우도.
+
+**단점**: 조합 폭발. $m$ 이 크거나 $k_j$ 가 크면 계산 불가능.
+
+### Peto 의 순열 합 (13.6) — 연속 시간 해석
+
+**가정**: 동률이 연속 시간의 **반올림** 결과. 두 명이 $t_j$ 에 실패한 것처럼 보이지만 실제로는 미세한 시간차가 있었음 — 순서는 알 수 없음.
+
+**공식** ($m = 2$ 의 경우):
+
+$$
+L_j = \underbrace{\frac{\exp(\beta^T x_1)}{\sum_{R(t_j)} \exp(\beta^T x)}}_{\text{$x_1$ 먼저}} \cdot \underbrace{\frac{\exp(\beta^T x_2)}{\sum_{R_1} \exp(\beta^T x)}}_{\text{$x_2$ 다음}} + (\text{순서 뒤집음}) \tag{13.6}
+$$
+
+$R_1 = R(t_j) \setminus \{x_1\}$. 두 순서 $(x_1, x_2), (x_2, x_1)$ 의 확률 합.
+
+**장점**: 연속 시간 가정에 부합. 동률이 **반올림 결과** 라고 믿으면 정확.
+
+**단점**: $m! \cdot (\text{복잡 계산})$. $m$ 이 크면 여전히 부담스러움.
+
+### Peto 의 단순 근사 (13.7) — 복원 추출
+
+**가장 단순한 근사**:
+
+$$L_j = \frac{\exp(\beta^T s)}{\left\{\sum_{R(t_j)} \exp(\beta^T x)\right\}^m}. \tag{13.7}$$
+
+$s$ = $m$ 명 동률자의 공변량 합.
+
+**유도**: "$m$ 개를 복원 추출" 가정. 실제로는 비복원이지만 $m/k_j$ 가 작으면 차이 미미.
+
+**장점**: 계산 초고속. 단순.
+
+**단점**: 동률이 많아 $m/k_j$ 가 크면 편향.
+
+### 세 방법 비교
+
+| 방법 | 가정 | 계산 복잡도 | 편향 |
+|---|---|---|---|
+| Cox (13.5) | 이산 시간, 정확 | $O\binom{k_j}{m}$ | 없음 (이산 가정 하) |
+| Peto 순열 (13.6) | 연속 시간, 반올림 | $O(m!)$ | 없음 (연속 가정 하) |
+| Peto 단순 (13.7) | 복원 추출 | $O(1)$ | 동률 많을 때 과소 |
+
+### Breslow (1974) — 실무 표준
+
+McCullagh-Nelder 가 언급하지 않지만 **Breslow 근사** 가 가장 흔히 쓰인다:
+
+$$L_j^{\text{Breslow}} = \frac{\exp(\beta^T s_j)}{\left\{\sum_{R(t_j)} \exp(\beta^T x)\right\}^m}.$$
+
+이것은 Peto 단순 (13.7) 과 **동일** 하다. R `survival::coxph(..., ties="breslow")` 가 기본값.
+
+**Efron (1977)** 가 더 나은 근사 제안 — R `ties="efron"` 가 기본값으로 흔히 쓰임.
+
+### 실무 권고
+
+- **동률 적음** ($m \leq 2$, $m/k_j \leq 0.05$): 어떤 방법이든 거의 같음. Breslow 기본값.
+- **동률 많음** ($m \geq 5$): Efron 또는 정확 방법. Breslow 편향 주의.
+- **매우 많은 동률** ($m \geq 20$): 이산 시간 로지스틱 회귀 고려.
+
+## 계산 방법 (§13.5.3)
+
+### 방법 1 — 직접 가중 최소제곱
+
+(13.4) 의 로그는
+
+$$\log L_j = \beta^T x_j - \log\left\{\sum_{R(t_j)} \exp(\beta^T x)\right\}.$$
+
+$b(\theta) = \log\{\sum \exp(\beta^T x)\}$ 의 **지수족 형태**. 정준 모수 $\beta$, 조건부 기대 $b'(\theta) = \bar x(t_j)$ (위험집합 가중 평균), 분산 $b''(\theta)$.
+
+**IRLS 로 최대화**:
+
+$$\widehat\beta \leftarrow \widehat\beta + I^{-1} U, \qquad U = \sum_j \{x_j - \bar x(t_j)\}, \quad I = \sum_j \text{Var}_j.$$
+
+**계산상 어려움**: 위험집합이 **시점마다 다르므로** 가중치 $b''$ 가 적합값의 명시적 함수가 아님. 표준 GLM 소프트웨어가 그대로 쓰이지 않음.
+
+### 방법 2 — 다항 로그선형 모형
+
+각 실패 시점 $t_j$ 의 **위험집합 $R(t_j)$ 를 $k_j$ 개 범주 다항 분포** 로 재구성:
+
+- 반응 변수: $y_j = (y_{j1}, \ldots, y_{j k_j})$ where $y_{j l} = 1$ if $l$-th individual failed, else 0.
+- 다항 확률: $\pi_{j l} = \exp(\beta^T x_l) / \sum_m \exp(\beta^T x_m)$.
+
+**로그선형 모형** 으로 모수화 (§5.5):
+
+$$\log \pi_{j l} = \alpha_j + \beta^T x_l, \qquad \alpha_j = \text{위험집합 } j \text{ 의 "영양" 모수}.$$
+
+$\alpha_j$ 는 **위험집합마다 다른 정규화 상수** — nuisance. $\beta$ 는 공변량 효과.
+
+**장점**: 표준 다항 로그선형 GLM 으로 처리. 단, 각 관측치 그룹의 범주 수 $k_j$ 가 가변이라 일부 소프트웨어 제약.
+
+### 방법 3 — Whitehead (1980) 의 포아송 GLM 환원 ⭐
+
+가장 실무적으로 유용한 환원. **다항과 포아송의 쌍대성** (§6.4) 을 활용.
+
+**아이디어**: 각 (실패 시점, 위험집합 구성원) 쌍을 **독립 포아송 관측치** 로 취급.
+
+**재구성**:
+
+- 각 실패 시점 $t_j$ 와 각 $l \in R(t_j)$ 에 대해 **인공 관측치** 생성.
+- 반응 변수: $y_{j l} = 1$ if $l$ failed at $t_j$, 0 otherwise.
+- 선형 예측자: $\log \mu_{j l} = \alpha_j + \beta^T x_l$.
+- $\alpha_j$ = **failure time 에 대한 blocking factor** (각 실패 시점마다 상수).
+
+**왜 작동하는가**: (§6.4) 의 결과 — 포아송 분포의 **조건부 분포** (합이 고정될 때) 는 다항. 합 고정 조건이 $\alpha_j$ 의 프로파일 우도에서 자연스럽게 부과된다.
+
+**계산 결과**: Whitehead 는 **$\widehat\beta$ 와 SE 가 부분 우도의 그것과 정확히 동일** 함을 보인다. 즉 "**생존 분석 = 포아송 GLM + 시점 blocking factor**".
+
+::: {.callout-important}
+## Whitehead 환원의 실무적 의의
+
+이 환원의 교육적·실용적 가치:
+
+1. **표준 GLM 소프트웨어** (SAS, R `glm`, Python `statsmodels`) 로 Cox 모형 구현 가능 — 전용 생존 패키지 불필요.
+2. **모형 확장** 이 자연스러움: 시간 의존 $\beta$, 층화, 구분 시간 공변량 등을 blocking factor 와 공변량 항 조작으로 구현.
+3. **GLM 진단** (Ch.12) 이 Cox 모형에도 적용. 부분 잔차 · Schoenfeld 잔차 계산 용이.
+
+다만 실제로는 위험집합이 확장될수록 **관측치 수 폭증** — 데이터가 $N$ 개 실패 시점에 각각 $k_j$ 개 위험집합 구성원이면 총 $\sum k_j$ 개 행. 수천·수만 행이 쉽게 된다. 계산 비용 때문에 전용 Cox 소프트웨어가 여전히 표준.
+:::
+
+### Peto 의 동률 조정
+
+방법 2 의 다항 우도에서 동률 처리:
+
+- 다항 총계 = **그 시점의 동률 실패 수 $m$** (1 대신).
+- 알고리즘 조정 불필요.
+
+포아송 환원 (방법 3) 에서도 동일. 이것이 **Peto 방법** 의 본질 — (13.7) 의 복원 추출 가정과 수학적 등가.
+
+## 부분 우도의 통계적 성질
+
+### 일치성과 점근 정규성
+
+Andersen & Gill (1982) 이 마틴게일 이론으로 증명:
+
+$$\widehat\beta_{PL} \xrightarrow{p} \beta_0, \qquad \sqrt{n}(\widehat\beta_{PL} - \beta_0) \xrightarrow{d} N(0, I^{-1}(\beta_0)).$$
+
+$I(\beta)$ = 부분 관측 정보 행렬.
+
+### Wald / LRT / Score 검정
+
+부분 우도를 "정식 우도처럼" 취급. 세 표준 검정 (Wald, LRT, score) 모두 적용 가능하며 $\chi^2$ 점근 분포.
+
+**Wald 검정**:
+$$\frac{\widehat\beta_j}{\text{SE}(\widehat\beta_j)} \xrightarrow{d} N(0, 1).$$
+
+**LRT**:
+$$-2 \log \frac{L_P(\widehat\beta_{M_0})}{L_P(\widehat\beta_{M_1})} \xrightarrow{d} \chi^2_k.$$
+
+**Score (log-rank)**: 위험집합에서의 공변량 편차를 관찰 합과 비교. 이항 공변량 (처치/대조) 일 때 **로그-순위 검정 (log-rank test)** 과 동일.
+
+### 효율성 — Efron-Oakes 정리
+
+Efron (1977), Oakes (1977) 의 결과:
+
+$$\text{eff}(\widehat\beta_{PL}) \approx 1 \quad \text{under parametric alternative}.$$
+
+즉 Cox 부분 우도 추정량의 **점근 분산** 이 참 모수적 MLE 의 분산과 **거의 같다**. 대부분의 조건에서 효율 손실이 5% 미만.
+
+이것이 Cox 모형의 역설 — **분포 가정 없이도 효율이 거의 모수적 수준**. 공변량 효과 $\beta$ 와 기저 위험 $\lambda(t)$ 의 **점근 직교성** 이 본질적 원인.
+
+## Python 실전 — Freireich 데이터
+
+### lifelines 로 직접 Cox 적합
+
+```python
+import numpy as np
+import pandas as pd
+from lifelines import CoxPHFitter
+
+# Freireich 데이터 (12-4 에서 사용)
+t1 = [6, 6, 6, 6, 7, 9, 10, 10, 11, 13, 16, 17, 19, 20, 22, 23, 25, 32, 32, 34, 35]
+w1 = [0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0]
+t2 = [1, 1, 2, 2, 3, 4, 4, 5, 5, 8, 8, 8, 8, 11, 11, 12, 12, 15, 17, 22, 23]
+w2 = [1] * 21
+
+df = pd.DataFrame({
+    'time': t1 + t2,
+    'event': w1 + w2,
+    'group': [0]*21 + [1]*21  # 0=6-MP, 1=placebo
+})
+
+# 세 가지 동률 처리 방법으로 Cox 적합
+for ties in ['efron', 'breslow']:
+    cph = CoxPHFitter()
+    cph.fit(df, 'time', 'event', ties=ties if hasattr(cph, 'ties') else None)
+    beta1 = cph.params_['group']
+    se = cph.standard_errors_['group']
+    print(f"{ties:8s}: β₁ = {beta1:.3f} ± {se:.3f}, HR = {np.exp(beta1):.2f}")
+```
+
+기대: Efron 과 Breslow 가 약간 다른 값. Freireich 데이터에 동률이 꽤 있어 차이 감지.
+
+### Whitehead 포아송 환원 — 수동 구현
+
+```python
+import statsmodels.api as sm
+
+# 각 실패 시점에 대해 위험집합 구성
+df_sorted = df.sort_values('time').reset_index(drop=True)
+failure_times = sorted(df_sorted.loc[df_sorted['event'] == 1, 'time'].unique())
+
+# 포아송 GLM 을 위한 인공 데이터셋 구성
+long_data = []
+for j, t_j in enumerate(failure_times):
+    # 위험집합 R(t_j): t_l >= t_j 인 모든 개체
+    risk_set = df_sorted[df_sorted['time'] >= t_j]
+    for _, row in risk_set.iterrows():
+        long_data.append({
+            'failure_id': j,        # blocking factor
+            'group': row['group'],
+            'response': 1 if (row['time'] == t_j and row['event'] == 1) else 0
+        })
+
+long_df = pd.DataFrame(long_data)
+
+# 실패 시점을 범주형으로 dummy
+dummies = pd.get_dummies(long_df['failure_id'], prefix='ft', drop_first=True)
+X = pd.concat([pd.Series(1, index=long_df.index, name='const'),
+               long_df['group'].astype(float),
+               dummies.astype(float)], axis=1)
+y = long_df['response']
+
+m_pois = sm.GLM(y, X, family=sm.families.Poisson()).fit()
+beta1_whitehead = m_pois.params['group']
+se_whitehead = m_pois.bse['group']
+
+print(f"\nWhitehead 포아송 환원:")
+print(f"  β₁ = {beta1_whitehead:.3f} ± {se_whitehead:.3f}")
+print(f"  HR = {np.exp(beta1_whitehead):.2f}")
+print(f"  (lifelines Cox 와 동일해야 함)")
+```
+
+기대 출력: Whitehead 환원의 $\widehat\beta_1$ 이 Cox Breslow 결과와 거의 일치 (소수점 둘째 자리). SE 도 비슷.
+
+### 수동 부분 우도 계산 — 교육용
+
+```python
+def partial_log_likelihood(beta, df):
+    """Breslow 근사 (동률 단순 처리)."""
+    ll = 0.0
+    for t_j in sorted(df.loc[df['event'] == 1, 'time'].unique()):
+        failures = df[(df['time'] == t_j) & (df['event'] == 1)]
+        risk_set = df[df['time'] >= t_j]
+        # 분자: Σ exp(β x) over failed
+        num = np.sum(np.exp(beta * failures['group']))
+        # 분모: Σ exp(β x) over risk set, m 번 곱 (Breslow/Peto 근사)
+        m = len(failures)
+        den = np.sum(np.exp(beta * risk_set['group'])) ** m
+        ll += np.log(num / den)
+    return ll
+
+# β₁ 그리드 탐색
+beta_grid = np.linspace(0.5, 3.0, 100)
+ll_vals = [partial_log_likelihood(b, df) for b in beta_grid]
+beta_hat = beta_grid[np.argmax(ll_vals)]
+print(f"\n수동 Breslow 부분 우도:")
+print(f"  β̂₁ ≈ {beta_hat:.3f} (그리드 해상도)")
+
+# 더 정밀한 최적화
+from scipy.optimize import minimize_scalar
+res = minimize_scalar(lambda b: -partial_log_likelihood(b, df), bounds=(0.5, 3.0), method='bounded')
+print(f"  β̂₁ = {res.x:.4f} (최적화)")
+```
+
+### Log-rank 검정과 Score 검정의 동치
+
+```python
+from lifelines.statistics import logrank_test
+
+lr = logrank_test(
+    df[df['group'] == 0]['time'], df[df['group'] == 1]['time'],
+    df[df['group'] == 0]['event'], df[df['group'] == 1]['event']
+)
+print(f"\nLog-rank 검정: χ² = {lr.test_statistic:.2f}, p = {lr.p_value:.4f}")
+
+# Cox 의 score 검정 (null 에서 β=0)
+# cph.score (lifelines) 또는 수동 계산
+```
+
+기대: Log-rank χ² ≈ 16.8, Cox Wald/LRT 와 일관.
+
+## 요약 — §13.5 의 다섯 가지 교훈
+
+### 교훈 1 — 기저 위험의 nuisance 처리
+
+$\lambda(t)$ 를 모수화하지 않고도 $\beta$ 를 효율적으로 추정 가능. Cox 의 핵심 혁신.
+
+### 교훈 2 — 관점의 역전
+
+"시간 무작위, 공변량 고정" → "시간 고정, 공변량 선택 무작위". 이 역전이 비중심 초기하 유비를 낳고, $\lambda(t)$ 상쇄를 가능하게 함.
+
+### 교훈 3 — 동률 처리의 trade-off
+
+Cox 정확 (조합 폭발) · Peto 순열 (계산 부담) · Breslow/Peto 단순 (편향) 중 선택. 실무: Efron 기본, 동률 많으면 Cox 정확.
+
+### 교훈 4 — GLM 으로의 환원
+
+Whitehead 의 **artificial Poisson + blocking factor** 구조가 Cox 모형을 일반 GLM 안으로 끌어온다. 표준 소프트웨어로 구현 가능.
+
+### 교훈 5 — 점근 직교성의 힘
+
+Efron-Oakes 정리: $\beta$ 와 $\lambda(t)$ 가 점근 직교이므로 $\lambda(t)$ 포기의 효율 비용이 거의 없다. 이것이 Cox 모형이 실무에서 지배적인 이유.
+
+## Cox vs 모수적 — 언제 무엇을 쓸까
+
+| 상황 | 추천 |
+|---|---|
+| 공변량 효과만 관심 | **Cox** — 분포 가정 최소 |
+| 절대 위험 예측 필요 | **모수적 Weibull/지수** — $\lambda(t)$ 필요 |
+| 시간 외삽 | **모수적** — Cox 는 외삽 제한 |
+| 소표본, 동률 많음 | **모수적** — Cox 동률 처리 편향 가능 |
+| 대표본, 동률 적음 | **Cox** — 강건, 효율적 |
+| 진단·탐색 | **Cox** 먼저 → 필요 시 모수적 확증 |
+
+실무 관행: **Cox 가 기본**, 필요 시 모수적 보조 분석.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Models for Survival Data — 개관 (McCullagh Ch.13)](./12-1-models-for-survival-data-overview.qmd)
+- [Proportional-Hazards Models (McCullagh §13.2)](./12-2-proportional-hazards-models.qmd)
+- [Parametric Survival (McCullagh §13.3)](./12-3-parametric-survival.qmd)
+- [Leukaemia Example (McCullagh §13.4)](./12-4-leukaemia-example.qmd)
+- [초기하 분포 (McCullagh §7.3)](./06-2-hypergeometric-distributions.qmd) — 비중심 초기하와의 연결
+- [Log-linear 다항 쌍대성 (McCullagh §6.4)](./05-4-poisson-multinomial-duality.qmd) — Whitehead 환원의 기반
+
+**관련 개념**
+
+- [생존 분석 개요 — Kleinbaum 기반](../survival/01-survival-overview.qmd)
+- [Log-rank 검정](../164-permuted-p-value.qmd) — Cox score 검정의 특수 사례
+
+**방법론 참고**
+
+- Cox, D. R. (1972a). "Regression models and life-tables." *JRSS B* 34: 187-220. **원 논문**.
+- Cox, D. R. (1975). "Partial likelihood." *Biometrika* 62: 269-276.
+- Efron, B. (1977). "The efficiency of Cox's likelihood function for censored data." *JASA* 72: 557-565.
+- Oakes, D. (1977). "The asymptotic information in censored survival data." *Biometrika* 64: 441-448.
+- Whitehead, J. (1980). "Fitting Cox's regression model to survival data using GLIM." *Appl. Statist.* 29: 268-275.
+- Andersen, P. K. & Gill, R. D. (1982). "Cox's regression model for counting processes." *Ann. Statist.* 10: 1100-1120. **마틴게일 이론**.
+
+**후속 주제 — Ch.13 심화**
+
+- [Ch.13 Exercises (McCullagh §13.7)](./12-6-ch13-exercises.qmd)
