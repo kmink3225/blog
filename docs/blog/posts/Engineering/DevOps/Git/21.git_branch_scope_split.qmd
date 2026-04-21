@@ -1,0 +1,274 @@
+---
+title: "Git - 뒤늦은 브랜치 분리"
+subtitle: "hard reset + force push + A..B 검증으로 섞인 scope 복구하기"
+description: |
+  기능 브랜치 위에 다른 scope의 커밋을 쌓은 뒤에야 mismatch를 인지한 상황에서,
+  파괴적 git 명령(hard reset + force push)으로 커밋을 깔끔하게 분리하는 절차를
+  정리한다. cherry-pick 비파괴 경로와의 trade-off, 파괴적 작업이 안전한 세
+  조건, `git branch <name>` / `--hard` / `A..B` / `-u` / `--force-with-lease`
+  옵션들이 실전 분리 작업에서 각각 어떻게 쓰이는지 다룬다.
+categories:
+  - Engineering
+  - Git
+  - DevOps
+author: Kwangmin Kim
+date: 04/21/2026
+---
+
+## 왜 분리가 필요했나
+
+플랫폼 리팩토링을 시작하면서 전용 브랜치를 파야 했는데 습관적으로 `feat/standardizer`(데이터 표준화 Agent 기능 브랜치) 위에서 바로 작업을 시작해버렸다. **커밋 7개를 쌓은 뒤에야 scope mismatch를 인지**했다.
+
+문제의 구체적 양상:
+
+```
+42a9638 fix(poc): restore path calculations            ← 리팩토링
+78a93a5 feat(core/rag): port 4 modules                 ← 리팩토링
+2f02411 chore(refactor): split PoC pyproject           ← 리팩토링
+29ea02a feat(core): add contracts.py                   ← 리팩토링
+5d7b534 feat(core): port llm and config                ← 리팩토링
+e840f58 chore(refactor): move src to poc/src           ← 리팩토링
+fc4f699 chore(refactor): scaffold platform             ← 리팩토링
+─────────────────────────────────────────────────
+c7eaf56 fix(code-standardizer): 결과 영역에서 ...       ← 여기까지가 진짜 standardizer
+ac57ab2 feat(code-standardizer): docstring ...
+...
+```
+
+### 왜 커밋 타입 구분만으로는 부족한가
+
+Conventional Commits의 `feat` vs `chore(refactor)`로 커밋 타입은 구분되어 있다. 그러나 이대로 main 머지 PR을 만들면 구조적 문제가 발생한다.
+
+1. PR 제목·설명을 **"표준화 Agent 개선"**으로 쓰면 리팩토링 커밋이 scope 밖으로 넘친다. **"플랫폼 리팩토링"**으로 쓰면 standardizer 커밋이 scope 밖으로 넘친다. 한 PR이 두 주제를 동시에 대표할 수 없다.
+2. 리뷰어 입장에서 **두 가지 전혀 다른 변경이 한 PR에 섞여** 있으니 경계를 구분하며 읽어야 한다. 리뷰 피로도가 올라간다.
+3. 한쪽만 revert하고 싶을 때 얽혀 있어 **부분 되돌리기가 어렵다**.
+4. 브랜치 이름(`feat/standardizer`)이 실제 내용과 달라 **히스토리 검색이 불편**해진다.
+
+**브랜치 수준에서 scope를 섞으면 PR 단위로 깨지지 않는다**. 커밋 타입 구분은 필요 조건이지만 충분 조건이 아니다.
+
+## 선택지 3개 분석
+
+| 옵션 | 작업 | 장점 | 단점 |
+|---|---|---|---|
+| **A. 그대로 둠** | 나중에 PR 설명으로 풀어냄 | 지금 손 안 댐 | PR 커밋 리스트 혼잡, 리뷰·추적 비용 지속 |
+| **B. 비파괴 분리** | `feat/refactor`를 `c7eaf56`에서 새로 파고 리팩토링 7개 cherry-pick. `feat/standardizer`는 건드리지 않음 | force push 불필요 | 중복 커밋 존재(cherry-pick은 새 hash 생성), main 머지 타이밍에 둘 중 하나에서 리팩토링 커밋이 자연 소멸해야 함 |
+| **C. 파괴적 분리** | `feat/refactor`를 현재 HEAD에서 파고, `feat/standardizer`를 `c7eaf56`로 `git reset --hard` 후 `git push --force` | 히스토리 깔끔, 중복 없음 | force push 필요, 공동 작업자 있으면 위험 |
+
+### 왜 C를 택했나 — 파괴적 분리가 안전한 세 조건
+
+힘의 균형이 C로 기울게 한 조건 세 개:
+
+1. **단독 작업 브랜치** — `feat/standardizer`는 본인만 pull/push하는 개인 작업 브랜치다. 공동 작업자의 로컬과 어긋날 위험이 없다.
+2. **PR 미제출 상태** — `feat/standardizer → main` PR이 아직 없어 force push가 외부 참조(리뷰 코멘트, CI 실행 기록 등)를 깨뜨리지 않는다.
+3. **커밋 수 적음** — 지금 7개. 다음 주가 되면 더 쌓여 분리 작업 비용이 커진다. **지금이 가장 싸다**는 원칙이 적용된다.
+
+B는 안전하지만 **중복 커밋이 히스토리에 남는 것**이 장기적으로 더 지저분하다. C는 파괴적이지만 한 번에 깨끗하다. Trade-off가 단기 리스크 vs 장기 위생인데, 리스크가 매우 낮으면 위생을 택한다.
+
+### 파괴적 작업의 조건부 허용 원칙
+
+세 조건 중 하나라도 무너지면 C는 버리고 B로 간다.
+
+| 조건 | 무너진 경우 대응 |
+|------|----------------|
+| 단독 작업 브랜치 | 공동 작업자가 pull했다면 force push로 그들 로컬이 깨짐 → B |
+| PR 미제출 | PR 리뷰·CI 기록이 force push 후 stale hash 참조로 깨짐 → B |
+| 로컬·원격 동기화 | 오래된 로컬로 force push하면 신규 커밋이 증발 → fetch 후 판단 |
+
+## 실행 단계
+
+### Step 0. 상태 확인 (작업 전 진단)
+
+```bash
+git log --oneline -12
+git branch -vv
+```
+
+**확인한 것**:
+
+- 현재 HEAD: `42a9638` (feat/standardizer)
+- 리팩토링 범위: `fc4f699` ~ `42a9638` (7개 연속)
+- 스플릿 지점: `c7eaf56` (리팩토링 직전, 마지막 진짜 standardizer 커밋)
+- 브랜치 3개 상태:
+  - `feat/chatbot @ 9f2cdf6` (origin 일치)
+  - `feat/standardizer @ 42a9638` (origin 일치) ← 체크아웃 중
+  - `main @ 347126c` (origin 일치)
+
+**스플릿 지점을 정확히 집어내는 것이 가장 중요하다.** 한 커밋만 빗나가도 의미가 달라진다. 여기서는 직전 커밋 메시지가 `fix(code-standardizer)`로 시작하는 것을 보고 경계선을 확정했다. 커밋 메시지 prefix가 일관되게 관리되고 있다면 이 확정 작업이 쉽다. 역으로, 커밋 메시지가 엉성하면 스플릿 자체가 고통스러워진다 — 커밋 메시지 규율은 **미래의 분리 가능성을 위한 투자**다.
+
+### Step 1. `feat/refactor` 브랜치 생성
+
+```bash
+git branch feat/refactor
+```
+
+`git checkout -b feat/refactor`가 아니라 `git branch feat/refactor`를 쓴 이유:
+
+- `checkout -b`는 **브랜치 생성 + 체크아웃을 동시에** 수행한다.
+- 여기서는 브랜치 참조만 먼저 만들고, reset을 현재 브랜치(`feat/standardizer`)에서 수행해야 한다.
+- 체크아웃하지 않고 브랜치만 만들면 `feat/refactor`가 현재 HEAD(`42a9638`)를 가리키는 참조로 남는다.
+
+직후 `git branch -vv`:
+
+```
+  feat/chatbot      9f2cdf6 [origin/feat/chatbot] ...
+  feat/refactor     42a9638 fix(poc): restore path ...
+* feat/standardizer 42a9638 [origin/feat/standardizer] ...
+```
+
+두 브랜치가 같은 commit을 가리키고, `*`는 여전히 `feat/standardizer`. 원하던 상태다.
+
+### Step 2. `feat/standardizer`를 `c7eaf56`로 hard reset
+
+```bash
+git reset --hard c7eaf56
+```
+
+#### `--hard`를 쓴 이유
+
+reset은 `--soft` / `--mixed` / `--hard` 세 모드가 있고 각각 "무엇까지 되돌릴 것인가"의 범위가 다르다.
+
+| 모드 | HEAD | index(staging) | working tree |
+|------|------|---------------|--------------|
+| `--soft` | 이동 | 유지 | 유지 |
+| `--mixed` (기본) | 이동 | 이동 | 유지 |
+| `--hard` | 이동 | 이동 | 이동 |
+
+| 모드 | 여기서 쓰면 어떻게 되나 |
+|------|------------------------|
+| `--soft` | 리팩토링 파일이 staged 상태로 남음 (원하지 않음) |
+| `--mixed` | 파일이 unstaged로 남음 (원하지 않음) |
+| `--hard` | 작업 디렉토리도 c7eaf56 상태로 복원 (원하는 것) |
+
+목표는 `feat/standardizer`에서 리팩토링 흔적을 완전히 지우는 것이므로 `--hard`다. 다음 단계에서 `feat/refactor`로 checkout할 때 리팩토링 파일들이 다시 복원되므로 실제로 파일이 디스크에서 사라지는 시간은 짧다.
+
+**출력 중 주목할 지점**:
+
+```
+Updating files: 100% (489/489), done.
+HEAD is now at c7eaf56 fix(code-standardizer): 결과 영역에서 '원본 코드' 섹션 제거
+```
+
+489개 파일이 업데이트됨. 리팩토링으로 추가·이동된 대량 파일(`poc/src/**`, `core/`, `domains/`, ...)이 tracked 상태에서 제거되거나 원위치로 돌아가는 작업이 이 숫자로 드러난다.
+
+#### Untracked 파일의 보존
+
+`git reset --hard`는 **tracked 파일만 건드리고 untracked 파일은 그대로 둔다**. 이 리포에는 `poc/src/agent/prompts/data_standardizer/llm-architecture.md`가 시종일관 untracked 상태였는데, 앞선 리팩토링에서 `git mv src poc/src`할 때 파일시스템 수준으로 함께 이동했고, 이번 reset에서도 그 위치에 그대로 남는다. `git status` 출력의 `?? poc/`가 그걸 반영한다. 처음 보면 이상해 보이지만 git의 설계대로 동작한 것이다.
+
+### Step 3. Force push
+
+```bash
+git push --force origin feat/standardizer
+```
+
+출력:
+
+```
++ 42a9638...c7eaf56 feat/standardizer -> feat/standardizer (forced update)
+```
+
+`+` 기호와 `(forced update)` 표기는 **non-fast-forward 업데이트임을 git이 명시적으로 알려주는 것**이다. 일반 push였다면 fast-forward가 아니어서 거부됐을 것이다.
+
+#### `--force` vs `--force-with-lease`
+
+`--force-with-lease`는 "내가 마지막으로 본 원격 상태와 지금 원격이 같을 때만 force push하라"는 **조건부 force push**다. 동시에 다른 사람이 push한 경우 그 변경을 덮어쓰지 않는다.
+
+| 옵션 | 동작 |
+|------|------|
+| `--force` | 무조건 덮어씀. 다른 사람의 push가 증발할 수 있음 |
+| `--force-with-lease` | 원격이 내가 아는 상태와 다르면 거부. 덮어쓰기 사고 방지 |
+
+팀 환경에서는 **거의 항상 `--force-with-lease`**를 쓰는 편이 안전하다. 비용은 같고 안전성은 더 높다. 이번 케이스는 단독 작업 브랜치라 `--force`로 충분하지만, 습관적으로 `--force-with-lease`를 쓰는 편이 낫다.
+
+### Step 4. `feat/refactor` 체크아웃
+
+```bash
+git checkout feat/refactor
+```
+
+이 시점에 working tree가 다시 `42a9638` 상태로 복원된다. 리팩토링 파일들(`poc/src/*`, `core/*`, `domains/*`, ...)이 디스크에 다시 나타난다.
+
+### Step 5. `feat/refactor` 원격 push + upstream 설정
+
+```bash
+git push -u origin feat/refactor
+```
+
+`-u` (= `--set-upstream`)는 이후 `git push` / `git pull`을 브랜치명 없이 할 수 있게 upstream 연결을 설정한다. 새 브랜치를 처음 push할 때 습관적으로 `-u`를 붙이면 편하다.
+
+출력:
+
+```
+* [new branch]      feat/refactor -> feat/refactor
+branch 'feat/refactor' set up to track 'origin/feat/refactor'.
+```
+
+## 검증 — 분리가 정확히 됐는가
+
+```bash
+git log --oneline feat/refactor..feat/standardizer
+# (empty)
+
+git log --oneline feat/standardizer..feat/refactor
+# 42a9638 fix(poc): ...
+# 78a93a5 feat(core/rag): ...
+# 2f02411 chore(refactor): ...
+# 29ea02a feat(core): ...
+# 5d7b534 feat(core): ...
+# e840f58 chore(refactor): ...
+# fc4f699 chore(refactor): ...
+```
+
+### `A..B` 문법의 의미
+
+**"B에 있지만 A에 없는 커밋"을 표시**한다.
+
+- `feat/refactor..feat/standardizer` → `feat/standardizer`에만 있는 커밋. 비어 있어야 함(standardizer에 리팩토링 잔존 없음). **✓**
+- `feat/standardizer..feat/refactor` → `feat/refactor`에만 있는 커밋. 리팩토링 7개가 정확히 나와야 함. **✓**
+
+이 **대칭 검증**이 "잘 분리됐나"를 가장 확실히 확인하는 방법이다. 브랜치 요약(`git branch -vv`)만 보면 HEAD가 다르다는 것만 알지 실제 커밋 집합 차이는 보이지 않는다.
+
+## Claude Code에게 맡길 수 없는 부분
+
+파괴적 git 명령(force push, hard reset)은 에이전트가 "최선의 판단"으로 실행하면 되돌릴 수가 없다. Claude Code는 안전장치가 걸려 있어 선택지를 정리해 제시하고, 사용자가 실제로 "c"라고 선택 입력을 받은 뒤에야 실행했다. **이건 올바른 default**다 — 자동 판단이 빠르다고 파괴적 명령까지 자동화하면 사고 발생 시 복구 비용이 자동화 효용을 훨씬 초과한다.
+
+## 최종 상태
+
+| 브랜치 | HEAD | 역할 |
+|---|---|---|
+| `main` | `347126c` | 변동 없음 |
+| `feat/chatbot` | `9f2cdf6` | 변동 없음 |
+| `feat/standardizer` | `c7eaf56` | **force push 후** — 순수 표준화 Agent 기능 커밋만 |
+| `feat/refactor` | `42a9638` | **신규** — 플랫폼 리팩토링 7개 커밋 |
+
+향후 main 머지 시 **PR 2건을 각각 정돈된 scope로 제출 가능**하다 — `feat/refactor → main`(플랫폼 인프라), `feat/standardizer → main`(표준화 Agent). 리뷰어가 한 번에 한 주제만 보면 된다.
+
+## 핵심 학습 포인트
+
+1. **브랜치 scope 인식은 작업 시작 직후에** — `checkout -b` 한 번만 추가로 치면 됐을 것을, 7커밋 쌓인 뒤에 사후 분리하느라 force push까지 가게 됐다. 습관이 되지 않으면 계속 반복될 실수다. 플랫폼 리팩토링·버전 업그레이드·실험 같은 **cross-cutting 작업은 전용 브랜치 파는 것을 default**로 한다.
+
+2. **파괴적 작업의 조건부 허용** — force push / hard reset은 다음 조건 **모두** 충족 시에만 안전하다.
+   - (a) 대상 브랜치에 본인만 작업 (공동 pull 이력 없음)
+   - (b) PR 미제출 (외부 참조 없음)
+   - (c) 로컬·원격이 최근 동기화된 상태 (stale 로컬로 덮어쓰지 않음)
+   - 조건 하나라도 안 맞으면 cherry-pick 같은 비파괴 경로로 우회한다.
+
+3. **`git branch` 단독 사용의 쓰임** — 보통 `checkout -b`가 편해서 많이 쓰지만, "참조만 만들어두고 체크아웃은 나중" 시나리오에서는 `git branch <name>`이 깔끔하다.
+
+4. **reset `--soft` / `--mixed` / `--hard` 구분의 실전 의미** — 문서로 읽을 때는 헷갈리지만, "무엇까지 되돌릴 것인가"의 계층(HEAD → index → working tree)으로 외우면 분명해진다. 브랜치 분리 시나리오에서는 `--hard`가 맞다.
+
+5. **`A..B` 커밋 집합 문법** — 브랜치 분리·merge 검증·PR 범위 확인 등 상당수 실무 확인이 이 하나로 해결된다. diff가 아니라 **커밋 리스트 차이**를 보고 싶을 때 유용하다.
+
+6. **`--force-with-lease` 습관화** — 단독 브랜치에서는 `--force`로 충분하지만, 팀 환경을 섞어가며 일하는 경우 습관을 통일하는 편이 안전하다.
+
+7. **Untracked 파일과 reset의 상호작용** — reset은 untracked를 건드리지 않는다는 규칙을 기억하면, 브랜치 전환·reset 후에 남는 `??` 표시가 당황스럽지 않다.
+
+## 한 줄 요약
+
+Conventional Commits로 커밋 타입을 구분해도 **브랜치에서 scope를 섞으면 PR 단위로 안 깨진다**. 사후 분리는 비용이 비싸므로 시작 직후 `checkout -b` 한 번이 가장 싼 위생 투자다. 파괴적 git 명령(force push / hard reset)은 **단독 브랜치 · PR 미제출 · 동기화 상태** 세 조건을 모두 충족할 때만 안전하게 쓰고, 그 외엔 cherry-pick 우회로 가는 게 기본이다. `git branch <name>` / `--hard` / `A..B` / `-u` / `--force-with-lease` 같은 빈도 낮아 보이는 옵션들이 실전 분리 작업에서 각각 제자리를 잡는다.
+
+## 관련 포스트
+
+- [20.git_multi_branch_integration](./20.git_multi_branch_integration.qmd) — 이 분리 작업의 전편: 여러 feature 브랜치를 main에 일괄 통합하던 흐름에서 scope mismatch가 드러남
+- [13.git_cherry_pick](./13.git_cherry_pick.qmd) — 비파괴 분리(옵션 B)에 사용되는 기법
+- [9.git_undo](./9.git_undo.qmd) — reset의 일반적 용법과 복구 시나리오
+- [8.git_merge_rebase](./8.git_merge_rebase.qmd) — 브랜치 구조를 유지하는 통합 방식 vs 평탄화 방식 비교

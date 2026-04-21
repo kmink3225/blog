@@ -1,0 +1,232 @@
+---
+title: "Git - 여러 feature 브랜치를 main에 일괄 통합하기"
+subtitle: "fetch --prune + ff-only pull + no-ff merge 순차 통합 워크플로"
+description: |
+  여러 로컬 환경(VM, 다른 PC)에서 각자 작업한 feature 브랜치들을
+  origin에 push해 둔 상태에서, 한 로컬로 모아 main에 통합하고
+  다시 origin에 반영하는 실전 절차를 정리한다. fetch --prune으로
+  원격 상태를 먼저 수집하고, --ff-only pull로 feature 브랜치를
+  동기화한 뒤, --no-ff merge로 통합 시점을 히스토리에 남기는
+  순차 방식이다. push와 merge의 분리 개념도 함께 다룬다.
+categories:
+  - Engineering
+  - Git
+  - DevOps
+author: Kwangmin Kim
+date: 04/20/2026
+---
+
+## 상황
+
+여러 로컬 환경에서 각자 작업한 feature 브랜치를 GitHub origin에 push해 둔 상태다. 한 로컬에서 모든 변경을 모아 main에 통합하고 origin에 다시 반영해야 한다. 흔한 멀티 디바이스 개발자 흐름이지만, pull·merge·push의 세 동작이 각각 **다른 ref를 건드린다**는 점을 놓치면 결과물이 예상과 어긋난다.
+
+이 포스트는 아래 구성의 실제 작업 기록을 따라가며 각 단계의 선택 근거를 정리한다.
+
+- 로컬 브랜치 3개, 원격 브랜치 8개
+- 머지 대상 feature 브랜치 4개 (누적 커밋 12개)
+- 최종 결과: main에 16커밋 ahead (머지 커밋 4개 포함)
+
+## 작업 시작 시점의 브랜치 상태
+
+**로컬 브랜치**
+
+- `main` (체크아웃 중)
+- `feat/chatbot`
+- `feat/standardizer`
+
+**원격 브랜치**
+
+- `origin/main`, `origin/master`
+- `origin/feat/chatbot`
+- `origin/feat/standardizer`
+- `origin/feat/code-analyzer`
+- `origin/feat/docstring-maker`
+- `origin/feat/domain_data_augment_agent`
+- `origin/feat/domain_group_classifier`
+- `origin/chatbot-vibe-coding`
+
+작업 디렉토리의 untracked 파일은 git 작업과 무관하면 그대로 둔다. `git reset`, `git merge` 같은 명령은 untracked 파일을 건드리지 않으므로 안전하다.
+
+## Step 1. 원격 상태 수집 — `git fetch --all --prune`
+
+```bash
+git fetch --all --prune
+```
+
+### 왜 pull이 아니라 fetch부터 하는가
+
+`pull`은 `fetch + merge`의 통합 명령이지만, 여러 브랜치를 다룰 때는 **원격 상태 전체를 먼저 받아두고 어떤 브랜치에 어떤 변경이 있는지 파악한 뒤 결정**하는 편이 안전하다. pull을 바로 쓰면 의도하지 않은 머지가 일어나고, 여러 브랜치의 상태를 한눈에 비교할 기회를 잃는다.
+
+`--prune`은 원격에서 삭제된 브랜치 참조를 로컬에서도 정리한다. stale ref가 남으면 `git branch -a` 결과가 어지러워지고, CI 스크립트가 없는 브랜치를 참조해 실패할 수 있다.
+
+### 결과
+
+```
+- [deleted]         (none)     -> origin/feat/docstring-maker
+   a870120..aa9aa50  feat/standardizer -> origin/feat/standardizer
+```
+
+- `origin/feat/docstring-maker`가 원격에서 삭제된 것이 확인되어 로컬 참조도 제거됨
+- `origin/feat/standardizer`에 새 커밋 2개 도착
+
+## Step 2. 로컬 브랜치 동기화 상태 점검
+
+```bash
+git for-each-ref --format='%(refname:short) %(upstream:short) %(upstream:track)' refs/heads
+```
+
+또는 간단히:
+
+```bash
+git branch -vv
+```
+
+| 로컬 브랜치 | upstream | 상태 |
+|---|---|---|
+| `main` | `origin/main` | 일치 |
+| `feat/chatbot` | `origin/feat/chatbot` | 일치 |
+| `feat/standardizer` | `origin/feat/standardizer` | **2 commits behind** |
+
+`feat/standardizer`만 pull이 필요한 상황이 확인된다.
+
+## Step 3. 로컬 feature 브랜치 pull — `--ff-only`
+
+```bash
+git checkout feat/standardizer
+git pull --ff-only
+git checkout main
+```
+
+### 왜 `--ff-only`인가
+
+`--ff-only`는 **fast-forward가 가능할 때만 pull을 허용**하고, 그렇지 않으면 거부한다. 단순히 원격 변경을 따라가는 경우에는 머지 커밋을 만들 이유가 없다. pull이 의도치 않은 머지 커밋을 만들어 히스토리를 지저분하게 만드는 일은 팀 작업에서 자주 발생하는 문제다. `--ff-only`는 이 사고를 원천 차단한다.
+
+**결과**: `60e88d5..aa9aa50` 2커밋 fast-forward 완료. plans 3개와 experiments.json 등 5388 lines 추가.
+
+## Step 4. main에 머지할 브랜치 식별
+
+```bash
+git log --oneline main..origin/<branch>
+```
+
+`A..B` 문법은 "`B`에 있지만 `A`에 없는 커밋"을 표시한다. 즉 main 대비 해당 원격 브랜치가 가진 **새 커밋**을 정확히 나열한다.
+
+| 원격 브랜치 | main 대비 새 커밋 | 내용 |
+|---|---|---|
+| `origin/feat/chatbot` | 1 | RAG citation 정확도 개선 |
+| `origin/feat/standardizer` | 2 | 세션/실험 데이터 업데이트 |
+| `origin/feat/domain_data_augment_agent` | 3 | 프롬프트 v0.8, RETROSPECTIVE |
+| `origin/feat/domain_group_classifier` | 6 | classifier 신규(skeleton ~ baseline) |
+| `origin/feat/code-analyzer` | 0 | 머지 불필요 |
+| `origin/chatbot-vibe-coding` | 0 | 머지 불필요 |
+
+총 12개 커밋이 4개 브랜치에 분산되어 있음이 확인된다. 0개인 브랜치는 머지 대상에서 제외한다.
+
+## Step 5. 머지 전략 결정
+
+### 선택 1 — 머지 방식: `--no-ff`
+
+```bash
+git merge --no-ff <origin/branch>
+```
+
+`--no-ff`는 **머지 커밋을 강제 생성**한다. fast-forward로 평탄화되는 대신, 각 feature 브랜치가 main에 통합된 시점이 히스토리에 명시적으로 남는다. PR 기반 워크플로와 동일한 모양이다.
+
+fast-forward를 쓰면 평탄해져 **어떤 브랜치에서 왔는지 흔적이 사라진다**. `git log --graph`로 볼 때 브랜치 구조가 무너진다. 조직의 리뷰·감사 기록을 위해서도 `--no-ff`가 기본이다.
+
+### 선택 2 — 머지 순서: 작은 것부터
+
+- chatbot(1) → standardizer(2) → augment(3) → classifier(6)
+
+누적 변경이 큰 브랜치를 먼저 넣으면 **후속 머지의 충돌 표면이 커진다**. 작은 변경을 먼저 올려 main을 점진적으로 키우는 편이 충돌 가능성을 줄인다.
+
+### 선택 3 — 충돌 발생 시: 즉시 중단·보고
+
+자동 해결을 금지한다. 충돌은 리뷰 없이 자동 봉합되면 나중에 기능이 깨진 채로 통합된다. 수동 검토가 필수다.
+
+## Step 6. 순차 머지 실행
+
+```bash
+git merge --no-ff origin/feat/chatbot                  -m "Merge branch 'feat/chatbot' into main"
+git merge --no-ff origin/feat/standardizer             -m "Merge branch 'feat/standardizer' into main"
+git merge --no-ff origin/feat/domain_data_augment_agent -m "Merge branch 'feat/domain_data_augment_agent' into main"
+git merge --no-ff origin/feat/domain_group_classifier  -m "Merge branch 'feat/domain_group_classifier' into main"
+```
+
+모든 머지가 ort 전략으로 충돌 없이 자동 완료된다.
+
+변경 요약:
+
+- `feat/chatbot`: 7 files, +1382 lines
+- `feat/standardizer`: 6 files, +5388 lines
+- `feat/domain_data_augment_agent`: 3 files, +714 lines
+- `feat/domain_group_classifier`: 27 files, +12044 lines
+
+## Step 7. 의문 — "원격에 이미 push했는데 왜 origin/main과 안 맞지?"
+
+머지 완료 후 상태를 보면 다음과 같은 의구심이 생긴다.
+
+```
+On branch main
+Your branch is ahead of 'origin/main' by 16 commits.
+```
+
+"각 로컬에서 push한 걸 다시 pull해서 머지했는데 왜 원격과 어긋나는가?"
+
+### 오해의 정체 — 세 동작이 각각 다른 ref를 건드린다
+
+| 동작 | 영향 받는 ref |
+|---|---|
+| feature 브랜치 push | `origin/feat/*` 만 갱신 |
+| feature 브랜치 pull | 로컬 `feat/*` 만 갱신 |
+| **로컬 main에 머지** | **로컬 `main` 만 갱신** |
+
+feature 브랜치를 origin에 push한 사실은 `origin/main`을 자동으로 업데이트하지 **않는다**. 머지 커밋은 머지를 실행한 로컬에서만 만들어지므로, 그 머지 결과를 원격에 반영하려면 **별도의 `git push origin main`이 필요**하다.
+
+### 16 = 12 + 4
+
+- feature 브랜치 커밋: 1 + 2 + 3 + 6 = 12
+- `--no-ff`로 강제 생성된 머지 커밋: 4
+
+ahead 16의 내역이 이 덧셈으로 설명된다.
+
+## Step 8. 최종 push
+
+```bash
+git push origin main
+# fcb0104..2130e35  main -> main
+```
+
+push 완료 후 최종 상태:
+
+```
+feat/chatbot       -> origin/feat/chatbot       (일치)
+feat/standardizer  -> origin/feat/standardizer  (일치)
+main               -> origin/main               (일치)
+```
+
+## 핵심 학습 포인트
+
+1. **`--ff-only` pull 습관화** — feature 브랜치 동기화는 `--ff-only`로 한정해 의도치 않은 머지 커밋 발생을 막는다.
+2. **`--no-ff` merge의 가치** — PR 기반 워크플로와 동일한 모양의 히스토리를 유지한다. `git log --graph`에서 통합 시점이 명확히 보인다.
+3. **머지 순서: 작은 → 큰** — 누적 충돌 표면을 최소화하는 순서다.
+4. **push와 merge의 분리** — `origin/<branch>` 갱신과 `origin/main` 갱신은 별개 동작이다. feature 브랜치를 push했다고 main이 자동으로 따라가지 않는다.
+5. **`fetch --prune`의 안전성** — 원격에서 삭제된 브랜치의 stale ref가 자동 정리된다. 쌓이면 정리 비용이 커지므로 습관적으로 붙이는 편이 낫다.
+6. **`A..B` 커밋 집합 문법** — "B에 있지만 A에 없는 커밋". 머지 대상 식별, PR 범위 확인, 브랜치 분리 검증 모두에서 재사용된다.
+
+## 적용된 commit 요약
+
+```
+2130e35 Merge branch 'feat/domain_group_classifier' into main
+bb40a60 Merge branch 'feat/domain_data_augment_agent' into main
+fbae589 Merge branch 'feat/standardizer' into main
+f5f7de9 Merge branch 'feat/chatbot' into main
+```
+
+이 4개 머지 커밋이 `origin/main`에 정상 도달한다.
+
+## 관련 포스트
+
+- [21.git_branch_scope_split](./21.git_branch_scope_split.qmd) — 이 통합 이후 발생한 후속 작업: 한 feature 브랜치에 리팩토링 scope가 섞여 사후 분리가 필요해진 케이스
+- [16.git_sync](./16.git_sync.qmd) — 로컬을 원격 기준으로 강제 동기화하는 별도 상황
+- [8.git_merge_rebase](./8.git_merge_rebase.qmd) — `--no-ff` 선택의 근거가 되는 merge vs rebase 비교
