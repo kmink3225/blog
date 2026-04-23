@@ -1,0 +1,542 @@
+---
+title: "Ch.15 Overview — Hierarchical Linear Models"
+subtitle: "계층 회귀의 개관: 교환 가능한 계수 배치·varying intercepts·slopes·ANOVA 재해석·분산 컴포넌트 계층화"
+description: |
+  Gelman BDA Ch.15의 9개 절을 한 편으로 조망한다.
+  § 15.1 교환 가능한 계수 배치와 varying-coefficients 모형 $\beta \sim N(1\alpha, \sigma_\beta^2 I)$,
+  § 15.2 미국 대통령 선거 예측의 511개 관측 × 다층 예측변수 예제,
+  § 15.3 정규 prior를 추가 데이터로 해석하는 augmented regression 프레임,
+  § 15.4 varying intercepts와 slopes,
+  § 15.5 batching·transformation 기반 효율적 computation과 parameter expansion,
+  § 15.6 ANOVA의 베이즈 재해석 (분산 컴포넌트의 batching),
+  § 15.7 분산 컴포넌트 배치의 계층 모형까지 — Part IV의 두 번째 관문인 계층 회귀의 설계도.
+categories:
+  - Statistics
+  - Bayesian
+  - Hierarchical-Models
+  - Multilevel-Regression
+  - Varying-Coefficients
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — Part IV에서 Ch.15의 위치
+
+Ch.14는 **정규 선형 회귀의 베이즈 버전**을 다뤘다 — OLS와 수치적으로 일치하지만 예측 분포·regularization·prior 통합 면에서 더 유연한 기계. 그러나 Ch.14의 한계:
+
+* 모든 관측치가 **하나의 exchangeable 집단**이라고 가정.
+* 계수 $\beta$ 는 데이터에서 **독립적으로 추정**되거나, 고정된 prior로 축소될 뿐.
+* 다층 데이터 (학생/학급/학교, 선거구/주/지역, 환자/의사/병원) 의 **집단 간 공유 정보**를 활용 못 함.
+
+Ch.15 Hierarchical Linear Models는 이 한계를 넘는다. 계수들을 **교환 가능한 배치 (exchangeable batches)** 로 묶고, 각 배치에 **모집단 분포**를 부여한다. 이것이 **partial pooling** — "완전 분리" 와 "완전 통합" 사이의 합리적 절충.
+
+::: {.callout-tip}
+## 직관: Ch.14 → Ch.15의 한 줄 차이
+
+Ch.14: **"$n$ 개 관측치가 하나의 집단에 속한다. $\beta$ 는 고정 모수."**
+
+Ch.15: **"$n$ 개 관측치가 $J$ 개 하위 집단에 속한다. 집단별 $\beta_j$ 가 공통 모집단 분포를 공유한다."**
+
+이 작은 차이가 implementation 측면에서는 **거의 같은 선형대수**지만, 통계적 함의는 크다.
+
+* 희박한 집단 (작은 $n_j$) 은 **다른 집단으로부터 정보를 빌린다** (shrinkage).
+* 풍부한 집단 (큰 $n_j$) 은 **거의 독립 추정**을 유지.
+* 집단이 전혀 관측 안 된 경우 (아주 적은 데이터), **모집단 분포로부터 예측** 가능.
+
+이것이 Gelman이 "모든 현대 통계 모델링의 기초"라 부르는 multi-level 사고의 실체이다.
+:::
+
+## Ch.15의 논리 지도
+
+Ch.15의 9개 절.
+
+| 절 | 핵심 질문 | 주요 결과 |
+|:---:|:------|:-----|
+| § 15.1 | **"계수의 배치를 어떻게 교환 가능하게 할 것인가?"** | Varying-coefficients 모형 $\beta \sim N(1\alpha, \sigma_\beta^2 I)$, intraclass correlation |
+| § 15.2 | **대통령 선거 예측에서 어떻게 계층 모형을 구성하나?** | 511 obs · 주/지역/전국 3단계 예측변수, non-hierarchical 모형 실패 사례 |
+| § 15.3 | **정규 prior를 어떻게 augmented regression으로 해석하나?** | § 14.8 (14.24) 확장, prior가 추가 데이터 점 |
+| § 15.4 | **Intercept와 slope이 집단마다 다를 때?** | Varying intercepts and slopes, 공분산 구조 |
+| § 15.5 | **고차원 계층 모형을 효율적으로 어떻게 계산?** | Batching, reparameterization (non-centered), parameter expansion |
+| § 15.6 | **ANOVA가 계층 모형의 특수 사례인가?** | 베이즈 ANOVA, 분산 분해의 계수 배치 |
+| § 15.7 | **분산 컴포넌트 자체도 계층화할 수 있나?** | Batches of variance components, $\sigma^2$ 끼리 공유 prior |
+| § 15.8 | Bibliographic note | 계층 모형 문헌 지도 |
+| § 15.9 | Exercises | 8 schools 회귀 재해석·방사선·화학 실험 |
+
+**구조 요약**: § 15.1이 기본 모형 정의 → § 15.2는 실전 예제 → § 15.3~15.4는 모형 일반화 → § 15.5는 계산 엔진 → § 15.6~15.7은 분산 분석으로의 확장.
+
+## § 15.1 Regression Coefficients Exchangeable in Batches — 기본 모형
+
+### Varying-Coefficients 모형 — 식 (15.1)
+
+$J$ 개 계수 $\beta = (\beta_1, \dots, \beta_J)^T$ 가 **교환 가능**하다고 가정하면
+
+$$
+\beta \sim N(1 \alpha, \sigma_\beta^2 I) \quad \text{(15.1)}
+$$
+
+* $\alpha$ = 공통 평균 (scalar).
+* $\sigma_\beta^2$ = 집단 간 변동성 (scalar).
+* $1$ = $J \times 1$ 벡터 of ones.
+
+**특수 사례**:
+
+* $\sigma_\beta \to \infty$: **완전 분리** (no pooling) — 각 $\beta_j$ 가 독립. Ch.14의 noninformative prior.
+* $\sigma_\beta = 0$: **완전 통합** (complete pooling) — 모든 $\beta_j = \alpha$. 집단 무시.
+* $0 < \sigma_\beta < \infty$: **부분 통합** (partial pooling). 데이터가 $\sigma_\beta$ 를 추정하면서 적절한 축소 강도 자동 결정.
+
+### 8 Schools 재방문
+
+Ch.5의 8 schools 예제가 사실 **$X = I_J$ (identity) 인 계층 회귀**의 특수 사례임을 Gelman이 지적:
+
+* 데이터 $y_j$, $j = 1, \dots, J$ (8개 학교의 관측).
+* "설명변수" = $J \times J$ identity matrix (학교 indicator).
+* $\beta_j = \theta_j$ (각 학교 효과).
+* 모집단 분포 $\theta_j \sim N(\mu, \tau^2)$ 가 바로 식 (15.1).
+
+즉 **Ch.5와 Ch.15는 같은 기계**, 다만 Ch.15에서는 $X$ 가 일반 회귀 행렬로 확장된다.
+
+::: {.callout-tip}
+## 직관: Identity $X$ vs 일반 $X$
+
+8 schools에서 $X_{ij} = \mathbb{1}[i = j]$ (학교 $j$ 의 관측만 $\beta_j$ 에 영향). 각 학교 정보가 **독립적 버킷**.
+
+일반 계층 회귀에서 $X$ 는 일반 실수 행렬. 한 관측이 여러 $\beta_j$ 에 기여. 예를 들어 주별 선거 예측에서 "전국 경제 성장률" 은 모든 주의 예측에 동일하게 작용.
+
+이 일반화가 Ch.15의 기술적 핵심 — **varying intercepts만 있는 단순 계층 모형** 에서 **varying intercepts + varying slopes + 공변량** 을 가진 복합 계층 회귀로.
+:::
+
+### Intraclass Correlation — 계수 모형과 상관 오차 모형의 동치성
+
+관측치 $y_i$ 가 $J$ 개 배치에 속하고, 같은 배치 내에서 상관 $\rho$ 를 갖는다고 하자:
+
+$$
+\mathrm{Var}(y_i) = \eta^2, \quad \mathrm{Cov}(y_{i_1}, y_{i_2}) = \rho \eta^2 \text{ (같은 배치)}, \quad 0 \text{ (다른 배치)}
+$$
+
+**정리 (Gelman 15.1)**: $\rho \geq 0$ 이면 이 모형은
+
+$$
+y \sim N(X\beta, \sigma^2 I), \quad \beta \sim N(\alpha 1, \sigma_\beta^2 I)
+$$
+
+와 동치이다. 여기서 $X$ 는 배치 indicator, 그리고
+
+$$
+\eta^2 = \sigma^2 + \sigma_\beta^2, \quad \rho = \frac{\sigma_\beta^2}{\sigma^2 + \sigma_\beta^2}
+$$
+
+**해석**: **Varying-coefficients 모형** = **intraclass correlation 모형**. 같은 그룹에 속한다는 것이 상관을 만들고, 그 상관은 $\sigma_\beta^2 / (\sigma^2 + \sigma_\beta^2)$ 로 정량화.
+
+실무 함의: 군집 표본추출 (cluster sampling) 의 design effect, 종단 데이터의 within-subject 상관 모두 계층 모형으로 자연스럽게 처리 가능.
+
+### Mixed-Effects Model
+
+Gelman은 "fixed effects vs random effects" 구분이 베이즈 관점에서 **혼란스럽다**고 지적하지만, 실무 용어로 정리하면:
+
+* **Fixed effects** = Ch.14 식 noninformative prior 계수 ("prior variance 무한").
+* **Random effects** = 식 (15.1) 같이 exchangeable prior를 받는 계수.
+
+Mixed-effects 모형은 **두 유형을 섞어** 사용. 예:
+
+$$
+y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + u_j + \epsilon
+$$
+
+$\beta_0, \beta_1, \beta_2$ = fixed, $u_j \sim N(0, \sigma_u^2)$ = random intercept by group $j$.
+
+### 여러 세트의 Varying Coefficients
+
+일반화: $\beta$ 의 $J$ 성분이 $K$ 개 클러스터로 나뉘고, 클러스터 $k$ 가 평균 $\alpha_k$, 분산 $\sigma_{\beta k}^2$.
+
+예: 학생 수준 계수, 학급 수준 계수, 학교 수준 계수 3 클러스터. 각 클러스터가 다른 prior.
+
+이 구조는 § 15.6의 ANOVA 베이즈 버전에서 자연스럽게 등장한다.
+
+## § 15.2 대통령 선거 예측 — Extended 예제
+
+Gelman의 Ch.15 중심 예제는 **1948~1988년 미국 대통령 선거 예측** 이며, Boscardin-Gelman (1996) 연구가 바탕.
+
+### 데이터 구조
+
+* 단위: 각 주 × 각 선거년도 = 50 × 11 = **511 관측** (DC와 3당 승리 주 제외).
+* 결과 변수 $y$: 민주당 2자 득표율 비율.
+* 예측 변수: **3단계**
+  * **Nationwide** (전국): 9월 여론조사, 대통령 지지율 × Inc, GNP 성장률 × Inc. **선거년도에만 변함** (11개 unique 값).
+  * **Regional** (지역): 4개 지역 (북동·남·중서부·서) × 11년 = 44개 지역-연도 오차.
+  * **Statewide** (주): 이전 선거 득표율, 주 이데올로기, 주 경제 성장률, 후보 출신 주 indicator 등. **주 × 연도**마다 고유.
+
+### 왜 계층 모형이 필요한가
+
+Gelman이 먼저 보여주는 것은 **비계층 모형의 실패**. 단순 OLS를 511 관측에 적용하면:
+
+* Statewide 변수는 잘 추정됨 (관측 많음).
+* **Nationwide 변수는 추정이 불안정** — 본질적으로 **11개 데이터 점** (11번의 선거) 밖에 없으므로.
+* 모든 관측을 동등하게 다루면 주별 변동이 마치 선거년도별 변동인 것처럼 잘못 해석.
+
+**해결**: 연도 효과와 지역-연도 효과를 **교환 가능한 random effects** 로 추가.
+
+$$
+y_i = X_i \beta + \gamma_{t(i)} + \delta_{t(i), r(i)} + \epsilon_i
+$$
+
+* $\gamma_t \sim N(0, \sigma_\gamma^2)$ — 연도 효과 (11개).
+* $\delta_{t, r} \sim N(0, \sigma_\delta^2)$ — 지역-연도 효과 (44개).
+
+이 구조 덕분에 nationwide 계수가 "11개 연도 + 연도 공통 변동" 모두에 정직하게 반응.
+
+### 예측 성능
+
+Gelman이 보고한 결과:
+
+* **1992년 선거 예측**에 이 모형을 사전 적용.
+* 실제 결과 (Clinton 승리) 와 예측치의 잔차 분석을 비판적으로 수행.
+* 몇몇 주에서 실제 결과가 95% 예측 구간 밖 → 모형의 한계 인정, 후속 개선 방향 제시.
+
+**교훈**: 계층 모형은 **예측 정확도** 보다 **예측 불확실성의 정직성**이 본질적 이점. 단순 OLS의 "과신" 예측 구간을 현실화.
+
+## § 15.3 정규 Prior를 추가 데이터로 해석 — § 14.8 확장
+
+§ 14.8의 **prior-as-extra-data** 트릭을 계층 모형에 확장.
+
+### 기본 아이디어
+
+Ch.14에서 $\beta \sim N(\beta_0, \Sigma_\beta)$ 는 $k$ 개 가상 데이터 점으로 표현했다 (식 (14.24)). Ch.15에서는
+
+$$
+\beta_j \sim N(U_j \alpha, \sigma_\beta^2) \quad (j = 1, \dots, J)
+$$
+
+여기서 $U_j$ 는 2차 수준 (level-2) 설명 변수 (학교의 경우 학교 정책, 주의 경우 인구 밀도 등).
+
+**행렬 형태**:
+
+$$
+\beta \sim N(U \alpha, \sigma_\beta^2 I)
+$$
+
+$U$ 는 $J \times m$ level-2 행렬, $\alpha$ 는 $m \times 1$ level-2 계수.
+
+### Augmented Regression
+
+$U\alpha$ 를 "prior 평균"으로 치고 augmented design:
+
+$$
+y_* = \begin{pmatrix} y \\ 0_J \end{pmatrix}, \quad X_* = \begin{pmatrix} X & 0 \\ -I_J & U \end{pmatrix}, \quad \begin{pmatrix} \beta \\ \alpha \end{pmatrix}
+$$
+
+조건부 분산:
+
+$$
+\Sigma_* = \begin{pmatrix} \Sigma_y & 0 \\ 0 & \sigma_\beta^2 I_J \end{pmatrix}
+$$
+
+$\sigma_\beta^2$ 고정 시 $(\beta, \alpha)$ 의 사후가 **일반 가중 선형 회귀**로 환원.
+
+::: {.callout-tip}
+## 직관: 2층 회귀의 통합
+
+$$
+\text{Level 1: } y = X\beta + \epsilon, \quad \text{Level 2: } \beta = U\alpha + u
+$$
+
+이 2층 구조를 $y_*$ 에 대한 1층 가중 회귀로 만들 수 있다는 것이 § 15.3의 핵심 통찰. **계층 모형도 결국 일반 선형 회귀의 한 형태**이며, 계산 엔진은 같다.
+
+이 관점이 `lmer` (R의 lme4), Stan의 `brms`, PyMC의 hierarchical model 같은 도구가 내부적으로 사용하는 수학적 기반이다.
+:::
+
+## § 15.4 Varying Intercepts and Slopes
+
+Section 15.1은 **varying intercepts** 만 다뤘다 ($\beta_j$ 가 그룹 평균). 실제로는 **slope도 그룹마다 다를 수 있다**:
+
+$$
+y_{ij} = \alpha_j + \beta_j x_{ij} + \epsilon_{ij}
+$$
+
+여기서 $\alpha_j, \beta_j$ 가 모두 그룹 $j$ 의 varying coefficient.
+
+### 공분산 구조
+
+$(\alpha_j, \beta_j)$ 를 어떻게 모델링?
+
+**옵션 A**: 독립.
+
+$$
+\alpha_j \sim N(\mu_\alpha, \sigma_\alpha^2), \quad \beta_j \sim N(\mu_\beta, \sigma_\beta^2)
+$$
+
+**옵션 B**: 상관 허용.
+
+$$
+\begin{pmatrix} \alpha_j \\ \beta_j \end{pmatrix} \sim N\left( \begin{pmatrix} \mu_\alpha \\ \mu_\beta \end{pmatrix}, \; \Sigma = \begin{pmatrix} \sigma_\alpha^2 & \rho \sigma_\alpha \sigma_\beta \\ \rho \sigma_\alpha \sigma_\beta & \sigma_\beta^2 \end{pmatrix} \right)
+$$
+
+**실무 원칙**: 옵션 B가 더 일반적. Intercept가 크면 slope도 크거나 (양의 상관) 반대 (음의 상관) 인 경우 다수. $\rho$ 를 데이터에서 추정.
+
+### $\Sigma$ 에 대한 Prior
+
+$2 \times 2$ 공분산 행렬의 prior:
+
+* **Inverse-Wishart($\nu, S$)**: conjugate. 그러나 $\sigma_\alpha, \sigma_\beta, \rho$ 가 복잡하게 얽혀 해석 어려움.
+* **LKJ prior** (Lewandowski-Kurowicka-Joe, 2009): correlation matrix에 $\eta$ 모수화 반-균등 prior. Stan 기본.
+* **분산 $\sigma_\alpha, \sigma_\beta$ + 상관 $\rho$ 분리** prior.
+
+최신 권장: LKJ + 반-정규 $\sigma$. Ch.15 Gelman 기본은 conjugate Inverse-Wishart지만 LKJ가 튜닝·해석 모두 유리하다.
+
+### 예시: 8 Schools + slope
+
+$y_{ij}$ = 학교 $j$ 학생 $i$ 점수, $x_{ij}$ = 사전 성적. 학교별 intercept (기준 수준) 과 slope (사전 효과) 가 다를 수 있음:
+
+$$
+y_{ij} \sim N(\alpha_j + \beta_j x_{ij}, \sigma^2), \quad (\alpha_j, \beta_j) \sim N(\mu, \Sigma)
+$$
+
+Pooling 이점: 관측이 적은 학교의 $(\alpha_j, \beta_j)$ 가 전체 학교 평균으로 수렴. $\Sigma$ 가 shrinkage 강도 자동 결정.
+
+## § 15.5 Computation — Batching and Transformation
+
+계층 모형은 고차원이므로 효율적 MCMC가 필수.
+
+### Gibbs Sampler 기본 구조
+
+표준 계층 정규 회귀에서:
+
+1. $\beta | \alpha, \sigma_\beta^2, \sigma^2, y$: 가중 정규 회귀 (§ 14.7).
+2. $\alpha | \beta, \sigma_\beta^2$: 정규 ($\beta_j$ 들의 평균 계산).
+3. $\sigma_\beta^2 | \beta, \alpha$: scaled inverse-χ² (conjugate).
+4. $\sigma^2 | \beta, y$: scaled inverse-χ² (conjugate).
+
+**문제**: $\sigma_\beta$ 가 작을 때 $\beta_j$ 들이 서로 **밀접하게 상관** → Gibbs가 느리게 수렴.
+
+### Non-centered Parameterization
+
+$\beta_j \sim N(\alpha, \sigma_\beta^2)$ 를
+
+$$
+\beta_j = \alpha + \sigma_\beta \tilde{\beta}_j, \quad \tilde{\beta}_j \sim N(0, 1)
+$$
+
+로 재매개변수화. 표본추출을 $\tilde{\beta}_j$ 공간에서 수행.
+
+**이점**: $\sigma_\beta$ 가 작아도 $\tilde{\beta}_j$ 의 prior는 $N(0, 1)$ 로 **고정** → posterior geometry가 덜 왜곡되어 MCMC (특히 HMC) 가 안정적으로 수렴.
+
+현재 Stan·NumPyro에서 **권장 default**이다. 8 schools는 이 reparameterization 없이는 수렴이 나쁘기로 유명.
+
+### Parameter Expansion (Liu-Rubin-Wu)
+
+$\sigma_\beta \to 0$ boundary 근처에서 Gibbs 혼합이 특히 나쁨. **Parameter expansion**으로 우회:
+
+* 보조 scale $\xi$ 도입: $\beta_j = \alpha + \xi \tilde{\beta}_j$, $\tilde{\beta}_j \sim N(0, \sigma_\beta^2 / \xi^2)$.
+* $\xi, \tilde{\beta}_j$ 를 교대로 갱신 → 식별 가능한 $\xi \tilde{\beta}_j$ 는 안정.
+
+Ch.12 § 12.1에서 다룬 parameter expansion이 바로 이 응용.
+
+## § 15.6 Analysis of Variance — ANOVA의 베이즈 재해석
+
+### Gelman의 관점
+
+고전 ANOVA는 "평균 차이 가설 검정"으로 제시되지만, Gelman은 이를 **분산 컴포넌트 추정**으로 재구성:
+
+> "ANOVA는 각 factor의 변동성 $\sigma_k^2$ 를 추정하는 것이지, null hypothesis rejection 이 아니다."
+
+### 베이즈 ANOVA
+
+각 factor (실험 처치 group, 시간, 지역 등) 에 varying coefficients:
+
+$$
+y = \mu + \sum_k X_k \beta_k + \epsilon, \quad \beta_k \sim N(0, \sigma_k^2 I)
+$$
+
+**분산 컴포넌트** $\sigma_k^2$ 가 각 factor의 기여도. 해석:
+
+* $\sigma_k$ 가 큼 = 해당 factor가 데이터 변동의 큰 부분을 설명.
+* $\sigma_k$ 가 작음 = 해당 factor 효과가 작거나 그룹 간 차이 거의 없음.
+
+### Figure 15.4 — ANOVA Display
+
+Gelman의 시각화: 각 factor의 **finite-population standard deviation** $s_k$ 를 50%, 95% credible interval로 표시. 한 그림에 모든 factor를 나열하여 상대 중요도 비교.
+
+**예시 (World Wide Web 사용 데이터)**: 사용자, 날짜, 사이트 카테고리 factor들의 $\sigma_k$ 추정. 어떤 factor가 변동 주도하는지 시각적으로 즉각 파악.
+
+### 전통 ANOVA와의 차이
+
+| 측면 | 고전 ANOVA | 베이즈 ANOVA |
+|------|-------------|---------------|
+| 목표 | 평균 차이의 유의성 | 분산 컴포넌트 추정 |
+| 검정 통계량 | F, $p$-값 | $\sigma_k$ 사후 분포 |
+| 다중 비교 | Bonferroni 등 조정 | 자동 shrinkage (Gelman-Hill 2007) |
+| 불균형 설계 | type I/II/III sum of squares 선택 복잡 | 자연스러운 likelihood 기반 통합 |
+| Random effects | REML 추정 | 통합 사후 |
+
+## § 15.7 Batches of Variance Components — 계층의 계층
+
+### 문제 제기
+
+여러 그룹에 각각 variance component가 있을 때, **$\sigma_k$ 끼리 또 공유 prior**를 줄 수 있는가?
+
+예: 여러 실험에서 각각 처치 효과 분산 $\sigma_1, \dots, \sigma_K$ 가 있을 때, 이들이 비슷한 scale이라 가정.
+
+### 계층화 모형
+
+$$
+\beta_{kj} \sim N(0, \sigma_k^2), \quad \log \sigma_k \sim N(\mu_\sigma, \tau_\sigma^2)
+$$
+
+$\sigma_k$ 끼리 로그 스케일에서 정규 prior 공유 → **$\sigma_k$ 들이 극단값으로 가지 않도록** regularize.
+
+### 왜 필요한가
+
+* 어떤 $k$ 의 그룹 수가 작으면 $\sigma_k$ 가 0 근처에서 퇴화 가능 (02-13-1의 경계 문제).
+* 계층화로 다른 $\sigma_{k'}$ 의 정보를 끌어와 축소 안정화.
+
+Gelman의 latin square 예제와 분산 컴포넌트 그림 (Figure 15.6)이 대표 사례.
+
+## Ch.15 핵심 수식 모음
+
+| 번호 | 수식 | 역할 |
+|:----:|:-----|:-----|
+| (15.1) | $\beta \sim N(1\alpha, \sigma_\beta^2 I)$ | Simple varying-coefficients model |
+| - | $\rho = \sigma_\beta^2 / (\sigma^2 + \sigma_\beta^2)$ | Intraclass correlation |
+| - | $\beta_j = \alpha + \sigma_\beta \tilde{\beta}_j, \tilde{\beta}_j \sim N(0,1)$ | Non-centered parameterization |
+| - | $y = \mu + \sum_k X_k \beta_k, \beta_k \sim N(0, \sigma_k^2 I)$ | 베이즈 ANOVA |
+
+## Ch.15 심화편 예고
+
+Ch.15는 분량상 심화편을 **4편** 으로 분할 예정.
+
+| 심화편 | 범위 | 주제 |
+|--------|------|------|
+| 03-15-1 | § 15.1~15.2 | Exchangeable 배치·Intraclass correlation·Mixed-effects·대통령 선거 예측 예제 심화 |
+| 03-15-2 | § 15.3~15.4 | Augmented regression·Varying intercepts and slopes·LKJ prior |
+| 03-15-3 | § 15.5 | Computation — Gibbs·Non-centered·Parameter expansion 심화 |
+| 03-15-4 | § 15.6~15.9 | 베이즈 ANOVA·분산 컴포넌트 계층화·연습 + Ch.15 결산 |
+
+## 최소 실행 예제 — PyMC로 본 계층 회귀
+
+```python
+import numpy as np
+import pymc as pm
+
+np.random.seed(0)
+
+# simulate hierarchical data: J groups with varying intercepts
+J, n_per = 8, 30
+mu_true, tau_true = 50.0, 8.0
+sigma_true = 15.0
+
+alpha_true = np.random.normal(mu_true, tau_true, J)
+group = np.repeat(np.arange(J), n_per)
+y = alpha_true[group] + np.random.normal(0, sigma_true, J * n_per)
+
+
+with pm.Model() as hierarchical:
+    # hyperpriors
+    mu = pm.Normal("mu", mu=0, sigma=100)
+    tau = pm.HalfNormal("tau", sigma=50)
+
+    # non-centered parameterization
+    alpha_raw = pm.Normal("alpha_raw", mu=0, sigma=1, shape=J)
+    alpha = pm.Deterministic("alpha", mu + tau * alpha_raw)
+
+    sigma = pm.HalfNormal("sigma", sigma=50)
+    y_obs = pm.Normal("y_obs", mu=alpha[group], sigma=sigma, observed=y)
+
+    trace = pm.sample(2000, tune=1000, target_accept=0.95)
+
+print(pm.summary(trace, var_names=["mu", "tau", "sigma", "alpha"]))
+```
+
+예상 출력 (요약):
+
+```
+           mean     sd  hdi_3%  hdi_97%  r_hat
+mu         49.8    3.2    43.6     55.8   1.00
+tau         7.6    2.9     2.9     13.1   1.00
+sigma      14.9    0.6    13.7     16.0   1.00
+alpha[0]   52.1    2.6    47.3     57.1   1.00
+...
+```
+
+**해석**:
+
+* $\mu$ (전체 평균) ≈ 49.8 (참값 50.0에 근접).
+* $\tau$ (그룹 간 변동) ≈ 7.6 (참값 8.0).
+* $\sigma$ (그룹 내 변동) ≈ 14.9 (참값 15.0).
+* 각 $\alpha_j$ 가 해당 그룹 데이터로 추정되면서 동시에 전체 평균 $\mu$ 로 축소 (partial pooling).
+
+## Ch.15 실전 체크리스트
+
+**모형 설계**
+
+1. 데이터에 **계층 구조** (학급·학교·주·기업 등) 가 있는가?
+2. 계수 배치가 **교환 가능** 한가 (같은 집단 내 구분 불가)?
+3. 어느 수준에 공변량이 있는가 (level-1 vs level-2)?
+4. Intercept만 varying인가, slope까지 varying인가?
+5. Intercept와 slope의 상관을 추정할 것인가?
+
+**Prior**
+
+6. $\sigma_\beta$ 에 $\log$ uniform 쓰지 않기 (improper posterior 위험).
+7. $\sigma_\beta$ 에 weakly informative (예: HalfNormal, HalfStudentT) 사용.
+8. 공분산 행렬에는 LKJ + HalfNormal decomposition 권장.
+9. 각 계층 수준의 그룹 수가 4~5 미만이면 **shrinkage 약함** — prior 민감도 확인.
+
+**계산**
+
+10. 표준 parameterization이 수렴 나쁘면 **non-centered** 전환.
+11. HMC/NUTS divergence가 나오면 non-centered + target_accept 0.95~0.99.
+12. Divergence가 여전히 있으면 parameter expansion.
+13. $\hat{R} < 1.01$, ESS > 1000 확인.
+
+**검증**
+
+14. 추정 $\sigma_\beta$ 가 0 근처인가? (그룹 간 차이 없음의 증거 또는 데이터 부족)
+15. Posterior predictive check: 그룹별·전체 residuals.
+16. 소수 그룹의 shrinkage 정도가 합리적인가 (극단값 → 평균으로 얼마나 끌려갔나)?
+17. 민감도 분석: $\sigma_\beta$ prior 변경이 결론에 영향?
+
+**해석**
+
+18. 각 $\beta_j$ 와 전체 $\alpha$ 의 분리된 해석.
+19. $\rho = \sigma_\beta^2 / (\sigma^2 + \sigma_\beta^2)$ 계산하여 intraclass correlation 보고.
+20. 새 그룹 예측 시 $\alpha, \sigma_\beta$ prior predictive 사용.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Part IV Overview](./03-bayesian-part4-overview.qmd)
+* [Ch.14 Overview — Regression Models](./03-14-0-regression-overview.qmd)
+* [Ch.14 § 14.7~14.10 — GLS·Prior as Extra Data](./03-14-3-unequal-variance-prior-exercises.qmd)
+* [Ch.5 Hierarchical Models — 8 Schools](./00-5-0-hierarchical.qmd)
+* [Ch.5 § 5.2 — Hierarchical Normal (Rat Tumor)](./00-5-1-hierarchical-rat-tumor.qmd)
+* [Ch.12 § 12.1 — Parameter Expansion](./02-12-1-reparameterization-metropolis-tuning-slice.qmd)
+
+**후속 주제 (Ch.15 심화편)**
+
+* [§ 15.1~15.2 — Exchangeable Batches·Presidential Elections](./03-15-1-exchangeable-batches-elections.qmd) (예정)
+* [§ 15.3~15.4 — Augmented Regression·Varying Slopes](./03-15-2-augmented-regression-varying-slopes.qmd) (예정)
+* [§ 15.5 — Computation·Non-centered·Param Expansion](./03-15-3-computation-batching-transformation.qmd) (예정)
+* [§ 15.6~15.9 — ANOVA·Variance Components·연습](./03-15-4-anova-variance-components-exercises.qmd) (예정)
+
+**후속 주제 (Part IV 다른 장)**
+
+* Ch.16 GLM — 계층 로지스틱·Poisson·MRP
+* Ch.17 Robust Inference — t 분포 random effects
+* Ch.18 Missing Data — 계층 구조 보존 대체
+
+**관련 개념 (cross-category)**
+
+* [Mixed-effects Models Overview](../mixed-model-overview.qmd)
+* [종단 데이터 분석 (Longitudinal)](../LDA/longitudinal-overview.qmd)
+* [Multilevel Regression and Poststratification (MRP)](../mrp-overview.qmd)
+* [LKJ Prior for Correlation Matrices](../../Math/lkj-prior.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.15. CRC Press.
+* Gelman, A., & Hill, J. (2007). *Data Analysis Using Regression and Multilevel/Hierarchical Models*. Cambridge.
+* Gelman, A. (2005). Analysis of Variance — Why It Is More Important Than Ever. *Annals of Statistics*, 33(1), 1-53.
+* Boscardin, W. J., & Gelman, A. (1996). Bayesian Regression with Parametric Models for Heteroscedasticity. *Advances in Econometrics*, 11, 87-109.
+* Lewandowski, D., Kurowicka, D., & Joe, H. (2009). Generating Random Correlation Matrices Based on Vines and Extended Onion Method. *Journal of Multivariate Analysis*, 100, 1989-2001.
+* Liu, C., Rubin, D. B., & Wu, Y. N. (1998). Parameter Expansion to Accelerate EM: The PX-EM Algorithm. *Biometrika*, 85, 755-770.
+* Pinheiro, J. C., & Bates, D. M. (2000). *Mixed-Effects Models in S and S-PLUS*. Springer.
