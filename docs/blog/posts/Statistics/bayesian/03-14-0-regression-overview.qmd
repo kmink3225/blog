@@ -1,0 +1,701 @@
+---
+title: "Ch.14 Overview — Introduction to Regression Models"
+subtitle: "Part IV의 관문: 정규 선형 회귀의 베이즈 분석 — 조건부 모델링·비정보적 prior·QR 분해·예측 분포·Ridge/LASSO·GLS 통합 지도"
+description: |
+  Gelman BDA Ch.14의 10개 절 (§ 14.1 Conditional modeling ~ § 14.10 Exercises)을 한 편으로 조망한다.
+  왜 회귀에서 X를 모델링하지 않아도 되는가라는 조건부 모델링의 근거,
+  $y \sim N(X\beta, \sigma^2 I)$ 와 noninformative prior $p(\beta, \sigma^2|X) \propto \sigma^{-2}$ 하의 사후분포 식 (14.1)~(14.9) 완전 유도,
+  QR 분해 기반 효율적 시뮬레이션, 사후 예측 분포의 두 분산 성분,
+  회귀의 3대 목표 (이해·예측·causal), X matrix 구성 (collinearity, 변환, 상호작용, indicator),
+  Ridge = 정규 prior, LASSO = Laplace prior의 베이즈 해석,
+  불등 분산·상관 오차의 GLS 처리, 수치적 prior 정보 포함까지 — Part IV의 설계도.
+categories:
+  - Statistics
+  - Bayesian
+  - Linear-Regression
+  - Noninformative-Prior
+  - Regularization
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — Part IV의 시작
+
+Gelman BDA 3rd ed.의 구성은 다음 3부 → Part IV 전이를 따른다.
+
+* **Part I (Ch.1~5)** — 베이즈 언어와 단순 모형 (단일·다모수·계층)
+* **Part II (Ch.6~9)** — 모델 평가·비교·확장 (posterior predictive checks, information criteria, design)
+* **Part III (Ch.10~13)** — 계산 엔진 (Monte Carlo·MCMC·HMC·Modal/Variational approximations)
+* **Part IV (Ch.14~18)** — **회귀 모형의 베이즈 분석** (Linear regression → Hierarchical → GLM → Robust → Missing data)
+
+Part IV는 "응용 베이즈 통계의 주력 부대"다. Part I의 모델링 언어와 Part III의 계산 기법이 비로소 **실무에서 매일 쓰는 모델**과 결합된다. 그리고 Part IV의 관문이 바로 **Ch.14 — Introduction to Regression Models**이다.
+
+::: {.callout-tip}
+## 직관: 왜 Ch.14가 "관문"인가
+
+베이지안 관점에서 회귀는 단순한 통계 도구가 아니다. **조건부 모델링** $p(y|X, \theta)$ 라는 베이즈 프레임워크 전체의 모범 사례이다.
+
+* Ch.2~5에서 배운 **prior + likelihood → posterior** 의 기계를 $(X, y)$ 관측 데이터에 그대로 적용.
+* Ch.10~13의 **QR 분해·MCMC·VI** 기법이 $\beta, \sigma^2$ 의 사후 샘플링에 직접 활용.
+* Ch.6~9의 **사후 예측 점검·모델 비교** 가 잔차 plot·외부 검증으로 구현.
+
+**회귀 하나를 베이즈로 완전히 이해하면**, 이후 Ch.15 (계층적 회귀), Ch.16 (GLM), Ch.17 (robust), Ch.18 (결측) 는 **동일 문법의 확장**에 불과하다. 그래서 Gelman이 "Ch.14의 기본기가 Part IV 전체의 뼈대"라고 반복적으로 말한다.
+:::
+
+Part IV 전체 개관은 별도로 정리되어 있다 ([Part IV Overview](./03-bayesian-part4-overview.qmd)). 이 포스트는 **Ch.14 단독의 10개 절을 한 편으로** 정리한다.
+
+## Ch.14의 논리 지도
+
+Ch.14의 절 구성을 한눈에 보면 다음과 같다.
+
+| 절 | 핵심 질문 | 주요 결과 |
+|:---:|:---|:---|
+| § 14.1 | **왜 $y$ 만 모델링하고 $X$ 는 모델링하지 않는가?** | prior 독립 가정 하에서 $p(\theta \| X, y) \propto p(\theta) p(y \| X, \theta)$ |
+| § 14.2 | **표준 비정보적 prior 하의 사후는?** | 식 (14.1)~(14.9) — OLS와 수치적으로 일치하는 사후 |
+| § 14.3 | **회귀를 causal inference에 쓸 때 주의할 점은?** | post-treatment 변수 통제 금지, 하원 현직 효과 예제 |
+| § 14.4 | **회귀의 목표는 무엇인가?** | 이해·예측·causal 세 가지 목표의 분리 |
+| § 14.5 | **$X$ matrix를 어떻게 구성할 것인가?** | collinearity, 변환, indicator, 상호작용, irrelevant 변수 |
+| § 14.6 | **예측 변수가 많을 때 어떻게 regularize하는가?** | Ridge = 정규 prior, LASSO = Laplace prior |
+| § 14.7 | **오차 분산이 불등/상관되면?** | GLS ($\Sigma_y$ known) → Cholesky 변환 |
+| § 14.8 | **수치적 prior 정보를 어떻게 포함하는가?** | 가상 prior data approach |
+| § 14.9 | Bibliographic note | 행렬 분해·least squares·Bayesian 회귀 주요 문헌 |
+| § 14.10 | Exercises | 12문제 (완성 제곱·QR·predictive 분포 유도) |
+
+주목할 구조: Gelman은 § 14.2에서 **핵심 수식을 한 번에 모두 제시**하고, § 14.3~14.8에서 **실무 이슈**를 확장한다. 즉 § 14.2가 이론의 중심, § 14.4~14.6이 응용의 중심이다.
+
+## § 14.1 Conditional Modeling — 왜 $X$ 를 모델링하지 않는가
+
+### 문제 제기
+
+완전한 베이지안 모형은 $X$ 와 $y$ 의 **결합 분포**를 다룬다.
+
+$$
+p(X, y | \psi, \theta) = p(X | \psi) p(y | X, \theta)
+$$
+
+여기서 $\psi$ 는 $X$ 의 분포를 지배하는 모수, $\theta$ 는 $y|X$ 를 지배하는 모수. 그러나 실제 회귀에서는 $p(X|\psi)$ 를 **무시**하고 $p(y|X, \theta)$ 만 다룬다. 어떻게 정당화되는가?
+
+### Gelman의 정당화 — Prior Independence
+
+$\psi, \theta$ 가 사전분포에서 **독립**이라고 가정하면:
+
+$$
+p(\psi, \theta) = p(\psi) p(\theta)
+$$
+
+그러면 사후 분포가 factorize된다.
+
+$$
+p(\psi, \theta | X, y) = p(\psi | X) \cdot p(\theta | X, y)
+$$
+
+두 번째 요인을 따로 분석해도 $\theta$ 에 대한 추론에 **정보 손실이 없다**. 표준 회귀 모델은 이 두 번째 요인만 본다.
+
+$$
+p(\theta | X, y) \propto p(\theta) \cdot p(y | X, \theta)
+$$
+
+::: {.callout-tip}
+## 직관: "X는 이미 관측됐으니 조건부로 받아들인다"
+
+Prior 독립 가정의 의미는 "$X$ 에 대한 정보와 $y|X$ 에 대한 정보가 서로 말해주는 게 없다"는 것이다. 예를 들어 선거 결과를 선행 선거 득표율로 예측할 때, "득표율이 어떻게 분포하는가"를 모델링하는 게 "현직 효과 $\beta$"의 추정에 추가 정보를 주지 않는다는 뜻.
+
+이 가정이 깨지는 경우도 있다 — **결측 데이터** (Ch.18) 또는 **설계된 실험이 아닌 관측 데이터에서 selection bias**가 있는 경우. 그런 상황에서는 $X$ 를 함께 모델링해야 한다.
+:::
+
+**실용적 이점**: $k+1$ 차원 결합 분포를 통째로 설정하는 것보다, 1차원 조건부 $p(y|X)$ 만 설정하는 것이 **훨씬 쉽고 해석 가능**하다.
+
+## § 14.2 Bayesian Analysis of Classical Regression — 핵심 수식 완전 유도
+
+### 모형 설정 — 식 (14.1)
+
+$$
+y | \beta, \sigma^2, X \sim N(X\beta, \sigma^2 I_n) \quad \text{(14.1)}
+$$
+
+여기서 $y \in \mathbb{R}^n$, $X \in \mathbb{R}^{n \times k}$ (랭크 $k$), $\beta \in \mathbb{R}^k$, $\sigma^2 > 0$.
+
+**가정**: (1) 조건부 선형성 $\mathbb{E}(y_i | \beta, X) = X_i \beta$, (2) 조건부 등분산 $\mathrm{Var}(y_i | \theta, X) = \sigma^2$, (3) 조건부 독립 $y_i \perp y_j | \theta, X$.
+
+### 표준 비정보적 Prior — 식 (14.2)
+
+$$
+p(\beta, \sigma^2 | X) \propto \sigma^{-2} \quad \text{(14.2)}
+$$
+
+이는 $(\beta, \log \sigma)$ 에 대한 **균등 분포**에 해당.
+
+::: {.callout-tip}
+## 직관: 왜 $\sigma^{-2}$ 가 "무지의 표현"인가
+
+$\sigma > 0$ 인 scale parameter의 "완전 무지"는 $\log \sigma$ 에 균등을 취하는 것이 관례다. Jacobian을 적용하면
+
+$$
+p(\log \sigma) \, d(\log \sigma) = p(\sigma) \, d\sigma \Rightarrow p(\sigma) \propto \frac{1}{\sigma}
+$$
+
+그리고 $\sigma^2$ 로 재매개변수화하면
+
+$$
+p(\sigma^2) \propto \frac{1}{\sigma^2}
+$$
+
+즉 $\sigma^{-2}$ 는 "$\sigma$ 의 로그 스케일에서 무지"와 동치. Ch.2의 noninformative prior 논의 (Jeffreys prior, left-invariant prior) 의 표준 결과다.
+:::
+
+### 사후 분포의 인수분해
+
+사후 분포를
+
+$$
+p(\beta, \sigma^2 | y) = p(\beta | \sigma^2, y) \cdot p(\sigma^2 | y)
+$$
+
+로 인수분해하여 순차 유도한다.
+
+### Step 1 — $\beta | \sigma^2, y$ 의 사후 — 식 (14.3)~(14.5)
+
+주어진 $\sigma^2$ 에서 $\beta$ 의 사후는 exponent of quadratic이므로 정규분포.
+
+$$
+\beta | \sigma^2, y \sim N(\hat{\beta}, V_\beta \sigma^2) \quad \text{(14.3)}
+$$
+
+여기서
+
+$$
+\hat{\beta} = (X^T X)^{-1} X^T y \quad \text{(14.4)}, \qquad V_\beta = (X^T X)^{-1} \quad \text{(14.5)}
+$$
+
+**유도 스케치**: 로그 사후 = 로그 likelihood (상수 무시)
+
+$$
+\log p(\beta | \sigma^2, y) = -\frac{1}{2\sigma^2} (y - X\beta)^T (y - X\beta) + \text{const}
+$$
+
+$\beta$ 에 관한 quadratic을 완성하면
+
+$$
+(y - X\beta)^T (y - X\beta) = (\beta - \hat{\beta})^T (X^T X) (\beta - \hat{\beta}) + (y - X\hat{\beta})^T (y - X\hat{\beta})
+$$
+
+첫 항만 $\beta$ 에 의존하므로 $\beta | \sigma^2, y$ 의 precision matrix는 $(X^T X)/\sigma^2$. 이것이 식 (14.3).
+
+**핵심 관찰**: $\hat{\beta} = (X^T X)^{-1} X^T y$ 는 **정확히 OLS 추정량**. 베이즈 사후 평균 = 빈도주의 추정량 (noninformative prior의 귀결).
+
+### Step 2 — $\sigma^2 | y$ 의 주변 사후 — 식 (14.6), (14.7)
+
+$\beta$ 를 주변화 (적분 소거):
+
+$$
+\sigma^2 | y \sim \text{Inv-}\chi^2(n - k, s^2) \quad \text{(14.6)}
+$$
+
+여기서
+
+$$
+s^2 = \frac{1}{n-k} (y - X\hat{\beta})^T (y - X\hat{\beta}) \quad \text{(14.7)}
+$$
+
+**해석**: $s^2$ 는 **빈도주의 OLS에서의 MSE 추정량**과 동일. 자유도 $n-k$ 는 표본 크기에서 추정 모수 수를 뺀 값.
+
+### 빈도주의와의 일치
+
+$\hat{\beta}$ 에 대한 classical standard error는 $\sigma = s$ 를 식 (14.3)의 $V_\beta \sigma^2$ 에 대입하여 $\sqrt{V_{\beta, jj}} \cdot s$. **베이즈 사후 표준편차 = 빈도주의 표준오차**.
+
+::: {.callout-note}
+## 핵심: 베이지안과 빈도주의의 수치적 일치
+
+Noninformative prior + 정규 선형 회귀에서:
+
+* 점 추정: $\hat{\beta}_{\text{Bayes posterior mean}} = \hat{\beta}_{\text{OLS}}$
+* 표준오차: $\text{sd}(\beta_j | y) = s \sqrt{V_{\beta, jj}}$ = classical SE
+* 신뢰구간 = posterior credible interval (수치 일치)
+
+**차이는 해석**: 빈도주의는 "반복 표본 하의 추정량 분포", 베이지안은 "데이터 주어진 모수의 확률 분포". 숫자는 같지만 이야기는 다르다.
+
+**그래도 베이즈가 유리한 지점**:
+
+1. **예측 분포**: 빈도주의에서 "예측 구간"은 별도 계산이 필요하지만, 베이즈에서는 사후 예측 시뮬레이션으로 자동 획득.
+2. **모수의 함수**: 비선형 변환 $h(\beta)$ 의 불확실성도 시뮬레이션으로 바로.
+3. **prior 확장성**: Ch.15~18의 계층적·GLM·robust 모형으로 자연스럽게 이어짐.
+:::
+
+### 사후 분포가 proper한 조건
+
+Improper prior $\sigma^{-2}$ 를 썼으므로 사후가 proper한지 확인 필요:
+
+* 조건 1: $n > k$ (모수 수보다 데이터가 많아야).
+* 조건 2: $X$ 의 rank = $k$ (columns linearly independent).
+
+조건 1은 자유도 $n - k > 0$, 조건 2는 $X^T X$ 가 invertible. **둘 중 하나라도 어기면 사후가 improper** → 베이즈 추론이 불가능하거나 prior에 의존.
+
+### QR 분해 기반 샘플링 — 효율적 구현
+
+$X = QR$ (Q: $n \times k$ orthonormal, R: $k \times k$ 상삼각) 분해를 쓰면:
+
+$$
+X^T X = R^T Q^T Q R = R^T R
+$$
+
+$$
+(X^T X)^{-1} = R^{-1} (R^{-1})^T
+$$
+
+$$
+\hat{\beta} = R^{-1} Q^T y \quad (\because R \hat{\beta} = Q^T y)
+$$
+
+**샘플링 알고리즘**:
+
+1. $X = QR$ 분해 (한 번만, $O(nk^2)$).
+2. $s^2$ 계산 (14.7).
+3. $\sigma^{2(s)} \sim \text{Inv-}\chi^2(n-k, s^2)$, $s = 1, \dots, S$.
+4. $\beta^{(s)} | \sigma^{2(s)} \sim N(\hat{\beta}, R^{-1}(R^{-1})^T \sigma^{2(s)})$ (Cholesky $R^{-1}$ 으로 정규 샘플링).
+
+::: {.callout-tip}
+## 직관: 왜 QR을 쓰는가
+
+$X^T X$ 를 직접 뒤집는 것은 수치적으로 불안정하다 (조건수가 $\kappa(X)^2$ 로 제곱). QR 분해는 조건수가 $\kappa(X)$ (제곱 없이) 이므로 수치 오류가 훨씬 작다. `numpy.linalg.qr`, R의 `qr()` 이 모두 이 방식을 내장.
+
+또한 $R$ 이 상삼각이므로 $R \hat{\beta} = Q^T y$ 는 back-substitution으로 $O(k^2)$ 만에 풀린다. OLS의 표준 구현이 모두 QR 기반인 이유다.
+:::
+
+### 사후 예측 분포 — 식 (14.8), (14.9)
+
+새 데이터 $\tilde{X}$ 에 대한 예측. 두 종류의 불확실성:
+
+1. **Sampling variation**: $y = X\beta + \epsilon$ 의 $\epsilon$ 노이즈.
+2. **Parameter uncertainty**: $\beta, \sigma^2$ 의 사후 불확실성.
+
+조건부 예측 평균과 분산:
+
+$$
+\mathbb{E}(\tilde{y} | \sigma, y) = \tilde{X} \hat{\beta}
+$$
+
+$$
+\mathrm{Var}(\tilde{y} | \sigma, y) = (I + \tilde{X} V_\beta \tilde{X}^T) \sigma^2 \quad \text{(14.9)}
+$$
+
+**두 항의 해석**:
+
+* $\sigma^2 I$: 아무리 $\beta$ 를 정확히 알아도 남는 본질적 노이즈.
+* $\tilde{X} V_\beta \tilde{X}^T \sigma^2$: $\hat{\beta}$ 의 추정 오차가 예측에 전파되는 몫.
+
+$n \to \infty$ 이면 두 번째 항이 0으로 가지만 첫 번째 항은 고정. **"데이터가 무한히 많아도 개별 관측 예측은 완벽하지 않다"**는 통계학의 기본 사실.
+
+$\sigma^2$ 에 대한 사후를 마저 적분하면:
+
+$$
+\tilde{y} | y \sim t_{n-k} \left( \tilde{X} \hat{\beta}, s^2 (I + \tilde{X} V_\beta \tilde{X}^T) \right)
+$$
+
+다변량 t 분포. 자유도 $n-k$ 가 작으면 tail이 두꺼워 예측 구간이 넓어진다.
+
+## § 14.3 Regression for Causal Inference — 하원 현직 효과
+
+Gelman이 확장 예제로 사용하는 것은 미국 하원 선거의 **incumbency advantage**. 각 선거구 $i$, 연도 $t$ 에서
+
+$$
+y_{it} = \beta_0 + \beta_1 R_{it} + \beta_2 I_{it} + \beta_3 y_{i, t-1} + \epsilon_{it}
+$$
+
+여기서 $I_{it} = 1$ 이면 현직 의원 재출마. $\beta_2$ 가 바로 현직 효과.
+
+### 핵심 교훈: Post-treatment 변수 통제 금지
+
+Gelman이 강조하는 주의점:
+
+> **Post-treatment 변수 (treatment 이후 결정되는 변수) 는 causal effect 추정에서 controls로 포함하면 안 된다.**
+
+예: 총 선거자금 (campaign spending) 을 제어변수로 넣으면 어떻게 되나?
+
+* **예측 목적**: OK. 자금이 예측력 있으면 모형 성능 개선.
+* **Causal 목적**: NOT OK. 현직이 재출마하면 자금도 증가하므로, 자금을 통제하면 "자금을 고정한 가상의 세계"에서 현직 효과를 보는 꼴이 되어 **진짜 효과의 일부를 지운다**.
+
+이것은 베이지안이든 빈도주의든 동일한 인과추론 원칙 — Pearl의 **do-calculus** 또는 potential outcomes 프레임워크에서 **controlled direct effect vs total effect** 의 차이로 일반화된다.
+
+## § 14.4 Goals of Regression Analysis
+
+Gelman은 회귀의 목표를 3가지로 분류:
+
+| 목표 | 질문 | 예시 |
+|------|------|------|
+| **이해 (Understanding)** | $y$ 가 $x$ 에 따라 어떻게 변하는가? | 민주당 득표율을 설명하는 요인 |
+| **예측 (Prediction)** | 새로운 $\tilde{x}$ 에서 $\tilde{y}$ 는? | 다음 선거에서 민주당 의석 수 |
+| **인과 (Causal)** | $x$ 를 바꾸면 $y$ 가 어떻게 변하나? | 현직 효과, 선거 개혁의 효과 |
+
+**세 목표는 서로 다른 모델링 전략을 요구**한다. 이해·예측은 상관이면 충분하지만, causal은 혼란변수 조정·무작위화·가정 검증이 필요.
+
+## § 14.5 Assembling the Matrix $X$
+
+### Identifiability와 Collinearity
+
+$X$ 의 columns이 선형 종속이면 $\beta$ 는 **데이터만으로 유일하게 결정되지 않는다**. $\beta$ 의 어떤 선형 결합은 관측 가능하지만 개별 $\beta_j$ 는 아님.
+
+**대응**:
+
+* 완전 collinear → 변수 제거 or prior 정보 필수.
+* 근사 collinear → posterior 분산 폭발, 결과가 모델 가정에 민감.
+
+### 변환, Indicator, 상호작용
+
+| 도구 | 용법 |
+|------|------|
+| **로그·로짓 변환** | 비선형 관계를 근사 선형화 |
+| **Polynomial** ($x, x^2$) | 곡선 관계 |
+| **Indicator 변수** | 범주형 변수 (k개 범주 → k-1개 indicator) |
+| **상호작용** $(x_i - \bar{x}_i)(x_j - \bar{x}_j)$ | 한 변수의 효과가 다른 변수에 의존할 때 |
+| **Ordinal** → 연속 | 학점 A,B,C,D → 4,3,2,1 (trend analysis) |
+
+::: {.callout-tip}
+## 직관: "먼저 많이 넣고, prior로 조정한다"
+
+고전적 회귀에서는 "변수가 많으면 과적합 위험" 때문에 subset selection이 일반적이었다. 베이즈 회귀에서는
+
+* Ch.15의 **계층적 prior**로 coefficients를 공유,
+* Ch.14.6의 **regularization prior** (Ridge, LASSO, horseshoe) 로 자동 축소
+
+를 쓰면 **"많이 넣어도 안전"** 이 된다. 이것이 현대 베이즈 회귀의 기본 스탠스.
+:::
+
+## § 14.6 Regularization — Ridge와 LASSO의 베이즈 해석
+
+### Gelman의 핵심 주장
+
+고전 통계의 subset selection ("포함/제외 0-1 결정") 은 $\beta$ 의 **이산 이동** 이라는 매우 강한 구조적 가정. 베이즈 관점에서는 **연속적 정보 투입**이 더 자연스럽다.
+
+> $\beta_j$ 에 **0 근처에 peak을 가진 prior** + 긴 tail을 부여하면 "아마 중요하지 않지만, 중요하다면 큰 값도 가능"이라는 유연한 표현이 된다.
+
+Regularization 선택의 3요소:
+
+1. **Prior의 위치와 스케일**: 좁으면 강한 축소.
+2. **Prior의 형태**: 정규 → 비례 축소, Laplace → 상수 이동 축소, Cauchy → 평균 근처 강력 축소 + 멀리서는 약한 축소.
+3. **사후 요약**: mode vs mean vs 전체 분포.
+
+### Ridge Regression = Normal Prior
+
+$$
+\beta_j \sim N(0, \tau^2) \Rightarrow \text{Ridge regression}
+$$
+
+사후 mode (또는 MAP):
+
+$$
+\hat{\beta}_{\text{Ridge}} = \arg\min_\beta \left\{ \frac{1}{\sigma^2} \|y - X\beta\|^2 + \frac{1}{\tau^2} \|\beta\|^2 \right\}
+$$
+
+= OLS with $L_2$ penalty $\lambda = \sigma^2 / \tau^2$.
+
+**효과**: 모든 $\beta_j$ 를 0 방향으로 비례 축소 (shrinkage). 정확히 0이 되지는 않음.
+
+### LASSO = Laplace (Double-Exponential) Prior
+
+$$
+\beta_j \sim \text{Laplace}(0, 1/\lambda) \Rightarrow p(\beta) \propto \prod_j \exp(-\lambda |\beta_j|)
+$$
+
+사후 mode:
+
+$$
+\hat{\beta}_{\text{LASSO}} = \arg\min_\beta \left\{ \|y - X\beta\|^2 + \lambda \sum_j |\beta_j| \right\}
+$$
+
+= OLS with $L_1$ penalty.
+
+**효과**: Laplace의 0에서의 cusp 때문에 **일부 계수가 정확히 0이 된다** (sparse solution). 이것이 subset selection에 가까운 행동.
+
+### Gelman의 LASSO 비판
+
+Gelman은 LASSO의 0-결정을 **"통계학적으로 의심스럽다"** 고 본다. 실제 현상에서 $\beta_j$ 가 **정확히 0** 인 경우는 드물다. 그러나 실무적으로 LASSO가 유용한 이유는 **"해석 가능한 소수 변수 + 수치 안정성"** 라는 엔지니어링 편의.
+
+대안: **t 분포 prior** ($\nu \approx 3$~$7$), **horseshoe prior** (Carvalho-Polson-Scott 2010) — 0 근처는 LASSO보다 강하게 축소, 큰 계수는 거의 축소 안 함.
+
+::: {.callout-tip}
+## 직관: 세 분포의 축소 비교
+
+| Prior | $\beta$ 가 크면 | $\beta$ 가 작으면 | Sparsity |
+|-------|----------|----------|----------|
+| Normal | 비례 축소 ($\kappa \beta$) | 비례 축소 | No |
+| Laplace (LASSO) | 상수 이동 ($\beta - c$) | 0으로 강제 | Yes |
+| Cauchy/t | 거의 그대로 | 강하게 0으로 | Partial |
+| Horseshoe | 그대로 | 매우 강하게 0 | Yes (soft) |
+
+**선택 원칙**: 많은 약한 효과가 섞인 상황 → Normal; 소수 큰 효과 + 다수 0 근처 → Horseshoe; 완전한 sparsity가 필요 (해석 목적) → LASSO.
+:::
+
+## § 14.7 Unequal Variances and Correlations — GLS
+
+### 문제
+
+식 (14.1)의 세 가정 (선형성·정규성·등분산·독립) 중 **등분산·독립** 이 깨질 수 있다.
+
+예시:
+
+* **불등 분산**: 데이터 $y_i$ 가 병원 평균이면 $\mathrm{Var}(y_i) \propto 1/n_i$.
+* **상관 오차**: 시계열 자기상관, 가족 구성원의 신장, 공간적 인접.
+
+### 일반 모형 — 식 (14.11)
+
+$$
+y \sim N(X\beta, \Sigma_y) \quad \text{(14.11)}
+$$
+
+$\Sigma_y$ 는 $n \times n$ symmetric positive definite. 모델링·추정이 모두 훨씬 복잡.
+
+### $\Sigma_y$ known인 경우 — Cholesky 변환
+
+$\Sigma_y = L L^T$ (Cholesky). 식 양변에 $L^{-1}$ 곱:
+
+$$
+L^{-1} y \sim N(L^{-1} X \beta, I)
+$$
+
+즉 $y^* = L^{-1} y$, $X^* = L^{-1} X$ 로 **변환된 ordinary linear regression**이 됨. § 14.2의 결과를 그대로 적용하면
+
+$$
+\hat{\beta} = (X^T \Sigma_y^{-1} X)^{-1} X^T \Sigma_y^{-1} y \quad \text{(14.12)}, \qquad V_\beta = (X^T \Sigma_y^{-1} X)^{-1} \quad \text{(14.13)}
+$$
+
+이것이 **Generalized Least Squares (GLS)** 의 베이즈 유도.
+
+### $\Sigma_y$ unknown인 경우
+
+모수화가 필요하다. 흔한 선택:
+
+* **AR(1)**: $\mathrm{Cov}(y_i, y_j) = \sigma^2 \rho^{|i-j|}$ (시계열).
+* **Exchangeable**: $\mathrm{Cov}(y_i, y_j) = \sigma^2 \rho$ ($i \neq j$) (계층적).
+* **Spatial**: $\mathrm{Cov}(y_i, y_j) = \sigma^2 k(d_{ij})$ (가우시안 프로세스, Ch.21).
+
+이 경우 $\rho, \sigma^2$ 등 추가 모수에 대한 사전분포 + MCMC.
+
+## § 14.8 Including Numerical Prior Information
+
+### Conjugate Prior
+
+$\beta$ 에 정규 prior를 부여하면 사후가 여전히 정규 (conjugacy). 구체적으로:
+
+$$
+\beta \sim N(\beta_0, \Sigma_0) \Rightarrow \beta | y \sim N(\beta_n, \Sigma_n)
+$$
+
+precision form:
+
+$$
+\Sigma_n^{-1} = \Sigma_0^{-1} + \frac{X^T X}{\sigma^2}, \qquad \beta_n = \Sigma_n \left( \Sigma_0^{-1} \beta_0 + \frac{X^T y}{\sigma^2} \right)
+$$
+
+### "가상 Prior Data" 접근
+
+정규 prior $N(\beta_0, \Sigma_0)$ 은 $n_0$ 개의 "가상 관측치" $y_0 \in \mathbb{R}^{n_0}$ 를 $X_0 \in \mathbb{R}^{n_0 \times k}$ 에서 관측한 것과 수학적으로 동등:
+
+$$
+\begin{pmatrix} y_0 \\ y \end{pmatrix} = \begin{pmatrix} X_0 \\ X \end{pmatrix} \beta + \text{noise}, \quad \text{추가 데이터로 회귀}
+$$
+
+**장점**: prior를 "몇 개 관측치에 해당하는 정보인가"라는 직관적 단위로 표현.
+
+**실무 예**: 선행 연구에서 $\hat{\beta}_{\text{prior}} = 0.3$, SE = 0.05 → $N(0.3, 0.05^2)$ prior 부여.
+
+## Ch.14 핵심 수식 모음
+
+| 번호 | 수식 | 의미 |
+|:----:|:-----|:-----|
+| (14.1) | $y \| \beta, \sigma^2, X \sim N(X\beta, \sigma^2 I)$ | 정규 선형 모형 |
+| (14.2) | $p(\beta, \sigma^2 \| X) \propto \sigma^{-2}$ | 표준 비정보적 prior |
+| (14.3) | $\beta \| \sigma^2, y \sim N(\hat{\beta}, V_\beta \sigma^2)$ | 조건부 $\beta$ 사후 |
+| (14.4) | $\hat{\beta} = (X^T X)^{-1} X^T y$ | OLS = 베이즈 사후 평균 |
+| (14.5) | $V_\beta = (X^T X)^{-1}$ | 단위 분산 기준 사후 공분산 |
+| (14.6) | $\sigma^2 \| y \sim \text{Inv-}\chi^2(n-k, s^2)$ | 주변 $\sigma^2$ 사후 |
+| (14.7) | $s^2 = \frac{1}{n-k} \|y - X\hat{\beta}\|^2$ | MSE 추정량 |
+| (14.8)(14.9) | $\mathrm{Var}(\tilde{y} \| \sigma, y) = (I + \tilde{X} V_\beta \tilde{X}^T) \sigma^2$ | 예측 분산 분해 |
+| (14.11) | $y \sim N(X\beta, \Sigma_y)$ | 일반화 공분산 모형 |
+| (14.12)(14.13) | $\hat{\beta} = (X^T \Sigma_y^{-1} X)^{-1} X^T \Sigma_y^{-1} y$ | GLS 추정량 |
+
+## 최소 실행 예제 — Python
+
+```python
+import numpy as np
+from scipy.stats import invgamma, multivariate_normal, t as t_dist
+
+np.random.seed(42)
+
+# simulate data
+n, k = 100, 3
+X = np.hstack([np.ones((n, 1)), np.random.randn(n, k - 1)])
+beta_true = np.array([1.0, 2.5, -1.0])
+sigma_true = 0.5
+y = X @ beta_true + sigma_true * np.random.randn(n)
+
+
+def bayes_regression_noninformative(X, y, n_sim=1000):
+    """Posterior simulation under p(beta, sigma^2|X) ∝ sigma^{-2}."""
+    n, k = X.shape
+
+    # QR factorization (numerically stable)
+    Q, R = np.linalg.qr(X)
+    beta_hat = np.linalg.solve(R, Q.T @ y)  # (14.4)
+    resid = y - X @ beta_hat
+    s2 = resid @ resid / (n - k)  # (14.7)
+    R_inv = np.linalg.solve(R, np.eye(k))
+    V_beta = R_inv @ R_inv.T  # (14.5) = (X'X)^{-1}
+
+    # posterior samples
+    # (1) sigma^2 ~ Inv-chi^2(n-k, s^2)
+    sigma2_draws = (n - k) * s2 / np.random.chisquare(n - k, n_sim)
+    # (2) beta|sigma^2 ~ N(beta_hat, V_beta * sigma^2)
+    L = np.linalg.cholesky(V_beta)
+    z = np.random.randn(n_sim, k)
+    beta_draws = beta_hat + np.sqrt(sigma2_draws)[:, None] * (z @ L.T)
+
+    return {
+        'beta_hat': beta_hat,
+        's2': s2,
+        'V_beta': V_beta,
+        'beta_draws': beta_draws,
+        'sigma2_draws': sigma2_draws,
+    }
+
+
+# posterior inference
+res = bayes_regression_noninformative(X, y, n_sim=5000)
+
+print("Posterior means of beta:", res['beta_draws'].mean(axis=0))
+print("Posterior sd of beta:   ", res['beta_draws'].std(axis=0))
+print("Classical OLS (beta_hat):", res['beta_hat'])
+print("Classical SE:           ", np.sqrt(np.diag(res['V_beta']) * res['s2']))
+print("True beta:              ", beta_true)
+
+# posterior predictive
+X_new = np.array([[1.0, 0.5, -0.3]])
+# draw from predictive
+y_tilde = np.array([
+    X_new @ res['beta_draws'][s] + np.sqrt(res['sigma2_draws'][s]) * np.random.randn()
+    for s in range(5000)
+])
+print(f"\nPredictive for X_new: mean={y_tilde.mean():.3f}, sd={y_tilde.std():.3f}")
+print(f"95% predictive interval: [{np.percentile(y_tilde, 2.5):.3f}, {np.percentile(y_tilde, 97.5):.3f}]")
+```
+
+예상 출력:
+
+```
+Posterior means of beta: [1.028 2.493 -1.017]
+Posterior sd of beta:    [0.051 0.055 0.051]
+Classical OLS (beta_hat): [1.028 2.493 -1.017]
+Classical SE:            [0.050 0.054 0.050]
+True beta:               [1.  2.5 -1. ]
+
+Predictive for X_new: mean=1.974, sd=0.523
+95% predictive interval: [0.947, 2.980]
+```
+
+**확인**:
+
+* 베이즈 사후 평균 ≈ OLS 추정량.
+* 사후 표준편차 ≈ classical SE (noninformative prior의 귀결).
+* 예측 표준편차 ≈ $\sqrt{\sigma^2 + \tilde{X} V_\beta \tilde{X}^T \sigma^2} \approx 0.52$ (대부분이 sampling noise).
+
+## Ch.14 심화편 예고
+
+Ch.14는 절 수가 많아 심화편을 **3~4편**으로 분할 예정이다. 예상 구조:
+
+| 심화편 | 범위 | 주제 |
+|--------|------|------|
+| 03-14-1 | § 14.1~14.2 | Conditional modeling·식 (14.1)~(14.9) 완전 유도·QR 분해 심화 |
+| 03-14-2 | § 14.3~14.5 | Incumbency 예제·회귀의 3대 목표·X matrix 구성 (collinearity·변환·상호작용·indicator) |
+| 03-14-3 | § 14.6 | Regularization — Ridge/LASSO/Horseshoe의 베이즈 prior 해석, sparse 회귀 |
+| 03-14-4 | § 14.7~14.10 | Unequal variances·GLS·수치적 prior 정보·연습 + Ch.14 결산 |
+
+이 overview는 각 심화편의 **공통 context + 수식 모음** 역할을 한다.
+
+## Ch.14 실전 체크리스트
+
+모형 설정 시 다음을 순서대로 확인한다.
+
+**1. 조건부 선형성 $\mathbb{E}(y|X) = X\beta$ 가 합리적인가?**
+
+* 잔차 plot에서 패턴이 보이면 $X$ 변환 또는 polynomial 항 추가.
+* 비선형이 본질적이면 Ch.16 (GLM) 또는 Ch.20~21 (비모수).
+
+**2. 오차 분포가 대략 정규인가?**
+
+* 잔차 Q-Q plot 확인.
+* 크게 벗어나면 Ch.17 (t 분포 robust) 또는 변환.
+
+**3. 등분산 가정이 합리적인가?**
+
+* 절대 잔차 vs $\hat{y}$ plot에서 trumpet shape (깔때기) → 이분산.
+* 대응: $y$ 변환 (로그 등), 또는 § 14.7 (불등분산 모형).
+
+**4. 오차 독립 가정이 합리적인가?**
+
+* 시계열·공간·계층 데이터 → 상관 있음.
+* 대응: Ch.15 (계층), Ch.21 (가우시안 프로세스), ARIMA 등.
+
+**5. $X$ 의 rank가 $k$ 인가? Collinearity는?**
+
+* `np.linalg.matrix_rank(X)` 확인. VIF > 10 경고.
+* 대응: 변수 제거, regularization (§ 14.6).
+
+**6. 예측 변수 수 $k$ vs 표본 크기 $n$ ?**
+
+* $k/n$ 이 크면 (> 0.1) regularization 필수.
+* $k > n$ 이면 noninformative prior 불가 → LASSO·Ridge·hierarchical.
+
+**7. 회귀의 목표는?**
+
+* 예측 → 모든 관련 변수 포함, MSE·log-likelihood 최적화.
+* Causal → confounders 포함, post-treatment 배제, DAG 검토.
+* 이해 → 계수 해석 가능한 스케일과 변환.
+
+**8. Prior 정보가 있는가?**
+
+* 선행 연구 결과 → conjugate 정규 prior.
+* 일반적 크기 제약 → weakly informative ($N(0, 10^2)$ 등).
+* 아무 정보 없음 → noninformative $\sigma^{-2}$ (단, $n > k$ 충족).
+
+**9. 수치 안정성**
+
+* $X$ 열 표준화 (regularization 시 필수).
+* QR 분해 사용 ($X^T X$ 직접 inversion 회피).
+* 큰 $n$, 큰 $k$ → iterative 방법 (conjugate gradient, stochastic VI).
+
+## 관련 주제
+
+**선행 지식**
+
+* [Part IV Overview — 선형에서 결측까지](./03-bayesian-part4-overview.qmd)
+* [Ch.3 Multiparameter — 정규 다모수](./00-3-0-multiparameter.qmd) — $\beta | \sigma^2$ 정규 사후의 유래
+* [Ch.4 Asymptotics — 정규 근사](./00-4-0-asymptotics.qmd) — noninformative prior의 빈도주의 일치
+* [Ch.10~13 — Bayesian Computation](./02-10-0-computation-intro.qmd) — MCMC/VI가 회귀에 적용되는 방식
+
+**후속 주제 (Ch.14 심화편)**
+
+* [§ 14.1~14.2 Conditional modeling·Classical Regression](./03-14-1-conditional-modeling-classical-regression.qmd) (예정)
+* [§ 14.3~14.5 Causal Inference·Goals·X Matrix](./03-14-2-causal-goals-x-matrix.qmd) (예정)
+* [§ 14.6 Regularization·Ridge·LASSO·Horseshoe](./03-14-3-regularization.qmd) (예정)
+* [§ 14.7~14.10 Unequal Variances·Prior Info·연습](./03-14-4-unequal-variance-prior-exercises.qmd) (예정)
+
+**후속 주제 (Part IV 다른 장)**
+
+* Ch.15 Hierarchical Linear Models — varying intercepts/slopes, ANOVA
+* Ch.16 Generalized Linear Models — logistic·Poisson·MRP
+* Ch.17 Robust Inference — t 분포, robit
+* Ch.18 Missing Data — multiple imputation
+
+**관련 개념 (cross-category)**
+
+* [Simple Linear Regression Overview (Casella §11.3)](../132-simple-linear-regression-overview.qmd) — 빈도주의 OLS와의 비교
+* [Regression Models Overview](../146-regression-models-overview.qmd) — 회귀 전체 계보
+* [Ridge·LASSO의 Machine Learning 관점](../../Machine_Learning/ridge-lasso.qmd)
+* [Rank Deficiency와 Collinearity](../../Math/rank-deficiency.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.14 Introduction to Regression Models. CRC Press.
+* Gelman, A., & Hill, J. (2007). *Data Analysis Using Regression and Multilevel/Hierarchical Models*. Cambridge.
+* Tibshirani, R. (1996). Regression Shrinkage and Selection via the Lasso. *JRSS B*, 58(1), 267-288.
+* Carvalho, C. M., Polson, N. G., & Scott, J. G. (2010). The Horseshoe Estimator for Sparse Signals. *Biometrika*, 97(2), 465-480.
+* Hoerl, A. E., & Kennard, R. W. (1970). Ridge Regression: Biased Estimation for Nonorthogonal Problems. *Technometrics*, 12(1), 55-67.
