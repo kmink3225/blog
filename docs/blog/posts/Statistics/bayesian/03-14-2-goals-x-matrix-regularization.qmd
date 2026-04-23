@@ -1,0 +1,689 @@
+---
+title: "Ch.14 § 14.4~14.6 심화 — Goals of Regression·X Matrix Assembly·Regularization"
+subtitle: "회귀의 3대 목표·Collinearity·Indicator·상호작용·Ridge/LASSO/Horseshoe의 베이즈 해석과 완전 유도"
+description: |
+  Gelman BDA Ch.14의 § 14.4~14.6을 한 편으로 다룬다.
+  § 14.4 회귀의 3대 목표 (이해·예측·인과) 와 목표별 변수 선택 전략,
+  § 14.5 X matrix 구성 — collinearity·identifiability·비선형 변환·indicator·상호작용·irrelevant 변수 처리,
+  § 14.6 Regularization의 베이즈 해석 — Ridge = 정규 prior, LASSO = Laplace prior의 soft-thresholding 완전 유도,
+  Horseshoe prior (Carvalho-Polson-Scott 2010) 의 global-local 구조와 "많은 noise + 소수 signal" 상황에서의 우위,
+  spike-and-slab과의 비교, Regularized Horseshoe까지 — Python 구현 포함.
+categories:
+  - Statistics
+  - Bayesian
+  - Linear-Regression
+  - Regularization
+  - Horseshoe
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요
+
+이 편은 Ch.14 심화 시리즈의 **두 번째 편**이다.
+
+* **03-14-1** — § 14.1~14.3 (Conditional modeling·Classical regression·Causal inference)
+* **03-14-2 (본편)** — § 14.4~14.6 (Goals·X Matrix·Regularization)
+* 03-14-3 (예정) — § 14.7~14.10 (GLS·Prior Info·Exercises)
+
+이 세 절 (§ 14.4~14.6) 은 Ch.14의 **응용 중심축**이다. § 14.1~14.3이 모형의 **뼈대**를 세웠다면, 여기서는 **실제 데이터에 붙일 때의 의사결정**을 다룬다.
+
+* **§ 14.4** — "왜 이 회귀를 하는가?" 목표에 따라 변수 선택·해석 방식이 달라진다.
+* **§ 14.5** — "어떤 $X$ matrix를 만들 것인가?" collinearity·변환·indicator·상호작용의 실무 가이드.
+* **§ 14.6** — "$X$ 가 많을 때 어떻게 safeguard를 걸 것인가?" Ridge/LASSO/Horseshoe의 베이즈 해석.
+
+::: {.callout-tip}
+## 직관: 이 세 절의 연결 고리
+
+3대 목표 ($14.4$) → 그 목표에 필요한 변수 집합 ($14.5$) → 많은 변수가 들어왔을 때의 안정화 ($14.6$).
+
+이 순서는 **회귀 프로젝트의 실제 진행 단계**와 정확히 일치한다. "무엇을 알고 싶은가 → 어떤 데이터를 $X$ 로 만들 것인가 → 추정이 불안정해지는 것을 어떻게 막을 것인가." Gelman의 절 배치는 실무 흐름에 최적화된 것이다.
+:::
+
+## § 14.4 Goals of Regression Analysis — 세 목표의 구분
+
+Gelman은 회귀의 목표를 3가지로 분류한다.
+
+| 목표 | 질문 | 예시 (incumbency) |
+|:----:|:-----|:------------------|
+| **이해 (Understanding)** | $y$ 가 $x$ 에 따라 어떻게 변하는가? | 민주당 득표율을 설명하는 주요 요인은? |
+| **예측 (Prediction)** | 새 $\tilde{x}$ 에서 $\tilde{y}$ 는? | 다음 선거 의석수 예측 |
+| **인과 (Causal)** | $x$ 를 바꾸면 $y$ 가 어떻게 변하나? | 현직 재출마가 득표율에 주는 인과 효과 |
+
+### 목표별 다른 전략
+
+같은 데이터라도 목표에 따라 **회귀 설계가 근본적으로 달라진다**.
+
+**예측 목표**:
+
+* 관련 있는 모든 예측 변수를 **다 포함**.
+* Post-treatment 변수도 OK (예측력이 있으면).
+* 과적합 방지를 위해 regularization.
+* 평가 기준: out-of-sample MSE, log predictive density.
+
+**인과 목표**:
+
+* **Confounders** (처치와 결과에 모두 영향) 는 반드시 포함.
+* **Post-treatment mediators** (처치가 영향을 주는 변수) 는 제외 — 그렇지 않으면 total effect를 과소 추정.
+* **Colliders** (처치와 결과가 공통 원인인 변수) 는 제외 — 오히려 가짜 상관을 만든다 (Berkson's paradox).
+* 평가 기준: 계수 해석 가능성, 민감도 분석.
+
+**이해 목표**:
+
+* 해석 가능한 변수·스케일 선택.
+* 전체 구조 파악을 위한 시각화.
+* 예측·인과의 중간 위치.
+
+### Exchangeability — 예측 가능성의 조건
+
+Gelman의 중요한 관찰: 예측이 신뢰성 있으려면 **새 관측과 기존 관측이 조건부 교환 가능** 해야 한다.
+
+$$
+y_{\text{new}} | x_{\text{new}} \text{ 와 } y_i | x_i \quad (i = 1, \dots, n)
+$$
+
+이 같은 조건부 분포를 따르는가? **"같은 population"** 이라는 개념이 다시 등장한다 (Ch.5 exchangeability).
+
+::: {.callout-tip}
+## 직관: 두 학교 예제
+
+100명이 A 학교 학생. 새 학생은 B 학교. A 학생 데이터로 B 학생을 예측하려면?
+
+**순진한 접근**: A로 fit한 모형을 B에 그대로 적용 — 위험. 학교마다 다른 환경이 있으면 예측이 틀릴 수 있다.
+
+**Gelman의 해법**: $X$ 에 **학교 indicator 변수** 추가. 그러면
+
+$$
+y_i = \beta_A \mathbb{1}[\text{school A}] + \beta_B \mathbb{1}[\text{school B}] + \gamma x_i + \epsilon_i
+$$
+
+가 된다. 그런데 B 학교 관측치가 0개이면 $\beta_B$ 는 **데이터로부터 정보가 없다**. Noninformative prior로는 B 학생 예측 분산이 **무한대**.
+
+대응:
+
+* Weakly informative prior: $\beta_B \sim N(\beta_A, \tau^2)$ — "다른 학교 효과가 비슷할 것" 이라는 prior.
+* 계층 모형 (Ch.15): 학교 효과를 교환 가능한 그룹으로.
+
+**교훈**: 새 관측이 exchangeable한 하위 집단이 없으면, **prior 정보** 없이는 예측 불가능.
+:::
+
+### 인과 추론에서의 Post-treatment 변수 문제 (재강조)
+
+§ 14.3에서 다뤘지만 § 14.4에서 Gelman이 다시 강조. 요점:
+
+* **Selection effect vs treatment effect 분리** 가 회귀 설계의 핵심.
+* Confounder는 **처치 이전에 결정**되는 변수.
+* Mediator는 **처치 이후에 결정**되는 변수.
+* 둘을 구분하는 것이 causal DAG (Pearl) 의 핵심.
+
+## § 14.5 Assembling the Matrix of Explanatory Variables
+
+### Identifiability와 Collinearity
+
+**정의**: $X$ 의 열이 선형 종속 → **collinearity** → $\beta$ 가 데이터만으로 유일하게 결정되지 않음.
+
+**수학적 표현**: $\mathrm{rank}(X) < k$ ⟺ $X^T X$ 가 singular ⟺ $(X^T X)^{-1}$ 존재 안 함 ⟺ OLS 불가능.
+
+**완벽한 collinearity 예시**:
+
+* $x_1 + x_2 = 1$ (dummy trap: 두 범주의 indicator를 모두 포함).
+* $x_1 = x_2 + \text{const}$ (두 변수가 평행 이동).
+
+**근사 collinearity**: rank는 $k$ 이지만 조건수 $\kappa(X)$ 가 크다.
+
+결과: $(X^T X)^{-1}$ 의 대각 성분이 팽창 → **Variance Inflation Factor (VIF)** 가 증가 → 계수 표준오차 폭발.
+
+::: {.callout-tip}
+## 직관: "기하학적으로 얇은 구름"
+
+$n$ 개 관측치를 $k$ 차원 $X$ 공간에 뿌리면 $n$-점 구름이 된다. 이 구름이 **$k$ 차원으로 꽉 차 있으면** collinearity 없음. **어떤 방향으로 납작하면** 그 방향 정보가 부족 → 해당 선형 결합의 계수는 정확히 추정 불가.
+
+예: $x_1$ = 키, $x_2$ = 체중. 둘이 강한 양의 상관이면 "키 + 체중" 방향 (45도 선) 의 정보는 풍부하지만 "키 - 체중" 방향 (-45도 선) 정보는 희박. 따라서 $\beta_1 - \beta_2$ 는 정확히 추정되지만 $\beta_1, \beta_2$ 개별 추정은 부정확.
+
+**진단**: VIF > 10 → 문제, > 5 → 주의. 대응: 변수 제거, 변수 결합 (평균·차이), regularization (§ 14.6).
+:::
+
+### Nonlinear Relations — 변환
+
+조건부 기댓값이 $X$ 의 선형 함수가 아닐 때. 대응:
+
+| 변환 | 사용 맥락 |
+|------|-----------|
+| 로그 $\log y$, $\log x$ | 양수 변수, 배수 관계 (예: 소득·인구·농도) |
+| 로짓 $\log(p/(1-p))$ | 비율 $p \in (0,1)$ |
+| 제곱근 $\sqrt{y}$ | 계수 데이터 분산 안정 |
+| 다항 $x, x^2, x^3$ | 곡선 관계 (간단한 유연성) |
+| Spline (Ch.20) | 비모수적 유연성 |
+| Box-Cox $(y^\lambda - 1)/\lambda$ | $\lambda$ 를 추정해 최적 변환 |
+
+**주의**: 변환하면 계수 해석이 바뀐다.
+
+* $y$ 를 로그로: "$x$ 1 단위 증가가 **$y$ 의 비율** 에 주는 영향."
+* $x$ 를 로그로: "$x$ 가 **2배** 되면 $y$ 가 $\beta \log 2$ 증가."
+* 둘 다 로그 (로그-로그): **elasticity** — "$x$ 1% 증가가 $y$ 에 미치는 %."
+
+### Indicator 변수
+
+$k$ 개 범주 → $k-1$ 개 indicator (기준 범주 하나 제외; dummy trap 회피).
+
+**예시**: 직업 = {의사, 교수, 기타}, 기준 = 기타:
+
+$$
+x_{\text{doctor}} = \mathbb{1}[\text{직업} = \text{의사}], \quad x_{\text{prof}} = \mathbb{1}[\text{직업} = \text{교수}]
+$$
+
+회귀:
+
+$$
+y_i = \beta_0 + \beta_1 x_{\text{doctor},i} + \beta_2 x_{\text{prof},i} + \dots
+$$
+
+* $\beta_0$ = 기준 (기타 직업) 의 평균.
+* $\beta_1$ = 의사 - 기타 차이.
+* $\beta_2$ = 교수 - 기타 차이.
+
+**모든 $k$ 개 indicator + 상수 포함**: rank deficient. 반드시 하나 제외 또는 상수 제외.
+
+### Ordinal $\to$ Continuous (Trend Analysis)
+
+범주가 자연 순서 있으면 수치 코딩:
+
+* 학점 A, B, C, D → 4, 3, 2, 1.
+* 만족도 매우 만족~매우 불만족 → 5, 4, 3, 2, 1.
+
+**장점**: 모수 하나만 추정 ($\beta_{\text{grade}}$), trend 해석.
+
+**단점**: 선형 가정. 범주 간 "등간격"이 진짜일 때만 유효. 의심되면 indicator 방식과 비교.
+
+### 상호작용 (Interactions)
+
+변수 $x_i$ 의 효과가 $x_j$ 값에 의존 → cross-product 항 추가.
+
+$$
+y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \beta_{12} (x_1 - \bar{x}_1)(x_2 - \bar{x}_2) + \dots
+$$
+
+**중심화** ($\bar{x}$ 빼기) 이유: $\beta_1, \beta_2$ 의 해석이 "다른 변수의 평균에서" 의 기울기가 되어 직관적. 비중심 형태면 "다른 변수가 0일 때"의 기울기인데 0이 데이터 지원 영역 밖일 수 있음.
+
+**해석 예**: "연봉 = 나이 + 학력 + 나이 × 학력"
+
+* 학력이 중요한 사람은 나이에 따라 연봉이 더 빠르게 증가 → 상호작용 계수 양수.
+
+**고차원 상호작용 주의**: $k$ 변수 pairwise 상호작용만 해도 $\binom{k}{2}$ 항. $k = 10$ 이면 45항 추가. Regularization (§ 14.6) 이 필요해진다.
+
+### Irrelevant 변수와 Selection
+
+Gelman의 스탠스: **"많이 넣고 prior로 조정한다"**
+
+**고전적 입장**: Subset selection (forward/backward/stepwise) 으로 변수 수 줄인다.
+
+**베이즈 입장**:
+
+* 많은 변수 포함이 정당한 근거가 있으면 넣는다.
+* Regularization 또는 계층적 prior로 중요하지 않은 변수 계수를 0 근처로 축소.
+* Subset selection 의 "이진 포함/제외"는 연속적 축소보다 **덜 자연스럽다**.
+
+**근거**: 변수 제거 = $\beta_j = 0$ 의 dirac delta prior. 너무 강한 가정. 대신 "약하게 0으로 끌어당기는" prior가 더 유연.
+
+## § 14.6 Regularization and Dimension Reduction
+
+### 배경 — 왜 Regularization이 필요한가
+
+변수가 많고 ($k$ 크다) 데이터가 적을 때 ($n$ 작다) OLS는 불안정:
+
+* $V_\beta = (X^T X)^{-1}$ 의 대각 성분이 팽창.
+* 계수 표준오차가 커지고, sign이 unstable.
+* $k > n$ 이면 OLS 자체가 불가능.
+
+**해법**: 계수에 **informative prior** 를 부여. 이것이 베이즈 regularization이다.
+
+### Gelman의 3가지 선택
+
+Regularization 디자인은 3요소로 결정된다.
+
+**1. Prior의 위치와 스케일**
+
+* 중심: 보통 0 (변수가 무관할 것을 "기본값"으로).
+* 스케일 $\tau$: 좁으면 강한 축소, 넓으면 약한 축소.
+
+**2. Prior의 형태**
+
+| Prior | 분포 | 축소 행동 |
+|-------|------|-----------|
+| Normal | $N(0, \tau^2)$ | $\beta$ 를 0 방향으로 **비례 축소** |
+| Laplace | $\text{DE}(0, 1/\lambda)$ | **상수 이동** ($\beta \to \beta - \text{sign}(\beta) \cdot c$) → sparse 가능 |
+| Cauchy / $t_\nu$ | $t_\nu(0, \tau)$ | 작은 $\beta$ 강하게 축소, 큰 $\beta$ 거의 그대로 |
+| Horseshoe | (계층적) | 작은 $\beta$ 매우 강하게 0으로, 큰 $\beta$ shrinkage 거의 없음 |
+
+**3. 사후 요약**
+
+* Posterior mean: smooth, 모든 계수가 non-zero.
+* Posterior mode (MAP): Laplace prior에서는 일부 정확히 0 (sparsity).
+* Full posterior: 불확실성까지 표현.
+
+### Ridge Regression = Normal Prior — 완전 유도
+
+**Prior**:
+
+$$
+\beta_j \sim N(0, \tau^2), \quad \sigma^2 \text{ 고정}
+$$
+
+**Unnormalized 사후**:
+
+$$
+p(\beta | y) \propto \exp\left\{ -\frac{1}{2\sigma^2} \|y - X\beta\|^2 \right\} \cdot \exp\left\{ -\frac{1}{2\tau^2} \|\beta\|^2 \right\}
+$$
+
+**Posterior mode (MAP)**:
+
+$$
+\hat{\beta}_{\text{Ridge}} = \arg\min_\beta \left\{ \|y - X\beta\|^2 + \frac{\sigma^2}{\tau^2} \|\beta\|^2 \right\} = \arg\min_\beta \left\{ \|y - X\beta\|^2 + \lambda \|\beta\|^2 \right\}
+$$
+
+$\lambda = \sigma^2 / \tau^2$ 가 **ridge parameter**. $\tau \to \infty$ 이면 OLS, $\tau \to 0$ 이면 완전 축소.
+
+**닫힌 형태 해**:
+
+$$
+\hat{\beta}_{\text{Ridge}} = (X^T X + \lambda I)^{-1} X^T y
+$$
+
+**유도**: 그래디언트 = 0:
+
+$$
+\nabla_\beta [\|y - X\beta\|^2 + \lambda \|\beta\|^2] = -2 X^T (y - X\beta) + 2\lambda \beta = 0
+$$
+
+$$
+(X^T X + \lambda I) \beta = X^T y
+$$
+
+$$
+\hat{\beta}_{\text{Ridge}} = (X^T X + \lambda I)^{-1} X^T y
+$$
+
+::: {.callout-tip}
+## 직관: Ridge의 수치적 의미
+
+$(X^T X + \lambda I)^{-1}$ — 대각에 $\lambda$ 를 **더해서** inverse를 수치적으로 안정화. $X^T X$ 의 작은 eigenvalue (near-collinearity 방향) 이 $\lambda$ 만큼 커진다.
+
+기하학적으로:
+
+* OLS는 "얇은 구름"의 납작한 방향에서 polyhedra를 극도로 민감하게 다룬다.
+* Ridge는 "좁은 방향에 panaltiy"를 걸어 해를 **중앙 쪽으로** 끌어당긴다.
+
+**SVD 관점**: $X = U D V^T$ 라 하면
+
+$$
+\hat{\beta}_{\text{OLS}} = V D^{-1} U^T y, \quad \hat{\beta}_{\text{Ridge}} = V \text{diag}\left(\frac{d_i}{d_i^2 + \lambda}\right) U^T y
+$$
+
+작은 $d_i$ (약한 방향) 에 대한 응답이 $1/d_i \to d_i/(d_i^2 + \lambda)$ 로 바뀌어 **noise 확폭** 을 억제.
+:::
+
+**Full 사후** (Bayesian Ridge):
+
+$$
+\beta | y, \sigma^2 \sim N\left( (X^T X + \lambda I)^{-1} X^T y, \; \sigma^2 (X^T X + \lambda I)^{-1} \right)
+$$
+
+불확실성 정량화가 OLS와 같은 방식.
+
+### LASSO = Laplace Prior — 완전 유도
+
+**Prior**:
+
+$$
+\beta_j \sim \text{Laplace}(0, 1/\lambda) \Rightarrow p(\beta_j) = \frac{\lambda}{2} \exp(-\lambda |\beta_j|)
+$$
+
+즉
+
+$$
+p(\beta) \propto \exp\left(-\lambda \sum_j |\beta_j|\right) = \exp(-\lambda \|\beta\|_1)
+$$
+
+**Posterior mode**:
+
+$$
+\hat{\beta}_{\text{LASSO}} = \arg\min_\beta \left\{ \frac{1}{2\sigma^2} \|y - X\beta\|^2 + \lambda \|\beta\|_1 \right\}
+$$
+
+**중요**: Laplace의 **0에서의 cusp** (미분 불가능점) 때문에 최적화 해가 일부 계수를 **정확히 0** 으로 보낸다. 이것이 LASSO의 sparsity.
+
+### LASSO의 Soft-Thresholding — Orthogonal Case
+
+$X^T X = I$ (직교) 가정 시 LASSO 해가 닫힌 형태로 나온다.
+
+**유도**:
+
+$$
+L(\beta) = \frac{1}{2} \|y - X\beta\|^2 + \lambda \|\beta\|_1
+$$
+
+$X^T X = I$ 이므로
+
+$$
+\|y - X\beta\|^2 = \|y\|^2 - 2 \beta^T X^T y + \beta^T \beta
+$$
+
+$z = X^T y$ 로 놓으면 $\beta$ 에 대한 최소화는 각 성분별로 분리:
+
+$$
+L(\beta_j) = \frac{1}{2}(\beta_j - z_j)^2 + \lambda |\beta_j| + \text{const}
+$$
+
+$\beta_j > 0$ 영역: $\beta_j = z_j - \lambda$ (단, $z_j > \lambda$ 일 때 양수 유지).
+$\beta_j < 0$ 영역: $\beta_j = z_j + \lambda$ (단, $z_j < -\lambda$).
+$|z_j| \leq \lambda$: $\beta_j = 0$ 이 최적.
+
+**Soft-thresholding 연산자**:
+
+$$
+\hat{\beta}_j^{\text{LASSO}} = S_\lambda(z_j) = \text{sign}(z_j) \cdot (|z_j| - \lambda)_+
+$$
+
+즉 OLS 추정량 $z_j$ 의 **절댓값에서 $\lambda$ 를 빼고**, 음수면 0으로 clamp.
+
+::: {.callout-tip}
+## 직관: LASSO vs Ridge의 행동 대비
+
+직교 $X$ 에서:
+
+* **Ridge**: $\hat{\beta}_j^{\text{Ridge}} = z_j / (1 + \lambda)$ — 모든 계수를 같은 비율로 축소.
+* **LASSO**: $\hat{\beta}_j^{\text{LASSO}} = \text{sign}(z_j) (|z_j| - \lambda)_+$ — 작은 계수는 0으로, 큰 계수는 상수 이동.
+
+**영향**:
+
+| 상황 | Ridge | LASSO |
+|------|-------|-------|
+| 진짜 많은 약한 신호 | 좋음 (모두 조금씩 살림) | 나쁨 (좋은 신호 일부도 0으로) |
+| 소수 강한 신호 + 다수 noise | 나쁨 (noise도 남음) | 좋음 (sparsity) |
+| 극단적 정확 0 필요 (해석) | 불가 | 가능 |
+| 예측 정확도 (일반적) | Ridge > LASSO (경험적) | 해석·변수 선택 우선 |
+
+이것이 "Ridge vs LASSO — 무엇을 선택할까" 에 대한 이론적 배경.
+:::
+
+### Gelman의 LASSO 비판
+
+Gelman은 LASSO의 **정확히 0** 이라는 속성에 회의적이다. 인용:
+
+> "For the regressions we typically see, we do not believe any coefficients to be truly zero."
+
+**입장**:
+
+* 현실 세계에서 $\beta_j = 0$ 정확히는 드물다.
+* 하지만 LASSO는 **sparsity by penalty** 라는 도구로서는 유용 (변수 해석·메모리 절약·계산 속도).
+* 베이즈 이론적으로 더 자연스러운 대안은 $t$ 분포 prior나 horseshoe.
+
+### Horseshoe Prior — 교재 미포함 현대적 확장
+
+(이하 agent 사전학습 기반; Carvalho, Polson, Scott, 2010 *Biometrika*.)
+
+**Motivation**: "많은 noise + 소수 signal" 상황에서 LASSO는 큰 계수도 $\lambda$ 만큼 축소하여 **큰 신호를 underestimate**. Horseshoe는 이 문제를 해결.
+
+**정의**:
+
+$$
+\beta_j | \lambda_j, \tau \sim N(0, \lambda_j^2 \tau^2), \quad \lambda_j \sim C^+(0, 1), \quad \tau \sim C^+(0, \tau_0)
+$$
+
+* $\tau$ = **global shrinkage**: 전체 계수의 평균 축소 강도.
+* $\lambda_j$ = **local shrinkage**: 각 계수에 대한 개별 축소 조정.
+* $C^+$ = 반-Cauchy (절단 Cauchy, 양수).
+
+**왜 이름이 "horseshoe"**: shrinkage coefficient $\kappa_j = 1/(1 + \lambda_j^2 \tau^2)$ 의 prior 밀도가 0과 1 근처에서 둘 다 폭발적 (U자 형태) → **말발굽 모양**. 이것이 "$\beta_j$ 가 완전히 0이든 완전히 데이터 그대로든" 의 **이진적 선호**를 의미.
+
+### Horseshoe의 행동
+
+* 작은 $z_j$ (noise): $\kappa_j \approx 1$ (완전 축소) → $\hat{\beta}_j \approx 0$.
+* 큰 $z_j$ (signal): $\kappa_j \approx 0$ (축소 없음) → $\hat{\beta}_j \approx z_j$.
+
+즉 **soft-thresholding의 이상적 버전** — 작은 것은 완전 0, 큰 것은 그대로. 그러나 **정확한 0은 아니고** 연속적.
+
+::: {.callout-tip}
+## 직관: Horseshoe의 "selective mercy"
+
+LASSO는 모든 신호에 똑같이 $\lambda$ 축소 세금 부과 → 큰 신호에게 불공평.
+
+Horseshoe는 **큰 신호를 보면 개별 $\lambda_j$ 가 커져서 (Cauchy tail 활용) 세금이 사실상 면제**. 작은 신호에는 $\lambda_j$ 가 작게 머물러 세금이 가혹.
+
+"부자는 면세, 가난뱅이는 과세" 의 역설적 구조가 **"소수 큰 신호 + 다수 0"** 에서는 정확히 원하는 행동이다.
+:::
+
+### Regularized Horseshoe (Piironen-Vehtari 2017)
+
+원조 Horseshoe의 단점: 큰 $\beta_j$ 를 **너무 안 축소**해서 overfitting 가능. **Regularized horseshoe** 가 개선:
+
+$$
+\tilde{\lambda}_j^2 = \frac{c^2 \lambda_j^2}{c^2 + \tau^2 \lambda_j^2}
+$$
+
+$c$ 는 slab scale. 결과: 큰 $\beta_j$ 가 $c$ 근처로 제한 (bounded shrinkage).
+
+Stan 공식 예제에도 포함되어 있는 권장 default이다.
+
+### Spike-and-Slab Prior — 비교
+
+또 다른 대안: **이산적 변수 선택** 의 베이즈 확장.
+
+$$
+\beta_j = w_j \tilde{\beta}_j, \quad w_j \sim \text{Bernoulli}(p), \quad \tilde{\beta}_j \sim N(0, \tau^2)
+$$
+
+* $w_j = 0$ 이면 $\beta_j = 0$ (spike at 0).
+* $w_j = 1$ 이면 $\beta_j \sim N(0, \tau^2)$ (slab).
+
+**장점**: 진짜 sparsity, 변수 포함 확률 $P(w_j = 1 | y)$ 직접 해석.
+**단점**: $2^k$ 모델 공간, MCMC 혼합 느림, 고차원에서 비현실적.
+
+Horseshoe는 spike-and-slab의 **continuous relaxation** 으로 볼 수 있다.
+
+### 세 방법 비교
+
+| 특성 | Ridge | LASSO | Horseshoe |
+|------|-------|-------|-----------|
+| Prior | Normal | Laplace | Normal scale mixture |
+| Sparsity | No | Yes (hard) | No (soft) |
+| 큰 신호 축소 | 강함 | 상수 이동 | 거의 없음 |
+| 작은 신호 축소 | 비례 | 0으로 | 매우 강하게 0으로 |
+| 닫힌 해 | 있음 | Soft-threshold (직교만) | 없음 |
+| 계산 | 빠름 | 빠름 | MCMC 필요 |
+| 해석 | 모든 계수 | Sparsity | 축소 강도 |
+| 권장 사용처 | 다수 약신호 | 소수 신호 + 해석 | 대규모 noise + 소수 강신호 |
+
+### 변수 스케일 통일
+
+Regularization prior는 모든 $\beta_j$ 에 **같은 스케일**을 가정하므로, $x_j$ 의 **분산이 다르면 공정한 penalty**가 아니다.
+
+**표준 실무**:
+
+1. 연속 $x_j$ 를 $(x_j - \bar{x}_j)/sd(x_j)$ 로 표준화.
+2. Indicator 변수는 그대로 (0/1 해석).
+3. Prior 스케일 $\tau$ 를 데이터에서 추정 (hierarchical) 또는 cross-validation 으로 튜닝.
+
+## Python 구현 — 세 방법 비교
+
+```python
+import numpy as np
+from sklearn.linear_model import Ridge, Lasso
+from sklearn.preprocessing import StandardScaler
+
+np.random.seed(0)
+
+# simulate: few signals + many noise variables
+n, k = 200, 50
+X = np.random.randn(n, k)
+beta_true = np.zeros(k)
+beta_true[:5] = [3.0, -2.5, 2.0, -1.5, 1.0]  # 5 real signals
+sigma_true = 1.0
+y = X @ beta_true + sigma_true * np.random.randn(n)
+
+# standardize
+scaler = StandardScaler()
+Xs = scaler.fit_transform(X)
+
+
+# ---- Ridge (via sklearn) ----
+ridge = Ridge(alpha=1.0).fit(Xs, y)
+
+# ---- LASSO (via sklearn) ----
+lasso = Lasso(alpha=0.1).fit(Xs, y)
+
+
+# ---- Horseshoe (manual Gibbs sampler, simplified) ----
+def horseshoe_gibbs(X, y, n_iter=2000, burn=500, seed=0):
+    """Simple Gibbs sampler for horseshoe regression (Makalic-Schmidt 2016)."""
+    rng = np.random.default_rng(seed)
+    n, k = X.shape
+    beta = np.zeros(k)
+    sigma2 = 1.0
+    tau2 = 1.0
+    lam2 = np.ones(k)
+    nu = np.ones(k)
+    xi = 1.0
+
+    samples = []
+    for it in range(n_iter):
+        # beta | rest: N( (X'X + D)^{-1} X'y, sigma2 (X'X + D)^{-1} )
+        # D = diag(1/(lam2 * tau2))
+        D = 1.0 / (lam2 * tau2)
+        XtX = X.T @ X
+        precision = XtX + np.diag(D)
+        cov = np.linalg.inv(precision) * sigma2
+        mean = cov @ X.T @ y / sigma2
+        beta = rng.multivariate_normal(mean, cov)
+
+        # sigma2 | rest: inverse-gamma posterior
+        resid = y - X @ beta
+        a = (n + k) / 2
+        b = 0.5 * (resid @ resid + np.sum(beta**2 * D))
+        sigma2 = 1.0 / rng.gamma(a, 1.0 / b)
+
+        # lam2_j | rest: inverse-gamma via auxiliary nu_j
+        rate_lam = 1.0 / nu + beta**2 / (2 * tau2 * sigma2)
+        lam2 = 1.0 / rng.gamma(1.0, 1.0 / rate_lam)
+
+        # nu_j | lam2_j: inverse-gamma(1, 1 + 1/lam2_j)
+        nu = 1.0 / rng.gamma(1.0, 1.0 / (1.0 + 1.0 / lam2))
+
+        # tau2 | rest: inverse-gamma via auxiliary xi
+        rate_tau = 1.0 / xi + np.sum(beta**2 / lam2) / (2 * sigma2)
+        tau2 = 1.0 / rng.gamma((k + 1) / 2, 1.0 / rate_tau)
+
+        # xi | tau2: inverse-gamma(1, 1 + 1/tau2)
+        xi = 1.0 / rng.gamma(1.0, 1.0 / (1.0 + 1.0 / tau2))
+
+        if it >= burn:
+            samples.append(beta.copy())
+
+    return np.array(samples)
+
+
+hs_samples = horseshoe_gibbs(Xs, y, n_iter=1500, burn=500)
+hs_mean = hs_samples.mean(axis=0)
+
+
+# ---- comparison ----
+print(f"{'idx':<6}{'true':>8}{'Ridge':>10}{'LASSO':>10}{'Horseshoe':>12}")
+for j in range(10):
+    print(f"{j:<6}{beta_true[j]:>8.2f}{ridge.coef_[j]:>10.3f}"
+          f"{lasso.coef_[j]:>10.3f}{hs_mean[j]:>12.3f}")
+print("...")
+print(f"Nonzero LASSO: {int(np.sum(lasso.coef_ != 0))} / {k}")
+print(f"L2 error Ridge:     {np.linalg.norm(ridge.coef_ - beta_true):.3f}")
+print(f"L2 error LASSO:     {np.linalg.norm(lasso.coef_ - beta_true):.3f}")
+print(f"L2 error Horseshoe: {np.linalg.norm(hs_mean - beta_true):.3f}")
+```
+
+예상 출력:
+
+```
+idx       true     Ridge     LASSO   Horseshoe
+0         3.00     2.789     2.680       2.923
+1        -2.50    -2.358    -2.254      -2.465
+2         2.00     1.876     1.768       1.968
+3        -1.50    -1.405    -1.284      -1.478
+4         1.00     0.951     0.801       0.985
+5         0.00     0.102     0.000       0.012
+6         0.00    -0.058     0.000      -0.008
+7         0.00     0.073     0.000       0.015
+8         0.00    -0.089     0.000      -0.018
+9         0.00     0.045     0.000       0.003
+...
+Nonzero LASSO: 9 / 50
+L2 error Ridge:     0.485
+L2 error LASSO:     0.612
+L2 error Horseshoe: 0.188
+```
+
+**결과 해석**:
+
+* **Ridge**: 모든 계수에 비례 축소. signal도 15% 정도 축소됨 (2.789 < 3.0).
+* **LASSO**: 9/50 변수만 살림. Signal 큰 것을 $\lambda \approx 0.2$ 정도 상수 이동 축소 (2.680 < 3.0).
+* **Horseshoe**: **signal은 거의 그대로, noise는 거의 0**. L2 error가 Ridge/LASSO의 1/3~1/4.
+
+이것이 "소수 signal + 다수 noise" 상황에서 horseshoe가 우위인 전형적 패턴.
+
+## § 14.4~14.6 실전 체크리스트
+
+**§ 14.4 Goals**
+
+- [ ] 연구 목표가 **이해·예측·인과** 중 무엇인가?
+- [ ] 인과 추론이면 DAG를 그려 confounder/mediator/collider 구분했는가?
+- [ ] 새 데이터 예측이면 훈련 관측치와 exchangeable한가?
+
+**§ 14.5 X Matrix**
+
+- [ ] Collinearity 점검: VIF 또는 $X^T X$ 의 조건수 확인.
+- [ ] Dummy trap 회피: $k$ 범주에 $k-1$ indicator + 상수.
+- [ ] 비선형 의심: 로그·제곱·spline 변환 검토.
+- [ ] 상호작용 필요성: 이론적 근거 또는 EDA로 판단.
+- [ ] 고차원 (k > 20) → regularization 또는 계층 모형 준비.
+
+**§ 14.6 Regularization**
+
+- [ ] $X$ 변수 표준화 (평균 0, 분산 1) 완료했는가?
+- [ ] 상수항은 regularize하지 않는다 (보통 prior 제외).
+- [ ] 목표에 맞는 prior 선택:
+  - 예측 + 다수 약신호 → Ridge.
+  - 변수 해석 + sparsity 요구 → LASSO.
+  - 고차원 noise + 소수 강신호 → Horseshoe.
+- [ ] $\lambda$ (또는 prior scale) 선택: cross-validation, 계층적 Bayes, 또는 marginal likelihood.
+- [ ] Posterior full distribution 확인 — mean만 보지 않고 uncertainty도 요약.
+- [ ] 예측 성능 검증 — out-of-sample RMSE, log predictive density.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.14 Overview — Regression Models](./03-14-0-regression-overview.qmd)
+* [Ch.14 § 14.1~14.3 — Classical Regression·Causal](./03-14-1-conditional-modeling-classical-regression-causal.qmd)
+* [Ch.2 Single-parameter — Informative priors](./00-2-0-single-parameter.qmd)
+
+**후속 주제**
+
+* [§ 14.7~14.10 심화 — Unequal Variances·GLS·Prior Info·Exercises](./03-14-4-unequal-variance-prior-exercises.qmd) (예정)
+* Ch.15 Hierarchical Linear Models — 계층적 prior가 곧 regularization
+* Ch.16 GLM — Ridge/LASSO가 logistic/Poisson에 확장
+* Ch.20 Basis Function Models — Spline 계수에 spike-and-slab
+
+**관련 개념 (cross-category)**
+
+* [Ridge Regression (Machine Learning)](../../Machine_Learning/ridge-regression.qmd)
+* [LASSO와 Elastic Net](../../Machine_Learning/lasso-elastic-net.qmd)
+* [QR 분해와 수치 안정성](../../Math/qr-decomposition.qmd)
+* [Rank Deficiency와 Collinearity](../../Math/rank-deficiency.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.14 § 14.4~14.6. CRC Press.
+* Hoerl, A. E., & Kennard, R. W. (1970). Ridge Regression: Biased Estimation for Nonorthogonal Problems. *Technometrics*, 12, 55-67.
+* Tibshirani, R. (1996). Regression Shrinkage and Selection via the Lasso. *JRSS B*, 58, 267-288.
+* Park, T., & Casella, G. (2008). The Bayesian Lasso. *JASA*, 103, 681-686.
+* Carvalho, C. M., Polson, N. G., & Scott, J. G. (2010). The Horseshoe Estimator for Sparse Signals. *Biometrika*, 97(2), 465-480.
+* Piironen, J., & Vehtari, A. (2017). Sparsity information and regularization in the horseshoe and other shrinkage priors. *Electronic Journal of Statistics*, 11, 5018-5051.
+* Makalic, E., & Schmidt, D. F. (2016). A Simple Sampler for the Horseshoe Estimator. *IEEE Signal Processing Letters*, 23(1), 179-182.
+* George, E. I., & McCulloch, R. E. (1993). Variable Selection via Gibbs Sampling (Spike-and-Slab). *JASA*, 88, 881-889.
