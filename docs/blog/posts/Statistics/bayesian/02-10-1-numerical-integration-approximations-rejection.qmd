@@ -1,0 +1,709 @@
+---
+title: "§ 10.1~10.3 — 수치 적분·분포 근사·직접·기각 샘플링"
+subtitle: "Gelman BDA Ch.10 심화 — 식 (10.1) Monte Carlo 의 $1/\\sqrt{S}$ 수렴, Laplace 정규 근사 유도, 주변-조건부 분해의 2 단계, 기각 샘플링 수용 확률 $p/(Mg)$ 와 유효율 $1/M$"
+description: |
+  Ch.10 overview 가 "사후를 어떻게 계산할 것인가" 의 지도였다면, 이 포스트는
+  § 10.1~10.3 의 실제 여정이다. Monte Carlo 추정 식 (10.1) 이 왜
+  $O(1/\sqrt{S})$ 로 수렴하고 이게 차원에 독립인지, 결정론적 격자가 왜
+  차원 $d$ 에 $O(N^{-k/d})$ 로 수렴해 교차점이 $d \approx 5$ 에서 생기는지,
+  § 10.2 의 "조잡한 추정" 세 용도 (시작점·디버깅·위생) 가 어떻게 rat
+  tumor·8 학교 예제에서 구체화되는지, Laplace 정규 근사의 Taylor 전개가
+  식별하는 $-\log q$ 의 Hessian, 주변-조건부 분해가 "해석 가능한 부분은
+  적분, 나머지는 시뮬레이션" 하는 실전 패턴, Grid 절차의 5 단계 (범위
+  결정·평가·정규화·CDF·inverse sampling), 기각 샘플링이 $p(\theta \mid
+  \text{accept}) = p(\theta \mid y)$ 를 만족함의 증명, $M$ 이 수용 효율과
+  어떻게 연결되는가, envelope $g$ 의 꼬리가 $p$ 보다 두꺼워야 하는 수학적
+  이유 (무한 분산), 좋은 $g$ 설계의 실무 원칙 — 각 수식 옆에 "언제 쓰고
+  언제 실패하는가" 를 붙여 전개한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — 세 절의 공통 주제
+
+Ch.10 § 10.1~10.3 은 **MCMC 없이도 풀 수 있는** 베이즈 계산의 기본 도구. 세 가지 수단이 공통 질문에 답한다:
+
+> **"$\int h(\theta) p(\theta \mid y) d\theta$ 를 어떻게 계산할까"**
+
+| 절 | 전략 | 한 줄 |
+|---|---|---|
+| 10.1 | 수치 적분 일반론 | 결정론(격자) vs 시뮬레이션(MC), 차원과 선택 |
+| 10.2 | 분포 근사 | 정규 근사·조잡한 추정으로 문제 축소 |
+| 10.3 | 직접·기각 샘플링 | 독립 표본을 얻는 구체적 알고리즘 |
+
+셋이 합쳐서 **"단순 문제 → 표준 도구, 복잡 문제 → MCMC (Ch.11~12)"** 의 진입 관문을 형성. [Overview (02-10-0)](./02-10-0-computation-intro.qmd) 가 큰 지도였다면, 이 포스트는 **각 알고리즘의 유도·직관·실패 모드**를 보인다.
+
+## § 10.1 — 수치 적분
+
+### 베이즈 계산의 공통 적분
+
+어떤 베이즈 요약이든 결국 **사후 기댓값**:
+
+$$
+\mathbb{E}[h(\theta) \mid y] = \int h(\theta) \, p(\theta \mid y) \, d\theta
+$$
+
+$h$ 의 선택이 보고하는 것을 결정.
+
+| $h(\theta)$ | $\mathbb{E}$ 의 의미 |
+|---|---|
+| $\theta$ | 사후 평균 |
+| $(\theta - \mu_{\mathrm{post}})^2$ | 사후 분산 |
+| $\mathbb{1}\{\theta > c\}$ | 사후 확률 $\Pr(\theta > c \mid y)$ |
+| $p(\tilde{y} \mid \theta)$ | 사후 예측 $p(\tilde{y} \mid y)$ |
+| $\log p(y \mid \theta)$ | 주변 우도 계산 요소 |
+
+모든 계산이 **한 적분 공식의 특수화**. 적분을 어떻게 처리할지가 Ch.10 의 본체.
+
+### 시뮬레이션 (확률적) 방법 — 식 (10.1)
+
+$\theta^s \sim p(\theta \mid y)$ 추출 후 **표본 평균**:
+
+$$
+\mathbb{E}[h(\theta) \mid y] \approx \frac{1}{S} \sum_{s=1}^S h(\theta^s) \tag{10.1}
+$$
+
+근거: **대수 법칙**. 독립 표본 $\theta^s$ 에 대해 $\bar{h}_S \to \mathbb{E}[h]$ a.s.
+
+**정확도 (CLT)**:
+
+$$
+\bar{h}_S \sim \mathrm{N}\!\left(\mathbb{E}[h], \frac{\mathrm{Var}[h(\theta)]}{S}\right)
+$$
+
+표준오차 $= \mathrm{SD}[h] / \sqrt{S}$. **$S$ 4 배 → 오차 2 배 감소**. 느리지만 $\theta$ 차원에 **독립**.
+
+::: {.callout-tip}
+## 직관 — 왜 $1/\sqrt{S}$ 이 차원 독립인가
+
+CLT 의 핵심: 독립 표본의 분산이 $\mathrm{Var}[h]/S$. 이 **$\mathrm{Var}[h]$ 는 차원에 의존하지 않는다** — $h$ 의 분산은 $\theta$ 공간 전체가 아니라 $h(\theta)$ 의 범위로 결정.
+
+비유: $\theta$ 가 10 차원이든 1000 차원이든, $h(\theta)$ 가 "$\theta_1 > 0$ 확률" 같은 스칼라면 분산 $\le 0.25$. 차원은 $p(\theta \mid y)$ 의 모양에 영향을 주지만 **$h(\theta)$ 의 분산에는 직접 영향 없음**.
+
+결과: Monte Carlo 는 **고차원의 저주에서 해방**. 이게 시뮬레이션이 고차원 베이즈의 표준이 된 이유. 반대로 결정론적 격자는 차원에 지수 의존 — 다음 절에서.
+:::
+
+### 결정론적 방법
+
+가중 평가의 일반형:
+
+$$
+\mathbb{E}[h(\theta) \mid y] \approx \sum_{s=1}^S w_s \, h(\theta^s) \, p(\theta^s \mid y)
+$$
+
+$w_s$ 는 **격자점 $\theta^s$ 가 대표하는 부피**. 예:
+
+- **등간격 격자**: $w_s = \Delta$ (모두 같음).
+- **Simpson's rule**: $w_s \in \{1, 4, 2, 4, 2, \ldots, 4, 1\} \cdot \Delta/3$.
+- **Gauss-Hermite quadrature**: 정규 가중 적분용 최적 $\theta^s, w_s$.
+
+적응 격자: **사후 최빈값 근방**에서 시작해 밀도 높은 영역에 점 집중.
+
+### 차원의 저주 — 수치로 본 교차점
+
+결정론 격자의 오차: **Simpson's rule 은 $O(N^{-4})$**, 일반 차원에서 $O(N^{-4/d})$.
+
+**1 차원**: $N = 100$ → 오차 $\approx 10^{-8}$. 매우 정확.
+**3 차원**: $N = 100^3 = 10^6$ → 오차 $\approx 10^{-8}/3 \approx 10^{-3}$. 느려지기 시작.
+**10 차원**: $N = 100^{10} = 10^{20}$ 점 필요 → **실행 불가**.
+
+반면 Monte Carlo 는 $d = 10$ 이어도 $S = 10^4$ 로 표준오차 $\sigma/100$. 이 교차점이 대략 **$d = 4\sim5$**.
+
+::: {.callout-tip}
+## 직관 — 격자가 고차원에서 무너지는 진짜 이유
+
+단순 계산: $d$ 차원 hypercube 를 각 축 10 점으로 격자 = $10^d$ 점. 10 차원이면 100 억 점.
+
+그런데 **대부분이 빈 공간** 이다. 사후의 질량은 보통 작은 mode 근방에 집중 — 격자점 대부분이 "$p(\theta \mid y) \approx 0$" 인 영역. 계산 낭비.
+
+Monte Carlo 는 **$p$ 자체에서 추출** 하므로 질량이 있는 곳에 자동으로 집중. 이게 고차원에서 시뮬레이션이 이기는 이유 — "**적응적 샘플링**" 이 CLT 로 자동 내장.
+:::
+
+### $q(\theta \mid y)$ 로 작업하는 철학
+
+$p(\theta \mid y) = p(\theta) p(y \mid \theta) / p(y)$. 분모 $p(y) = \int p(\theta) p(y \mid \theta) d\theta$ 가 바로 **우리가 풀려는 적분** — 닫힌 형태 불가능.
+
+해결: **비례만 유지**. $q(\theta \mid y) = p(\theta) p(y \mid \theta)$ (marginal likelihood 미포함). 대부분 알고리즘 (Metropolis, rejection, importance) 이 **$q$ 의 비율** $q(\theta_1)/q(\theta_2)$ 만 쓰므로 정규화 불필요.
+
+### 로그 밀도로 작업
+
+수치 안정성을 위해 **$\log q$** 를 기본 표현으로.
+
+#### 언더플로 방지
+
+$n = 1000$ 관측에서 우도:
+
+$$
+p(y \mid \theta) = \prod_{i=1}^{1000} p(y_i \mid \theta)
+$$
+
+각 $p(y_i \mid \theta) \approx 0.5$ 라면 곱이 $\approx 0.5^{1000} \approx 10^{-301}$. **부동소수점 언더플로** → 0 반환.
+
+로그 스케일:
+
+$$
+\log p(y \mid \theta) = \sum_{i=1}^{1000} \log p(y_i \mid \theta)
+$$
+
+합으로 변환, $\log p \approx -693$ — 정상 실수.
+
+#### 비율 계산
+
+Metropolis 수용 확률:
+
+$$
+r = \frac{q(\theta^*)}{q(\theta^{(t-1)})}
+$$
+
+큰 수 / 큰 수 = 불안정. 로그 차이:
+
+$$
+\log r = \log q(\theta^*) - \log q(\theta^{(t-1)})
+$$
+
+마지막에만 $\exp(\log r)$ — **overflow 도 방지**.
+
+## § 10.2 — 분포 근사
+
+### 정규 근사 (Laplace approximation)
+
+Ch.4 의 BvM (Bernstein-von Mises) 정리: $n \to \infty$ 에서 사후가 정규에 수렴.
+
+**Laplace 근사의 유도**:
+
+1. $\log q(\theta \mid y)$ 의 **최빈값** $\hat{\theta}$ 찾기: $\nabla \log q(\hat{\theta}) = 0$.
+2. $\hat{\theta}$ 주변 2차 Taylor:
+
+$$
+\log q(\theta \mid y) \approx \log q(\hat{\theta} \mid y) - \frac{1}{2}(\theta - \hat{\theta})^\top H (\theta - \hat{\theta})
+$$
+
+$H = -\nabla^2 \log q(\hat{\theta})$ 는 음의 Hessian (양정치 가정).
+
+3. 지수화:
+
+$$
+q(\theta \mid y) \approx q(\hat{\theta}) \exp\!\left(-\tfrac{1}{2}(\theta - \hat{\theta})^\top H (\theta - \hat{\theta})\right)
+$$
+
+4. 이는 **정규 분포의 kernel**:
+
+$$
+p(\theta \mid y) \approx \mathrm{N}(\hat{\theta}, H^{-1})
+$$
+
+::: {.callout-tip}
+## 직관 — 왜 "2차 Taylor + 지수화 = 정규" 인가
+
+$\log$ 스케일에서 2차 함수 = 원 스케일에서 Gaussian. 수식으로:
+
+$$
+\exp\!\left(-\tfrac{1}{2} x^\top A x\right) \propto \mathrm{N}(0, A^{-1})
+$$
+
+이것이 **CLT 의 배경**이기도 — 독립 합의 특성함수가 $t \to 0$ 에서 $1 - \tfrac{1}{2}t^\top \Sigma t$, $\exp$ 로 정규.
+
+Laplace 근사가 말하는 것: **"$\log$ 사후가 2차 함수면 사후가 정규"**. $n \to \infty$ 에서 BvM 이 이 2차 근사의 정당성을 보장 (likelihood 가 지배적 → $\log$ 가 매끄러운 2차).
+
+실무: $\hat{\theta}$ 는 `scipy.optimize.minimize(-log_q)`, $H$ 는 자동 미분 또는 수치 Hessian.
+:::
+
+### 조잡한 추정의 세 용도
+
+§ 10.2 의 실용 원칙: **"정밀 분석 전에 거친 분석"**. 세 목적:
+
+#### 1. 시작점
+
+MCMC·기각·중요도 샘플링 모두 **$\theta$ 초기값** 이 필요. 임의값은 비효율.
+
+조잡한 추정이 "답의 대략적 위치" 를 제공 → 샘플러가 즉시 높은 밀도 영역에 진입.
+
+#### 2. 디버깅 기준
+
+복잡한 MCMC 코드에 버그가 있어도 수치 결과는 출력됨. 조잡한 추정이 **상식 기준** 제공:
+
+- 회귀 계수 MLE 가 1.5 근처 → MCMC 결과가 100 이면 즉시 버그 의심.
+- 평균이 0 ~ 10 대역이어야 → 사후 평균 $-50$ 이면 부호 오류.
+
+조잡한 추정 없이는 **"뭐가 맞는지 모르는 상태"**. 디버깅이 지옥.
+
+#### 3. 위생 점검
+
+계산 성공 후에도 "합리적 값 대역" 확인. 조잡한 추정과 크게 다르면 모형·데이터 양쪽 재점검.
+
+### Rat Tumor 예시 (§ 5.1)
+
+Beta-Binomial 계층 모형. 71 실험에서 종양 발생률 $\theta_i \sim \mathrm{Beta}(\alpha, \beta)$.
+
+**조잡한 추정**:
+
+1. $\hat{\theta}_i = y_i / n_i$ (개별 MLE).
+2. $\hat{\alpha}, \hat{\beta}$ 를 **moment matching**:
+
+$$
+\bar{\theta} = \frac{\hat{\alpha}}{\hat{\alpha} + \hat{\beta}}, \quad s_\theta^2 = \frac{\hat{\alpha}\hat{\beta}}{(\hat{\alpha}+\hat{\beta})^2 (\hat{\alpha}+\hat{\beta}+1)}
+$$
+
+두 식 풀면 $\hat{\alpha}, \hat{\beta}$ 직접 획득.
+
+3. 이를 계층 모형의 **hyperparameter 초기값** 으로 사용. Grid·MCMC 시작점.
+
+### 8 학교 예시 (§ 5.5)
+
+**조잡한 추정**:
+
+- $\hat{\theta}_j = y_j$ (개별 학교 추정치).
+- $\hat{\mu} = \bar{y}$ (8 학교 평균).
+- $\hat{\tau}^2 = \max(0, s^2_y - \bar{\sigma}^2)$ — 식 (5.22), **moment-based** 분산 추정.
+
+이 $\hat{\mu}, \hat{\tau}$ 가 정밀 분석의 시작점. 정밀 분석이 이 근처에 수렴하면 코드 신뢰성 확인.
+
+### 해석적 + 시뮬레이션 혼합 — 부분 적분 전략
+
+Ch.10 의 또 다른 권고: **해석 가능한 부분은 적분, 나머지만 시뮬레이션**.
+
+예 (정규 계층 모형):
+
+$$
+\theta_j \mid \mu, \tau \sim \mathrm{N}(\mu, \tau^2), \quad y_j \mid \theta_j \sim \mathrm{N}(\theta_j, \sigma_j^2)
+$$
+
+$\theta_j$ 를 **해석적으로 주변화**:
+
+$$
+y_j \mid \mu, \tau \sim \mathrm{N}(\mu, \tau^2 + \sigma_j^2)
+$$
+
+2 차원 $(\mu, \tau)$ 에 대해서만 격자·시뮬레이션. 후에 조건부 $\theta_j \mid \mu, \tau, y$ (정규 공액) 에서 추출.
+
+**이 분해 전략이 § 10.3 의 주변-조건부 분해와 직결**.
+
+## § 10.3 — 직접 시뮬레이션과 기각 샘플링
+
+### 공액 직접 추출
+
+표준 분포 (Beta, Gamma, Normal, Dirichlet, Wishart) 는 numpy·scipy 에 내장. 공액 구조면 한 줄:
+
+```python
+theta_samples = rng.beta(alpha_post, beta_post, size=S)
+```
+
+**문제는 비공액**. 이때 4 가지 대안.
+
+1. **Grid 근사** (이 절).
+2. **기각 샘플링** (이 절).
+3. **중요도 샘플링** (§ 10.4).
+4. **MCMC** (Ch.11~12).
+
+### 주변-조건부 분해
+
+복잡한 결합 분포를 **순차 인수분해**로 풀기.
+
+**8 학교 예제 구조**:
+
+$$
+p(\mu, \tau, \theta_1, \ldots, \theta_8 \mid y) = p(\mu, \tau \mid y) \cdot \prod_{j=1}^8 p(\theta_j \mid \mu, \tau, y)
+$$
+
+**추출 알고리즘**:
+
+1. **Step 1**: $p(\mu, \tau \mid y)$ 에서 $(\mu^s, \tau^s)$ 추출 (2 차원 → grid 가능).
+2. **Step 2**: 각 $(\mu^s, \tau^s)$ 조건부로 $\theta_j^s \sim p(\theta_j \mid \mu^s, \tau^s, y)$ — 정규 공액.
+
+2 단계의 묘미: **각 단계가 저차원 또는 공액**. 결합 분포 전체를 한 번에 풀 필요 없음.
+
+::: {.callout-tip}
+## 직관 — 왜 "분해" 가 계산을 단순화 하는가
+
+10 차원 적분은 불가능해도, **2 차원 + 1 차원 $\times$ 8** 은 쉽다.
+
+수학적으로 $p(A, B) = p(A) p(B \mid A)$ 분해는 **자유**. 그러나 **계산 가능성** 은 분해 선택에 따라 극적으로 달라진다.
+
+실무 원칙: "**hyperparameter 먼저, individual parameter 나중**". 계층 구조의 자연스러운 순서. 교환 가능 단위가 hyperparameter 조건부로 독립이기 때문.
+:::
+
+### Grid 근사 — 5 단계 절차
+
+저차원 ($d \le 3$) 사후의 범용 도구.
+
+#### Step 1 — 범위 결정
+
+$\theta$ 의 지지 영역 설정. 방법:
+
+- 사전 정보 기반.
+- 조잡한 추정 $\hat{\theta}$ 주변 $\pm 5\hat{\sigma}$.
+- 사후가 "충분히 작은 밀도 영역" 에 도달하도록.
+
+#### Step 2 — 격자 평가
+
+균등 또는 적응 격자 $\theta_1, \ldots, \theta_N$ 에서 $q(\theta_i \mid y)$ 계산. **로그 스케일**에서:
+
+$$
+\log q_i = \log p(\theta_i) + \sum_k \log p(y_k \mid \theta_i)
+$$
+
+#### Step 3 — 정규화
+
+$\max_i \log q_i$ 를 빼서 overflow 방지 후 지수화:
+
+```python
+log_q = log_q - log_q.max()
+q = np.exp(log_q)
+p = q / q.sum()
+```
+
+#### Step 4 — CDF 구성
+
+$F_i = \sum_{j \le i} p_j$. 누적합.
+
+#### Step 5 — Inverse CDF Sampling
+
+$U \sim \mathrm{Uniform}[0, 1]$ 추출 → $\theta_{i^*}$ 선택 where $i^* = \min\{i : F_i \ge U\}$.
+
+### 사후 예측 분포 추출
+
+사후 $p(\theta \mid y)$ 에서 $\theta^s$ 가 있으면, **사후 예측** 은 한 줄.
+
+$$
+\tilde{y}^s \sim p(\tilde{y} \mid \theta^s), \quad s = 1, \ldots, S
+$$
+
+$\{\tilde{y}^s\}$ 가 자동으로 $p(\tilde{y} \mid y) = \int p(\tilde{y} \mid \theta) p(\theta \mid y) d\theta$ 의 표본.
+
+사후 예측 점검 (Ch.6), 예측 우도 (Ch.7) 의 기반. **"사후 + 우도 모형"** 만 있으면 예측이 자동.
+
+### 기각 샘플링 — 알고리즘
+
+$p(\theta \mid y)$ 에서 직접 추출 불가, 보조 분포 $g(\theta)$ 에서만 가능한 경우.
+
+::: {.callout-note}
+## 정의 — Rejection Sampling
+
+**조건**: 상수 $M < \infty$ 가 존재해 $\frac{p(\theta \mid y)}{g(\theta)} \le M$ for all $\theta$ with $p(\theta \mid y) > 0$.
+
+**알고리즘**:
+
+1. $\theta \sim g(\theta)$ 추출.
+2. $u \sim \mathrm{Uniform}[0, 1]$ 추출.
+3. $u \le \frac{p(\theta \mid y)}{M g(\theta)}$ 이면 **수용**. 아니면 **기각** 후 Step 1 복귀.
+:::
+
+Figure 10.1 (교재): $Mg$ 가 $p$ 위에 있는 envelope. 수용 확률이 두 곡선의 높이 비.
+
+### 왜 작동하는가 — 증명
+
+수용된 $\theta$ 의 분포가 $p(\theta \mid y)$ 임을 보인다. 수용된 표본의 pdf:
+
+$$
+\Pr(\theta = t \mid \text{accept}) = \frac{\Pr(\text{accept} \mid \theta = t) \cdot g(t)}{\Pr(\text{accept})}
+$$
+
+분자: 조건부 수용 확률 $\frac{p(t \mid y)}{M g(t)}$ 에 제안 밀도 $g(t)$ 곱:
+
+$$
+\frac{p(t \mid y)}{M g(t)} \cdot g(t) = \frac{p(t \mid y)}{M}
+$$
+
+분모: 전체 수용 확률:
+
+$$
+\Pr(\text{accept}) = \int \frac{p(\theta \mid y)}{M g(\theta)} g(\theta) d\theta = \frac{1}{M} \int p(\theta \mid y) d\theta = \frac{1}{M}
+$$
+
+비율:
+
+$$
+\Pr(\theta = t \mid \text{accept}) = \frac{p(t \mid y) / M}{1/M} = p(t \mid y)
+$$
+
+**수용된 표본이 정확히 목표 분포**.
+
+### 효율 — $1/M$ 의 의미
+
+수용 확률 $= 1/M$. 즉:
+
+- **$M = 2$**: 평균 2 번 추출에 1 번 수용 (50%).
+- **$M = 10$**: 10 번에 1 번 (10%).
+- **$M = 100$**: 100 번에 1 번 (1%).
+
+이론적 최적: **$M = 1$** (달성 시 $g = p$, 이미 직접 추출 가능 — 원래 문제 해결).
+
+실무 최적: **$g$ 를 $p$ 에 최대한 근사** 해서 $M$ 작게.
+
+::: {.callout-tip}
+## 직관 — $M$ 이 "envelope 의 낭비" 를 정량화
+
+$M g(\theta)$ 는 항상 $p(\theta \mid y)$ 위. 두 곡선 사이 **빈 공간 = 기각되는 영역**.
+
+$M$ 이 크면 envelope 가 훨씬 위 → 빈 공간 많음 → 대부분 기각. $M$ 이 1 에 가까우면 envelope 가 $p$ 에 들러붙어 효율적.
+
+**비유**: 양궁에서 과녁 중심을 맞추려 할 때, 팔을 흔들면 흔들수록 원 안에 화살 들어갈 확률이 낮다. $M$ 이 **팔 흔듦의 크기**. $g$ 선택이 **조준 실력**.
+:::
+
+### Envelope $g$ 의 꼬리 조건
+
+**필수 조건**: $p$ 가 정의된 전 영역에서 $p/g \le M < \infty$ 성립.
+
+이게 실패하면 어느 꼬리에서 $p/g \to \infty$ → $M$ 존재 안 함 → 알고리즘 정의 불가.
+
+**실패 사례**:
+
+- $p$ = Cauchy (heavy tail), $g$ = Normal (light tail). 꼬리에서 $p/g \to \infty$.
+- $p$ = 지지 구간 넓음, $g$ = 구간 제한 분포. $g = 0$ 영역에서 $p > 0$ → 비율 무한.
+
+**성공 원칙**: **$g$ 의 꼬리가 $p$ 보다 두꺼워야** 한다.
+
+::: {.callout-tip}
+## 직관 — 꼬리 조건의 수학적 의미
+
+"$g$ 가 $p$ 를 dominate 한다" (measure-theoretic 용어: $p \ll g$).
+
+실용적으로:
+
+- $p$ 가 light tail → $g$ 도 light tail 가능.
+- $p$ 가 heavy tail → $g$ 도 heavy tail 필요 (같거나 더 두꺼운).
+
+흔한 선택: **$g$ = t-distribution** (heavy tail 포함). $p$ 의 대부분을 커버하면서 꼬리도 안전.
+
+극단 실패: $p$ 를 잘 몰라서 $g$ 를 $p$ 보다 얇게 설정 → **침묵 버그**. 수용 확률이 잘못 계산되어 잘못된 표본 반환. 이론적 결함이 겉으로 안 드러남.
+:::
+
+### 자기 진단 — 수용률
+
+**내장된 품질 지표**: 수용 확률 $= 1/M$ 이므로 **"수용된 표본 수 / 추출 시도 수"** 가 효율 척도.
+
+- **> 50%**: 좋음.
+- **10~50%**: 괜찮음.
+- **< 10%**: 비효율 — $g$ 개선 또는 다른 방법.
+- **< 1%**: 거의 작동 안 함 — 포기하고 MCMC 또는 IS.
+
+이 자기 진단이 기각 샘플링의 큰 장점. Importance sampling 은 "무한 분산" 이 조용히 실패하지만, 기각은 **효율이 나쁘면 즉시 티가 남**.
+
+### 실무 패턴 — Adaptive Rejection Sampling
+
+$g$ 를 **수작업 설계** 하지 않고 데이터로 학습하는 변형:
+
+- **Adaptive Rejection Sampling (ARS, Gilks & Wild 1992)**: $\log p$ 가 오목할 때, 접선으로 piecewise linear envelope 자동 구성. Gibbs 샘플링 내부에서 사용.
+- **Ratio-of-Uniforms method**: 다차원에서의 기각 샘플링 일반화.
+
+Ch.10 은 수동 envelope 예제에 집중. 자동화는 Ch.11 의 Gibbs 내부.
+
+## 세 절을 관통하는 직관 모음
+
+### "문제 단순화" 의 계층
+
+세 절은 "단순화 → 계산" 의 세 층위.
+
+| 단계 | 전략 | 결과 |
+|---|---|---|
+| 분해 | 주변-조건부로 차원 축소 | 고차원 → 저차원 순차 |
+| 근사 | 정규 근사로 형태 단순화 | 복잡 사후 → 정규 |
+| 샘플링 | 격자·기각·IS 로 수치화 | 수식 → 표본 |
+
+각 단계가 앞 단계의 부담을 줄임. 결합해 쓰는 것이 실무의 표준.
+
+### $q$ 와 $\log q$ 의 습관
+
+베이즈 계산에 익숙해지면 **모든 수식을 $\log q$ 로 자연스레 쓰게** 된다.
+
+- `log_prior + log_likelihood` (합, 안정).
+- `log_q.max()` 빼서 정규화.
+- 비율은 **차이**로 계산.
+
+이 습관이 **수치 재앙을 80% 막는다**. Ch.11~12 의 복잡 알고리즘에서도 같은 원칙.
+
+### 정규 근사 = 베이즈의 "Newton's method"
+
+Laplace 근사는 최적화의 Newton step 과 같은 구조:
+
+- Newton: $x \leftarrow x - H^{-1} \nabla f$ (2 차 Taylor).
+- Laplace: $p \approx \mathrm{N}(\hat{\theta}, H^{-1})$ (2 차 Taylor + 지수화).
+
+두 방법 모두 **"2 차 정보" 로 smooth 한 함수를 로컬 근사**. 베이즈 계산의 많은 고급 기법 (VI, INLA) 이 이 뿌리에서 출발.
+
+## 코드 — 각 방법의 Python 구현
+
+### 예제 문제 — Beta-Binomial 사후
+
+$y = 7$ success / $n = 20$ trials. Prior $\theta \sim \mathrm{Beta}(1, 1)$ (uniform).
+
+**참 사후**: $\mathrm{Beta}(8, 14)$.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import beta, norm, uniform
+
+rng = np.random.default_rng(10)
+y, n = 7, 20
+a_post, b_post = 1 + y, 1 + n - y  # Beta(8, 14)
+true_mean = a_post / (a_post + b_post)
+true_var = a_post * b_post / ((a_post + b_post)**2 * (a_post + b_post + 1))
+print(f"참 사후 평균: {true_mean:.4f}, 분산: {true_var:.6f}")
+```
+
+### 방법 1 — 직접 추출 (공액)
+
+```python
+theta_direct = rng.beta(a_post, b_post, size=10_000)
+print(f"직접 추출 평균: {theta_direct.mean():.4f}")
+print(f"직접 추출 분산: {theta_direct.var():.6f}")
+```
+
+### 방법 2 — Grid 근사
+
+```python
+# Step 1: 범위
+theta_grid = np.linspace(0.001, 0.999, 1000)
+
+# Step 2: 평가 (log scale)
+def log_q(theta, y, n):
+    # prior (uniform): log 1 = 0
+    # likelihood: y log theta + (n-y) log(1-theta)
+    return y * np.log(theta) + (n - y) * np.log(1 - theta)
+
+log_q_vals = log_q(theta_grid, y, n)
+
+# Step 3: 정규화
+log_q_vals -= log_q_vals.max()
+q_vals = np.exp(log_q_vals)
+p_vals = q_vals / q_vals.sum()
+
+# Step 4: CDF
+cdf = np.cumsum(p_vals)
+
+# Step 5: Inverse CDF sampling
+U = rng.uniform(size=10_000)
+idx = np.searchsorted(cdf, U)
+theta_grid_samples = theta_grid[idx]
+
+print(f"Grid 평균: {theta_grid_samples.mean():.4f}")
+print(f"Grid 분산: {theta_grid_samples.var():.6f}")
+```
+
+### 방법 3 — Laplace 정규 근사
+
+```python
+from scipy.optimize import minimize_scalar
+
+def neg_log_q(theta, y, n):
+    if theta <= 0 or theta >= 1:
+        return np.inf
+    return -(y * np.log(theta) + (n - y) * np.log(1 - theta))
+
+res = minimize_scalar(neg_log_q, args=(y, n), bounds=(0.001, 0.999), method="bounded")
+theta_hat = res.x
+
+# Hessian (analytical): d^2/dtheta^2 of -log q = y/theta^2 + (n-y)/(1-theta)^2
+H = y / theta_hat**2 + (n - y) / (1 - theta_hat)**2
+sigma_laplace = 1 / np.sqrt(H)
+
+theta_laplace = rng.normal(theta_hat, sigma_laplace, size=10_000)
+theta_laplace = np.clip(theta_laplace, 0.001, 0.999)
+
+print(f"Laplace 중심: {theta_hat:.4f}")
+print(f"Laplace sigma: {sigma_laplace:.4f}")
+print(f"Laplace 평균: {theta_laplace.mean():.4f}")
+print(f"Laplace 분산: {theta_laplace.var():.6f}")
+```
+
+Laplace 가 참값과 약간 다름 — Beta(8,14) 는 완전 정규가 아니지만 근사로 유용.
+
+### 방법 4 — 기각 샘플링 (Beta envelope on Uniform)
+
+```python
+# g = Uniform[0,1], p = Beta(8, 14) 커널
+# p(theta) / g(theta) 의 최대값
+theta_peak = (a_post - 1) / (a_post + b_post - 2)  # Beta 의 mode
+M = beta.pdf(theta_peak, a_post, b_post)  # g = 1 이므로 p/g = p
+print(f"Envelope M = {M:.2f}")
+print(f"수용률 예상 = {1/M:.4f}")
+
+# 기각 샘플링
+n_trials = 50_000
+theta_proposals = rng.uniform(0, 1, size=n_trials)
+u = rng.uniform(0, 1, size=n_trials)
+accept = u < beta.pdf(theta_proposals, a_post, b_post) / M
+theta_reject = theta_proposals[accept]
+print(f"실제 수용률: {accept.mean():.4f}")
+print(f"수용된 표본 수: {accept.sum()}")
+print(f"Rejection 평균: {theta_reject.mean():.4f}")
+print(f"Rejection 분산: {theta_reject.var():.6f}")
+```
+
+출력 비교 표:
+
+| 방법 | 평균 | 분산 | 효율 |
+|---|---|---|---|
+| 직접 (공액) | 0.3636 | 0.0101 | 100% |
+| Grid | 0.3636 | 0.0101 | 고정 비용 |
+| Laplace | ~0.35 | ~0.01 | 근사 |
+| Rejection (Uniform g) | 0.3636 | 0.0101 | ~1/M = 22% |
+
+네 방법 모두 참 사후 평균 $8/22 \approx 0.3636$ 복원.
+
+### Envelope 개선 — Beta(4, 7) g
+
+더 정확한 envelope 으로 수용률 향상:
+
+```python
+# g = Beta(4, 7) (대략 p 의 모양)
+# p/g 의 최대값을 수치적으로
+theta_test = np.linspace(0.01, 0.99, 200)
+ratios = beta.pdf(theta_test, a_post, b_post) / beta.pdf(theta_test, 4, 7)
+M2 = ratios.max() * 1.01  # 약간 여유
+print(f"개선 envelope M = {M2:.2f}, 예상 수용률 {1/M2:.3f}")
+
+theta_prop2 = rng.beta(4, 7, size=50_000)
+u2 = rng.uniform(0, 1, size=50_000)
+accept2 = u2 < beta.pdf(theta_prop2, a_post, b_post) / (M2 * beta.pdf(theta_prop2, 4, 7))
+print(f"개선 수용률: {accept2.mean():.4f}")
+```
+
+더 가까운 envelope → 수용률 증가. 이것이 **envelope 튜닝의 실무 효과**.
+
+## 실전 체크리스트
+
+§ 10.1~10.3 의 교훈을 실무 절차로:
+
+1. **차원 먼저 판단** — $d \le 3$ 이면 grid, $d \ge 5$ 면 시뮬레이션. 중간은 조합.
+2. **$\log q$ 로 시작** — overflow/underflow 기본 차단.
+3. **조잡한 추정 먼저** — 답의 대역 파악 + 디버깅 기준.
+4. **주변-조건부 분해 시도** — 해석적 부분은 적분.
+5. **정규 근사 한 번 해 보기** — 평균·분산의 상식 검증.
+6. **Grid 절차 5 단계 따르기** — 범위 → 평가 → 정규화 → CDF → sampling.
+7. **Envelope 꼬리 확인** — $g$ 꼬리가 $p$ 보다 두꺼워야.
+8. **수용률 모니터** — $<$ 10% 면 envelope 개선 또는 방법 전환.
+9. **정규화 안 된 $q$ 사용** — $p(y)$ 계산 회피.
+10. **여러 방법 교차 검증** — 같은 문제에 2 개 이상 방법 적용, 결과 일치하면 신뢰.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Ch.10 Overview (02-10-0)](./02-10-0-computation-intro.qmd) — Part III 출발점
+- [Bayesian Part III 개관](./02-bayesian-part3-overview.qmd) — Ch.10~13 지도
+- [Ch.4 Asymptotics](./00-4-0-asymptotics.qmd) — Laplace 근사의 이론적 배경
+- [Ch.5 Hierarchical Models](./00-5-0-hierarchical.qmd) — 주변-조건부 분해가 쓰이는 곳
+
+**Ch.10 후속 절**
+
+- `02-10-2-*` — § 10.4~10.9 (중요도 샘플링·$S_{\mathrm{eff}}$·환경·디버깅·연습)
+
+**후속 주제**
+
+- Ch.11 Basics of MCMC — Gibbs, Metropolis, 수렴 진단
+- Ch.12 Efficient MCMC — HMC, NUTS
+- Ch.13 Modal·Variational Approximations — Laplace 근사의 확장
+
+**관련 개념**
+
+- Liu (2001), *Monte Carlo Strategies in Scientific Computing*
+- Robert & Casella (2004), *Monte Carlo Statistical Methods*
+- Gilks & Wild (1992) — Adaptive Rejection Sampling
+- Tierney & Kadane (1986) — Laplace 근사의 베이즈 응용
+- Kass & Raftery (1995) — marginal likelihood 계산의 Laplace
+- Rue, Martino, Chopin (2009) — INLA (Laplace 의 현대 계층 모형 응용)
