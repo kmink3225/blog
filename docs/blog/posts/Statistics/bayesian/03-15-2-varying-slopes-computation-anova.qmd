@@ -1,0 +1,691 @@
+---
+title: "Ch.15 § 15.4~15.6 심화 — Varying Intercepts and Slopes·Computation·ANOVA"
+subtitle: "식 (15.4)~(15.6) 공분산 구조·Scaled Inv-Wishart·LKJ·Gibbs batching·Parameter expansion·ANOVA 식 (15.7)~(15.10)"
+description: |
+  Gelman BDA Ch.15의 § 15.4~15.6을 한 편으로 다룬다.
+  § 15.4 Varying intercepts and slopes — 식 (15.4)의 2변량 공분산 모형과 (15.5)의 벡터 일반화,
+  Inverse-Wishart prior의 한계와 Scaled Inv-Wishart 식 (15.6) redundant parameterization,
+  현대적 대안 LKJ prior, 비즈니스 스쿨 GMAT 예제 (59학교 × 8계수 + σ_j),
+  § 15.5 Computation — blockwise Gibbs / all-at-once / parameter expansion 3가지 전략,
+  선거 예제의 ζ-확장된 모형, HMC를 위한 non-centered 8 schools,
+  § 15.6 ANOVA 의 계층 재해석 — 식 (15.7)~(15.8) batching 표현,
+  식 (15.9) parameter expansion, 식 (15.10) finite-population vs superpopulation SD 구분,
+  Web connect times 5-way factorial 예제 (Figure 15.4) 까지.
+categories:
+  - Statistics
+  - Bayesian
+  - Hierarchical-Models
+  - Varying-Slopes
+  - ANOVA
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요
+
+Ch.15 심화 시리즈의 **두 번째 편**. § 15.4~15.6은 계층 모형의 **세 번째 차원**을 다룬다.
+
+* **§ 15.4** — Scalar 계수에서 **벡터 계수**로 확장. Intercept와 slope이 그룹마다 다를 때의 공분산 구조.
+* **§ 15.5** — 계층 모형의 **계산 엔진**. Gibbs 변종·parameter expansion·HMC reparameterization.
+* **§ 15.6** — **ANOVA 를 계층 회귀의 관점에서 재해석**. Batching of coefficients라는 통합 시각.
+
+::: {.callout-tip}
+## 직관: 세 절의 주제
+
+* § 15.4 는 **"모형 확장"** — 2개 이상의 계수가 함께 varying일 때.
+* § 15.5 는 **"계산 인프라"** — 그 확장된 모형을 실제 어떻게 돌리는가.
+* § 15.6 은 **"개념 통합"** — ANOVA·mixed-effects·random effects 가 모두 같은 batching 아이디어임을 보임.
+
+Gelman이 "ANOVA 보다 더 중요해진 것은 없다" (Gelman 2005) 라고 단언한 배경이 여기서 드러난다. 계층 모형을 이해하면 ANOVA는 자연스러운 귀결이다.
+:::
+
+## § 15.4 Varying Intercepts and Slopes
+
+### 기본 모형 — 식 (15.4)
+
+$J$ 개 그룹, 각 그룹 $j$ 에 $n_j$ 개 관측. Intercept와 slope 모두 그룹별로 varying:
+
+$$
+\begin{aligned}
+y_{ij} &\sim N(\alpha_j + x_{ij} \beta_j, \sigma_y^2) \\
+\begin{pmatrix} \alpha_j \\ \beta_j \end{pmatrix} &\sim N\left( \begin{pmatrix} \mu_\alpha \\ \mu_\beta \end{pmatrix}, \begin{pmatrix} \sigma_\alpha^2 & \rho \sigma_\alpha \sigma_\beta \\ \rho \sigma_\alpha \sigma_\beta & \sigma_\beta^2 \end{pmatrix} \right)
+\end{aligned} \quad \text{(15.4)}
+$$
+
+* $\alpha_j, \beta_j$: 그룹 $j$ 의 intercept와 slope.
+* $\sigma_\alpha, \sigma_\beta$: 그룹 간 intercept 변동, slope 변동.
+* $\rho$: intercept-slope **상관**.
+
+**Hyperparameters**: $(\mu_\alpha, \mu_\beta, \sigma_\alpha, \sigma_\beta, \rho)$. Hyperprior는 scale parameters의 양수 제약과 $\rho \in (-1, 1)$ 을 지키는 uniform 또는 weakly informative.
+
+### 왜 $\rho$ 가 중요한가
+
+$\rho = 0$ 가정은 "intercept와 slope이 독립 변동". 그러나 실제 현상에서는 대부분 상관이 있다.
+
+::: {.callout-tip}
+## 직관: Intercept-slope 상관의 실제 예
+
+**교육 연구 예**: $y_{ij}$ = 학생 $i$ 학교 $j$ 의 성적, $x_{ij}$ = 학생의 사전 점수.
+
+* $\alpha_j$ = 학교 $j$ 의 **기준 성적** (사전 점수 0 기준).
+* $\beta_j$ = 학교 $j$ 의 **사전 점수 효과** (slope).
+
+$\rho > 0$: "잘 가르치는 학교" 는 기준 성적도 높고 사전 점수 효과도 크다.
+$\rho < 0$: "교정 효과가 큰 학교" — 기준은 낮지만 사전 점수 효과가 커서 격차를 줄임.
+
+$\rho = 0$ 으로 가정하고 분석하면 이런 패턴을 놓친다. **$\rho$ 를 추정해야** 한다.
+:::
+
+### 벡터 일반화 — 식 (15.5)
+
+$K$ 개 계수가 그룹마다 varying ($K \geq 2$). $\beta^{(j)} = (\beta_1^{(j)}, \dots, \beta_K^{(j)})^T$.
+
+$$
+\begin{aligned}
+y_{ij} &\sim N(X_j \beta^{(j)}, \sigma_y^2) \\
+\beta^{(j)} &\sim N(\mu_\beta, \Sigma_\beta)
+\end{aligned} \quad \text{(15.5)}
+$$
+
+$\Sigma_\beta$ 는 $K \times K$ symmetric positive definite. Intercept만 varying (Ch.15 § 15.1) 이면 $K = 1$ 이고 $\Sigma_\beta = \sigma_\beta^2$ 스칼라.
+
+**Prior** 의 핵심 과제: $\Sigma_\beta$ 에 대한 prior.
+
+### Inverse-Wishart Prior (Conjugate)
+
+식 (15.5) 에서 $\Sigma_\beta$ 의 conditionally conjugate prior:
+
+$$
+\Sigma_\beta \sim \text{Inv-Wishart}_{\nu_0}(S_0)
+$$
+
+Conjugate 이므로 Gibbs sampler에서 $\Sigma_\beta | \beta^{(1:J)}$ 가 Inv-Wishart로 닫힌 형태.
+
+**단점** (Gelman의 지적):
+
+1. **Noninformative 버전** $\nu_0 = K + 1$, $S_0 = I$ 가 **variance에 강한 제약**. 대각 성분 분포가 $\chi^2_1$ 에 가까움 → 큰 variance 허용 어려움.
+2. Variance와 correlation이 **얽혀 있음**. 둘을 따로 조절하기 어렵다.
+3. 해석 어려움. $\nu_0, S_0$ 의 의미를 직관적으로 파악하기 힘들다.
+
+### Scaled Inverse-Wishart — 식 (15.6)
+
+Gelman의 **redundant parameterization** 해법.
+
+$$
+\beta^{(j)} = \mu_\beta + \xi \otimes \eta^{(j)}, \quad \eta^{(j)} \sim N(0, \Sigma_\eta) \quad \text{(15.6)}
+$$
+
+여기서
+
+* $\xi \in \mathbb{R}^K$ = "scale 인자" (성분별 곱).
+* $\eta^{(j)} \in \mathbb{R}^K$ = "표준화된 변동".
+* $\otimes$ = **Hadamard (성분별) 곱**.
+
+그러면 유효 공분산은
+
+$$
+\Sigma_\beta = \text{Diag}(\xi) \Sigma_\eta \text{Diag}(\xi)
+$$
+
+**Prior**:
+
+* $\xi_k \sim$ uniform (각 차원 scale 자유).
+* $\Sigma_\eta \sim \text{Inv-Wishart}_{K+1}(I)$ (correlation 구조만 결정).
+
+::: {.callout-tip}
+## 직관: 왜 분해가 도움이 되는가
+
+원조 Inv-Wishart는 variance와 correlation을 한 덩어리로 다뤄서 서로 타협하기 어렵다. Scaled 버전은:
+
+* $\xi$ 가 **각 차원의 크기**를 결정 → 차원별 variance를 자유롭게.
+* $\Sigma_\eta$ 가 **표준화된 상관 행렬** → Inv-Wishart의 "불편한 규모 제약" 이 correlation에만 적용.
+
+결과: Variance는 거의 자유롭게 큰 값도 허용, correlation은 적당히 regularize. 이것이 Gelman-Hill (2007) Ch.13에서 권장하는 실무 default.
+:::
+
+### 현대적 대안 — LKJ Prior (교재 미포함)
+
+Lewandowski-Kurowicka-Joe (2009) 의 LKJ prior는 **correlation matrix에 직접 prior**:
+
+$$
+R \sim \text{LKJ}(\eta)
+$$
+
+* $\eta = 1$: correlation matrix 공간에 균등 prior.
+* $\eta > 1$: correlation을 0 방향으로 regularize.
+* $\eta < 1$: correlation을 ±1 방향으로 밀어냄 (거의 안 쓰임).
+
+$\Sigma_\beta$ 를 표준편차 × correlation 로 분해:
+
+$$
+\Sigma_\beta = \text{Diag}(\tau) \, R \, \text{Diag}(\tau), \quad \tau_k \sim \text{HalfNormal}, \; R \sim \text{LKJ}(\eta)
+$$
+
+**장점**:
+
+* 표준편차와 correlation을 **완전히 분리**.
+* 각 prior를 독립적으로 해석·조정.
+* Stan, PyMC, NumPyro에서 모두 기본 지원.
+
+**현재 권장**: Scaled Inv-Wishart보다 LKJ + HalfNormal 이 우세.
+
+### 비즈니스 스쿨 GMAT 예제
+
+Gelman의 § 15.4 확장 예제. 미국 59개 경영대학원, 2년간 약 8500명 학생. **약 4%만 흑인 학생**.
+
+**연구 질문**: GMAT-V, GMAT-Q, UGPA (대학 성적) 로 1학년 GPA 예측 시 **흑인/비흑인 별 다른 회귀**가 필요한가?
+
+**모형**: 각 학교 $j$, 학생 $i$:
+
+$$
+y_{ij} \sim N(X_{ij} \beta_j, \sigma_j^2)
+$$
+
+$X_{ij}$ 는 **8차원**:
+* 4개 기본 변수 (상수·GMAT-V·GMAT-Q·UGPA).
+* 4개 변수 × 흑인 indicator (상호작용).
+
+$\beta_j \in \mathbb{R}^8$, $j = 1, \dots, 59$. 학교별로 **9개 모수** ($\beta_j$ 8개 + $\sigma_j$).
+
+**문제**: 흑인 학생이 4%이므로 **많은 학교에 흑인 학생이 거의 없다**. 학교별로 독립 회귀 (no pooling) → 흑인 관련 4개 계수 추정 **불가능** (collinearity 또는 singular matrix).
+
+**해법**: 계층 모형
+
+$$
+\beta_j \sim N(\alpha, \Lambda_\beta), \quad j = 1, \dots, 59
+$$
+
+$\alpha \in \mathbb{R}^8$, $\Lambda_\beta \in \mathbb{R}^{8 \times 8}$. 흑인 학생이 적은 학교의 $\beta_j$ 가 전체 평균 $\alpha$ 로 **강한 shrinkage** → 추정 가능.
+
+**결과**:
+
+* 계층 모형이 **비계층보다 예측 정확도 훨씬 높음**.
+* 약 **85% 학교에서 비흑인이 흑인보다 GPA 예측이 높다** (test 점수 고정 시).
+* 60% 이상의 차이가 posterior SD 1 이상, 20%는 2 이상 → **체계적 편향** 증거.
+
+이것이 varying-slopes 계층 모형의 **실무적 필요성**을 보여주는 고전 사례.
+
+## § 15.5 Computation — Batching and Transformation
+
+### 3가지 계산 전략
+
+Ch.15 계층 회귀의 Gibbs sampler에는 3가지 접근이 있다.
+
+| 전략 | 핵심 아이디어 | 장점 | 단점 |
+|------|---------------|------|------|
+| **Blockwise Gibbs** | 배치 단위 교대 업데이트 | 프로그래밍 간단 | 배치 간 강상관 시 느림 |
+| **All-at-once Gibbs** | Augmented regression 전체 한 번에 | 교차 상관 처리 잘 | 매 step당 큰 회귀 |
+| **Parameter Expansion** | $\xi$ 추가로 $\beta$ 와 $\sigma_\beta$ 의존성 분해 | $\sigma_\beta \to 0$ boundary 탈출 | 추가 파라미터 관리 |
+
+### Blockwise Gibbs — 한 배치씩
+
+**절차**:
+
+1. 고정된 variance parameters와 다른 배치 given.
+2. 현재 배치의 계수를 **augmented 선형 회귀**로 업데이트 (§ 14.8 prior-as-data).
+3. 분산 parameters를 각자의 conjugate inverse-$\chi^2$ 로.
+4. 모든 배치 순회 후 반복.
+
+**예** (선거 모형):
+
+* Update $\beta$ (20개 fixed effects) given $\gamma, \delta, \sigma$: 가중 회귀.
+* Update $\gamma_{rt}$ (44개 지역-연도) given $\beta, \delta, \tau_\gamma$: 각 $\gamma_{rt}$ 의 사후가 정규.
+* Update $\delta_t$ (11개 연도) given $\beta, \gamma, \tau_\delta$: 각 $\delta_t$ 의 사후가 정규.
+* Update $\sigma, \tau_{\gamma 1}, \tau_{\gamma 2}, \tau_\delta$: 각 inverse-$\chi^2$.
+
+많은 경우 배치 구조가 단순해서 **단순 평균** 계산으로 사후 평균을 얻을 수 있다.
+
+### All-at-Once Gibbs
+
+§ 15.3의 augmented regression 구조를 그대로 활용.
+
+**절차**:
+
+1. 고정된 variance parameters $\sigma, \tau$ given.
+2. $\gamma = (\beta, \alpha)$ **전체**를 가중 회귀로 한 번에.
+3. Variance parameters 업데이트 (inverse-$\chi^2$).
+
+**장점**: 배치 간 posterior 상관이 강해도 수렴 안정.
+
+**단점**: 매 step 행렬 분해 비용.
+
+**예** (선거 모형): Augmented $n_* = 566$ obs × $k_* = 75$ 예측변수 가중 회귀. $O(n_* k_*^2) \approx 3.2 \times 10^6$ flops per step.
+
+**실무**: 중·대형 문제에서는 **HMC (NUTS)** 가 더 효율적.
+
+### Parameter Expansion — $\sigma_\beta \to 0$ 탈출
+
+**문제**: $\sigma_\beta$ 추정이 0 근처에 갇히는 현상. Gibbs 특유의 **stochastic vortex**:
+
+1. $\sigma_\beta$ 작음 → $\beta_j$ 들이 평균으로 강한 shrinkage.
+2. 축소된 $\beta_j$ 들의 분산도 작음 → $\sigma_\beta$ 가 또 작게 업데이트.
+3. 루프에 갇혀 수렴 느려짐.
+
+**해법** (Liu-Rubin-Wu 1998, Gelman 2008): **Redundant 파라미터 $\xi$ 도입**.
+
+선거 예제에서 expanded 모형:
+
+$$
+y_{st} \sim \begin{cases}
+N(X_{st} \beta + \zeta_1^{\text{region}} \gamma_{r(s), t} + \zeta^{\text{year}} \delta_t, \sigma^2) & r(s) \in \{1,2,3\} \\
+N(X_{st} \beta + \zeta_2^{\text{region}} \gamma_{r(s), t} + \zeta^{\text{year}} \delta_t, \sigma^2) & r(s) = 4
+\end{cases}
+$$
+
+$\zeta$ 는 uniform prior의 보조 파라미터 (posterior에 identified되지 않음).
+
+**원 모수 복원**:
+
+$$
+\gamma_{rt}^{\text{old}} = \zeta^{\text{region}} \gamma_{rt}^{\text{new}}, \quad \tau_\gamma^{\text{old}} = |\zeta^{\text{region}}| \tau_\gamma^{\text{new}}
+$$
+
+곱 $\zeta \gamma$ 는 identified → 이것만 저장.
+
+**효과**: $\zeta$ 가 $\gamma$ 와 $\tau_\gamma$ 의 **상호 의존성을 깨뜨림** → Gibbs vortex에서 빠르게 탈출.
+
+### HMC Transformation — Non-Centered Parameterization
+
+HMC (Hamiltonian Monte Carlo) 의 문제: variance parameter $\tau$ 근처 0 에서 **"funnel geometry"** 가 생김.
+
+**Funnel 현상**: $\tau$ 가 작을 때 $\theta_j | \tau \sim N(\mu, \tau^2)$ 의 조건부가 매우 좁아짐. Posterior이 "깔때기 모양" (tau 축에서 아래쪽이 훨씬 좁다). 고정 step size로는 좁은 부분과 넓은 부분 모두 효율 탐색 불가.
+
+**해법** (Betancourt-Girolami 2015, Neal 2003): **Non-centered parameterization**.
+
+Centered (원조):
+
+$$
+y_j \sim N(\theta_j, \sigma_j^2), \quad \theta_j \sim N(\mu, \tau^2)
+$$
+
+Non-centered (재매개):
+
+$$
+y_j \sim N(\mu + \tau \eta_j, \sigma_j^2), \quad \eta_j \sim N(0, 1)
+$$
+
+$\theta_j = \mu + \tau \eta_j$ 는 deterministic transform.
+
+::: {.callout-tip}
+## 직관: Non-centered가 왜 funnel을 펴는가
+
+Centered: $\theta_j | \mu, \tau$ 의 조건부 분산 = $\tau^2$. $\tau$ 가 작으면 $\theta_j$ 가 $\mu$ 근처에 매우 밀집.
+
+Non-centered: $\eta_j$ 의 분산 = 1 (항상). $\tau$ 와 무관한 fixed geometry.
+
+결과:
+
+* Centered posterior: "깔때기" — $\tau$ 가 커질수록 $\theta$ 공간이 넓어짐.
+* Non-centered posterior: $\eta, \tau$ 가 거의 독립적 평평한 geometry.
+
+HMC는 평평한 geometry를 훨씬 잘 탐색. 8 schools 에서 centered는 종종 divergence 발생하지만 non-centered는 거의 완벽 수렴.
+
+**실무 원칙**: 계층 모형에 HMC 쓸 때 **기본으로 non-centered** 권장. 예외: 큰 $\tau$ + 많은 데이터 시에는 centered가 오히려 나을 수 있다 ("optimal parameterization" 은 posterior 모양에 의존).
+:::
+
+Stan, NumPyro, PyMC의 모든 현대 계층 모형 예제가 non-centered로 작성되는 이유.
+
+## § 15.6 ANOVA as Batching of Coefficients
+
+### Gelman의 핵심 주장
+
+**"ANOVA 는 계수 배치 관점의 계층 회귀이다."**
+
+전통 ANOVA 는 "처치 그룹 평균 차이의 검정"으로 제시된다. 그러나 Gelman은 다르게 본다:
+
+* **Batch of coefficients** 구조가 핵심.
+* 각 factor = 한 배치의 계수들 (그룹별 효과).
+* 각 배치의 **분산 $\sigma_m^2$** 가 그 factor의 "중요도".
+
+이 관점에서 ANOVA·random effects·mixed models 가 **같은 수학적 구조**의 다른 표현일 뿐이다.
+
+### 표기법 — 식 (15.7)
+
+데이터 $y_i$, $i = 1, \dots, n$. 모형을 배치별 계수 합으로 표현:
+
+$$
+y_i = \sum_{m=0}^{M} \beta_{j_i^m}^{(m)} \quad \text{(15.7)}
+$$
+
+* $m = 0, \dots, M$: 배치 인덱스 (row of ANOVA table).
+* $J_m$ = 배치 $m$ 의 계수 개수.
+* $j_i^m$ = 관측 $i$ 에 해당하는 배치 $m$ 의 계수 인덱스.
+* $\beta_1^{(0)}$ = grand mean (배치 0).
+* $\beta^{(M)}$ = 잔차 항 (최하위).
+
+**회귀 형태로** (식 (15.8)):
+
+$$
+y_i = \sum_{m=0}^M \sum_{j=1}^{J_m} x_{ij}^{(m)} \beta_j^{(m)} \quad \text{(15.8)}
+$$
+
+$x_{ij}^{(m)}$ 은 0/1 design matrix (특정 관측이 특정 계수에 속함). 다른 $x$ 값도 가능 (일반 regression).
+
+### 예시: 3-Way ANOVA
+
+요인 A (3 수준), 요인 B (4 수준), 요인 C (2 수준). 모든 조합 관측.
+
+| 배치 $m$ | 설명 | $J_m$ |
+|---------|------|-------|
+| 0 | Grand mean | 1 |
+| 1 | A 주효과 | 3 |
+| 2 | B 주효과 | 4 |
+| 3 | C 주효과 | 2 |
+| 4 | A:B 상호작용 | 12 |
+| 5 | A:C 상호작용 | 6 |
+| 6 | B:C 상호작용 | 8 |
+| 7 | A:B:C | 24 |
+| 8 | 잔차 | $n$ |
+
+### 계층 Prior
+
+각 배치의 계수는 동일 평균·분산의 교환 가능 분포:
+
+$$
+\beta_j^{(m)} \sim N(0, \sigma_m^2), \quad j = 1, \dots, J_m, \quad m = 1, \dots, M
+$$
+
+평균은 **0으로 고정** (grand mean $\beta_1^{(0)}$ 이 별도 batch).
+
+**분산 prior** (conjugate):
+
+$$
+\sigma_m^2 \sim \text{Inv-}\chi^2(\nu_m, \sigma_{0m}^2)
+$$
+
+**Noninformative**: $\nu_m = -1, \sigma_{0m} = 0$ → $\sigma_m$ 에 uniform.
+
+### Parameter Expansion — 식 (15.9)
+
+$\sigma_m$ boundary 문제 회피:
+
+$$
+\beta_j^{(m)} = \zeta_m \gamma_j^{(m)}, \quad \sigma_m = |\zeta_m| \tau_m \quad \text{(15.9)}
+$$
+
+모형 변환:
+
+$$
+y = X \zeta \gamma, \quad \gamma_j^{(m)} \sim N(0, \tau_m^2), \quad \tau_m^2 \sim \text{Inv-}\chi^2(\nu_m, \sigma_{0m}^2)
+$$
+
+Gibbs sampler 단계:
+
+1. $\gamma$ 업데이트: 선형 회귀 with $n$ obs, $\sum J_m$ predictors.
+2. $\zeta$ 업데이트: 선형 회귀 with $n$ obs, $M$ predictors.
+3. $\tau$ 업데이트: 독립 Inv-$\chi^2$.
+4. $\beta, \sigma$ 복원 (15.9).
+
+### Finite-Population vs Superpopulation SD — 식 (15.10)
+
+**Superpopulation** $\sigma_m$: 모집단 분산. "새로운 factor 수준" 이 얻을 값의 분산.
+
+**Finite-population** $s_m$: 현재 관측된 $J_m$ 개 계수의 분산.
+
+$$
+s_m = \sqrt{ \frac{1}{(df)_m} \beta^{(m) T} \left[ I - C^{(m) T} (C^{(m)} C^{(m) T})^{-1} C^{(m)} \right] \beta^{(m)} } \quad \text{(15.10)}
+$$
+
+여기서 $C^{(m)}$ 는 배치 $m$ 의 linear constraints ($c_m \times J_m$), $(df)_m = J_m - c_m$.
+
+::: {.callout-tip}
+## 직관: 두 SD의 차이
+
+예: 5개 의약품 ($J_m = 5$, 상수 제약 $c_m = 1$, $df = 4$) 비교 실험. 충분한 데이터.
+
+* **Finite-population** $s_m$: 이 5개 의약품 계수들 ($\beta_1^{(m)}, \dots, \beta_5^{(m)}$) 의 sample SD. 데이터 많으면 정확히 추정.
+* **Superpopulation** $\sigma_m$: "가상의 모든 가능한 의약품" 의 모집단 SD. 단 5개 관측으로 모집단 분산 추정 → 매우 불정확 ($\chi^2_4$ 기반).
+
+실무 해석:
+
+* **질문**: "이 5개 중 어느 것이 더 효과적인가?" → $s_m$ (관찰된 계수들의 spread).
+* **질문**: "새로운 의약품이 나오면 어떤 효과를 가질까?" → $\sigma_m$ (모집단 추측).
+
+전자는 "fixed effect" 질문, 후자는 "random effect" 질문. 같은 데이터 같은 계수지만 **질문이 다르면 답도 다르다**.
+:::
+
+**Gelman의 권장**: ANOVA display에서는 **finite-population $s_m$** 을 보고. 해석 가능하고 추정 정확.
+
+### Web Connect Times 예제 (Figure 15.4)
+
+**데이터**: 인터넷 connect time. **5-way factorial**:
+
+* **Destination** (to): 4 수준.
+* **Source** (from): 45 수준.
+* **Company** (service provider): 2 수준.
+* **Hour** (시간대): 25 수준.
+* **Week**: 2 수준 (2번 측정).
+
+총 $4 \times 45 \times 2 \times 25 \times 2 = 18,000$ 관측. 모든 조합이 한 번씩 (**no replication** at cell level).
+
+**ANOVA display**: 각 batch의 finite-population SD 추정치를 **50%, 95% credible interval** 로 시각화.
+
+**Figure 15.4 주요 관찰** (Gelman 원문):
+
+* 최하위 5-way 상호작용 (= 잔차) 의 SD 가 가장 큼 → 대부분 변동이 "세부적이고 예측 불가."
+* Source (from) 효과 SD가 두 번째로 큼 → 지리적 위치가 중요.
+* Hour-of-day 효과 중간.
+* Week, Company는 상대적으로 작음.
+
+**Gelman의 결론**: ANOVA display 는 "어느 factor가 중요한가"에 대한 **한 눈에 보는 요약**. 전통 $F$-test·$p$-값 위주 ANOVA 표보다 훨씬 해석 풍부.
+
+## Python 구현
+
+### 예제 1: Varying Intercept + Slope (LKJ)
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+rng = np.random.default_rng(42)
+
+# simulate data: J groups, each with intercept and slope
+J, n_per = 20, 15
+mu_alpha, mu_beta = 2.0, 0.5
+sigma_alpha, sigma_beta = 1.0, 0.3
+rho = 0.6  # intercept-slope correlation
+sigma_y = 0.5
+
+# draw group-level alpha, beta with correlation
+Sigma_true = np.array([[sigma_alpha**2, rho * sigma_alpha * sigma_beta],
+                       [rho * sigma_alpha * sigma_beta, sigma_beta**2]])
+L = np.linalg.cholesky(Sigma_true)
+z = rng.standard_normal((J, 2))
+group_coefs = np.array([mu_alpha, mu_beta]) + z @ L.T
+
+alpha_true = group_coefs[:, 0]
+beta_true = group_coefs[:, 1]
+
+# simulate observations
+group = np.repeat(np.arange(J), n_per)
+x = rng.standard_normal(J * n_per)
+y = alpha_true[group] + beta_true[group] * x + sigma_y * rng.standard_normal(J * n_per)
+
+
+with pm.Model() as vs_model:
+    # hyperpriors
+    mu_a = pm.Normal("mu_alpha", 0, 10)
+    mu_b = pm.Normal("mu_beta", 0, 10)
+
+    # LKJ + HalfNormal decomposition
+    sd_dist = pm.HalfNormal.dist(sigma=2.0)
+    chol, corr, stds = pm.LKJCholeskyCov(
+        "chol", n=2, eta=2.0, sd_dist=sd_dist, compute_corr=True
+    )
+
+    # non-centered
+    z = pm.Normal("z", 0, 1, shape=(J, 2))
+    mu_vec = pm.math.stack([mu_a, mu_b])
+    group_eff = mu_vec + z @ chol.T  # (J, 2)
+
+    alpha_j = group_eff[:, 0]
+    beta_j = group_eff[:, 1]
+
+    sigma = pm.HalfNormal("sigma", 2.0)
+    mu = alpha_j[group] + beta_j[group] * x
+    pm.Normal("y_obs", mu=mu, sigma=sigma, observed=y)
+
+    trace = pm.sample(2000, tune=1000, target_accept=0.95, chains=4)
+
+
+print(az.summary(trace, var_names=["mu_alpha", "mu_beta", "stds", "corr", "sigma"]))
+print(f"\nTrue: mu_alpha={mu_alpha}, mu_beta={mu_beta}")
+print(f"      sigma_alpha={sigma_alpha}, sigma_beta={sigma_beta}, rho={rho}")
+```
+
+예상 핵심 출력:
+
+```
+             mean    sd  hdi_3%  hdi_97%  r_hat
+mu_alpha     1.94  0.23    1.52     2.37   1.00
+mu_beta      0.49  0.08    0.35     0.65   1.00
+stds[0]      0.98  0.18    0.69     1.33   1.00
+stds[1]      0.30  0.06    0.20     0.42   1.00
+corr[0, 1]   0.53  0.18    0.18     0.82   1.00
+sigma        0.50  0.02    0.47     0.53   1.00
+```
+
+$\rho$ 추정 = 0.53 (참 0.6, CI [0.18, 0.82]). LKJ가 correlation을 자연스럽게 추정.
+
+### 예제 2: ANOVA Display
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+import pymc as pm
+
+rng = np.random.default_rng(0)
+
+# simulate 3-way factorial: A(3), B(4), C(2), with replication=3
+levels = {"A": 3, "B": 4, "C": 2}
+n_rep = 3
+
+# design matrix
+data = []
+for a in range(levels["A"]):
+    for b in range(levels["B"]):
+        for c in range(levels["C"]):
+            for _ in range(n_rep):
+                data.append((a, b, c))
+data = np.array(data)
+n = len(data)
+
+# true effects
+a_eff = rng.normal(0, 1.5, levels["A"])
+b_eff = rng.normal(0, 0.8, levels["B"])
+c_eff = rng.normal(0, 0.3, levels["C"])
+ab_eff = rng.normal(0, 0.5, (levels["A"], levels["B"]))
+mu0 = 10.0
+sigma = 1.0
+
+y = (mu0 + a_eff[data[:, 0]] + b_eff[data[:, 1]] + c_eff[data[:, 2]]
+     + ab_eff[data[:, 0], data[:, 1]] + sigma * rng.standard_normal(n))
+
+
+with pm.Model() as anova:
+    mu0_post = pm.Normal("mu0", 10, 10)
+
+    sd_A = pm.HalfNormal("sd_A", 2)
+    sd_B = pm.HalfNormal("sd_B", 2)
+    sd_C = pm.HalfNormal("sd_C", 2)
+    sd_AB = pm.HalfNormal("sd_AB", 2)
+    sd_resid = pm.HalfNormal("sd_resid", 2)
+
+    # non-centered
+    a = pm.Normal("a", 0, 1, shape=levels["A"]) * sd_A
+    b = pm.Normal("b", 0, 1, shape=levels["B"]) * sd_B
+    c = pm.Normal("c", 0, 1, shape=levels["C"]) * sd_C
+    ab = pm.Normal("ab", 0, 1, shape=(levels["A"], levels["B"])) * sd_AB
+
+    mu = (mu0_post + a[data[:, 0]] + b[data[:, 1]] + c[data[:, 2]]
+          + ab[data[:, 0], data[:, 1]])
+    pm.Normal("y_obs", mu=mu, sigma=sd_resid, observed=y)
+
+    trace_anova = pm.sample(1500, tune=1000, target_accept=0.95)
+
+
+# ANOVA display (Gelman Figure 15.4 style)
+factors = ["A", "B", "C", "A:B", "residual"]
+post = [trace_anova.posterior[f"sd_{f}"].values.flatten()
+        for f in ["A", "B", "C", "AB", "resid"]]
+
+fig, ax = plt.subplots(figsize=(7, 4))
+for i, (name, samples) in enumerate(zip(factors, post)):
+    median = np.median(samples)
+    lo50, hi50 = np.percentile(samples, [25, 75])
+    lo95, hi95 = np.percentile(samples, [2.5, 97.5])
+    ax.hlines(i, lo95, hi95, color='gray', lw=1)
+    ax.hlines(i, lo50, hi50, color='black', lw=3)
+    ax.plot(median, i, 'o', color='red')
+
+ax.set_yticks(range(len(factors)))
+ax.set_yticklabels(factors)
+ax.set_xlabel("Standard deviation")
+ax.set_title("ANOVA display (50% and 95% credible intervals)")
+ax.grid(alpha=0.3)
+plt.tight_layout()
+```
+
+## § 15.4~15.6 실전 체크리스트
+
+**§ 15.4 Varying Slopes**
+
+- [ ] 그룹 간 변동이 intercept만인가, slope도 다른가?
+- [ ] Slope varying이면 intercept-slope 상관 $\rho$ 를 추정하는가?
+- [ ] 공분산 행렬 prior: Inv-Wishart (단점) vs Scaled Inv-Wishart vs LKJ.
+- [ ] 그룹 수 $J \geq K+1$ 인가? ($K$-차원 공분산 추정 가능성)
+- [ ] 희박한 그룹이 많으면 계층 모형의 **shrinkage가 필수**임 확인.
+
+**§ 15.5 Computation**
+
+- [ ] 문제 크기에 맞는 Gibbs 전략 선택 (blockwise/all-at-once/HMC).
+- [ ] Variance parameter가 0 근처 경계로 가면 **parameter expansion** 검토.
+- [ ] HMC/NUTS 사용 시 **non-centered parameterization** 기본.
+- [ ] Divergence 발생 시 target_accept 0.95~0.99 상향.
+- [ ] $\hat{R} < 1.01$, ESS > 1000 확인.
+- [ ] 수렴 확인 후 원 모수 ($\beta, \sigma$) 로 변환 저장.
+
+**§ 15.6 ANOVA**
+
+- [ ] Factor들을 **batch of coefficients** 로 재해석했는가?
+- [ ] 각 batch에 **교환 가능 prior** $N(0, \sigma_m^2)$ 부여?
+- [ ] 관심 대상이 **finite-population SD** ($s_m$) 인가 **superpopulation SD** ($\sigma_m$) 인가?
+  - "이 특정 factor 수준들의 차이" → $s_m$.
+  - "새 factor 수준이 가질 효과의 크기" → $\sigma_m$.
+- [ ] ANOVA display로 여러 factor의 중요도를 **한 그림에 비교**했는가?
+- [ ] Traditional F-test·p-값 대신 **SD 분포 시각화**로 보고.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.15 Overview](./03-15-0-hierarchical-linear-models-overview.qmd)
+* [Ch.15 § 15.1~15.3 — Exchangeable Batches·선거·Augmented Regression](./03-15-1-exchangeable-batches-elections-augmented.qmd)
+* [Ch.12 § 12.1 — Parameter Expansion in MCMC](./02-12-1-reparameterization-metropolis-tuning-slice.qmd)
+* [Ch.13 § 13.4 — EM and Parameter Expansion](./02-13-2-em-conditional-marginal-hierarchical.qmd)
+
+**후속 주제**
+
+* [§ 15.7~15.9 — Variance Component Hierarchies·Exercises](./03-15-3-variance-hierarchies-exercises.qmd) (예정)
+* Ch.16 GLM — 계층 로지스틱·Poisson·MRP
+* Ch.20 Basis Functions — varying coefficients의 함수적 확장
+* Ch.21 Gaussian Processes — 무한 차원 varying coefficients
+
+**관련 개념 (cross-category)**
+
+* [Mixed-Effects Models (Hedeker-Gibbons)](../LDA/longitudinal-overview.qmd)
+* [LKJ Prior for Correlation Matrices](../../Math/lkj-prior.qmd)
+* [Analysis of Variance (Casella Ch.11)](../126-anova-regression-overview.qmd)
+* [Funnel Geometry and HMC Divergences](../../Deep_Learning/hmc-funnel.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.15 § 15.4~15.6. CRC Press.
+* Gelman, A. (2005). Analysis of Variance — Why It Is More Important Than Ever. *Annals of Statistics*, 33(1), 1-53.
+* Gelman, A., & Hill, J. (2007). *Data Analysis Using Regression and Multilevel/Hierarchical Models*. Cambridge.
+* Lewandowski, D., Kurowicka, D., & Joe, H. (2009). Generating Random Correlation Matrices. *JMA*, 100, 1989-2001.
+* Liu, C., Rubin, D. B., & Wu, Y. N. (1998). Parameter Expansion to Accelerate EM: The PX-EM Algorithm. *Biometrika*, 85, 755-770.
+* Neal, R. M. (2003). Slice Sampling. *Annals of Statistics*, 31(3), 705-767.
+* Betancourt, M., & Girolami, M. (2015). Hamiltonian Monte Carlo for Hierarchical Models. In *Current Trends in Bayesian Methodology with Applications*.
+* Braun, H. I., Jones, D. H., Rubin, D. B., & Thayer, D. T. (1983). Empirical Bayes Estimation of Coefficients in the General Linear Model. *Psychometrika*, 48, 171-181.
