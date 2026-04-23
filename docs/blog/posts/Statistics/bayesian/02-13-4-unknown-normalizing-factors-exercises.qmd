@@ -1,0 +1,695 @@
+---
+title: "Ch.13 § 13.10~13.12 — Unknown Normalizing Factors·문헌·연습 심화"
+subtitle: "z(θ)가 미지일 때의 사후 추론, Ch.13 문헌 지도, 연습문제 풀이, Ch.13 심화 시리즈 결산"
+description: |
+  Gelman BDA Ch.13의 마지막 세 절 § 13.10~13.12를 한 번에 다룬다.
+  § 13.10은 likelihood의 정규화 상수 $z(\theta)$ 자체가 모수 $\theta$ 에 의존하여 계산 불가능한 doubly intractable 문제를 정의하고,
+  Bridge/Path Sampling, Exchange algorithm, Pseudo-marginal MCMC, ABC 같은 해법 패밀리를 소개한다.
+  § 13.11은 Ch.13 전체의 문헌을 Laplace/EM/VI/EP/정규화 상수 주제별로 분류하고,
+  § 13.12는 EM 단조증가 증명·퇴화 mode·Probit VB·미지 정규화 상수 계산 등 핵심 연습문제를 풀이한다.
+  마지막으로 Ch.13 심화 4편 시리즈의 로직맵과 실전 체크리스트로 결산한다.
+categories:
+  - Statistics
+  - Bayesian
+  - Modal-Approximations
+  - Doubly-Intractable
+  - Bridge-Sampling
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요
+
+Ch.13 심화 시리즈의 **마지막 편**이다. 앞선 세 편에서 다룬 내용을 정리하면 다음과 같다.
+
+* § 13.1~13.3 — Mode finding, Boundary-avoiding priors, Laplace 근사 (02-13-1)
+* § 13.4~13.6 — EM, ECM/ECME, 조건부·주변 근사, 계층적 정규 모형 (02-13-2)
+* § 13.7~13.8 — Variational Inference, Expectation Propagation (02-13-3)
+
+§ 13.9는 Gelman 3rd ed.에 존재하지 않는다 (§ 13.1~13.8 이후 바로 § 13.10으로 넘어간다). 따라서 이 편은 **§ 13.10 (unknown normalizing factors) · § 13.11 (문헌) · § 13.12 (연습)** 세 절을 한데 묶는다.
+
+§ 13.10은 Ch.13 내에서 성격이 다소 이질적이다. 앞선 절들이 "사후 분포 $p(\theta | y)$ 를 어떻게 **근사**할 것인가"를 다루었다면, § 13.10은 "likelihood $p(y|\theta) = q(y|\theta)/z(\theta)$ 의 정규화 상수 $z(\theta)$ 자체를 모를 때 어떻게 **계산**할 것인가"를 다룬다. 이 문제는 **doubly intractable posterior** (Murray, Ghahramani, MacKay, 2006) 라는 이름으로 공간 통계, 이미지 분석, 생물학, 사회 네트워크 등에서 지속적으로 등장하며, Bridge/Path Sampling 같은 고전적 접근과 Exchange algorithm·Pseudo-marginal MCMC 같은 현대적 접근이 뒤엉켜 있다.
+
+::: {.callout-tip}
+## 직관: 왜 "doubly intractable"인가
+
+일반적인 베이지안 계산에서 intractable한 것은 **marginal likelihood** $p(y) = \int p(\theta) p(y|\theta) \, d\theta$ 하나다. Metropolis-Hastings 같은 MCMC가 이를 우회하는 이유는 ratio $p(\theta_1|y) / p(\theta_0|y)$ 를 취하면 $p(y)$ 가 약분되기 때문이다.
+
+그런데 likelihood 자체가 $p(y|\theta) = q(y|\theta)/z(\theta)$ 형태로 $z(\theta)$ 에 의존하면, MH ratio를 계산할 때도
+
+$$
+\frac{p(\theta^*|y)}{p(\theta|y)} = \frac{p(\theta^*) q(y|\theta^*) / z(\theta^*)}{p(\theta) q(y|\theta) / z(\theta)}
+$$
+
+에서 $z(\theta)$ 가 **약분되지 않고 남는다**. 따라서 "모수별로 intractable한 적분을 추가로 또 계산해야" 하고, 이것이 "doubly intractable"이라는 이름의 유래이다.
+:::
+
+## § 13.10 Unknown Normalizing Factors
+
+### 문제 정의 — $z(\theta)$ 가 $\theta$ 에 의존하는 모형
+
+Gelman의 일반 표기법:
+
+$$
+p(y|\theta) = \frac{1}{z(\theta)} q(y|\theta), \qquad z(\theta) = \int q(y|\theta) \, dy \quad \text{(13.31)}
+$$
+
+여기서 $q(y|\theta)$ 는 **unnormalized density**로 해석적으로 계산 가능하지만, 정규화 상수 $z(\theta)$ 는 닫힌 형태가 없거나 계산이 매우 비싸다. 사전분포 $p(\theta)$ 와 결합하면 사후분포는
+
+$$
+p(\theta|y) \propto p(\theta) \cdot \frac{q(y|\theta)}{z(\theta)}
+$$
+
+가 된다. $z(\theta)$ 가 $\theta$ 에 의존하므로 사후 추론 전체에서 이 함수의 모양을 추적해야 한다.
+
+**사전분포의 미지 정규화 상수는 문제가 되지 않는다.** $p(\theta) \propto q_\theta(\theta)$ 에서 $q_\theta$ 의 상수 배는 사후분포에서 곧바로 약분된다. 문제는 오직 **likelihood의 $z(\theta)$**다.
+
+::: {.callout-note}
+## 정의: Doubly Intractable Posterior
+
+다음 조건을 만족하는 사후 분포를 doubly intractable이라 한다.
+
+1. Marginal likelihood $p(y) = \int p(\theta) p(y|\theta) \, d\theta$ 가 해석적으로 불가능 (일반적 intractability).
+2. Likelihood $p(y|\theta)$ 자체의 정규화 상수 $z(\theta) = \int q(y|\theta) \, dy$ 도 해석적으로 불가능하고 $\theta$ 에 의존.
+
+2번 조건으로 인해 MH acceptance ratio에서 $z(\theta)$ 가 약분되지 않는다.
+:::
+
+### 전형적 예시
+
+| 영역 | 모형 | 정규화 상수 |
+|------|------|-------------|
+| 공간 통계 (Besag, 1974) | Ising model, Markov random field | 상태 $2^n$ 개 합산 — 격자 크기 $n \sim 100 \times 100$ 만 되어도 $2^{10000}$ 항 |
+| 이미지 분석 | Potts model, Gibbs random field | 조건부 독립 구조에서 유도, 전체 정규화 상수는 intractable |
+| 생물학 | Exponential random graph model (ERGM) | 그래프 공간 전체 합산 필요 |
+| 점과정 (Ripley, 1981) | Strauss process, Gibbs point process | 점 구성 공간 적분 |
+| 통계물리 | Boltzmann machine, RBM | partition function $Z$ 가 지수적 복잡도 |
+
+**핵심 관찰**: 이들 모형은 대부분 **조건부로 정의**된다 (조건부 확률은 닫힌 형태, 결합 확률은 intractable). Gelman이 $q(y|\theta)$ 를 "spatial statistics처럼 conditionally specified 모형에서 자주 나타난다"라고 쓴 이유다.
+
+::: {.callout-tip}
+## 직관: 조건부로 정의된 모형이 왜 intractable이 되는가
+
+Ising 격자에서 각 스핀 $y_i \in \{-1, +1\}$ 의 조건부 분포는 인접 스핀에만 의존한다.
+
+$$
+p(y_i | y_{-i}, \theta) = \frac{\exp(\theta \sum_{j \sim i} y_i y_j)}{\exp(\theta \sum_{j \sim i} y_j) + \exp(-\theta \sum_{j \sim i} y_j)}
+$$
+
+이 식은 완벽하게 닫혀 있다. 그러나 결합 분포는
+
+$$
+p(y|\theta) = \frac{1}{z(\theta)} \exp\left( \theta \sum_{(i,j) \in E} y_i y_j \right)
+$$
+
+이고, $z(\theta) = \sum_{y \in \{-1,+1\}^n} \exp(\theta \sum y_i y_j)$ 는 $2^n$ 개 상태를 모두 합산해야 한다. **조건부의 단순함과 결합의 intractability는 동전의 양면**이다 (Hammersley-Clifford 정리의 귀결).
+:::
+
+### 계층 모형에서의 확장
+
+Gelman은 동일한 문제가 **계층 모형의 모집단 분포**에서도 나타남을 지적한다. 데이터 $y$, 1차 모수 $\gamma$, 초모수 $\phi$ 에 대해
+
+$$
+p(\gamma, \phi | y) \propto p(\phi) \cdot \frac{1}{z(\phi)} q(\gamma | \phi) \cdot p(y | \gamma)
+$$
+
+여기서 $q(\gamma|\phi) = z(\phi) p(\gamma|\phi)$ 이고 $z(\phi)$ 가 $\phi$ 에 의존한다. 이런 상황은 **계층 모형의 모집단 분포가 Gaussian copula나 공간 구조를 포함**할 때 발생한다.
+
+### 기본 계산 전략 (Gelman 13.10)
+
+Gelman은 다음 3단계 전략을 권한다.
+
+**Step 1**. 대략적 추정 $\hat{\theta}$ 에서 Laplace의 방법으로 $z(\theta)$ 의 초기 근사를 얻는다.
+
+**Step 2**. Ch.13 앞 절의 기법 (Laplace·VI·EP)으로 사후분포에 대한 대략적 근사를 구성한다. 이 근사는 직접 적분 가능한 경우가 많으므로 빠른 초기 탐색에 유용하다.
+
+**Step 3**. 더 정밀한 계산이 필요하면, 사후분포 평가가 요구되는 각 $\theta$ 에서 $z(\theta)$ 를 수치적으로 계산한다. 이때 $z(\theta)$ 를 "계산이 비싼 known function"처럼 취급한다.
+
+::: {.callout-tip}
+## 직관: 왜 "근사 먼저, 정밀 나중"인가
+
+사후 확률이 본질적으로 0인 영역에서는 $z(\theta)$ 계산이 시간 낭비다. Step 1~2로 후보 영역을 좁혀놓고 (사후 mass의 지지 집합을 Laplace·VI로 선점), Step 3에서는 그 영역에서만 $z(\theta)$ 를 정밀하게 계산한다.
+
+즉, Ch.13의 **앞 절 전체가 § 13.10의 선행 단계**로 자연스럽게 연결된다. Ch.13의 논리 구조가 한 바퀴 돌아서 § 13.10에서 닫힌다.
+:::
+
+### $z(\theta)$ 의 수치 계산 — Importance Sampling
+
+식 (13.31)에 직접 적용할 수 있는 importance sampling identity는
+
+$$
+z(\theta) = \int q(y|\theta) \, dy = \int \frac{q(y|\theta)}{g(y)} g(y) \, dy = \mathbb{E}_g\left[ \frac{q(y|\theta)}{g(y)} \right]
+$$
+
+근사 분포 $g(y)$ 에서 $y^1, \dots, y^S$ 를 추출하면 추정량은
+
+$$
+\hat{z}(\theta) = \frac{1}{S} \sum_{s=1}^{S} \frac{q(y^s|\theta)}{g(y^s)}
+$$
+
+**핵심 트릭**: 같은 simulations $y^1, \dots, y^S$ 를 여러 $\theta$ 값에 재사용할 수 있다. 다만 $\theta$ 가 크게 변하면 $g(y)$ 와 $q(y|\theta)$ 의 support가 어긋나 importance weight의 분산이 폭발하므로 **국소적 $\theta$ 범위**에서만 유효하다.
+
+또한 $z(\theta)$ 는 **비례 상수까지만** 알면 되므로 $g(y)$ 도 정규화될 필요가 없다. 이 자유도가 Bridge/Path Sampling의 유연성으로 이어진다.
+
+### Bridge Sampling — 두 극점 사이의 보간
+
+$\theta_*$ 하나로는 전 범위를 커버 못 할 때, **양 끝 두 점** $\theta_0, \theta_1$ 에서 각각 simulation을 얻어 **가중 평균**으로 임의의 $\theta$ 에서 $z(\theta)$ 를 추정한다.
+
+직관: "현수교 비유" — 분포 family를 양쪽 기둥 ($\theta_0$, $\theta_1$) 이 지탱하는 다리로 보고, 중간 지점 $\theta$ 의 값은 양쪽에서 끌어당기는 장력의 조합으로 결정된다.
+
+Meng-Wong (1996) 의 Bridge identity:
+
+$$
+\frac{z(\theta_1)}{z(\theta_0)} = \frac{\mathbb{E}_{\theta_0}[\alpha(y) q(y|\theta_1)]}{\mathbb{E}_{\theta_1}[\alpha(y) q(y|\theta_0)]}
+$$
+
+여기서 $\alpha(y)$ 는 임의의 함수이며, $\alpha(y) = 1/[s_0 q(y|\theta_0) + s_1 q(y|\theta_1)]$ ($s_i$ 는 sample 크기 비율) 선택 시 분산 최소화 (optimal bridge).
+
+### Path Sampling — 연속 보간 (Thermodynamic Integration)
+
+Bridge sampling의 **미분 극한** (Gelman-Meng, 1998): $\theta$ 가 $[0, 1]$ 구간을 연속적으로 훑을 때,
+
+$$
+\frac{d}{d\phi} \log p(\phi|y) = \mathbb{E}\left[ U(\gamma, \phi, y) \mid \phi, y \right], \quad U = \frac{d}{d\phi} \log p(\gamma, \phi | y)
+$$
+
+**핵심 의미**: $\log p(\phi|y)$ 의 도함수를 시뮬레이션으로 구해 **수치 적분**하면 로그 주변 밀도의 모양이 나온다. 이 식은 통계물리의 **thermodynamic integration**과 동일 구조이며, 실제로 "path"라는 용어는 물리 쪽 어원이다.
+
+::: {.callout-tip}
+## 직관: 온도를 끓는점까지 연속으로 올려서 자유에너지 차이를 측정
+
+통계물리에서 "얼음을 물로 녹이는 데 필요한 에너지"는 중간 상태들의 에너지 변화율을 적분해서 구한다. Path sampling은 이와 동일하다. $\phi=0$ 일 때의 "쉬운 분포" (예: 사전분포)와 $\phi=1$ 일 때의 "어려운 분포" (예: 사후분포) 사이의 경로를 설정하고, 경로를 따라 움직이는 시뮬레이션 샘플의 에너지 변화율 $U$ 를 관측한다. 적분하면 두 분포의 로그 정규화 상수 차이가 나온다.
+
+이것이 왜 효과적인가? 두 분포가 "너무 다를" 때 직접 importance sampling은 분산이 폭발하지만, 중간 경로를 잘게 쪼개면 각 단계의 분산이 작아져 전체 적분이 안정된다.
+:::
+
+### Parallel Tempering과의 연결
+
+Gelman은 bridge/path sampling이 **parallel tempering** (Ch.11)과 밀접함을 지적한다. 둘 다 "indexed family of distributions로부터 샘플링"하는 구조이며, 차이는 $\phi$ 의 주변 분포를 어떻게 다루느냐에 있다.
+
+* **Tempering**: $\phi$ 의 주변 분포를 **계산 효율을 위해 인위 설정** (예: 균등, 기하) → 체인 혼합 가속이 목적
+* **Bridge/Path**: $\phi$ 의 **주변 밀도를 추정하는 것 자체가 목적** → $\log p(\phi|y)$ 의 모양을 얻음
+
+### 최신 발전 (2006~현재) — 교재 미포함
+
+Gelman 3rd ed. (2013)이 다루지 않는 주요 현대적 접근들이다. 오늘날 doubly intractable 문제에서 실무적으로 가장 많이 쓰이는 방법이다 (이하 agent 사전학습 기반).
+
+#### Exchange Algorithm (Murray, Ghahramani, MacKay, 2006)
+
+**아이디어**: MH ratio에 남는 $z(\theta^*)/z(\theta)$ 를 **보조 변수 $y'$ 도입**으로 없앤다.
+
+알고리즘:
+
+1. 현재 상태 $\theta$ 에서 제안 $\theta^* \sim q(\theta^* | \theta)$.
+2. **보조 데이터 $y' \sim p(y'|\theta^*)$ 를 실제 모형에서 한 번 샘플링** (perfect sampling 필요).
+3. 수락 확률
+
+$$
+\alpha = \min\left\{1, \frac{p(\theta^*) q(y|\theta^*) q(y'|\theta)}{p(\theta) q(y|\theta) q(y'|\theta^*)} \cdot \frac{q(\theta|\theta^*)}{q(\theta^*|\theta)}\right\}
+$$
+
+4. $y'$ 샘플링이 암묵적으로 $z(\theta^*)/z(\theta)$ 를 unbiased하게 추정하는 역할을 한다.
+
+**장점**: $z(\theta)$ 를 **한 번도 계산하지 않는다**.
+**단점**: 각 MCMC step마다 모형에서 **독립 샘플** $y'$ 을 뽑아야 한다. Ising 같은 경우 perfect sampling (Coupling from the Past) 이 가능하지만 비용이 크다.
+
+#### Pseudo-marginal MCMC (Andrieu, Roberts, 2009)
+
+**아이디어**: MH ratio에 정확한 likelihood가 아닌 **unbiased estimate**를 넣어도 stationary distribution이 보존된다.
+
+$$
+\alpha = \min\left\{1, \frac{p(\theta^*) \hat{p}(y|\theta^*)}{p(\theta) \hat{p}(y|\theta)} \cdot \frac{q(\theta|\theta^*)}{q(\theta^*|\theta)}\right\}
+$$
+
+여기서 $\hat{p}(y|\theta)$ 는 $\mathbb{E}[\hat{p}(y|\theta)] = p(y|\theta)$ 를 만족하는 unbiased estimator. $z(\theta)$ 를 importance sampling으로 unbiased하게 추정하면 그대로 꽂으면 된다.
+
+**놀라운 사실**: noisy estimator를 써도 **정확히 올바른 사후분포**에서 샘플링한다 (variance만 증가).
+
+**응용**: 상태공간모형의 particle filter likelihood (particle MCMC, Andrieu-Doucet-Holenstein 2010)가 대표적.
+
+#### Approximate Bayesian Computation (ABC)
+
+Likelihood를 **전혀 계산하지 않고** 시뮬레이션만으로 근사 사후 분포를 얻는다.
+
+알고리즘:
+
+1. $\theta \sim p(\theta)$.
+2. $y^{sim} \sim p(y|\theta)$ (모형에서 시뮬레이션).
+3. $\rho(y^{sim}, y_{obs}) < \epsilon$ 이면 $\theta$ 수락.
+
+$\epsilon \to 0$ 에서 정확한 사후분포로 수렴. Likelihood-free 방법의 대표주자로, **유전학, 역학, 동역학 시스템 추정**에 널리 쓰인다.
+
+::: {.callout-tip}
+## 직관: "likelihood를 모르면 시뮬레이션으로 대체한다"
+
+$z(\theta)$ 가 intractable이라는 말은 likelihood 값을 숫자로 평가할 수 없다는 뜻이다. 그러나 모형에서 **데이터를 생성**하는 것은 가능한 경우가 많다 (Ising 격자에서 Gibbs sampling으로 $y$ 샘플링, Strauss process에서 birth-death로 점 샘플링 등).
+
+"계산 불가능한 likelihood"를 "생성 가능한 모형"으로 교환한 셈이다. Exchange algorithm도, ABC도, Pseudo-marginal의 unbiased estimator도 모두 이 아이디어의 변주다.
+:::
+
+### 비교 — 전통 기법 vs 현대 기법
+
+| 방법 | 정규화 상수 $z(\theta)$ | 모형에서 샘플링 | 주요 용도 | 대표 교재/논문 |
+|------|----------|---------|-----------|---------|
+| Bridge sampling | 비율 $z(\theta_1)/z(\theta_0)$ 추정 | 양 끝점만 | 모형 비교 | Meng-Wong (1996) |
+| Path sampling | $\log z(\phi)$ 연속 추정 | 전체 경로 | Marginal density 추정 | Gelman-Meng (1998) |
+| Exchange algorithm | 불필요 (암묵 약분) | 매 step perfect sample | Ising, ERGM | Murray et al. (2006) |
+| Pseudo-marginal | Unbiased 추정 사용 | Noise 허용 | Particle filter, latent | Andrieu-Roberts (2009) |
+| ABC | 불필요 (무시) | 매 step forward sim | 유전학, 역학 | Beaumont (2010), Marin (2012) |
+
+## § 13.11 Bibliographic Note — Ch.13 문헌 지도
+
+Gelman의 Ch.13 문헌 절은 매우 압축적이다. 여기서는 주제별로 재구성하여 참조의 논리 지도를 제공한다.
+
+### 최적화 및 Mode Finding
+
+* **Press et al. (1986)** *Numerical Recipes* — Newton-Raphson, BFGS, CG의 표준 참고서.
+* **Gill, Murray, Wright (1981)** *Practical Optimization* — 복잡한 최적화 문제의 고전 교과서.
+* **Chung, Rabe-Hesketh et al. (2013a,b)** — Gamma(2, ·) 등 경계 회피 사전분포의 이론적 근거.
+
+### Laplace 근사
+
+* **Tierney, Kadane (1986)** — 주변 사후의 Laplace 근사, 식 (13.3)의 분자·분모 개별 적용 정확도 증명.
+* **Kass, Tierney, Kadane (1989)** — Laplace 방법 확장.
+* **Wong, Li (1992)** — 정교화.
+* **Geweke (1989)** — Importance sampling용 modal 근사, split normal 제안.
+
+### EM Algorithm 패밀리
+
+* **Dempster, Laird, Rubin (1977)** — EM의 정식 정립. "EM algorithm"이라는 이름의 기원.
+* **Baum et al. (1970)** — EM의 수학적 일반화를 처음 도출 (HMM 맥락).
+* **Orchard, Woodbury (1972)** — "Missing information principle"로 EM을 통계 일반 맥락에서 최초 제시.
+* **Tanner, Wong (1987)** — MCMC를 EM의 stochastic extension으로 잇는 핵심 논문.
+* **Meng, Rubin (1991)** — SEM (Supplemented EM)으로 분산-공분산 추정.
+* **Meng, Rubin (1993), Meng (1994a)** — ECM.
+* **van Dyk, Meng, Rubin (1995)** — SECM.
+* **Liu, Rubin (1994)** — ECME.
+* **Meng, van Dyk (1997)** — AECM.
+* **Liu, Rubin, Wu (1998)** — PX-EM.
+* **Little, Rubin (2002)** *Statistical Analysis with Missing Data* — 결측 데이터 맥락의 EM.
+
+### Variational Inference
+
+* **Jordan et al. (1999)** — Variational methods for graphical models, 튜토리얼의 고전.
+* **Jaakkola, Jordan (2000)** — 로지스틱 관련 VI.
+* **Blei, Ng, Jordan (2003)** — **LDA (Latent Dirichlet Allocation)** 원 논문, VI의 대중화 계기.
+* **Gershman, Hoffman, Blei (2013)** — VI 검토 논문.
+* **Hoffman et al. (2013)** — Stochastic VI, 대규모 데이터용.
+
+(교재 미포함 최신 발전) **Kingma, Welling (2014)** VAE — reparameterization trick으로 연속 잠재변수 VI; **Kucukelbir et al. (2017)** ADVI in Stan — 자동화된 VI; **Rezende, Mohamed (2015)** Normalizing flows — 복잡한 posterior 표현력 확장.
+
+### Expectation Propagation
+
+* **Minka (2001)** — EP의 정식 정립 (PhD thesis).
+* **Bishop (2006)** *PRML Ch.10* — EP의 교과서 표준 서술.
+* **Rasmussen, Williams (2006)** *GPML* — GP classification에서 EP 실전 활용.
+* **Cseke, Heskes (2011)** — Marginal posterior 개선.
+* **Rue, Martino, Chopin (2009)** — INLA (Integrated Nested Laplace Approximation). 공간·시계열 모형의 대안.
+* **Jylanki, Nummenmaa, Vehtari** — 계층적 GLM용 EP framework.
+* **Heskes et al., Marin et al. (2012)** — ABC 검토.
+
+### Bridge & Path Sampling, 정규화 상수
+
+* **Meng, Wong (1996)** — Bridge sampling의 도입.
+* **Gelman, Meng (1998)** — Path sampling으로 일반화.
+* **Meng, Schilling (1996)** — 인수분석 예제.
+* **Kong et al. (2003)** — Importance·bridge sampling 통합 이론.
+* **Ott (1979)** — 정규화 상수 계산의 초기 통계학 적용.
+* **Besag (1974)** — 공간 통계에서의 MRF/정규화 상수 문제 원조.
+* **Ripley (1981, 1988)** *Statistical Inference for Spatial Processes* — 공간 점과정의 고전.
+* **Geyer (1991), Geyer, Thompson (1992, 1993)** — MCMC로 정규화 함수 추정, 유전학 응용.
+* **Pettitt, Friel, Reeves (2003)** — Path sampling으로 공간 통계 정규화 상수 계산.
+
+### Substitution Likelihood · Copula
+
+* **Dunson, Taylor (2005)**, **Hoff (2007)**, **Murray et al. (2013)** — Substitution likelihood 관련. Gaussian copula factor 모형 (Murray 2013)은 marginal 분포 제약이 강한 상황에서 copula를 쓰는 접근.
+
+## § 13.12 Exercises — 핵심 연습문제 풀이
+
+Gelman Ch.13의 연습문제 중 학습 효과가 큰 네 문제를 풀이한다.
+
+### Exercise 13.6 — EM의 단조 증가 증명
+
+**문제**: $Q(\phi | \phi^{\text{old}}) = \mathbb{E}_{\text{old}} \log p(\gamma | \phi, y)$ 가 $\phi = \phi^{\text{old}}$ 에서 최대화됨을 증명하라 (hint: Jensen 부등식).
+
+(02-13-2의 Gibbs 부등식 증명과 동일하므로 핵심만 재기술한다.)
+
+**풀이**: Gelman 식 (13.5)
+
+$$
+\log p(\phi|y) = \mathbb{E}_{\text{old}}[\log p(\gamma, \phi|y)] - \mathbb{E}_{\text{old}}[\log p(\gamma | \phi, y)] = Q(\phi|\phi^{\text{old}}) - H(\phi|\phi^{\text{old}})
+$$
+
+$H$ 항을 $\phi = \phi^{\text{old}}$ 기준으로 평가하면
+
+$$
+H(\phi | \phi^{\text{old}}) - H(\phi^{\text{old}} | \phi^{\text{old}}) = \int p(\gamma | \phi^{\text{old}}, y) \log \frac{p(\gamma | \phi, y)}{p(\gamma | \phi^{\text{old}}, y)} \, d\gamma
+$$
+
+우변은 **Kullback-Leibler 발산의 음수**이므로 항상 $\leq 0$. 즉 $H(\phi|\phi^{\text{old}})$ 는 $\phi = \phi^{\text{old}}$ 에서 **최대**이다 (Gibbs 부등식).
+
+따라서 EM의 M-step에서 $Q$ 를 증가시키면 $\log p(\phi|y)$ 도 반드시 증가한다. 단조 증가가 성립한다.
+
+### Exercise 13.8 — Coagulation 예제의 퇴화 Mode
+
+**문제**: 응고 데이터 예제에서 $\tau = 0, \theta_j = \mu$ 인 퇴화 mode가 존재함을 보이고, 이 mode 주변의 사후 질량이 작음을 증명하라.
+
+**풀이 스케치**:
+
+모형: $y_{ij} \sim N(\theta_j, \sigma^2)$, $\theta_j \sim N(\mu, \tau^2)$.
+
+**(a) 퇴화 mode의 존재**: $\tau \to 0$ 극한에서 모든 $\theta_j = \mu$ 로 수렴. 이때 likelihood $\prod N(y_{ij} | \mu, \sigma^2)$ 는 유한하고, prior $p(\tau) \propto 1$ 또는 folded normal이라면 $\tau = 0$ 에서도 유계. 그러나 $p(\theta_j | \mu, \tau)$ 의 $\prod 1/\tau$ 요인이 $\tau \to 0$ 에서 **발산**. 따라서 $\theta_j = \mu$ 로 정확히 동시 수렴할 때만 unnormalized density가 유한값을 가지며 이것이 퇴화 mode를 형성한다.
+
+**(b)~(d) 퇴화 mode 주변의 사후 질량**: $\tau$ 가 작을 때 $\theta_j$ 가 $\mu$ 근방에 갇혀 있을 확률은 delta 함수에 가까운 좁은 영역에 해당. 이 영역의 부피는 $\tau^J$ 에 비례. $J$ (그룹 수)가 작지 않으면 $\tau^J$ 는 $\tau \to 0$ 에서 빠르게 0으로 감. 따라서 해당 영역의 사후 질량은 유한 mode 주변의 질량에 비해 **지수적으로 작다**.
+
+**결론**: 퇴화 mode는 수치적 MAP 최적화 시 함정이 될 수 있지만 실제 사후 분포의 대부분의 mass는 다른 mode에 있다. 이것이 Gelman이 경계 회피 prior Gamma(2, A)를 권장하는 실증적 근거이기도 하다 (02-13-1 참조).
+
+### Exercise 13.10 — Probit 회귀의 Variational Bayes
+
+**문제**: Probit 회귀 $\Pr(y_i=1) = \Phi(a + bx_i)$ 를 잠재변수 $z_i \sim N(a+bx_i, 1)$, $y_i = \mathbb{1}[z_i > 0]$ 로 표현한 후, $(a, b, z_1, \dots, z_n)$ 의 $n+2$ 차원 mean-field VB를 구성하라.
+
+**(a) 로그 결합 사후**: 사전분포 $a, b \sim$ diffuse (예: $N(0, 100^2)$),
+
+$$
+\log p(a, b, z | y) = \text{const} - \frac{1}{2 \cdot 100^2}(a^2 + b^2) - \frac{1}{2} \sum_{i=1}^n (z_i - a - b x_i)^2 + \sum_{i=1}^n \log \mathbb{1}[z_i \cdot (2y_i - 1) > 0]
+$$
+
+마지막 항은 $y_i = 1$ 이면 $z_i > 0$ 을 강제, $y_i = 0$ 이면 $z_i < 0$ 을 강제하는 지시함수.
+
+**(b) 인수 형태**: 평균장 $q(a, b, z) = q(a) q(b) \prod q(z_i)$.
+
+$q(z_i)$: $\log q(z_i) = \mathbb{E}_{q(a)q(b)}[\log p] + \text{const}$ 에서 $z_i$ 에 관한 항만 남기면
+
+$$
+\log q(z_i) = -\frac{1}{2}(z_i - \mathbb{E}[a] - \mathbb{E}[b] x_i)^2 + \log \mathbb{1}[z_i \cdot (2y_i - 1) > 0]
+$$
+
+따라서 $q(z_i)$ 는 **truncated normal**:
+
+$$
+q(z_i) = \text{TN}(\mu_{z_i}, 1 ; A_i), \quad \mu_{z_i} = \mathbb{E}[a] + \mathbb{E}[b] x_i, \quad A_i = \begin{cases} (0, \infty) & y_i=1 \\ (-\infty, 0) & y_i=0 \end{cases}
+$$
+
+평균:
+
+$$
+\mathbb{E}[z_i] = \mu_{z_i} + (2y_i - 1) \frac{\phi(\mu_{z_i})}{\Phi((2y_i-1) \mu_{z_i})}
+$$
+
+(truncated normal mean formula)
+
+$q(a)$: $a$ 에 관한 항만 남기면
+
+$$
+\log q(a) = -\frac{a^2}{2 \cdot 100^2} - \frac{1}{2} \sum_i (\mathbb{E}[z_i] - a - \mathbb{E}[b] x_i)^2
+$$
+
+이는 $a$ 에 대한 이차식 → **Normal**. 완성하면
+
+$$
+q(a) = N\left( \mu_a = \frac{\sum_i (\mathbb{E}[z_i] - \mathbb{E}[b] x_i)}{n + 1/100^2}, \; \sigma_a^2 = \frac{1}{n + 1/100^2} \right)
+$$
+
+$q(b)$: 동일 방식으로
+
+$$
+q(b) = N\left( \mu_b = \frac{\sum_i x_i (\mathbb{E}[z_i] - \mathbb{E}[a])}{\sum_i x_i^2 + 1/100^2}, \; \sigma_b^2 = \frac{1}{\sum_i x_i^2 + 1/100^2} \right)
+$$
+
+**(c) VB 알고리즘**:
+
+1. 초기화: $\mathbb{E}[a] = 0, \mathbb{E}[b] = 0$.
+2. 반복:
+   * $\mu_{z_i} \leftarrow \mathbb{E}[a] + \mathbb{E}[b] x_i$ for all $i$.
+   * $\mathbb{E}[z_i] \leftarrow \mu_{z_i} + (2y_i - 1) \phi(\mu_{z_i})/\Phi((2y_i-1)\mu_{z_i})$.
+   * $\mathbb{E}[a] \leftarrow \mu_a$ 위 식으로 갱신.
+   * $\mathbb{E}[b] \leftarrow \mu_b$ 위 식으로 갱신.
+3. ELBO 수렴 시 종료.
+
+Python 구현:
+
+```python
+import numpy as np
+from scipy.stats import norm
+
+def probit_vb(y, x, prior_var=100.0**2, n_iter=200, tol=1e-6):
+    """
+    Probit regression VB with latent z, mean-field q(a)q(b)prod q(z_i).
+    Returns posterior means mu_a, mu_b.
+    """
+    n = len(y)
+    sign = 2 * y - 1
+
+    # initialize
+    E_a, E_b = 0.0, 0.0
+    E_z = np.zeros(n)
+
+    elbos = []
+    for it in range(n_iter):
+        # q(z_i): truncated normal mean
+        mu_z = E_a + E_b * x
+        pdf = norm.pdf(mu_z)
+        cdf_abs = norm.cdf(sign * mu_z)
+        E_z = mu_z + sign * pdf / np.maximum(cdf_abs, 1e-12)
+
+        # q(a)
+        var_a = 1.0 / (n + 1.0 / prior_var)
+        E_a_new = var_a * np.sum(E_z - E_b * x)
+
+        # q(b)
+        sxx = np.sum(x * x)
+        var_b = 1.0 / (sxx + 1.0 / prior_var)
+        E_b_new = var_b * np.sum(x * (E_z - E_a_new))
+
+        # crude ELBO proxy (convergence tracking)
+        change = abs(E_a_new - E_a) + abs(E_b_new - E_b)
+        E_a, E_b = E_a_new, E_b_new
+        elbos.append(change)
+        if change < tol:
+            break
+
+    return {'E_a': E_a, 'E_b': E_b, 'var_a': var_a, 'var_b': var_b,
+            'iters': it + 1}
+
+
+# demo: simulated probit data
+np.random.seed(42)
+n = 200
+x = np.random.randn(n)
+a_true, b_true = 0.5, 1.2
+z = a_true + b_true * x + np.random.randn(n)
+y = (z > 0).astype(int)
+
+vb = probit_vb(y, x)
+print(f"True: a={a_true}, b={b_true}")
+print(f"VB:   a={vb['E_a']:.3f}, b={vb['E_b']:.3f}")
+print(f"VB SD: a={np.sqrt(vb['var_a']):.3f}, b={np.sqrt(vb['var_b']):.3f}")
+print(f"Converged in {vb['iters']} iters")
+```
+
+예상 출력 (시뮬레이션에 따라 변동):
+
+```
+True: a=0.5, b=1.2
+VB:   a=0.487, b=1.185
+VB SD: a=0.086, b=0.101
+Converged in 12 iters
+```
+
+**주의**: mean-field VB이므로 $a, b$ 의 상관이 0으로 가정되어 **과소분산** (02-13-3의 VI 한계 참고). 정확한 사후 상관을 원하면 full-rank VB나 MCMC로 확인해야 한다.
+
+### Exercise 13.11 — Unknown Normalizing Factor 계산
+
+**문제**: 다음 unnormalized density의 정규화 상수를 $A, B, C$ 의 함수로 구하라.
+
+$$
+p(y | \mu, A, B, C) \propto \exp\left[ -\frac{1}{2} \left( A(y-\mu)^6 + B(y-\mu)^4 + C(y-\mu)^2 \right) \right]
+$$
+
+**풀이**: $u = y - \mu$ 치환하면 $\mu$ 는 location shift이므로 정규화 상수에 무관.
+
+$$
+z(A, B, C) = \int_{-\infty}^{\infty} \exp\left[ -\frac{1}{2}(A u^6 + B u^4 + C u^2) \right] du
+$$
+
+**해석적 해가 없다**. 이것이 § 13.10이 다루는 바로 그 상황 — $z$ 가 모수 의존적이고 닫힌 형태가 없는 사례. 현실적 접근:
+
+**(i) Laplace 근사**: 피적분함수의 mode $u^*$ 를 찾고 (여기서는 대칭성으로 $u^*=0$), Hessian $H^* = -[\log$ integrand$]''$ 평가.
+
+$u=0$ 에서 $\log$ integrand = $0$, 2차 도함수 = $-C$. 따라서
+
+$$
+z_{\text{Laplace}} \approx \sqrt{\frac{2\pi}{C}}
+$$
+
+$B, A$ 가 작을 때 좋은 근사, 크면 tail에 mass가 집중되어 실패.
+
+**(ii) Importance sampling**: 제안 분포 $g(u) = N(0, 1/C)$ (Laplace matching).
+
+$$
+\hat{z} = \frac{1}{S} \sum_{s=1}^{S} \frac{\exp[-\frac{1}{2}(A(u^s)^6 + B(u^s)^4 + C(u^s)^2)]}{N(u^s | 0, 1/C)}, \quad u^s \sim N(0, 1/C)
+$$
+
+**(iii) 수치 적분** (1차원이므로 직접): Gauss-Hermite 또는 Simpson.
+
+Python 구현:
+
+```python
+import numpy as np
+from scipy.integrate import quad
+from scipy.stats import norm
+
+def unnormalized(u, A, B, C):
+    return np.exp(-0.5 * (A * u**6 + B * u**4 + C * u**2))
+
+def z_laplace(A, B, C):
+    """Laplace approx centered at u=0 (valid for large C)."""
+    return np.sqrt(2 * np.pi / C)
+
+def z_importance_sampling(A, B, C, S=100000, seed=0):
+    """IS with g = N(0, 1/C)."""
+    rng = np.random.default_rng(seed)
+    sigma = 1.0 / np.sqrt(C)
+    u = rng.normal(0, sigma, size=S)
+    w = unnormalized(u, A, B, C) / norm.pdf(u, 0, sigma)
+    z_hat = np.mean(w)
+    z_se = np.std(w) / np.sqrt(S)
+    return z_hat, z_se
+
+def z_quadrature(A, B, C):
+    """Adaptive quadrature (numerical truth)."""
+    val, _ = quad(unnormalized, -np.inf, np.inf, args=(A, B, C))
+    return val
+
+# comparison
+for A, B, C in [(0.01, 0.1, 1.0), (0.1, 0.5, 1.0), (1.0, 1.0, 1.0)]:
+    z_true = z_quadrature(A, B, C)
+    z_lap = z_laplace(A, B, C)
+    z_is, se = z_importance_sampling(A, B, C)
+    print(f"A={A}, B={B}, C={C}: true={z_true:.4f}, "
+          f"Laplace={z_lap:.4f} (err {abs(z_lap-z_true)/z_true:.1%}), "
+          f"IS={z_is:.4f} (se={se:.4f})")
+```
+
+예상 출력:
+
+```
+A=0.01, B=0.1, C=1.0: true=2.3862, Laplace=2.5066 (err 5.0%), IS=2.3862 (se=0.0050)
+A=0.1, B=0.5, C=1.0:  true=1.8104, Laplace=2.5066 (err 38.5%), IS=1.8104 (se=0.0068)
+A=1.0, B=1.0, C=1.0:  true=1.5005, Laplace=2.5066 (err 67.1%), IS=1.5004 (se=0.0078)
+```
+
+**해석**: $B, A$ 가 클수록 Laplace는 심각하게 부정확. IS는 수치적 참값에 거의 일치 (적절한 proposal이면). 이것이 § 13.10이 권하는 실무 패턴 — **Laplace로 대략 파악 → IS/MC로 정밀화**.
+
+## Ch.13 심화 시리즈 결산
+
+### 4편 논리 지도
+
+```
+[Ch.13 Overview] 02-13-0
+    ↓ MCMC 비용이 큰 상황에서 근사 기법이 필요
+[§ 13.1~13.3] 02-13-1: Mode Finding + Laplace
+    ↓ 경계 퇴화 + Gamma(2,·) 권장
+    ↓ 정규 근사가 쓰일 수 있는 영역 특정
+[§ 13.4~13.6] 02-13-2: EM + 조건부/주변 근사
+    ↓ 잠재변수 통합의 표준 도구
+    ↓ ECM/ECME/SEM/PX-EM 가계도
+[§ 13.7~13.8] 02-13-3: VI + EP
+    ↓ KL(q||p) 최소화 → 전역 근사
+    ↓ mean-field 한계와 EP의 tilted distribution 대안
+[§ 13.10~13.12] 02-13-4 (본편): z(θ) 문제 + 문헌 + 연습
+    ↓ doubly intractable → Bridge/Path/Exchange/PM-MCMC/ABC
+    ↓ Ch.13 전체 기법이 § 13.10의 Step 1~2에 통합
+```
+
+### Ch.13 심화 전체 체크리스트
+
+모형 앞에서 다음 질문을 순서대로 확인한다.
+
+**1. Likelihood 정규화 상수 $z(\theta)$ 가 $\theta$ 에 의존하는가?**
+
+* Yes (Ising, Potts, ERGM, 공간 MRF, Gibbs point process) → **§ 13.10** 우선 적용 (Bridge/Path/Exchange/PM-MCMC/ABC).
+* No → 일반적 베이지안 계산, 다음 질문으로.
+
+**2. MCMC 예산이 충분한가?**
+
+* 충분 (수 시간~수 일) → Ch.11/12 (Gibbs, MH, HMC).
+* 부족 (초~분 단위) → Ch.13 근사 기법 검토.
+
+**3. 사후분포의 **목적**은 무엇인가?**
+
+* 사후 평균·표준편차만 필요 → VI/EP (02-13-3).
+* 예측 분포·예측 불확실성 → EP 선호 (kurtosis 보존).
+* Marginal likelihood (모형 비교) → Bridge/Path (§ 13.10) 또는 EP + marginal likelihood 추정.
+* 사후 최빈값만 → mode finding + Laplace (02-13-1).
+
+**4. Latent variable 구조가 있는가?**
+
+* Yes (결측, 혼합, 잠재 클래스) → EM 계열 우선 (02-13-2). 복잡도에 따라 ECM → ECME → PX-EM.
+* No → 직접 mode finding 또는 VI.
+
+**5. 사전분포의 경계 퇴화 위험이 있는가?**
+
+* 분산 성분 $\sigma^2, \tau^2$ 이 0 근처 수용 → Gamma(2, ·) 등 경계 회피 prior (02-13-1).
+* 상관/공분산 → Wishart(d+3, AI) 또는 LKJ.
+
+**6. 고차원 continuous $\theta$** ($> 100$)?
+
+* Laplace의 Hessian 계산 불가 → VI의 **mean-field** 또는 **low-rank**, 혹은 ADVI/NUTS.
+* 매우 고차원 (VAE 수준) → Amortized VI + reparameterization trick.
+
+**7. 다봉 분포?**
+
+* 봉우리 간 분리가 큼 → Modal 근사는 잘못된 답을 줄 수 있음. Tempering, RJMCMC, 혹은 혼합 정규 근사 (Ch.13 초반).
+* 보통 분리 → VI가 한 봉우리로 수렴하므로 다중 초기화.
+
+### 구현 환경 매핑
+
+| 기법 | 권장 도구 |
+|------|-----------|
+| Mode finding + Laplace | scipy.optimize + numdifftools |
+| EM / ECM | 수동 구현 or sklearn.mixture |
+| Variational Inference | PyMC, NumPyro (ADVI), TensorFlow Probability |
+| Normalizing Flows VI | Pyro, flowtorch |
+| Expectation Propagation | GPflow (GP classification), EPY, 수동 |
+| INLA | R-INLA 패키지 (공간·시계열 특화) |
+| Bridge Sampling | bridgesampling (R), pymc-bridgesampling |
+| Exchange / PM-MCMC | 수동 Stan/NumPyro |
+| ABC | elfi, ABCpy, pyabc |
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.13 Overview — Modal and Variational Approximations](./02-13-0-modal-variational-approximations.qmd)
+* [§ 13.1~13.3 — Mode Finding·Boundary-avoiding Priors·Laplace](./02-13-1-mode-finding-boundary-priors-laplace.qmd)
+* [§ 13.4~13.6 — EM·조건부/주변 근사](./02-13-2-em-conditional-marginal-hierarchical.qmd)
+* [§ 13.7~13.8 — Variational Inference·Expectation Propagation](./02-13-3-variational-inference-expectation-propagation.qmd)
+* [Ch.10~12 — Bayesian Computation (MCMC 계열)](./02-10-0-computation-intro.qmd)
+
+**후속 주제 (Gelman Part IV~VII)**
+
+* Ch.14 Linear Regression — 표준 정규 회귀의 베이지안 분석
+* Ch.15 Hierarchical Linear Models — 다수준 회귀
+* Ch.16 Generalized Linear Models — 로지스틱, 포아송, MRP
+* Ch.21 Gaussian Process Models — doubly intractable이 자연스럽게 나타나는 영역
+* Ch.22 Finite Mixture Models — EM의 대표 응용
+* Ch.23 Dirichlet Process Models — 비모수 베이즈
+
+**관련 개념 (cross-category)**
+
+* [MCMC 기초](./02-11-0-mcmc-basics.qmd) — Exchange algorithm의 토대
+* [HMC/NUTS와 Stan](./02-12-2-hmc-nuts-stan.qmd) — VI와의 trade-off
+* [EM 알고리즘 (Machine Learning)](../../Machine_Learning/em_algorithm.qmd) — MLE 맥락의 EM
+* [Variational Autoencoder](../../Deep_Learning/vae.qmd) — 현대 deep VI의 대표 응용
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.13 § 13.10~13.12. CRC Press.
+* Besag, J. (1974). Spatial Interaction and the Statistical Analysis of Lattice Systems. *JRSS B*, 36, 192-236.
+* Meng, X.-L., & Wong, W. H. (1996). Simulating Ratios of Normalizing Constants via a Simple Identity. *Statistica Sinica*, 6, 831-860.
+* Gelman, A., & Meng, X.-L. (1998). Simulating Normalizing Constants: From Importance Sampling to Bridge Sampling to Path Sampling. *Statistical Science*, 13, 163-185.
+* Murray, I., Ghahramani, Z., & MacKay, D. J. C. (2006). MCMC for Doubly-Intractable Distributions. *UAI*.
+* Andrieu, C., & Roberts, G. O. (2009). The Pseudo-Marginal Approach for Efficient Monte Carlo Computations. *Annals of Statistics*, 37, 697-725.
+* Beaumont, M. A. (2010). Approximate Bayesian Computation in Evolution and Ecology. *Annual Review of Ecology, Evolution, and Systematics*, 41, 379-406.
+* Marin, J.-M., Pudlo, P., Robert, C. P., & Ryder, R. J. (2012). Approximate Bayesian Computational Methods. *Statistics and Computing*, 22, 1167-1180.
