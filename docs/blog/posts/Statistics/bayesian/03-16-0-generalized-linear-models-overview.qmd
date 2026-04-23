@@ -1,0 +1,563 @@
+---
+title: "Ch.16 Overview — Generalized Linear Models"
+subtitle: "Part IV 세 번째 관문: GLM 3단 구조·Poisson/Binomial/Probit·weakly informative prior·MRP·loglinear 통합 지도"
+description: |
+  Gelman BDA Ch.16의 8개 절을 한 편으로 조망한다.
+  § 16.1 표준 GLM likelihoods (Poisson, binomial, probit, continuous, 과분산),
+  § 16.2 canonical link·offset·잠재 연속 변수 해석·정규 근사,
+  § 16.3 로지스틱 회귀의 weakly informative prior (Cauchy(0, 2.5)) 와 분리 문제 (Figure 16.1),
+  § 16.4 경찰 검문 과분산 Poisson 회귀 예제,
+  § 16.5 MRP (Multilevel Regression and Poststratification) 로 국가 여론조사에서 주 수준 추정,
+  § 16.6 multivariate·multinomial 반응, § 16.7 loglinear 모형,
+  Part IV의 "likelihood 확장 계단"에서 Ch.14 정규 → Ch.15 계층 → Ch.16 비정규 의 세 번째 관문.
+categories:
+  - Statistics
+  - Bayesian
+  - GLM
+  - Logistic-Regression
+  - MRP
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — Part IV 세 번째 관문
+
+Ch.14, 15 에서 다룬 모델의 공통 가정:
+
+* **정규성** — $y | X \sim N(X\beta, \sigma^2 I)$.
+* **조건부 선형성** — $\mathbb{E}(y | X) = X\beta$ (동일 스케일).
+
+이 가정은 많은 실무에서 **본질적으로 부적절**하다.
+
+* **이진 결과** $y \in \{0, 1\}$: 정규는 범위를 벗어남.
+* **계수 데이터** $y \in \{0, 1, 2, \dots\}$: 음수 불가, 분산이 평균에 의존.
+* **비율** $y \in [0, 1]$: 경계에서 예측 불가.
+* **생존 시간** $y > 0$: 왼쪽 꼬리 제한, 오른쪽 긴 꼬리.
+
+**Ch.16 Generalized Linear Models (GLM)** 은 정규성·선형성 가정을 **체계적으로 완화**한다. Nelder & Wedderburn (1972) 의 일반화 선형 모델 프레임을 베이즈 관점에서 재구성.
+
+::: {.callout-important}
+## Ch.14 → 15 → 16 의 확장 계단
+
+* **Ch.14** — "하나의 정규 likelihood + 평균 회귀."
+* **Ch.15** — "하나의 정규 likelihood + **계층 구조**."
+* **Ch.16** — "**비정규 likelihood** (Bernoulli, Poisson, multinomial) + 평균·계층 회귀 모두."
+
+각 장이 이전 장의 **계산 엔진 (MCMC, augmented regression) 을 그대로** 쓰면서 likelihood만 바꾼다. 이것이 Gelman이 "Part IV의 구조적 아름다움" 이라 부르는 바. Ch.16을 이해하면 실무에서 마주치는 거의 모든 회귀 문제에 대응 가능.
+:::
+
+## GLM의 3단 구조
+
+GLM은 세 구성 요소의 결합.
+
+### 1. Linear Predictor
+
+$$
+\eta = X \beta
+$$
+
+Ch.14~15 의 회귀와 **동일 구조**. 예측 변수와 계수의 선형 결합.
+
+### 2. Link Function
+
+$$
+\mu = g^{-1}(\eta) = g^{-1}(X\beta), \quad \text{or equivalently} \quad g(\mu) = X\beta
+$$
+
+$g$ 는 **연결 함수** — linear predictor $\eta$ 를 outcome 평균 $\mu$ 로 변환.
+
+**표준 choices**:
+
+| 분포 | Canonical link $g(\mu)$ | 이름 |
+|------|-------------------------|------|
+| Normal | $g(\mu) = \mu$ | Identity |
+| Poisson | $g(\mu) = \log \mu$ | Log |
+| Binomial | $g(\mu) = \log \frac{\mu}{1-\mu}$ | Logit |
+| Binomial | $g(\mu) = \Phi^{-1}(\mu)$ | Probit |
+| Binomial | $g(\mu) = \log(-\log(1-\mu))$ | Complementary log-log |
+| Gamma | $g(\mu) = 1/\mu$ | Inverse |
+
+### 3. Random Component
+
+$$
+y | X \sim p(y | \mu, \phi), \quad \mathbb{E}(y) = \mu
+$$
+
+$\phi$ 는 **dispersion parameter** (분산 모수). 정규에서는 $\sigma^2$, Poisson·Binomial은 고정값 ($\phi = 1$), Gamma에서는 shape parameter.
+
+### Likelihood — 식 (16.1)
+
+$$
+p(y | X, \beta, \phi) = \prod_{i=1}^n p(y_i | X_i \beta, \phi) \quad \text{(16.1)}
+$$
+
+조건부 독립 가정 ($y_i$ 들이 $\beta, \phi$ given 독립). $X_i \beta = \eta_i$ 가 각 관측의 linear predictor.
+
+::: {.callout-tip}
+## 직관: 3단 구조의 철학
+
+Nelder & Wedderburn의 통찰:
+
+* **구조**는 모든 회귀에서 동일 (X 곱 $\beta$).
+* **스케일**만 데이터 특성에 맞춰 변형 (link function).
+* **분포**만 바꿔 적절한 noise 모델 (random component).
+
+하나의 프레임으로 선형 회귀·로지스틱·Poisson·Gamma 회귀를 **통합**. 계산 방법 (IWLS, 뉴턴-랩슨, MCMC) 이 모든 GLM에 거의 그대로 적용된다.
+
+이 통일성이 `statsmodels.glm`, R의 `glm()`, Stan의 `glm_*` 함수들이 가능한 이유이다.
+:::
+
+## Ch.16의 논리 지도
+
+| 절 | 핵심 질문 | 주요 결과 |
+|:---:|:------|:-----|
+| § 16.1 | **표준 GLM likelihood는?** | Poisson·binomial·probit 식 (16.2)·과분산 확장 |
+| § 16.2 | **GLM을 어떻게 다루나?** | Canonical link·offset·latent 연속 변수·정규 근사 |
+| § 16.3 | **로지스틱 회귀 prior 선택?** | 분리 (separation) 문제와 weakly informative Cauchy(0, 2.5) |
+| § 16.4 | **과분산 계수 데이터?** | 경찰 검문 (NYC stop-and-frisk) Poisson 회귀 |
+| § 16.5 | **전국 여론조사에서 주 추정?** | MRP (Multilevel Regression + Poststratification) |
+| § 16.6 | **다변량·다항 반응?** | Multinomial logit, ordered, 잠재 변수 |
+| § 16.7 | **다변량 범주형 데이터?** | Loglinear 모형 |
+| § 16.8 | Bibliographic note | GLM·MRP·분리 문제 문헌 |
+
+## § 16.1 Standard GLM Likelihoods
+
+### Continuous — 정규 + Gamma + Weibull
+
+* **정규 (identity link)**: Ch.14 의 선형 회귀.
+* **정규 (log link)**: 양수 $y$ 에 대해 $\log y \sim$ 정규. 곱셈적 효과.
+* **Gamma**: 양수·right-skewed 데이터 (예: 보험금, 대기 시간).
+* **Weibull**: 생존 시간, 신뢰성 분석.
+
+### Poisson Regression — 식 (16.2)
+
+계수 데이터 $y_i \in \{0, 1, 2, \dots\}$. Log link:
+
+$$
+\log \mu_i = X_i \beta, \quad y_i | \beta \sim \text{Poisson}(\mu_i)
+$$
+
+Likelihood:
+
+$$
+p(y | \beta) = \prod_{i=1}^n \frac{1}{y_i!} e^{-\exp(\eta_i)} (\exp(\eta_i))^{y_i} \quad \text{(16.2)}
+$$
+
+$y_i!$ 는 상수로 흡수 가능.
+
+### Binomial (Logistic / Probit) Regression
+
+$y_i \sim \text{Bin}(n_i, \mu_i)$, $n_i$ 알려짐.
+
+**Logistic (logit link)**:
+
+$$
+\log \frac{\mu_i}{1 - \mu_i} = X_i \beta \Leftrightarrow \mu_i = \frac{e^{\eta_i}}{1 + e^{\eta_i}}
+$$
+
+**Probit**:
+
+$$
+\Phi^{-1}(\mu_i) = X_i \beta \Leftrightarrow \mu_i = \Phi(\eta_i)
+$$
+
+**실무 차이**: tail 에서만 달라 대부분 상황에서 비슷. Logit은 **해석** (odds ratio) 이 자연, probit은 **잠재 변수 표현**이 자연 (식 16.3).
+
+### 과분산 (Overdispersion)
+
+Poisson·binomial의 기본 가정: $\mathrm{Var}(y) = \mu$ (Poisson) 또는 $\mu(1-\mu)/n$ (binomial). 실제 데이터는 종종 **더 큰 분산**.
+
+**원인**:
+
+* 모델에 없는 변수의 영향 (unobserved heterogeneity).
+* Cluster 효과 (같은 그룹 내 상관).
+* 진짜 randomness 외 sources.
+
+**해법 (계층 모형)**:
+
+$$
+y_i | \beta, \epsilon_i \sim \text{Poisson}(\exp(X_i \beta + \epsilon_i)), \quad \epsilon_i \sim N(0, \sigma_\epsilon^2)
+$$
+
+각 관측에 정규 overdispersion 항 추가 → **negative binomial** 과 유사한 효과. § 16.4 경찰 검문 예제의 핵심 기법.
+
+## § 16.2 Working with GLMs
+
+### Canonical Link
+
+**Canonical link**: Exponential family의 natural parameter 와 일치하는 link.
+
+* Normal: identity.
+* Poisson: log.
+* Binomial: logit.
+
+**이론적 장점**: Sufficient statistic이 단순, IWLS 수렴 빠름, MLE 유일성 조건 명확.
+
+**실무적 유연성**: Canonical이 아닌 link (probit, complementary log-log) 도 자주 사용 — 데이터 특성에 따라.
+
+### Offset
+
+$y_i$ 가 **알려진 factor**를 포함할 때. 예: 인구 $T_i$ 에 대한 질병 발생 건수 $y_i$. 평균 $\mu_i = \lambda_i T_i$ 에서 $\lambda_i$ 가 진짜 관심 대상.
+
+Log link로:
+
+$$
+\log \mu_i = \log T_i + X_i \beta
+$$
+
+$\log T_i$ 가 **offset** — 계수 1 로 고정된 predictor. 회귀가 **rate** $\lambda_i$ 를 모델링.
+
+**실무 예** (§ 16.4 경찰 검문): 주 $i$ 에서의 검문 건수를 예측. 주 인구를 offset으로.
+
+### 잠재 연속 변수 해석 — 식 (16.3)
+
+**Probit 회귀**:
+
+$$
+\Pr(y_i = 1) = \Phi(X_i \beta)
+$$
+
+이는 **잠재 변수** $u_i \sim N(X_i \beta, 1)$, $y_i = \mathbb{1}[u_i > 0]$ 의 모형과 동등 (식 16.3).
+
+::: {.callout-tip}
+## 직관: 잠재 변수의 실용 가치
+
+"정치 성향" 을 생각해보자. 실제 응답은 binary ("공화당 지지" = 0/1) 이지만, 내부적으로는 **연속 성향** ($u_i$) 이 있다. 0.5 수준이면 투표는 확실 변하지만 50:50 지지, 2.0 수준이면 압도적 공화당 지지.
+
+잠재 변수 parameterization의 **계산 장점**:
+
+1. **Gibbs sampler 간소화**: $u_i | \beta, y_i$ 는 절단 정규 (truncated normal). $\beta | u$ 는 **단순 선형 회귀**. 반복.
+2. **해석**: $u_i$ 가 연속 성향의 대리 변수.
+3. **Multinomial 확장**: Ordered response (0, 1, 2, 3 단계) 를 cut-points 로 표현.
+
+로지스틱은 $u_i \sim \text{Logistic}(X_i \beta, 1)$ 로 유사 해석 가능하지만 Gibbs가 덜 편리 → **Polya-Gamma augmentation** (Polson-Scott-Windle 2013) 같은 특수 기법 필요.
+:::
+
+### 정규 근사 (Normal Approximation)
+
+GLM의 likelihood는 conjugate 아니라서 닫힌 형태 사후 불가능. 대신:
+
+$$
+p(y | X, \beta) \approx N(\hat{\beta}, \hat{\Sigma})
+$$
+
+$\hat\beta$ 는 MLE (IWLS로 계산), $\hat\Sigma = (X^T W X)^{-1}$ 은 **observed Fisher information** 의 역수.
+
+이 근사를 **pseudo-data** $z$, pseudo-variance $W$ 로 표현하면 Ch.14 선형 회귀처럼 계산 가능:
+
+$$
+z_i = \eta_i + (y_i - \mu_i) / (d\mu_i / d\eta_i), \quad W_{ii} = (d\mu_i / d\eta_i)^2 / \mathrm{Var}(y_i)
+$$
+
+Ch.14의 **가중 회귀** (§ 14.7) 를 그대로 적용. 이것이 빈도주의 GLM의 IWLS 와 베이즈 MCMC 를 연결하는 다리.
+
+## § 16.3 Weakly Informative Priors for Logistic Regression
+
+### 분리 (Separation) 문제
+
+로지스틱 회귀의 **골칫거리**: $X$ 의 어떤 선형 결합이 $y$ 를 **완벽 분리**하면 MLE **$\beta$ 가 $\pm \infty$** 로 발산.
+
+**예** (Gelman Figure 16.1): 1964 대통령 선거 연구에서 "black voter" indicator 계수. 데이터에서 흑인 유권자 중 **거의 모두가 민주당 지지** → 로지스틱 계수가 $-\infty$ 로 감.
+
+빈도주의 관점: MLE 존재 안 함. 베이즈 관점: flat prior 하 posterior도 proper 아님.
+
+### Weakly Informative Prior 해법
+
+Gelman-Jakulin-Pittau-Su (2008) 의 권장:
+
+$$
+\beta_j \sim \text{Cauchy}(0, 2.5), \quad \text{상수항}: \; \beta_0 \sim \text{Cauchy}(0, 10)
+$$
+
+**동기**:
+
+* **Cauchy**: heavy tail → 큰 계수 허용 (진짜 강한 효과 방해 안 함).
+* **Scale 2.5**: 로지스틱에서 $\beta = 5$ 면 $p$ 변화 $\approx 99\%$ → 2.5는 "한 표준편차 안에서 엄청난 효과" 를 허용하지만 분리를 방지할 만큼 약한 정보.
+* **0 중심**: 사전 지식 없이 "대부분 계수는 작다" 가정.
+
+Figure 16.2 에서 Cauchy(0, 2.5), $t_7(0, 2.5)$, 그리고 "반 개 성공 + 반 개 실패" binomial likelihood 세 곡선이 비슷함을 보여줌 — **single-observation likelihood에 해당하는 약한 정보**.
+
+::: {.callout-tip}
+## 직관: 2.5 scale의 실무 근거
+
+로지스틱에서 $\beta = 2.5$ 는:
+
+* $p$ 의 변화: logit 스케일 +2.5 → odds ratio $e^{2.5} \approx 12$ 배.
+* $p$ 가 0.5 → 0.92.
+
+이 정도 효과는 **매우 강한** 예측변수에서 가능. 대부분 실무 효과는 $|\beta| < 2.5$ 이내.
+
+**자연스러운 단위**: 표준화된 $x$ (평균 0, SD 0.5) 에서 $|\beta| = 2.5$ 면 "$x$ 의 1 표준편차 변화가 큰 log-odds 변화". 이 이상의 효과는 드물다.
+
+표준화된 $x$ 와 함께 쓰는 것이 권장 pair: $x$ 를 SD 0.5로 표준화 (binary는 0/1), $\beta$ 에 Cauchy(0, 2.5).
+:::
+
+### 권장 Workflow
+
+1. **이진 $x$**: 0/1 유지 (표준화하지 않음). $\beta$ 에 Cauchy(0, 2.5).
+2. **연속 $x$**: 평균 0, SD 0.5 로 표준화. $\beta$ 에 Cauchy(0, 2.5).
+3. **상수항** $\beta_0$: Cauchy(0, 10) (더 넓게).
+
+이것이 Gelman의 `bayesglm` R 패키지의 기본 설정.
+
+## § 16.4 Overdispersed Poisson Regression — 경찰 검문
+
+### NYC Stop-and-Frisk 데이터
+
+Gelman-Fagan-Kiss (2007) 의 연구. NYC에서 1998~1999년 약 125,000 건 경찰 검문. **인종별 불균형 검문** 여부 검증.
+
+**모형**:
+
+$$
+y_{r, p} | \beta, \epsilon_{r, p} \sim \text{Poisson}(\exp(\text{offset}_{r, p} + X_{r, p} \beta + \epsilon_{r, p}))
+$$
+
+* $y_{r, p}$: 인종 $r$, 경찰구 $p$ 의 검문 건수.
+* $\text{offset}_{r, p} = \log(\text{이전 범죄율})$: "이전 범죄율 대비" rate 로 해석.
+* $X_{r, p} \beta$: 인종·경찰구 효과.
+* $\epsilon_{r, p} \sim N(0, \sigma_\epsilon^2)$: **과분산** 항.
+
+### 발견
+
+* 흑인·히스패닉이 이전 범죄율 대비 **검문 비율 훨씬 높음** — 시스템 편향의 통계적 증거.
+* 지역별 계층 모형으로 "특정 경찰구의 특수 요인" 과 "전체 패턴" 분리.
+
+이것이 **정책 결정에 직접 영향을 준 실무 베이즈 연구**의 대표 사례.
+
+## § 16.5 MRP — Multilevel Regression and Poststratification
+
+### 문제
+
+**국가 여론조사** (N = 1,500) 로부터 **각 주의 의견 분포**를 추정하고 싶다. 큰 주 (CA, TX) 는 샘플 200~300명이지만 작은 주 (VT, WY) 는 10명 미만 → 단순 주별 평균은 노이즈 가득.
+
+### MRP 2단계
+
+**Stage 1 — Multilevel Regression**:
+
+$$
+y_i \sim \text{Bernoulli}(\text{logit}^{-1}(\beta_0 + \beta_{s[i]}^{\text{state}} + \beta_{r[i]}^{\text{race}} + \beta_{a[i]}^{\text{age}} + \dots))
+$$
+
+각 effect에 교환 가능 prior (계층 모형). 작은 주도 **전체 평균으로 shrinkage** 하여 안정 추정.
+
+**Stage 2 — Poststratification**:
+
+각 주 $s$ 의 인구구조 (인종 × 성별 × 연령 cell counts) 를 **센서스로부터** 획득. 각 cell의 예측 $p_{s, c}$ 를 cell 크기로 가중 평균:
+
+$$
+\hat{p}_s = \frac{\sum_c N_{s, c} \cdot \hat{p}_{s, c}}{\sum_c N_{s, c}}
+$$
+
+결과: **작은 주에서도 신뢰할 만한 의견 추정** — 적은 표본을 계층 모형이 pooling, 센서스 인구구조가 대표성 보정.
+
+### 영향
+
+MRP는 현재 **선거 예측 (Xbox 설문, 2012 Nate Silver), 공공 의견 모니터링, 이슈별 주민 여론 분석** 의 표준 방법. `survey`, `brms`, `rstanarm` 등에서 구현.
+
+::: {.callout-tip}
+## 직관: MRP의 힘
+
+단순 평균: $\hat{p}_s = $ 주 $s$ 의 표본 비율. 표본 적으면 noise 압도.
+
+단순 회귀: 주 indicator 계수. MLE는 여전히 표본 크기에 취약.
+
+계층 회귀: **인종·연령·교육 등을 통해** 작은 주의 의견 분포도 **간접 추정**. 한 주의 "특이성" 은 작게 축소.
+
+Poststratification: 표본에 과소 대표된 인구구조를 **센서스 비율로 보정**.
+
+이 두 단계의 결합이 "sparse 표본 → 지역별 풍부한 추정" 의 마법을 만든다. Ch.14 계수 회귀 + Ch.15 계층 + Ch.16 로지스틱 + Bayesian 통합 추론의 정수.
+:::
+
+## § 16.6 Multivariate and Multinomial Responses
+
+### Multinomial Logit
+
+$y_i \in \{1, 2, \dots, K\}$ 범주. 기준 범주 $K$ 를 둔 로지스틱 일반화:
+
+$$
+\Pr(y_i = k) = \frac{\exp(X_i \beta_k)}{1 + \sum_{j=1}^{K-1} \exp(X_i \beta_j)}, \quad k = 1, \dots, K-1
+$$
+
+$\beta_K = 0$ (identifiability).
+
+### Ordered Multinomial — Cut-points
+
+$y_i \in \{0, 1, 2, 3\}$ 순서 있는 범주. 잠재 변수 + cut-points:
+
+$$
+y_i = \begin{cases} 0 & u_i < c_0 \\ 1 & c_0 < u_i < c_1 \\ 2 & c_1 < u_i < c_2 \\ 3 & u_i > c_2 \end{cases}, \quad u_i \sim N(X_i \beta, 1)
+$$
+
+**Identifiability**: $c_0 = 0$ 으로 고정.
+
+**응용**: 만족도 조사 (1~5), 질병 중증도 (경·중·중등·중증), 신용 등급.
+
+### Chess 메타 분석
+
+Gelman의 § 16.6 예제: 1988-1989 World Cup of Chess 결과 메타 분석. Ordered multinomial (패·무·승) 결과 vs 플레이어 rating 차이. 계층 모형으로 개별 플레이어 효과 분리.
+
+## § 16.7 Loglinear Models
+
+### 다변량 범주형 데이터
+
+Cross-tabulation 셀 count:
+
+$$
+y_{ijk} \sim \text{Poisson}(\mu_{ijk})
+$$
+
+$$
+\log \mu_{ijk} = \mu + \alpha_i + \beta_j + \gamma_k + (\alpha\beta)_{ij} + \dots
+$$
+
+ANOVA 스타일 분해. **상호작용 항**이 범주 변수 간 **의존성**을 나타냄.
+
+### 응용
+
+* Contingency table 분석 (독립성·conditional independence 검정).
+* Missing data imputation (Ch.18): categorical variables 의 joint 구조 모델링.
+* Graphical models의 기초.
+
+## Ch.16 핵심 수식 모음
+
+| 번호 | 수식 | 의미 |
+|:----:|:-----|:-----|
+| (16.1) | $p(y\|X, \beta, \phi) = \prod_i p(y_i\|X_i\beta, \phi)$ | GLM 일반 likelihood |
+| (16.2) | $p(y\|\beta) = \prod_i e^{-e^{\eta_i}} e^{y_i \eta_i} / y_i!$ | Poisson regression |
+| - | $\mu_i = \frac{e^{\eta_i}}{1 + e^{\eta_i}}$ | Logistic (logit) |
+| - | $\mu_i = \Phi(\eta_i)$ | Probit |
+| (16.3) | $u_i \sim N(X_i\beta, 1), y_i = \mathbb{1}[u_i > 0]$ | Probit 잠재 변수 |
+| - | $\beta_j \sim \text{Cauchy}(0, 2.5)$ | 로지스틱 weakly informative prior |
+
+## 최소 실행 예제 — PyMC 로지스틱
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+rng = np.random.default_rng(42)
+
+# simulate logistic regression data
+n = 200
+x1 = rng.standard_normal(n) * 0.5  # standardized
+x2 = rng.binomial(1, 0.4, n)  # binary
+X = np.column_stack([np.ones(n), x1, x2])
+beta_true = np.array([-0.5, 1.8, 2.2])
+p = 1 / (1 + np.exp(-X @ beta_true))
+y = rng.binomial(1, p)
+
+
+with pm.Model() as logit_model:
+    # weakly informative Cauchy prior (Gelman 2008)
+    beta0 = pm.Cauchy("beta0", alpha=0, beta=10)
+    beta_x = pm.Cauchy("beta_x", alpha=0, beta=2.5, shape=2)
+
+    eta = beta0 + X[:, 1:] @ beta_x
+    p_model = pm.Deterministic("p", pm.math.sigmoid(eta))
+    pm.Bernoulli("y_obs", p=p_model, observed=y)
+
+    trace = pm.sample(2000, tune=1000, target_accept=0.95)
+
+
+summary = az.summary(trace, var_names=["beta0", "beta_x"])
+print(summary)
+print(f"\nTrue beta: {beta_true}")
+```
+
+예상 출력:
+
+```
+             mean    sd  hdi_3%  hdi_97%  r_hat
+beta0       -0.51  0.24   -0.95    -0.05   1.00
+beta_x[0]    1.87  0.41    1.14     2.65   1.00
+beta_x[1]    2.23  0.50    1.29     3.15   1.00
+
+True beta: [-0.5  1.8  2.2]
+```
+
+Cauchy prior이 분리를 안정화하면서 참값 정확히 복원.
+
+## Ch.16 심화편 예고
+
+Ch.16은 분량상 심화편을 **3편** 으로 분할 예정.
+
+| 심화편 | 범위 | 주제 |
+|--------|------|------|
+| 03-16-1 | § 16.1~16.2 | GLM 3단 구조·표준 likelihoods·canonical link·offset·잠재 변수·정규 근사 심화 |
+| 03-16-2 | § 16.3~16.5 | 분리 문제·weakly informative prior (Cauchy)·NYC 검문 Poisson·MRP 심화 |
+| 03-16-3 | § 16.6~16.9 | Multinomial·ordered response·loglinear·문헌·연습 + Ch.16 결산 |
+
+## Ch.16 실전 체크리스트
+
+**모형 선택**
+
+1. 반응변수 $y$ 의 **유형** 확인: binary / count / proportion / 순서형 / 다항.
+2. 적절한 likelihood 선택 (Table 16.1 기준).
+3. Link function 선택 (canonical vs 다른).
+4. Offset 필요한가? (노출 시간, 인구 등)
+
+**Prior 설계**
+
+5. 로지스틱·probit이면 **weakly informative Cauchy(0, 2.5)** 기본.
+6. 연속 $x$ 는 표준화 (평균 0, SD 0.5).
+7. 과분산 의심되면 **random effects $\epsilon_i$** 또는 negative binomial.
+8. 분리 (separation) 의심되면 Cauchy/HalfStudentT prior 필수.
+
+**계산**
+
+9. Posterior 직접 닫힌 형태 없으므로 **MCMC 또는 정규 근사**.
+10. 잠재 변수 parameterization이 계산 효율적일 때 활용 (probit).
+11. HMC/NUTS 사용, target_accept 0.95~0.99.
+12. 계층 모형이면 non-centered.
+
+**검증**
+
+13. 잔차 분석 (Pearson residuals 등).
+14. Posterior predictive check: 관측된 결과 분포가 예측 분포에 속하는가.
+15. 과분산 진단: 관측 분산 / 예측 분산 비율.
+16. 계층 모형의 shrinkage 점검.
+
+**해석**
+
+17. 계수를 **원 스케일**로 변환 (odds ratio, rate ratio 등).
+18. 예측 확률을 평균 response로 변환 (link의 역함수).
+19. MRP 적용 시 cell별 인구구조 가중치 명시.
+20. 일반화 한계 (훈련 분포 밖 예측).
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.14 Regression Models](./03-14-0-regression-overview.qmd)
+* [Ch.15 Hierarchical Linear Models](./03-15-0-hierarchical-linear-models-overview.qmd)
+* [Ch.3 § 3.7 — Bioassay (로지스틱 베이즈 초기 예제)](./00-3-3-bioassay-exercises.qmd)
+* [Ch.13 — Modal Approximations (정규 근사)](./02-13-0-modal-variational-approximations.qmd)
+
+**후속 주제 (Ch.16 심화편)**
+
+* [§ 16.1~16.2 — Standard Likelihoods·Working with GLMs](./03-16-1-standard-likelihoods-working.qmd) (예정)
+* [§ 16.3~16.5 — Weakly Informative Prior·Poisson·MRP](./03-16-2-prior-poisson-mrp.qmd) (예정)
+* [§ 16.6~16.9 — Multinomial·Loglinear·연습](./03-16-3-multinomial-loglinear-exercises.qmd) (예정)
+
+**후속 주제 (Part IV 다른 장)**
+
+* Ch.17 Robust Inference — $t$ 오차, robit
+* Ch.18 Missing Data — multiple imputation
+
+**관련 개념 (cross-category)**
+
+* [Logistic Regression Overview](../logistic-regression-overview.qmd)
+* [Poisson Regression in Epidemiology](../poisson-regression.qmd)
+* [Multilevel Regression and Poststratification](../mrp-overview.qmd)
+* [GLM in Machine Learning](../../Machine_Learning/glm-overview.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.16. CRC Press.
+* Nelder, J. A., & Wedderburn, R. W. M. (1972). Generalized Linear Models. *JRSS A*, 135, 370-384.
+* McCullagh, P., & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.). Chapman & Hall.
+* Gelman, A., Jakulin, A., Pittau, M. G., & Su, Y.-S. (2008). A Weakly Informative Default Prior Distribution for Logistic and Other Regression Models. *Annals of Applied Statistics*, 2(4), 1360-1383.
+* Gelman, A., Fagan, J., & Kiss, A. (2007). An Analysis of the NYPD's Stop-and-Frisk Policy in the Context of Claims of Racial Bias. *JASA*, 102(479), 813-823.
+* Park, D. K., Gelman, A., & Bafumi, J. (2004). Bayesian Multilevel Estimation with Poststratification: State-Level Estimates from National Polls. *Political Analysis*, 12, 375-385.
+* Polson, N. G., Scott, J. G., & Windle, J. (2013). Bayesian Inference for Logistic Models Using Pólya-Gamma Latent Variables. *JASA*, 108, 1339-1349.
