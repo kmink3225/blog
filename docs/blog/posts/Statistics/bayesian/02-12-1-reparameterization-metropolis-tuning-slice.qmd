@@ -1,0 +1,641 @@
+---
+title: "§ 12.1~12.3 — 재매개변수화·Metropolis 튜닝·Slice·Reversible Jump"
+subtitle: "Gelman BDA Ch.12 심화 — 선형/non-centered 재매개변수화 기하학, $t$ 분포 auxiliary Gibbs, parameter expansion 유도, $c = 2.4/\\sqrt{d}$ 최적성, slice sampling 증강, reversible jump 식 (12.2), simulated tempering"
+description: |
+  Ch.12 overview 가 "무작위 보행을 넘어서" 세 축의 지도였다면, 이 포스트는
+  § 12.1~12.3 의 **수식 유도와 구체 알고리즘 분석**. § 12.1 의 선형
+  재매개변수화가 사후 공분산을 고유값 분해로 왜 대각화 하는지, non-centered
+  $\theta_j = \mu + \tau \eta_j$ 가 funnel 을 어떻게 제거하는지의
+  기하학적 증명, $t_\nu$ 분포를 $\mathrm{N}(\mu, V_i), V_i \sim
+  \mathrm{Inv}\text{-}\chi^2(\nu, \sigma^2)$ 혼합으로 표현해 Gibbs 가능하게
+  만드는 유도 (식 12.1), parameter expansion 의 $\alpha$ 도입이 왜 stuck
+  상태 탈출에 도움이 되는가, § 12.2 의 고차원 정규 목표에서 $c^* =
+  2.4/\sqrt{d}$ 와 수용률 0.234 가 평균 제곱 점프 거리 최대화로 나오는
+  수식, Metropolis 의 효율 $0.3/d$ 가 Gibbs 의 $1/d$ 보다 3 배 나쁜 근거,
+  Adaptive MCMC 가 정상 분포를 깰 수 있는 이유와 Andrieu-Thoms 정리의
+  diminishing adaptation 조건, § 12.3 의 slice sampling 증강 $(\theta, u)$
+  에서 어떻게 균등 추출이 $p(\theta \mid y)$ 샘플링을 복원하는지, reversible
+  jump 식 (12.2) 의 Jacobian 항이 차원 변화에서 detailed balance 를 어떻게
+  유지하는지, simulated tempering 의 $q_k(\theta) = p(\theta \mid y)^{1/T_k}
+  p_0(\theta)^{1-1/T_k}$ 사다리 구조 — 각 수식 옆에 "왜 이 변형이 효율을
+  높이는가·언제 실패하는가" 를 붙여 전개한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — 세 절의 공통 질문
+
+Ch.12 § 12.1~12.3 은 기본 MCMC 의 **"세 방향의 확장"**.
+
+| 절 | 접근 |
+|---|---|
+| 12.1 | Gibbs 변형 — 좌표 변환·변수 추가 |
+| 12.2 | Metropolis 튜닝 — 점프 스케일 최적화 |
+| 12.3 | 기타 확장 — slice, reversible jump, tempering |
+
+세 절 모두 **목표 분포는 그대로, 알고리즘만 수정**. HMC (§ 12.4~12.6) 와 달리 random walk 패러다임 내에서의 개선. [Overview (02-12-0)](./02-12-0-efficient-mcmc.qmd) 의 큰 그림을 수식으로 채운다.
+
+## § 12.1 — Efficient Gibbs Samplers
+
+### 선형 재매개변수화 — 선형대수 정확히
+
+Gibbs 가 느린 주원인: **사후 성분 간 상관**. Figure 11.2 의 $\rho = 0.8$ 경우, Gibbs 는 축 정렬 이동으로 대각선을 지그재그.
+
+**해결**: 선형 변환 $\phi = A\theta + b$ 로 상관 제거.
+
+#### 고유값 분해 기반 선택
+
+목표 분포 사후 공분산 $\Sigma$. 대칭 양정치 → 고유값 분해:
+
+$$
+\Sigma = Q \Lambda Q^\top
+$$
+
+$Q$ 는 orthogonal, $\Lambda$ 는 대각.
+
+**최적 변환**:
+
+$$
+\phi = Q^\top \theta \Rightarrow \mathrm{Cov}(\phi) = Q^\top \Sigma Q = \Lambda
+$$
+
+**대각 공분산**. 새 좌표에서 Gibbs 는 **독립 성분 업데이트** — 한 번에 한 축이지만 상관 없음.
+
+#### 효율 이득 정량
+
+이변량 정규 $\rho = 0.8$ 의 자기상관 시간:
+
+$$
+\tau_{\mathrm{ac, 원좌표}} \approx \frac{1}{1 - \rho^2} = \frac{1}{0.36} \approx 2.8
+$$
+
+변환 후 $\phi$ 는 독립 → $\tau_{\mathrm{ac, 새좌표}} = 1$. **2.8 배 가속**.
+
+$\rho \to 1$ 극단에서 원좌표 Gibbs 의 $\tau_{\mathrm{ac}} \to \infty$, 재매개변수화는 1 유지. 병리 사후일수록 큰 이득.
+
+::: {.callout-tip}
+## 직관 — 재매개변수화는 "회전 비용 없음"
+
+선형 변환은 Jacobian 이 상수 — 사후 밀도에 단순 곱셈 효과. 계산 비용 0.
+
+그러나 **수렴 속도는 질적으로 달라짐**. "무료 속도 향상".
+
+실무 한계:
+
+- $\Sigma$ 사전 추정 필요 → 예비 MCMC 또는 Laplace 근사.
+- 비정규 사후에선 선형 변환이 완벽 제거 못 함.
+- 그러나 **대부분 감소** — 시도할 가치.
+:::
+
+### Non-centered Parameterization — Funnel 제거
+
+계층 모형의 특수 문제. 전통 (centered):
+
+$$
+\theta_j \sim \mathrm{N}(\mu, \tau^2)
+$$
+
+#### Funnel 의 기하학
+
+$\tau$ 가 작아지면 $\theta_j$ 의 조건부 분산 $\tau^2$ 도 작아짐. 즉 **$\tau$ 축을 따라 내려갈수록 $\theta_j$ 공간 좁아짐**.
+
+2D 등고선 ($(\tau, \theta_j)$ 평면):
+
+```
+           θ_j
+            |
+            |    .  .  .  .
+            |  .   .   .   .
+            | .     .     .
+            |.       .       .
+     -------+-------|--------|---  τ
+            |.       .       .
+            | .     .     .
+            |  .   .   .   .
+            |    .  .  .  .
+            |
+```
+
+중앙 좁은 영역 ($\tau \to 0$) 이 "funnel 목". MCMC 가 이 영역에 들어가면 $\tau$ 를 올리기 위해 $\theta_j$ 가 거의 정확히 $\mu$ 와 같아야 — 매우 좁은 통로.
+
+Metropolis·HMC 모두 **step size** 를 이 좁은 영역에 맞춰 크게 줄여야 → 다른 영역에서 비효율.
+
+#### Non-centered 변환
+
+새 파라미터 $\eta_j$ 도입:
+
+$$
+\eta_j \sim \mathrm{N}(0, 1), \quad \theta_j = \mu + \tau \eta_j
+$$
+
+$\eta_j$ 의 조건부 분포는 **항상 표준 정규**. $(\mu, \tau)$ 가 바뀌어도 $\eta_j$ 공간은 변화 없음.
+
+**기하학적 의미**: funnel 이 **수직 실린더**로 펴짐. MCMC 가 일관된 step size 로 전체 탐색 가능.
+
+::: {.callout-tip}
+## 직관 — "숫자를 바꾸지 말고 좌표를 바꿔라"
+
+$\theta_j = \mu + \tau \eta_j$ 는 **두 변수를 한 변수의 선형 결합** 으로 정의. 수학적으로 똑같은 분포, 다른 파라미터화.
+
+비유: 극좌표 vs 데카르트 좌표. 같은 공간, 다른 언어. 어떤 문제는 극좌표에서 쉽고 어떤 문제는 데카르트에서 쉽다.
+
+Non-centered 가 유리한 조건: **데이터가 그룹별 모수를 약하게 식별** (그룹당 관측이 적거나 그룹 간 분산 $\tau$ 가 작은 경우).
+
+반대 상황 — **강한 식별** (그룹당 관측 많음, $\tau$ 큼) — 에서는 centered 가 유리할 수도. Stan 은 "자동 선택" 제공.
+:::
+
+### 보조 변수 — $t$ 분포 Gibbs
+
+**문제**: $y_i \sim t_\nu(\mu, \sigma^2)$. $t$ 분포는 표준 분포 아니므로 조건부 공액 Gibbs 불가.
+
+**해결**: **$t$ 를 정규 혼합으로 재표현**.
+
+#### 혼합 표현 — 식 (12.1)
+
+확률론의 고전 결과:
+
+$$
+y \sim t_\nu(\mu, \sigma^2) \iff y \mid V \sim \mathrm{N}(\mu, V), \quad V \sim \mathrm{Inv}\text{-}\chi^2(\nu, \sigma^2) \tag{12.1}
+$$
+
+**증명**: $V$ 를 marginalize.
+
+$$
+p(y) = \int \mathrm{N}(y \mid \mu, V) \mathrm{Inv}\text{-}\chi^2(V \mid \nu, \sigma^2) dV
+$$
+
+계산하면 $t_\nu(y \mid \mu, \sigma^2)$. (교재 Appendix A.)
+
+#### 확장 모형 Gibbs
+
+$(y, V, \mu, \sigma^2)$ 결합 분포에서 Gibbs.
+
+**(1) $V_i \mid \mu, \sigma^2, y$**: 정규-역감마 공액.
+
+$$
+V_i \mid \mu, \sigma^2, \nu, y \sim \mathrm{Inv}\text{-}\chi^2\!\left(\nu + 1, \frac{\nu \sigma^2 + (y_i - \mu)^2}{\nu + 1}\right)
+$$
+
+**(2) $\mu \mid V, \sigma^2, y$**: 각 관측의 개별 분산 $V_i$ 가중. 정규 공액.
+
+$$
+\mu \mid \sigma^2, V, \nu, y \sim \mathrm{N}\!\left(\frac{\sum_i y_i/V_i}{\sum_i 1/V_i}, \frac{1}{\sum_i 1/V_i}\right)
+$$
+
+**(3) $\sigma^2 \mid V, \mu, y$**: $V_i$ 의 역수 합.
+
+$$
+\sigma^2 \mid \mu, V, \nu, y \sim \mathrm{Gamma}\!\left(\frac{n\nu}{2}, \frac{\nu}{2} \sum_i \frac{1}{V_i}\right)
+$$
+
+세 조건부 모두 **공액** → Gibbs 100% 수용.
+
+::: {.callout-tip}
+## 직관 — "잠재 변수가 문제를 선형화한다"
+
+원 모형의 $t$ 우도: 비공액, 직접 샘플링 불가.
+
+확장 모형: **각 관측에 자기만의 분산 $V_i$**. 이 분산이 관측별로 다르므로 "가중 정규" — 각 구성 성분이 공액.
+
+잠재 변수 $V_i$ 는 **"이 관측이 꼬리에서 왔나"** 를 부드럽게 표현. 큰 $V_i$ = 꼬리 관측 (outlier).
+
+이 패턴이 일반 원리: **"혼합 분포는 잠재 지시자로 표현해 Gibbs 가능"**. 혼합 모형 (Ch.22), LDA, 유한 혼합 가우시안 모두 같은 구조.
+:::
+
+### Parameter Expansion — 더 큰 공간에서
+
+**역설적 아이디어**: 파라미터를 **추가** 해서 더 큰 공간에서 샘플링 → 수렴 개선.
+
+#### $t$ 모형의 확장
+
+식 (12.1) 의 Gibbs 는 **$\sigma$ 가 작을 때 stuck** — $V_i$ 가 $\sigma^2$ 에 비례 축소, 다시 $\sigma^2$ 도 축소 → 두 변수 얽힘.
+
+**확장**: 새 스케일 파라미터 $\alpha > 0$ 도입.
+
+$$
+y_i \sim \mathrm{N}(\mu, \alpha^2 U_i), \quad U_i \sim \mathrm{Inv}\text{-}\chi^2(\nu, \tau^2)
+$$
+
+$\alpha^2 U_i = V_i$, $\alpha \tau = \sigma$ 대응. **1-to-many**: $(\alpha, U, \tau)$ 많은 조합이 같은 $(V, \sigma)$.
+
+#### 왜 효과적인가
+
+원 공간 $(V, \sigma)$ 에서 stuck 이어도, 확장 공간 $(\alpha, U, \tau)$ 에서는 **$\alpha$ 차원 자유도** 로 탈출 가능.
+
+마치 2D 에 갇힌 입자에 3D 의 공간을 열어 주는 것 — 바로 위로 올라가 장애물 우회.
+
+$\alpha$ 자체는 의미 없는 보조 변수. 관심 양 $\sigma = \alpha \tau$ 는 post-hoc 계산.
+
+::: {.callout-tip}
+## 직관 — "역설적으로 차원 추가가 효율 향상"
+
+수학적 설명: 원 공간의 **좁은 통로**가 확장 공간에서 **평면 경로**로 펼쳐짐.
+
+또 다른 비유: 2 차원 미로에서 막힌 곳 앞에서 3 차원 점프로 벽 위를 건너가기.
+
+원리: **파라미터의 over-parametrization**이 오히려 기하학을 단순화. 근본적으로 **식별 가능성을 희생 → 수렴 이득**.
+
+현대 적용: Neural network 의 over-parametrization (더 많은 weight → 최적화 쉬움). 같은 원리의 다른 영역 발견.
+:::
+
+## § 12.2 — Efficient Metropolis Jumping Rules
+
+### 두 가지 점프 전략
+
+§ 12.2 의 도입부: Metropolis 점프 $J$ 의 두 큰 부류.
+
+1. **Random walk** — $J(\theta^* \mid \theta^{t-1}) = \mathrm{N}(\theta^{t-1}, c^2 \Sigma)$ 형식. 이 섹션 중심.
+2. **Independence proposal** — $J(\theta^*) \approx p(\theta^* \mid y)$ 에 가깝게. Ch.10.3 의 기각 샘플링과 유사.
+
+대부분 실무에선 random walk. Independence 는 Laplace 근사 결합 시 유용.
+
+### 최적 $c = 2.4/\sqrt{d}$ — 유도 배경
+
+**가정**: $\theta \mid y \sim \mathrm{N}(0, I_d)$ (정규화된 좌표). 점프 $J = \mathrm{N}(\theta, c^2 I_d)$.
+
+**목표**: 연속 표본 $\theta^{t+1} - \theta^t$ 의 **평균 제곱 점프 거리** 최대화.
+
+$$
+\mathrm{ESJD} = \mathbb{E}[\lVert \theta^{t+1} - \theta^t \rVert^2]
+$$
+
+#### ESJD 계산
+
+제안 $\theta^* - \theta \sim \mathrm{N}(0, c^2 I)$. 수용 확률 평균 $\alpha(c)$ 는 $c$ 의 함수.
+
+$$
+\mathrm{ESJD} = \mathbb{E}[\lVert \theta^* - \theta \rVert^2 \cdot \mathbb{1}\{\text{accept}\}] = c^2 d \cdot \alpha(c)
+$$
+
+**Trade-off**:
+
+- $c$ 작음: $\alpha \to 1$, 그러나 $c^2$ 작아 ESJD 작음.
+- $c$ 큼: $c^2$ 큼, 그러나 $\alpha \to 0$ 으로 ESJD 작음.
+
+**최대화**: $d \to \infty$ 점근 이론 (Roberts, Gelman, Gilks 1997):
+
+$$
+c^*(d) \to \frac{2.38}{\sqrt{d}} \quad \text{as } d \to \infty
+$$
+
+수용률:
+
+$$
+\alpha^* \to 0.234 \quad \text{as } d \to \infty
+$$
+
+저차원 보정:
+
+- $d = 1$: $c^* \approx 2.38$, $\alpha^* \approx 0.44$.
+- $d = 5$: $c^* \approx 1.07$, $\alpha^* \approx 0.28$.
+- $d \ge 5$: $\alpha^* \approx 0.23$.
+
+### 효율 비교 — $0.3/d$ vs Gibbs $1/d$
+
+$d$ 차원 독립 정규 목표에서:
+
+**Metropolis (최적 튜닝)**: 효율 $\approx 0.3/d$ (독립 샘플링 대비).
+**Gibbs (변수 독립)**: 효율 $= 1/d$ ($d$ 반복마다 한 개 독립 표본).
+
+**Gibbs 가 3.3 배 빠름**. 단, Gibbs 는 조건부 공액 요구.
+
+비공액 사후에선 Gibbs 불가 → Metropolis. 또는 HMC (훨씬 빠름).
+
+### $\Sigma$ 선택
+
+$J(\theta^* \mid \theta) = \mathrm{N}(\theta, c^2 \Sigma)$ 에서 $\Sigma$ 는 목표 사후의 공분산 근사.
+
+**실무 선택**:
+
+1. **Laplace 근사**: 사후 mode 에서 음의 Hessian 역수.
+2. **예비 MCMC**: 초기 run 으로 $\Sigma$ 추정 → 본 run 에 사용.
+3. **Stan 의 adapt**: warm-up 동안 자동 조정.
+
+**잘못된 $\Sigma$**: 목표 분포와 모양이 다르면 특정 방향 이동 비효율. Sigma 가 isotropic $(I)$ 이면 사후 타원의 긴축에서 수용률 낮음.
+
+### Adaptive MCMC — Two-phase Protocol
+
+**이론적 위험**: 알고리즘이 이전 샘플에 의존 → **Markov 성질 파괴** → 정상 분포 보장 안 됨.
+
+#### 올바른 구현
+
+**Two-phase**:
+
+1. **Adaptive phase**: $\Sigma$, $c$ 등을 자유롭게 조정. **이 phase 샘플은 버림**.
+2. **Fixed phase**: 조정 동결. 이 phase 만 추론에 사용.
+
+**이유**: Fixed phase 는 진짜 Markov chain → 수렴 보장.
+
+#### Diminishing Adaptation (Andrieu-Thoms 2008)
+
+더 정교한 접근: **adaptation 속도가 시간에 따라 0 으로 수렴**.
+
+$\lvert \theta_\text{scale}^{(t+1)} - \theta_\text{scale}^{(t)} \rvert \to 0$ as $t \to \infty$.
+
+이 조건 + 추가 regularity 하에서 수렴 보장 (Andrieu-Moulines 2006, Andrieu-Thoms 2008).
+
+**실무**: Robbins-Monro 형 updating.
+
+$$
+c^{(t+1)} = c^{(t)} + \gamma_t (\alpha^{(t)} - 0.234)
+$$
+
+$\gamma_t \propto 1/t$ (수렴 조건). 수용률 $\alpha^{(t)}$ 가 0.234 에 수렴.
+
+### 실무 절차
+
+1. **초기 $c$** = $2.4/\sqrt{d}$, $\Sigma$ = Laplace 또는 $I$.
+2. **Warm-up 500~1000 반복** — adapt $\Sigma$ 및 $c$.
+3. **수용률 확인** — 20~40% 구간이면 고정.
+4. **본 샘플링** — adapt 꺼짐.
+
+Stan·PyMC 의 NUTS 가 이 protocol 자동화.
+
+## § 12.3 — 추가 확장
+
+### Slice Sampling
+
+#### 기본 아이디어
+
+$d$ 차원 목표 분포 $p(\theta \mid y)$ 에서 추출은 **$(d+1)$ 차원의 균등 분포**에서 추출과 등가:
+
+$$
+p(\theta, u \mid y) \propto \mathbb{1}\{0 \le u \le p(\theta \mid y)\}
+$$
+
+증명: $u$ marginalize → $\int_0^{p(\theta)} du = p(\theta)$. 확률론의 "밀도는 CDF 의 미분" 역개념.
+
+#### 알고리즘
+
+균등 분포에서 Gibbs 하듯 $\theta, u$ 교대 샘플링.
+
+**(1) $u \mid \theta \sim \mathrm{Uniform}(0, p(\theta \mid y))$**: 쉬움 — 현재 $\theta$ 의 밀도값 계산 후 균등.
+
+**(2) $\theta \mid u \sim \mathrm{Uniform}\{\theta' : p(\theta' \mid y) \ge u\}$**: **목표 밀도가 $u$ 이상인 영역에서 균등**.
+
+(2) 가 어려운 부분 — "slice" 영역 $\{p \ge u\}$ 찾기. 일반 알고리즘 (Neal 2003):
+
+- 초기 구간 확장 (stepping out).
+- 외부로부터 축소 (shrinkage).
+
+::: {.callout-tip}
+## 직관 — "밀도 아래 영역 균등 추출"
+
+확률론의 핵심: **$p(\theta)$ 의 밀도 값 = 그 점에서의 수직 길이**.
+
+점 $(\theta, u)$ 가 밀도 함수 곡선 아래 균등 분포 → $\theta$ 를 marginalize 하면 원 분포.
+
+이 기하학적 해석이 **rejection sampling** (Ch.10.3) 과 동일 원리. 차이: rejection 은 envelope $Mg$ 필요, slice 는 필요 없음 (자기 자신 사용).
+
+장점: **튜닝 없음**, 수용률 100%.
+단점: slice 영역 찾기가 복잡 사후에서 어려움.
+:::
+
+### Reversible Jump — 차원 변화 MCMC
+
+**문제**: 모형 평균화에서 **모형 간 이동** 필요. 예: 회귀 변수 집합이 다른 모형, 혼합 성분 수가 다른 모형.
+
+각 모형 $M_k$ 가 **다른 차원**. 일반 Metropolis 은 같은 차원 내 이동만 — 불가능.
+
+#### Green (1995) 의 해법
+
+**보조 변수 $u$** 도입으로 차원 매칭. 모형 $M_k$ ($d_k$ 차원) 에서 $M_{k^*}$ ($d_{k^*}$ 차원) 로 이동 시:
+
+1. $u \sim J(u \mid k, k^*, \theta_k)$ 추출 (auxiliary, $\dim u$ 크기).
+2. **결정적 변환** $(\theta_{k^*}, u^*) = g_{k, k^*}(\theta_k, u)$.
+3. **차원 균형**: $d_k + \dim(u) = d_{k^*} + \dim(u^*)$.
+
+이 차원 균형이 **detailed balance** 유지의 핵심.
+
+#### 수용 비율 — 식 (12.2)
+
+$$
+r = \frac{p(y \mid \theta_{k^*}, M_{k^*}) p(\theta_{k^*} \mid M_{k^*}) \pi_{k^*}}{p(y \mid \theta_k, M_k) p(\theta_k \mid M_k) \pi_k} \cdot \frac{J_{k^*, k} J(u^* \mid k^*, k, \theta_{k^*})}{J_{k, k^*} J(u \mid k, k^*, \theta_k)} \cdot \lvert J \rvert \tag{12.2}
+$$
+
+- 첫째 분수: **모형 간 베이즈 인자** ($\pi$ = 모형 prior).
+- 둘째 분수: **제안 분포 비율** (Hastings 보정).
+- $\lvert J \rvert$: **Jacobian** $\lvert \nabla g_{k, k^*} / \nabla(\theta_k, u) \rvert$ — 차원 변화 정당화.
+
+::: {.callout-tip}
+## 직관 — Jacobian 이 핵심인 이유
+
+차원 변화는 **변수 변환** 과 같음. 확률 밀도는 변환 시 **Jacobian 곱셈** 필요 (미적분 기본).
+
+$(\theta_k, u) \to (\theta_{k^*}, u^*)$ 결정적 변환이면 두 공간의 확률이 $\lvert J \rvert$ 배수.
+
+Detailed balance 확인: 양방향 전이 확률 비교 시 Jacobian 이 **약분되도록** 공식 설계.
+
+실무 예시: logistic regression 에 새 변수 추가/제거. 새 변수의 계수 $\beta_{\text{new}} \sim \mathrm{N}(0, \sigma^2)$ 제안 시 Jacobian = 1 (identity 변환).
+:::
+
+### Simulated Tempering — 다봉 분포
+
+**문제**: 다봉 사후. Metropolis 는 봉 사이 **저밀도 영역** 에서 대부분 기각 → **한 봉에 갇힘**.
+
+**Simulated tempering** (Marinari-Parisi 1992, Geyer-Thompson 1995): 온도 사다리 $T_0 = 1, T_1, \ldots, T_K$ 에서 MCMC.
+
+$$
+q_k(\theta) = p(\theta \mid y)^{1/T_k} p_0(\theta)^{1-1/T_k}
+$$
+
+- $T_k = 1$: 원 사후.
+- $T_k > 1$: 완화된 분포 (봉 덜 뾰족).
+- $T_k \to \infty$: base measure $p_0$ 에 근접 (거의 평평).
+
+고온에서 봉 사이 이동 쉬움. 저온에서 정확한 사후 샘플.
+
+#### 알고리즘
+
+$(\theta, s)$ 결합 샘플링. $s$ 는 현재 온도 레벨.
+
+1. $\theta$: 현재 온도 $s^t$ 의 $q_{s^t}$ 에서 MCMC step.
+2. $s$: 인접 온도로 jump 제안, 수용/기각.
+
+수용 확률:
+
+$$
+r = \frac{c_j q_j(\theta^{t+1}) J_{j, s^t}}{c_{s^t} q_{s^t}(\theta^{t+1}) J_{s^t, j}}
+$$
+
+$c_k$ 는 **정규화 상수의 역수** — 각 온도에서 시간 균등 배분. 적응적으로 조정.
+
+**결과**: $s^t = 0$ 인 표본만 $\theta$ 사후 추정에 사용.
+
+### Parallel Tempering
+
+변형: $K+1$ 개 **병렬 체인** 각자 다른 온도. 주기적으로 상태 교환.
+
+**장점**: 모든 체인이 동시에 샘플 → 병렬화 용이.
+**단점**: 메모리 $K$ 배.
+
+현대 실무: PyMC3 `parallel_tempering`, `ptemcee` 패키지.
+
+### Particle Filtering / SMC
+
+**Sequential Monte Carlo**: 여러 "입자" 체인을 병렬 실행, 낮은 확률 입자 제거 + 높은 확률 입자 복제.
+
+응용: 상태공간 모형, 시계열, 동적 베이즈.
+
+Ch.12 에선 간단히 언급 — Del Moral, Doucet, Jasra (2006) 의 참조.
+
+## 세 절을 관통하는 직관 모음
+
+### "변환과 증강" 의 두 길
+
+§ 12.1 의 두 전략:
+
+- **변환 (reparameterization)** — 같은 모형, 다른 좌표.
+- **증강 (augmentation)** — 새 변수 추가로 문제 구조 단순화.
+
+둘 다 **원 사후 유지**. 전자는 기하학 변경, 후자는 공액 성질 회복.
+
+### 튜닝의 두 시간 척도
+
+§ 12.2 의 핵심 원리:
+
+- **느린 시간 척도**: $\Sigma$ (사후 공분산 근사) — 전체 run 에 한 번 설정.
+- **빠른 시간 척도**: $c$ (scale) — 수용률 따라 수시 조정.
+
+두 척도 분리가 adaptive MCMC 의 안정성 핵심. Stan 의 adapt 가 정확히 이 패턴.
+
+### 다봉 문제는 전혀 다른 도구
+
+§ 12.1~12.2 의 모든 기법은 **한 봉** 가정. 여러 봉 사이 이동은 근본적으로 다른 문제 → § 12.3 의 tempering.
+
+실무 조언: 사후가 다봉 의심이면 **여러 초기값 병렬** + 수렴 안 되면 tempering 또는 SMC.
+
+## 코드 — Non-centered 8 학교 + Slice Sampling
+
+### Non-centered 8 학교
+
+centered 와 non-centered 를 PyMC 로 비교.
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+y = np.array([28, 8, -3, 7, -1, 1, 18, 12])
+sigma = np.array([15, 10, 16, 11, 9, 11, 10, 18])
+J = 8
+
+# Centered 모형
+with pm.Model() as centered_model:
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfNormal("tau", 10)
+    theta = pm.Normal("theta", mu, tau, shape=J)
+    pm.Normal("y", theta, sigma, observed=y)
+    idata_c = pm.sample(2000, tune=1000, target_accept=0.95, random_seed=121)
+
+# Non-centered 모형
+with pm.Model() as non_centered_model:
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfNormal("tau", 10)
+    eta = pm.Normal("eta", 0, 1, shape=J)
+    theta = pm.Deterministic("theta", mu + tau * eta)
+    pm.Normal("y", theta, sigma, observed=y)
+    idata_nc = pm.sample(2000, tune=1000, random_seed=121)
+
+print("Centered ESS (tau):   ", az.ess(idata_c, var_names=["tau"])["tau"].values)
+print("Non-centered ESS (tau):", az.ess(idata_nc, var_names=["tau"])["tau"].values)
+```
+
+기대 결과: Non-centered 의 $\tau$ ESS 가 훨씬 큼 ($\tau$ 가 funnel 의 목 부근에서 혼합 어려움 때문). 또한 `divergent` 경고 감소.
+
+### Simple Slice Sampling 구현
+
+1 차원 슬라이스 샘플러.
+
+```python
+def log_p_target(theta):
+    """예시: t_4 분포 커널."""
+    return -2.5 * np.log(1 + theta**2 / 4)
+
+def slice_sample(x0, log_p, w=1.0, n_samples=2000, rng=None):
+    rng = rng or np.random.default_rng()
+    samples = np.zeros(n_samples)
+    x = x0
+    for s in range(n_samples):
+        # Step 1: u ~ Uniform(0, p(x))
+        log_u = log_p(x) + np.log(rng.uniform())
+
+        # Step 2: horizontal slice
+        # Stepping out
+        r = rng.uniform()
+        L = x - r * w
+        R = L + w
+        while log_p(L) > log_u:
+            L -= w
+        while log_p(R) > log_u:
+            R += w
+        # Shrinkage
+        while True:
+            x_new = rng.uniform(L, R)
+            if log_p(x_new) >= log_u:
+                break
+            if x_new < x:
+                L = x_new
+            else:
+                R = x_new
+        x = x_new
+        samples[s] = x
+    return samples
+
+rng = np.random.default_rng(123)
+samples = slice_sample(0.0, log_p_target, w=2.0, n_samples=5000, rng=rng)
+print(f"평균: {samples.mean():.3f}, 분산: {samples.var():.3f}")
+print(f"참 t_4: 평균 0, 분산 2 (4/(4-2))")
+```
+
+Slice sampling 은 **튜닝 없이** 잘 작동. $t_4$ 의 분산 2 를 정확 추정.
+
+## 실전 체크리스트
+
+§ 12.1~12.3 의 교훈을 실무 절차로:
+
+1. **조건부 공액 먼저** — Gibbs 가능하면 우선.
+2. **상관 크면 재매개변수화** — 선형 (회전) 또는 non-centered.
+3. **계층 모형 funnel 의심 시 non-centered** — 기본 시도.
+4. **$t$ 분포나 혼합 → 보조 변수** — Gibbs 가능하게 만듦.
+5. **Stuck 감지 시 parameter expansion** — 차원 추가로 탈출.
+6. **Metropolis $c = 2.4/\sqrt{d}$ 출발** — 수용률 보정.
+7. **$\Sigma$ 는 사후 공분산 근사** — Laplace 또는 예비 MCMC.
+8. **Adaptive 는 two-phase** — warm-up 후 adapt 고정.
+9. **다봉 사후는 tempering** — 단순 Metropolis 부족.
+10. **Slice sampling 은 튜닝 없는 대안** — 1D 조건부에 유용.
+11. **Reversible jump 는 신중히** — Jacobian 실수 많음.
+12. **Stan/PyMC 자동화 활용** — 수동 구현 최소화.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Ch.12 Overview (02-12-0)](./02-12-0-efficient-mcmc.qmd) — 효율 MCMC 지도
+- [Ch.11 § 11.1~11.3 심화 (02-11-1)](./02-11-1-gibbs-metropolis-combinations.qmd) — Gibbs·Metropolis 기초
+- [Ch.11 § 11.4~11.6 심화 (02-11-2)](./02-11-2-convergence-ess-hierarchical-normal.qmd) — 수렴 진단
+
+**Ch.12 후속**
+
+- `02-12-2-*` — § 12.4~12.6 심화 (HMC·NUTS·Stan 상세)
+- `02-12-3-*` — § 12.7~12.8 (문헌·연습)
+
+**후속 주제**
+
+- Ch.13 Variational Inference — 또 다른 근사 패밀리
+- Ch.15 Hierarchical Linear Models — non-centered 본격 활용
+- Ch.22 Finite Mixture Models — reversible jump 응용
+
+**관련 개념**
+
+- Papaspiliopoulos, Roberts, Sköld (2007) — Non-centered parameterization 이론
+- Liu, Rubin, Wu (1998) — Parameter expansion 원저
+- Roberts, Gelman, Gilks (1997) — Metropolis 최적 수용률
+- Andrieu & Thoms (2008) — Adaptive MCMC 종합
+- Neal (2003) — Slice sampling
+- Green (1995) — Reversible jump
+- Marinari & Parisi (1992) — Simulated tempering 원저
+- Del Moral, Doucet, Jasra (2006) — SMC samplers
