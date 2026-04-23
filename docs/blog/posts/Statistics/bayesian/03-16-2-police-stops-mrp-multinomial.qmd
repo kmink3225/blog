@@ -1,0 +1,579 @@
+---
+title: "Ch.16 § 16.4~16.6 심화 — NYC 검문 과분산 Poisson·MRP·다변량/다항 반응"
+subtitle: "식 (16.12) overdispersed Poisson·경찰 검문 인종 분석·1988 MRP Figure 16.6·식 (16.13) bivariate 메타 분석"
+description: |
+  Gelman BDA Ch.16의 § 16.4~16.6을 한 편으로 다룬다.
+  § 16.4 NYC 경찰 검문 (stop-and-frisk) 약 175,000건 데이터의 과분산 Poisson 회귀 —
+  식 (16.12) 이전 범죄율 offset + 인종 계수 + 경찰구 random effect + 관측별 과분산,
+  Figure 16.5 결과 (흑인·히스패닉 violent crime 검문율 백인의 1.8~2.5배) 와 인과적 해석의 한계,
+  § 16.5 MRP (Multilevel Regression + Poststratification) — 1988 대통령 선거 CBS 7개 국가 여론조사에서
+  50개 주 지지율 추정, Figure 16.6 ANOVA display (ethnicity·region·state·interaction),
+  § 16.6 다변량·다항 반응 — 식 (16.13) bivariate normal 메타 분석 reparameterization,
+  multinomial logit·ordered cut-points·Chess 순위 분석까지.
+categories:
+  - Statistics
+  - Bayesian
+  - GLM
+  - MRP
+  - Poisson-Regression
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요
+
+Ch.16 심화 시리즈의 **두 번째 편**. § 16.1~16.3이 GLM의 이론·계산·prior 기본기라면, § 16.4~16.6 은 **실제 정책·정치·의학 문제에서의 적용**이다.
+
+* **§ 16.4** — NYC 경찰 stop-and-frisk 175,000건 데이터의 과분산 Poisson 회귀. 통계가 **공공정책 증거**로 쓰이는 사례.
+* **§ 16.5** — MRP (Multilevel Regression and Poststratification). 국가 여론조사에서 **각 주 지지율**을 추정하는 현대 표준.
+* **§ 16.6** — 다변량·다항 반응. 이진을 넘은 **여러 범주·상관된 반응**.
+
+::: {.callout-tip}
+## 직관: 세 절의 공통 원리
+
+세 절은 모두 "단순한 GLM 을 실제 복잡한 데이터에 적용" 의 사례다. 공통 도전:
+
+1. **과분산 & 불균형** (§ 16.4): 관측 수는 많지만 숨은 이질성이 Poisson 분산을 초과.
+2. **희박한 하위집단 추정** (§ 16.5): 국가 표본이지만 각 주 별 추정이 필요.
+3. **다차원 반응** (§ 16.6): 단일 binary 를 넘어 상관된 쌍·여러 범주.
+
+모든 경우 해법은 **계층 구조 + GLM**. Ch.15의 배치 구조 + Ch.16의 likelihood 확장을 **결합**한다. 이것이 현대 베이즈 통계의 핵심 문법.
+:::
+
+## § 16.4 NYC Stop-and-Frisk — 과분산 Poisson
+
+### 배경
+
+1999년 뉴욕주 법무장관실이 NYPD의 **stop-and-frisk** 정책을 조사. 의혹: 소수 인종 집단 과다 검문.
+
+**Gelman-Fagan-Kiss (2007)** 분석:
+
+* **데이터**: 1998~1999 15개월, 약 **175,000 건** 검문 기록.
+* **그룹**: 흑인 (African American), 히스패닉 (Latino), 백인 (European American).
+* **기타 인종** 4% 는 분류 모호성으로 제외.
+* **75개 경찰구** (precincts).
+
+### 단순 비교의 함정
+
+**집계 수치**:
+
+* 흑인: NYC 인구 26%, 검문의 51%.
+* 히스패닉: 인구 24%, 검문 33%.
+* 백인: 나머지, 검문 16%.
+
+**단순 추론**: "흑인·히스패닉이 인구 대비 2배 이상 검문당함."
+
+**문제**: 인종별 **범죄율이 다를 수 있다**. 공정 비교는 "범죄율 대비 검문률" 이어야 한다.
+
+### 범죄율 기준 비교
+
+실제 범죄 데이터 대신 **1997 NYC 체포 기록** (DCJS) 을 proxy. 체포 건수를 "경찰이 의심할 만한 범죄 건수" 대리 변수.
+
+**검문/체포 비율**:
+
+| 인종 | 비율 |
+|------|------|
+| 백인 | 1.24 |
+| 흑인 | 1.54 |
+| 히스패닉 | 1.72 |
+
+**단순 해석**: "체포 건수 대비 흑인 23%, 히스패닉 39% 더 자주 검문당함."
+
+**여전한 문제**: 경찰이 **고범죄 지역에서 많이 검문**한다면, 그 지역에 인종 구성이 달라서 집계 차이가 날 수도 있다. 각 경찰구 내에서는 인종 중립일 가능성. **경찰구 × 인종 정보** 필요.
+
+### 식 (16.12) — 계층 과분산 Poisson
+
+경찰구 $p$, 인종 $e \in \{1, 2, 3\}$ 의 검문 건수 $y_{ep}$:
+
+$$
+\begin{aligned}
+y_{ep} &\sim \text{Poisson}\left( n_{ep} \cdot \exp(\alpha_e + \beta_p + \epsilon_{ep}) \right) \\
+\beta_p &\sim N(0, \sigma_\beta^2) \\
+\epsilon_{ep} &\sim N(0, \sigma_\epsilon^2)
+\end{aligned} \quad \text{(16.12)}
+$$
+
+**성분 해석**:
+
+* $n_{ep}$: 인종 $e$, 경찰구 $p$ 의 **이전 연도 체포 건수** (15/12 로 스케일, 15개월).
+* $\alpha_e$: 인종 $e$ 의 **검문률 (log scale)**. 관심 모수.
+* $\beta_p$: 경찰구 $p$ 의 **random effect** (지역 전반 검문 강도).
+* $\epsilon_{ep}$: 인종 × 경찰구 조합의 **과분산** (15개월 시계열 변동 등).
+
+**Log linear predictor**:
+
+$$
+\log(\mathbb{E}[y_{ep}] / n_{ep}) = \alpha_e + \beta_p + \epsilon_{ep}
+$$
+
+즉 **"체포 대비 검문 rate"의 log** 를 선형 모델링. Rate ratio $\exp(\alpha_e)$ 가 최종 관심 수치.
+
+### 왜 이 구조인가 — 직관
+
+::: {.callout-tip}
+## 직관: 식 (16.12) 의 각 성분
+
+**Offset $\log n_{ep}$**: 단순 count가 아닌 **rate** 를 모델링. "이전 범죄율 대비" 라는 기준 설정.
+
+**인종 효과 $\alpha_e$**: 3개 인종에 대한 평균 검문률 편차. $\exp(\alpha_e) = 1$ 이면 "체포 건수와 비례", $> 1$ 이면 "과도 검문".
+
+**경찰구 random effect $\beta_p$**: 지역마다 전반적 검문 강도 다름을 통제. 75개 경찰구에 고정 효과 두면 모수 수 폭발 → 계층 prior 로 shrinkage.
+
+**과분산 $\epsilon_{ep}$**: Poisson 분산 $\mathrm{Var}(y) = \mu$ 보다 실제 분산이 크다. 관측별 정규 random effect 가 이를 흡수.
+
+**세 성분의 분리**가 핵심 — 만약 통합하면 "인종 효과가 지역 효과 때문인가 진짜 인종인가" 구별 불가. 계층 구조가 **confounding 분해**를 수행.
+:::
+
+### 경찰구 인종 구성별 부분석
+
+추가 층: 75개 경찰구를 **흑인 인구 비율**로 3분류.
+
+* **<10% 흑인**: 25개 경찰구.
+* **10~40% 흑인**: 25개 경찰구.
+* **>40% 흑인**: 25개 경찰구.
+
+각 분류에 대해 식 (16.12) 별도 적합. 이유: 인종 구성에 따라 **패턴이 체계적으로 다를 수 있음** — 소수 인종이 많은 지역의 dynamics vs 백인 다수 지역.
+
+### 범죄 유형별 분석
+
+4개 범죄 유형 × 3개 경찰구 카테고리 = **12개 별도 회귀**:
+
+* Violent crimes (25% of stops).
+* Weapons crimes (44%).
+* Property crimes (20%).
+* Drug crimes (11%).
+
+### Figure 16.5 주요 결과
+
+$\exp(\alpha_e)$ (rate ratio) 시각화:
+
+**Violent crimes** (가장 흔한 유형):
+
+* 백인 ≈ 1.0 (기준).
+* 흑인 ≈ **2.5** (2.5배 과다 검문).
+* 히스패닉 ≈ **1.9** (1.9배).
+
+**Weapons crimes**:
+
+* 백인 ≈ 1.0.
+* 흑인 ≈ **1.8**.
+* 히스패닉 ≈ **1.6**.
+
+**Property crimes**: 백인이 약간 더 많음.
+**Drug crimes**: 백인이 더 많음.
+
+**경찰구 카테고리에 걸쳐 패턴 유사** — 소수 인종 다수 지역에서도 같은 방향.
+
+### 해석의 조심스러움
+
+Gelman의 원문:
+
+> "Does the overall pattern of disproportionate stops of minorities imply that the NYPD was acting in an unfair or racist manner? **Not at all**."
+
+**통계적 결론**: 데이터에 **체계적 패턴** 존재 — 이전 범죄 대비 흑인·히스패닉이 violent crimes 에서 2배 이상 검문.
+
+**한계**:
+
+* "이전 체포" 자체가 시스템 편향을 반영할 수 있음 (circular).
+* 경찰 업무의 인과적 기제 해석은 통계를 넘어섬.
+* 정책 논의의 **출발점 수치** 제공.
+
+::: {.callout-tip}
+## 직관: 베이즈 분석이 정책에 기여하는 방식
+
+**정책 전 상태**: "과다 검문이다" vs "정상이다" 의 말싸움.
+
+**베이즈 분석 후**: "**이전 범죄 통제해도, violent crimes에서 2.5/1.9배 차이**" 라는 **정량화된 증거**.
+
+이것이 **이견 해소는 아니지만 대화 기반**을 만든다. Gelman의 표현: "Quantitative sense of the issues under dispute." 경찰 부서가 구체 수치에 반응할 기회를 제공.
+
+이 분석이 실제로 **2013 Ligon v. City of New York** 재판 등 법적 절차에 인용되었다. **통계가 법정 증거**가 된 드문 베이즈 사례.
+:::
+
+### Python 최소 구현
+
+```python
+import numpy as np
+import pymc as pm
+
+rng = np.random.default_rng(0)
+
+# simulate NYC-style data: 3 ethnicities × 25 precincts (one subset)
+n_ethn, n_prec = 3, 25
+ethn = np.repeat(np.arange(n_ethn), n_prec)
+prec = np.tile(np.arange(n_prec), n_ethn)
+n_obs = len(ethn)
+
+# true alpha (log rate ratio vs whites)
+alpha_true = np.array([0.0, 0.9, 0.6])  # white, black, hispanic
+beta_true = rng.normal(0, 0.3, n_prec)  # precinct variation
+n_ep = rng.poisson(100, n_obs)  # previous arrests offset
+
+# simulate stops
+log_mu = np.log(n_ep) + alpha_true[ethn] + beta_true[prec]
+mu = np.exp(log_mu)
+y = rng.poisson(mu)
+
+
+with pm.Model() as police_model:
+    alpha = pm.Normal("alpha", 0, 3, shape=n_ethn)
+    sigma_beta = pm.HalfNormal("sigma_beta", 1)
+    sigma_eps = pm.HalfNormal("sigma_eps", 0.5)
+
+    # non-centered
+    beta_raw = pm.Normal("beta_raw", 0, 1, shape=n_prec)
+    beta = pm.Deterministic("beta", sigma_beta * beta_raw)
+    eps_raw = pm.Normal("eps_raw", 0, 1, shape=n_obs)
+    eps = sigma_eps * eps_raw
+
+    log_rate = np.log(n_ep) + alpha[ethn] + beta[prec] + eps
+    pm.Poisson("y_obs", mu=pm.math.exp(log_rate), observed=y)
+
+    trace = pm.sample(2000, tune=1000, target_accept=0.95)
+
+
+print("Posterior exp(alpha) — relative stop rate vs arrests:")
+for e, name in enumerate(["White", "Black", "Hispanic"]):
+    samp = np.exp(trace.posterior["alpha"].values[..., e].flatten())
+    print(f"  {name}: {samp.mean():.2f} (95% CI [{np.percentile(samp, 2.5):.2f}, "
+          f"{np.percentile(samp, 97.5):.2f}])")
+```
+
+## § 16.5 MRP — Multilevel Regression and Poststratification
+
+### 문제 설정
+
+**국가 여론조사** 데이터 (N ≈ 1,500) 로부터 **50개 각 주의 의견 분포** 추정.
+
+**Gelman의 예제**: 1988 대통령 선거 CBS 7개 국가 여론조사. 공화당 (Bush Sr.) 지지율을 각 주별로 추정.
+
+**단순 접근의 한계**:
+
+* 주별 평균: CA·TX 같은 큰 주는 200~300 응답자, VT·WY 같은 작은 주는 10명 미만 → 작은 주는 **표본 오차가 압도**.
+* 주 indicator 회귀: MLE 여전히 불안정.
+* 인구 구조 반영 안 함 (전화 조사의 **selection bias**).
+
+### MRP 2단계
+
+**Stage 1 — Multilevel Regression**:
+
+$$
+\Pr(y_i = 1) = \text{logit}^{-1}(X_i \beta)
+$$
+
+$X_i$ 는 demographic + state + region indicator. 각 batch에 계층적 prior:
+
+$$
+\beta^{\text{state}}_s \sim N(0, \sigma_{\text{state}}^2), \quad \sigma_{\text{state}} \sim \text{uniform}
+$$
+
+동일하게 region, ethnicity × state, age × education 등 **모든 주요 interaction**에 각자의 $\sigma$.
+
+**Stage 2 — Poststratification**:
+
+각 cell $j$ (state × sex × ethnicity × age × education) 의 예측 확률 $\hat\theta_j$ 를 **센서스 cell 크기 $N_j$** 로 가중 평균:
+
+$$
+\hat\theta_s = \frac{\sum_{j \in s} N_j \hat\theta_j}{\sum_{j \in s} N_j}
+$$
+
+### Cell 수와 데이터 부족 문제
+
+**Gelman 1988 예제 구조**:
+
+* Sex: 2 수준.
+* Ethnicity: 2 수준 (African American vs other).
+* Age: 4 수준.
+* Education: 4 수준.
+* State: 50 수준.
+
+**총 cells**: $2 \times 2 \times 4 \times 4 \times 50 = 3{,}200$.
+
+**표본 크기**: 약 11,000 (7개 poll 합계).
+
+**평균 cell당 응답자**: $11{,}000 / 3{,}200 \approx 3.4$.
+
+**현실**: 많은 cell에 응답자 **0~1명**. 단순 셀별 비율 계산 불가.
+
+**MRP 해법**: 계층 모형이 **cell 간 정보 공유**. 응답 적은 cell도 관련 cell들로부터 추정 가능.
+
+### Figure 16.6 — ANOVA Display
+
+Gelman은 어느 factor가 중요한지 시각화 (Ch.15 § 15.6 스타일).
+
+**왼쪽 plot — 기본 모형**:
+
+| Factor | 상대 중요도 |
+|--------|-------------|
+| **ethnicity** | **가장 큼** |
+| **region × state** | 큼 |
+| region | 중간 |
+| age × education | 작음 |
+| sex, sex × ethnicity | 작음 |
+
+**진단**: ethnicity가 압도적 — 당시 1988 선거에서 흑인 커뮤니티의 민주당 지지가 강했음. Region 과 state 도 상당한 변동.
+
+**오른쪽 plot — ethnicity 상호작용 추가**:
+
+**ethnicity × region**, **ethnicity × state** 추가. **ethnicity × region** 이 **매우 큼** 발견:
+
+* 남부 주의 흑인 vs 북부 주의 흑인이 정치적으로 크게 다름.
+* "흑인 전체" 를 하나로 보면 주별 의견 변동 놓침.
+
+### MRP 결과
+
+각 주별 공화당 지지율 추정 → 실제 투표 결과와 비교. MRP가 단순 평균보다 **훨씬 정확**.
+
+MRP의 현대적 활용:
+
+* **Nate Silver (538)**: 2012 주별 선거 예측.
+* **Xbox survey** (Wang et al. 2015): 게임기 비대표 표본 + MRP → 정확한 선거 예측.
+* **YouGov, Morning Consult**: 상시 여론 모니터링.
+
+### Python 미니 MRP
+
+```python
+import numpy as np
+import pymc as pm
+
+rng = np.random.default_rng(1988)
+
+# simulate MRP data
+n_states = 10
+n_per_state = np.array([300, 250, 200, 150, 100, 80, 50, 30, 20, 15])
+n_total = n_per_state.sum()
+
+# categorical features
+state = np.concatenate([np.repeat(s, n) for s, n in enumerate(n_per_state)])
+female = rng.binomial(1, 0.52, n_total)
+black = rng.binomial(1, 0.12, n_total)
+
+# true effects (log-odds scale)
+state_eff = rng.normal(0, 0.3, n_states)
+beta0_true = -0.2
+beta_female_true = -0.1
+beta_black_true = -2.5
+
+logit_p = (beta0_true + state_eff[state] + beta_female_true * female
+           + beta_black_true * black)
+p = 1 / (1 + np.exp(-logit_p))
+y = rng.binomial(1, p)
+
+
+with pm.Model() as mrp:
+    beta0 = pm.Cauchy("beta0", 0, 10)
+    beta_female = pm.Cauchy("beta_female", 0, 2.5)
+    beta_black = pm.Cauchy("beta_black", 0, 2.5)
+
+    # hierarchical state effect (non-centered)
+    sigma_state = pm.HalfNormal("sigma_state", 1.0)
+    state_raw = pm.Normal("state_raw", 0, 1, shape=n_states)
+    state_coef = pm.Deterministic("state_coef", sigma_state * state_raw)
+
+    eta = (beta0 + state_coef[state] + beta_female * female
+           + beta_black * black)
+    pm.Bernoulli("y_obs", p=pm.math.sigmoid(eta), observed=y)
+
+    trace = pm.sample(2000, tune=1000, target_accept=0.95)
+
+
+# Stage 2: poststratification using census-like weights
+# imagine census says each state has 50% female, 10% black among others
+post_stratum_weights = np.array([[1, 0, 0], [1, 1, 0], [1, 0, 1], [1, 1, 1]])
+# (intercept_column, female, black) for 4 cells
+cell_fractions = np.array([0.45, 0.45, 0.05, 0.05])  # fem=0/1 × black=0/1
+
+beta0_samp = trace.posterior["beta0"].values.flatten()
+bf_samp = trace.posterior["beta_female"].values.flatten()
+bb_samp = trace.posterior["beta_black"].values.flatten()
+state_samp = trace.posterior["state_coef"].values.reshape(-1, n_states)
+
+state_p = np.zeros((len(beta0_samp), n_states))
+for s in range(n_states):
+    for c, (female_c, black_c) in enumerate([(0, 0), (1, 0), (0, 1), (1, 1)]):
+        eta_c = beta0_samp + state_samp[:, s] + bf_samp * female_c + bb_samp * black_c
+        p_c = 1 / (1 + np.exp(-eta_c))
+        state_p[:, s] += cell_fractions[c] * p_c
+
+print("State-level poststratified p̂:")
+for s in range(n_states):
+    print(f"  State {s}: {state_p[:, s].mean():.3f} "
+          f"(95% CI [{np.percentile(state_p[:, s], 2.5):.3f}, "
+          f"{np.percentile(state_p[:, s], 97.5):.3f}], n_samp={n_per_state[s]})")
+```
+
+**해석**: 작은 주 (state 8, 9: n=20, 15) 도 **합리적 구간** 추정. 계층 prior가 큰 주로부터 정보 차용, poststratification이 표본 demographic 불균형 보정.
+
+## § 16.6 Multivariate and Multinomial Responses
+
+### 다변량 Binomial — 메타 분석 재해석
+
+Ch.5.6의 22 임상시험 메타 분석을 **다변량** 관점에서 재작업.
+
+**Setup**: 연구 $j = 1, \dots, 22$, 처치 $i \in \{0, 1\}$. 각 cell $(i, j)$ 에 사망자 $y_{ij}$ / 피험자 $n_{ij}$.
+
+**Simple univariate**: log odds ratio $\theta_j = \log\frac{p_{1j}/(1-p_{1j})}{p_{0j}/(1-p_{0j})}$. 정규 근사.
+
+**한계**: 각 시험의 **평균 사망률 수준**을 무시. 평균이 높은 시험과 낮은 시험의 다른 반응 놓침.
+
+### 다변량 Binomial 모형
+
+$$
+y_{ij} | n_{ij}, p_{ij} \sim \text{Bin}(n_{ij}, p_{ij}), \quad i \in \{0, 1\}, \; j = 1, \dots, 22
+$$
+
+44개 $p_{ij}$ 를 어떻게 모델링? **연구별 쌍 $(p_{0j}, p_{1j})$** 은 자연히 상관될 것 (같은 환자 집단).
+
+### 식 (16.13) — Reparameterization
+
+Logit 변환 후 **평균 + 차이**로 재매개:
+
+$$
+\beta_{1j} = \frac{\text{logit}(p_{0j}) + \text{logit}(p_{1j})}{2} \quad \text{(평균 로짓)}
+$$
+
+$$
+\beta_{2j} = \text{logit}(p_{1j}) - \text{logit}(p_{0j}) \quad \text{(로짓 차이 = } \theta_j)
+$$
+
+22개 쌍 $(\beta_{1j}, \beta_{2j})$ 에 **bivariate normal**:
+
+$$
+p(\beta | \alpha, \Lambda) = \prod_{j=1}^{22} N\left( \begin{pmatrix} \beta_{1j} \\ \beta_{2j} \end{pmatrix} \Big| \begin{pmatrix} \alpha_1 \\ \alpha_2 \end{pmatrix}, \Lambda \right) \quad \text{(16.13)}
+$$
+
+* $\alpha_1$: 평균 로짓 수준 grand mean.
+* $\alpha_2$: 평균 처치 효과.
+* $\Lambda$: $2 \times 2$ 공분산 행렬 (variance·correlation).
+
+::: {.callout-tip}
+## 직관: 왜 "평균+차이" reparameterization?
+
+$\text{logit}(p_{0j})$ 와 $\text{logit}(p_{1j})$ 에 직접 bivariate normal 부여하면 두 **상관도가 매우 크다** (같은 연구의 대조군·처치군이 비슷한 기저 질환). 이는 posterior geometry가 **늘어진 타원** 이 되어 MCMC 수렴 어려움.
+
+**평균 + 차이**로 변환하면:
+
+* 평균 $\beta_{1j}$ = 기저 수준.
+* 차이 $\beta_{2j}$ = 처치 효과.
+
+두 성분은 상관이 작아 (거의 독립) **원형 posterior**. MCMC 수렴 빠름.
+
+이것은 Ch.12 § 12.1 에서 본 **"회전으로 posterior decorrelate"** 와 동일 원리. 계층 모형 prior 설계의 숨은 노하우.
+:::
+
+### Multinomial Logit
+
+$y_i \in \{1, 2, \dots, K\}$ 명목 범주. 기준 $K$ 에 대해:
+
+$$
+\Pr(y_i = k) = \frac{\exp(X_i \beta_k)}{1 + \sum_{j=1}^{K-1} \exp(X_i \beta_j)}, \quad k = 1, \dots, K-1
+$$
+
+$\beta_K = 0$ (identifiability).
+
+**계수 수**: $(K-1) \times p$ ($p$ = 예측 변수 수).
+
+**Bayesian**: 각 $\beta_k$ 에 Cauchy(0, 2.5) 또는 계층 prior.
+
+### Ordered Multinomial — Cut-points
+
+$y_i \in \{0, 1, \dots, K\}$ 순서 있는 범주. 잠재 변수 + 임계값:
+
+$$
+u_i \sim N(X_i \beta, 1)
+$$
+
+$$
+y_i = k \iff c_{k-1} < u_i < c_k, \quad c_0 = -\infty, c_K = \infty
+$$
+
+**Identifiability**: $c_1 = 0$ 고정. 나머지 $c_2, \dots, c_{K-1}$ 를 추정.
+
+**장점**: 선형 계수 $\beta$ 가 **모든 절단점에 공통** 효과 ("proportional odds" 가정).
+
+### Chess 순위 예제
+
+Gelman § 16.6 의 another example: 1988-1989 **World Cup of Chess** 결과 메타 분석. 각 경기 결과 ∈ {흑승, 무, 백승} (ordered).
+
+모형:
+
+$$
+u_{ij} \sim N(\theta_i - \theta_j, 1), \quad \text{result} = \begin{cases} \text{black win} & u < c_1 \\ \text{draw} & c_1 < u < c_2 \\ \text{white win} & u > c_2 \end{cases}
+$$
+
+$\theta_i$ = 플레이어 $i$ 의 skill. 계층 prior $\theta_i \sim N(0, \sigma^2)$. 관찰된 경기 결과로 skill 추정 + 기존 Elo rating 과 비교.
+
+이것이 현대 **rating systems** (TrueSkill, Glicko) 의 베이즈 기초.
+
+### Loglinear Models (§ 16.7 맛보기)
+
+다차원 범주형 데이터의 cell counts:
+
+$$
+y_{ijk} \sim \text{Poisson}(\mu_{ijk}), \quad \log \mu_{ijk} = \mu + \alpha_i + \beta_j + \gamma_k + (\alpha\beta)_{ij} + \dots
+$$
+
+**응용**:
+
+* Contingency table 독립성 검정 (상호작용 0 여부).
+* Graphical models 기초.
+* Categorical data missing imputation (Ch.18).
+
+## § 16.4~16.6 실전 체크리스트
+
+**§ 16.4 — 과분산 Poisson**
+
+- [ ] Offset 적절히 설정? (rate 로 해석 원하면 필수)
+- [ ] 과분산 진단: 잔차 분산 / 평균 > 1.5 이면 Poisson 부족.
+- [ ] Random effects (hierarchical) 로 과분산 흡수, 또는 Negative Binomial.
+- [ ] 교란 변수 (§ 16.4 의 경찰구) 를 계층적으로 통제.
+- [ ] 인과 해석과 통계 패턴 구분 — 데이터는 **상관 증거**, 인과는 **도메인 지식** 필요.
+
+**§ 16.5 — MRP**
+
+- [ ] Cell structure 설계 — 모든 중요 demographic을 포함하되 cell 수 폭발 주의.
+- [ ] Cell 당 응답자 < 5 개면 계층 모형 **필수**.
+- [ ] Interaction 고려 — 주요 factor 쌍 (ethnicity × region 등).
+- [ ] Poststratification 가중치로 **공식 인구 통계 (센서스)** 사용.
+- [ ] 각 factor의 ANOVA display 로 중요도 시각화.
+- [ ] Out-of-sample 검증: 학습에 안 쓴 주/집단 예측.
+
+**§ 16.6 — 다변량·다항**
+
+- [ ] 반응이 상관된 쌍이면 bivariate 모형 고려 (단순 가정보다 정직).
+- [ ] Reparameterization (평균+차이) 로 posterior decorrelation.
+- [ ] Ordered vs nominal 구분 — 순서가 있으면 cut-points, 없으면 multinomial logit.
+- [ ] Identifiability 제약 (기준 범주, cut-point 0) 명시.
+- [ ] 계층 prior 로 희박한 범주·단위 자동 shrinkage.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.16 Overview — GLM](./03-16-0-generalized-linear-models-overview.qmd)
+* [Ch.16 § 16.1~16.3 — Standard Likelihoods·IWLS·Weakly Informative](./03-16-1-standard-likelihoods-working-priors.qmd)
+* [Ch.15 — Hierarchical Linear Models](./03-15-0-hierarchical-linear-models-overview.qmd)
+* [Ch.5 § 5.6 — Meta-analysis](./00-5-2-normal-eight-schools-meta.qmd)
+
+**후속 주제**
+
+* [§ 16.7~16.9 — Loglinear·문헌·연습](./03-16-3-loglinear-exercises.qmd) (예정)
+* Ch.17 Robust Inference — $t$ 오차 확장
+* Ch.18 Missing Data — categorical imputation (loglinear)
+
+**관련 개념 (cross-category)**
+
+* [Multilevel Regression and Poststratification (MRP)](../mrp-overview.qmd)
+* [Causal Inference from Observational Data](../../Experimentation/causal-observational.qmd)
+* [TrueSkill and Glicko Rating Systems](../../Deep_Learning/rating-systems.qmd)
+* [Meta-analysis in Clinical Trials](../meta-analysis.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.16 § 16.4~16.6. CRC Press.
+* Gelman, A., Fagan, J., & Kiss, A. (2007). An Analysis of the NYPD's Stop-and-Frisk Policy in the Context of Claims of Racial Bias. *JASA*, 102(479), 813-823.
+* Park, D. K., Gelman, A., & Bafumi, J. (2004). Bayesian Multilevel Estimation with Poststratification: State-Level Estimates from National Polls. *Political Analysis*, 12, 375-385.
+* Ghitza, Y., & Gelman, A. (2013). Deep Interactions with MRP: Election Turnout and Voting Patterns Among Small Electoral Subgroups. *AJPS*, 57, 762-776.
+* Wang, W., Rothschild, D., Goel, S., & Gelman, A. (2015). Forecasting Elections with Non-representative Polls. *International Journal of Forecasting*, 31, 980-991.
+* Warn, D. E., Thompson, S. G., & Spiegelhalter, D. J. (2002). Bayesian Random Effects Meta-analysis of Trials with Binary Outcomes. *Statistics in Medicine*, 21, 1601-1623.
+* Glickman, M. E. (1999). Parameter Estimation in Large Dynamic Paired Comparison Experiments. *Applied Statistics*, 48, 377-394.
