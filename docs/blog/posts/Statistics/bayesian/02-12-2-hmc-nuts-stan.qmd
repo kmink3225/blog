@@ -1,0 +1,713 @@
+---
+title: "§ 12.4~12.6 — Hamiltonian Monte Carlo·NUTS·Stan"
+subtitle: "Gelman BDA Ch.12 심화 — 증강 사후와 Hamilton 방정식, leapfrog 3 단계 정확 유도, 수용 비율 식 (12.3) 에너지 해석, 8 학교 10차원 gradient + $\\log\\tau$ Jacobian, NUTS 의 U-turn 조건, Stan 자동 미분"
+description: |
+  Ch.12 overview 가 HMC 를 "무작위 보행 극복" 의 혁명으로 소개했다면,
+  이 포스트는 § 12.4~12.6 의 **수식과 알고리즘 세부**. HMC 가 모멘텀 변수
+  $\phi \sim \mathrm{N}(0, M)$ 를 도입해 결합 사후 $p(\theta, \phi \mid y)
+  = p(\phi) p(\theta \mid y)$ 를 구성하는 방식, Hamilton 방정식 $d\theta/dt
+  = M^{-1}\phi, d\phi/dt = \nabla \log p$ 의 에너지 보존 원리, leapfrog
+  integrator 의 symplectic 성질과 half-step/full-step/half-step 분해가 왜
+  time-reversible 인지, 식 (12.3) 의 수용 비율 $p(\theta^*)p(\phi^*) /
+  p(\theta^{t-1})p(\phi^{t-1})$ 이 연속 극한에서 1 에 수렴하는 이유, 튜닝
+  파라미터 $M, \epsilon, L$ 의 세 시간 척도와 최적 수용률 65%, 8 학교
+  계층 정규 모형의 gradient 해석적 유도 (식 마다 sigma_j 와 tau 의 역수
+  항), Gelman 의 실제 튜닝 궤적 ($\epsilon_0 = 0.1 \to 0.05$, $L_0 = 10
+  \to 20$, 수용률 0.23/0.59/0.02/0.57 → 0.52/0.68/0.75/0.51), $\tau > 0$
+  제약을 $\log \tau$ 변환으로 해소할 때 나타나는 Jacobian 항 $\tau$ 와
+  gradient 의 $-(J-1)$ 교정, NUTS 의 "U-turn 까지 계속" 알고리즘과
+  detailed balance 를 유지하는 양방향 확장, Riemannian HMC 의 curvature
+  기반 mass matrix, Stan 의 자동 미분이 어떻게 chain rule 역전파로 finite
+  difference 보다 빠른지, warm-up 단계에서 $M, \epsilon$ adaptive 설정 —
+  각 수식 옆에 "왜 이 단계가 필요한가" 를 붙여 전개한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — HMC 삼위일체
+
+Ch.12 § 12.4~12.6 은 현대 MCMC 의 **중심 삼각형**.
+
+| 절 | 역할 |
+|---|---|
+| 12.4 | HMC 알고리즘 자체 — 원리·leapfrog·튜닝·NUTS |
+| 12.5 | 8 학교 계층 정규에 HMC 적용 — 실전 gradient + 튜닝 |
+| 12.6 | Stan — HMC 를 자동화하는 계산 환경 |
+
+세 절이 **"이론 → 예제 → 자동화"** 의 피라미드. [Overview (02-12-0)](./02-12-0-efficient-mcmc.qmd) 가 큰 그림이었다면, 이 포스트는 **수식 + 구현 + 실전 수치**.
+
+Ch.11 의 Gibbs/Metropolis 가 **어떻게 샘플링이 가능한가** 를 보였다면, HMC 는 **어떻게 빠르게 가능한가** 를 보인다. 고차원 복잡 모형이 실제로 적합 가능하게 된 전환점.
+
+## § 12.4 — HMC 원리와 알고리즘
+
+### 무작위 보행의 한계 재확인
+
+Ch.11 의 Gibbs·Metropolis 는 모두 **local random walk**. 공간 대각선 $R$ 건너가려면:
+
+- Metropolis: $O(R^2 / \epsilon^2)$ 단계. $\epsilon$ 은 점프 크기.
+- Gibbs: $O(R^2 / \sigma^2)$ 비슷한 구조.
+
+고차원·강한 상관 사후에서 이 2차 비용이 지배적. 재매개변수화 (§ 12.1) 가 도움 되지만 근본 해결은 아님.
+
+### HMC 의 물리적 모티브
+
+HMC (Duane et al. 1987) 는 **해밀턴 역학**에서 영감. 물리:
+
+- 입자 위치 $\theta$.
+- **모멘텀** $\phi$.
+- 포텐셜 에너지 $U(\theta) = -\log p(\theta \mid y)$.
+- 운동 에너지 $K(\phi) = \tfrac{1}{2} \phi^\top M^{-1} \phi$.
+- **전체 에너지 (해밀토니안)**: $H(\theta, \phi) = U(\theta) + K(\phi)$.
+
+입자가 에너지 $H$ 를 보존하며 **직선·곡선 궤적**으로 이동. Brown 운동과 질적으로 다름.
+
+### 증강 사후
+
+HMC 의 수학적 핵심: 목표 분포를 $(\theta, \phi)$ 의 결합 분포로 확장.
+
+$$
+p(\theta, \phi \mid y) = p(\phi) \cdot p(\theta \mid y)
+$$
+
+**모멘텀 분포** $p(\phi) = \mathrm{N}(0, M)$ 는 **독립**. $\phi$ 를 marginalize 하면 원 사후 $p(\theta \mid y)$ 회복.
+
+주의: $\phi$ 는 **보조 변수** — 계산 중간 산물, 관심 대상 아님.
+
+### 에너지 보존 — 왜 HMC 가 빠른가
+
+$(\theta, \phi)$ 의 로그 결합 밀도:
+
+$$
+\log p(\theta, \phi \mid y) = \log p(\theta \mid y) - \tfrac{1}{2} \phi^\top M^{-1} \phi = -H(\theta, \phi) + C
+$$
+
+해밀턴 방정식:
+
+$$
+\frac{d\theta}{dt} = \frac{\partial H}{\partial \phi} = M^{-1} \phi, \quad \frac{d\phi}{dt} = -\frac{\partial H}{\partial \theta} = \nabla \log p(\theta \mid y)
+$$
+
+**중요 성질**:
+
+1. $H$ 가 연속 궤적 위에서 **일정** (에너지 보존).
+2. **Volume-preserving**: $(\theta, \phi)$ 부피 보존 (Liouville 정리).
+
+이 성질이 HMC 의 수용 비율이 1 에 가깝도록 만든다.
+
+### Leapfrog Integrator — 이산 근사
+
+연속 해밀턴 방정식을 유한 step 으로 이산화. Leapfrog (개구리 뛰기) 는 **symplectic** integrator — 에너지·부피 근사 보존.
+
+**한 leapfrog step** (크기 $\epsilon$):
+
+**(a) Half-step $\phi$**:
+$$
+\phi \leftarrow \phi + \tfrac{\epsilon}{2} \nabla \log p(\theta \mid y)
+$$
+
+**(b) Full-step $\theta$**:
+$$
+\theta \leftarrow \theta + \epsilon M^{-1} \phi
+$$
+
+**(c) Half-step $\phi$**:
+$$
+\phi \leftarrow \phi + \tfrac{\epsilon}{2} \nabla \log p(\theta \mid y)
+$$
+
+(c) 후 다음 반복의 (a) 는 같은 연산 — **연속 half-step = full-step** 으로 합쳐 효율.
+
+### 왜 Half-step 이 필요한가 — Symplectic 원리
+
+단순 Euler 방법 ($\phi$ 먼저 full, $\theta$ 먼저 full) 은 에너지 표류. Leapfrog 는 **대칭 분해**로 표류 감소.
+
+수학적으로: $\epsilon$ 크기 오차가 **시간 반전 대칭** 덕에 **$\epsilon^2$ 로 취소**. $L \epsilon$ 총 궤적에서 오차가 $L \epsilon^2$ — 긴 궤적에도 안정.
+
+::: {.callout-tip}
+## 직관 — Leapfrog 의 "half-step" 은 왜 혁명인가
+
+단순 Euler: 위치와 모멘텀을 번갈아 full step. 에너지 **계통적 표류** → 수용률 0 에 수렴.
+
+Leapfrog: **$\phi$ 를 $\theta$ 업데이트 전후로 대칭 분할**. 시간 반전 시 완전 같은 궤적 → 대칭 오차가 상쇄.
+
+이 대칭성이 HMC 를 **긴 궤적에도 안정**하게 만든다. $L = 100, 1000$ 단계도 가능. 비교: 단순 Euler 는 $L = 10$ 에서도 수용률 붕괴.
+
+더 정확한 integrator (Runge-Kutta 4) 도 있지만 **symplectic 성질 없음** → 장거리 궤적에서 더 나쁨. Symplectic 이 HMC 의 숨은 주역.
+:::
+
+### HMC 한 반복 — 식 (12.3)
+
+**알고리즘**:
+
+1. **모멘텀 재추출**: $\phi \sim \mathrm{N}(0, M)$. 이전 $\phi$ 버림.
+2. **Leapfrog $L$ 단계**: $(\theta, \phi) \to (\theta^*, \phi^*)$.
+3. **수용/기각**:
+
+$$
+r = \frac{p(\theta^* \mid y) \, p(\phi^*)}{p(\theta^{t-1} \mid y) \, p(\phi^{t-1})} \tag{12.3}
+$$
+
+$\theta^t = \theta^*$ with probability $\min(r, 1)$, else $\theta^{t-1}$.
+
+$\phi$ 는 매번 재추출되므로 $\phi^t$ 저장 불필요.
+
+### 수용 비율 해석
+
+식 (12.3) 는 **Metropolis 의 비율 $= $ 결합 사후 비율**.
+
+**연속 극한** ($\epsilon \to 0$): leapfrog 가 연속 궤적에 수렴 → 에너지 $H$ 정확 보존 → $r = 1$ (항상 수용).
+
+**유한 $\epsilon$**: 작은 에너지 편차 → 수용률 약간 < 1.
+
+**실무**: $\epsilon$ 조정으로 수용률을 **65%** (최적 이론값) 근처로.
+
+::: {.callout-tip}
+## 직관 — 왜 "65%" 인가
+
+Metropolis 의 최적 23% 와 비교해 왜 HMC 는 65%?
+
+Metropolis: random walk — **정보 없이** 제안. 정확한 방향 찾기 어려움 → 대부분 기각해야 정교한 탐색.
+
+HMC: gradient 정보 사용 — 제안이 "지능적". 대부분 좋은 방향. 수용률 높아도 탐색 효율 유지.
+
+또 다른 해석: 수용률 = "궤적의 정확도". Leapfrog 오차가 작으면 수용률 높음. 너무 높으면 오차 잡을 여지 있는 큰 $\epsilon$ 에 비해 **소심한 설정** — 더 긴 궤적으로 더 멀리 갈 수 있음.
+
+65% 보다 낮으면 $\epsilon$ 감소, 높으면 증가. 이론 (Beskos et al. 2013) 가 $0.651$ 로 구체.
+:::
+
+### 튜닝 3 파라미터
+
+HMC 는 Metropolis 보다 복잡. 3 개 파라미터.
+
+| 파라미터 | 역할 | 설정 |
+|---|---|---|
+| $M$ (mass matrix) | 공간 스케일 조정 | 사후 공분산 역수 근사, 대각 |
+| $\epsilon$ (step size) | 이산화 정밀도 | 수용률 65% 목표 |
+| $L$ (leapfrog steps) | 궤적 길이 | $L \epsilon$ = 공간 스케일 |
+
+**기본값**: $\epsilon L = 1$ (사후 스케일이 1 로 정규화됐다 가정), $L = 10$.
+
+### 제약 모수 처리
+
+HMC 는 **연속·부분 미분 가능** 사후에서 작동. 제약 모수 처리 방법.
+
+**방법 1 — 변환 (선호)**:
+
+- 양수 $\tau > 0$ → $\log \tau$ (실수 전체).
+- 확률 $p \in (0, 1)$ → $\mathrm{logit}(p)$.
+- 합 제약 $\sum \alpha_k = 1$ → stick-breaking.
+
+변환 후 **Jacobian** 보정 필요 — 로그 사후에 $\log \lvert J \rvert$ 추가.
+
+**방법 2 — Bouncing**:
+
+경계에 도달하면 모멘텀 부호 변경 → 반사. Detailed balance 유지.
+
+**방법 3 — Rejection**:
+
+경계 밖으로 나가면 그 궤적 기각. 단순하지만 비효율.
+
+실무: **방법 1**이 표준. Stan 이 자동 수행.
+
+### NUTS — No-U-Turn Sampler
+
+HMC 의 가장 까다로운 튜닝: **$L$ 선택**.
+
+- $L$ 너무 작음: 각 반복이 조금만 이동 → 느림.
+- $L$ 너무 큼: **U-turn** (궤적이 돌아와 원점 근처) → 계산 낭비.
+
+NUTS (Hoffman & Gelman 2014) 의 아이디어:
+
+> 궤적이 **돌아오기 시작** 할 때까지 계속 확장.
+
+**U-turn 조건**: $\phi \cdot (\theta - \theta_0) < 0$. 모멘텀과 시작점으로의 변위 벡터가 반대 방향.
+
+### NUTS 알고리즘 — 양방향 확장
+
+단순 "U-turn 까지 계속" 은 **detailed balance 깸**. NUTS 는 영리하게:
+
+1. **양방향 확장**: 궤적을 시간 앞·뒤로 이진 트리처럼 확장.
+2. **멈춤 조건**: 양 끝 subtree 중 하나가 U-turn 이면 중단.
+3. **표본 선택**: 전체 궤적에서 **확률 가중 무작위 선택**.
+
+**결과**: $L$ 자동 선택, detailed balance 유지, $\epsilon$ 만 튜닝 필요.
+
+Stan 의 기본 샘플러. PyMC 도 기본.
+
+::: {.callout-tip}
+## 직관 — NUTS 가 "자동" 인 진짜 의미
+
+NUTS 가 튜닝 없는 게 아님. **$\epsilon$ 은 여전히 튜닝 필요**. 그러나 **$L$ 이 없어짐** — 각 반복마다 궤적 길이가 적응적으로 달라짐.
+
+실무적 의미: 사후 분포의 **영역별 적응**. 평평한 영역에선 긴 궤적 (많은 leapfrog), 좁은 영역에선 짧은 궤적.
+
+이 적응이 중요한 이유: 계층 모형의 funnel 같은 구조는 **영역마다 다른 step size** 가 이상적. NUTS 가 자동 적용.
+
+하지만 NUTS 도 완벽하지 않음: 꼬리가 매우 짧거나 길면 여전히 어려움. Riemannian HMC 가 해결책.
+:::
+
+### Riemannian HMC
+
+더 고급 확장: **mass matrix $M$ 자체를 위치 의존** 으로.
+
+$M(\theta) = \text{Fisher info}(\theta)$ 또는 **local Hessian**.
+
+장점: 곡률 변화하는 사후에 적응.
+단점: 각 leapfrog step 에 Hessian 계산 → 고차원 비싸다.
+
+Stan 은 완전 Riemannian 미지원. 실험적 구현 존재.
+
+### HMC + Gibbs 결합
+
+HMC 는 **연속 모수만** 처리. 이산 모수 (mixture component index, model indicator) 는?
+
+**해결**: 블록 샘플링.
+
+- 연속 블록: HMC.
+- 이산 블록: Gibbs / Metropolis / slice.
+
+계층 모형에서는 HMC 가 **각 그룹을 블록으로** 처리해 속도 이득도 가능 — 한 반복당 한 $p(y^{(j)} \mid \eta^{(j)})$ 평가.
+
+## § 12.5 — HMC for 8 학교
+
+Gelman 의 구체 튜닝 궤적. HMC 실전 감각.
+
+### 모형 복습
+
+$J = 8$ 학교, 효과 $y_j$, 표준 오차 $\sigma_j$ 알려짐:
+
+$$
+y_j \mid \alpha_j \sim \mathrm{N}(\alpha_j, \sigma_j^2), \quad \alpha_j \mid \mu, \tau \sim \mathrm{N}(\mu, \tau^2)
+$$
+
+Prior: $p(\mu, \tau) \propto 1$.
+
+**10 차원 모수**: $\theta = (\alpha_1, \ldots, \alpha_8, \mu, \tau)$.
+
+### Log-Posterior 유도
+
+$$
+\log p(\theta \mid y) = -\sum_j \frac{(\alpha_j - y_j)^2}{2\sigma_j^2} - \sum_j \frac{(\alpha_j - \mu)^2}{2\tau^2} - J \log \tau + C
+$$
+
+### Gradient 유도
+
+HMC 의 핵심 요구사항: $\nabla \log p$ 해석적 계산.
+
+**$\alpha_j$ 편미분**:
+
+$$
+\frac{\partial \log p}{\partial \alpha_j} = -\frac{\alpha_j - y_j}{\sigma_j^2} - \frac{\alpha_j - \mu}{\tau^2}
+$$
+
+두 항 해석:
+
+- 첫 항: 데이터 우도 ($y_j$ 쪽으로 당김).
+- 둘째 항: 계층 prior ($\mu$ 쪽으로 당김).
+
+**$\mu$ 편미분**:
+
+$$
+\frac{\partial \log p}{\partial \mu} = -\sum_{j=1}^J \frac{\mu - \alpha_j}{\tau^2} = \frac{\sum_j \alpha_j - J \mu}{\tau^2}
+$$
+
+**$\tau$ 편미분**:
+
+$$
+\frac{\partial \log p}{\partial \tau} = -\frac{J}{\tau} + \sum_{j=1}^J \frac{(\alpha_j - \mu)^2}{\tau^3}
+$$
+
+세 항:
+
+- $-J/\tau$: prior 체계적 기울기.
+- 둘째: 그룹 간 편차 제곱 정보.
+
+### 디버깅 — 수치 미분 검증
+
+Gelman 권고: 해석 gradient 와 **수치 gradient** 비교.
+
+```python
+def num_grad(log_p, theta, h=1e-4):
+    g = np.zeros_like(theta)
+    for i in range(len(theta)):
+        theta_p = theta.copy(); theta_p[i] += h
+        theta_m = theta.copy(); theta_m[i] -= h
+        g[i] = (log_p(theta_p) - log_p(theta_m)) / (2 * h)
+    return g
+```
+
+두 gradient 가 소수점 4~5 자리 일치해야 버그 없음.
+
+### Mass Matrix 초기 설정
+
+Gelman 의 선택: $M = \mathrm{diag}(15^{-2}, \ldots, 15^{-2})$ — 모든 모수 스케일 15 가정.
+
+근거: Table 5.2 데이터의 대략적 분산. 엄밀할 필요 없음 — "stiffness 차이 제거" 용도.
+
+### 튜닝 궤적 — 실제 수치
+
+Gelman 이 책에 기록한 실험 시퀀스.
+
+#### 시도 1: $\epsilon_0 = 0.1, L_0 = 10$
+
+4 체인 × 100 반복. 수용률 `[0.23, 0.59, 0.02, 0.57]`.
+
+- 체인마다 다름 → 초기 $\theta$ 위치별 민감.
+- 평균 0.35 — 목표 65% 보다 많이 낮음.
+- $\widehat{R} > 2$ — 수렴 안 됨.
+
+**진단**: $\epsilon$ 이 너무 큼 → 수용률 낮음.
+
+#### 시도 2: $\epsilon_0 = 0.05, L_0 = 20$
+
+$\epsilon_0 L_0 = 1$ 유지하면서 $\epsilon$ 절반, $L$ 두 배.
+
+수용률 `[0.72, 0.87, 0.33, 0.55]`. 평균 0.62 — 목표 근접. 그러나 $\widehat{R}$ 여전히 > 1.2.
+
+#### 시도 3: 시도 2 튜닝 + 1000 반복
+
+수용률 `[0.52, 0.68, 0.75, 0.51]`. $\widehat{R} < 1.2$.
+
+#### 시도 4: 10,000 반복
+
+$\widehat{R} < 1.1$ for all — **수렴 도달**.
+
+::: {.callout-tip}
+## 직관 — HMC 튜닝의 실제 난이도
+
+교재의 이 시퀀스를 보면 HMC 가 **"플러그앤드플레이" 아님**. 여러 차례 시도 필요.
+
+Stan/PyMC 의 자동 튜닝이 왜 중요한지 이 예제가 말함: **warm-up 단계에서 adaptation** 으로 같은 과정 자동 수행. 사용자는 `iter=1000, warmup=500` 지정만.
+
+그래도 Stan 의 자동화가 실패하는 경우가 있음 — divergent transitions, max treedepth 경고. 이런 경우는 **모형 재매개변수화** (non-centered) 가 근본 해결.
+:::
+
+### $\log \tau$ 변환 — Jacobian 처리
+
+제약 $\tau > 0$ 해소: **$\tau \to \log \tau$**.
+
+변환된 공간의 로그 사후:
+
+$$
+\log p(\theta', y) = \log p(\theta \mid y) + \log \tau
+$$
+
+마지막 $\log \tau$ 는 Jacobian — $dt = d(\log \tau) \cdot \tau$ 의 $\tau$ 기여.
+
+**새 gradient** (마지막 성분):
+
+$$
+\frac{\partial}{\partial \log \tau} \log p = \tau \cdot \frac{\partial}{\partial \tau} \log p + 1 = -(J - 1) + \sum_j \frac{(\alpha_j - \mu)^2}{\tau^2}
+$$
+
+$-J/\tau$ 가 $\tau$ 곱해 $-J$ 되고, Jacobian $+1$ 이 더해져 $-(J-1)$.
+
+### Mass Matrix 재설정
+
+$\log \tau$ 의 스케일은 1 (로그 척도) 이므로:
+
+- $\alpha_j, \mu$: mass 15 (변함 없음).
+- $\log \tau$: **mass 1**.
+
+새 $M = \mathrm{diag}(15^{-2}, \ldots, 15^{-2}, 1^{-2})$.
+
+### 왜 변환이 유익한가
+
+$\tau$ 직접 샘플: $\tau = 0$ 근처에서 **경계 문제** — leapfrog 이 음수로 갈 수 있음.
+
+$\log \tau$: $-\infty$ 까지 허용 (funnel 의 목 효과적 표현). HMC 가 자유롭게 움직임.
+
+단, **funnel 자체는 여전히** — non-centered 변환이 더 근본적 해결책.
+
+## § 12.6 — Stan
+
+### 설계 철학
+
+**Stan**: Sampling through adaptive neighborhoods. Andrew Gelman·Bob Carpenter 팀 (Columbia).
+
+**목표**: HMC 의 성능을 **임의 베이즈 모형**에 자동 적용.
+
+**핵심 구성**:
+
+1. **모델 언어** (Stan code).
+2. **자동 미분** (C++ autodiff).
+3. **NUTS + adaptation** (warm-up 자동 튜닝).
+4. **수렴 진단** (R-hat, ESS 자동 보고).
+5. **인터페이스** (R, Python, Julia).
+
+### Stan 모델 언어 예제
+
+8 학교 모형:
+
+```stan
+data {
+  int<lower=0> J;
+  vector[J] y;
+  vector<lower=0>[J] sigma;
+}
+parameters {
+  real mu;
+  real<lower=0> tau;
+  vector[J] eta;          // non-centered
+}
+transformed parameters {
+  vector[J] theta = mu + tau * eta;
+}
+model {
+  eta ~ normal(0, 1);
+  y ~ normal(theta, sigma);
+}
+```
+
+**자동**: $\tau > 0$ 제약은 `<lower=0>` 키워드. Stan 이 내부적으로 $\log \tau$ 변환 + Jacobian 추가.
+
+### 자동 미분 (Autodiff)
+
+HMC 의 요구: $\nabla \log p$. 수치 미분은 $d + 1$ 회 함수 평가 → 느림.
+
+**Stan 의 autodiff**:
+
+1. **Expression tree** 구성: 모형 코드를 C++ AST 로 파싱.
+2. **Forward pass**: 현재 값에서 log p 계산 + 모든 중간값 저장.
+3. **Reverse pass**: chain rule 역전파. $\partial \log p / \partial x$ 를 한 번에 모든 $x$ 에 대해 계산.
+
+**비용**: forward 1 회 + reverse 1 회 $\approx$ 함수 평가 1.5~3 회. $d$ 차원이든 상수.
+
+**속도**: $d = 1000$ 에서 수치 미분 대비 **500 배 이상 빠름**.
+
+### Adaptation (Warm-up)
+
+Stan 의 warm-up 단계:
+
+1. **Initial**: 기본 $\epsilon = 1$, $M = I$.
+2. **Phase I** (75 iter): $\epsilon$ dual averaging 으로 조정.
+3. **Phase II** (25 + 50 + 100 + ... iter): $M$ 추정 + $\epsilon$ 재조정 (창 크기 점점 커짐).
+4. **Phase III** (50 iter): 마지막 $\epsilon$ fine-tune.
+
+Total warm-up: 1000 반복 (기본). 이후 adaptation 고정 → proper Markov chain.
+
+### NUTS 통합
+
+Stan 은 NUTS 를 기본으로 사용. `adapt_delta` 파라미터로 목표 수용률 조정:
+
+- 기본 0.8. Divergent transitions 많으면 0.95~0.99 로 올림.
+- 높은 $\delta$ → 작은 $\epsilon$ → 긴 warm-up 필요.
+
+### 진단 경고
+
+Stan 이 자동 제공하는 진단.
+
+| 경고 | 의미 | 해결 |
+|---|---|---|
+| $\widehat{R} > 1.05$ | 수렴 안 됨 | 더 길게 |
+| ESS 낮음 | 자기상관 많음 | 재매개변수화 |
+| Divergent transitions | 곡률 급격 | non-centered, adapt_delta 올림 |
+| Max treedepth | 궤적 너무 김 | max_treedepth 증가 |
+| E-BFMI 낮음 | Energy transition 문제 | 모형 재검토 |
+
+이 진단이 Stan 의 실무 가치의 절반 — 맹목적 샘플링 방지.
+
+### 인터페이스
+
+| 인터페이스 | 언어 | 특징 |
+|---|---|---|
+| CmdStan | C++ 직접 | 가장 빠름, dependency 최소 |
+| RStan | R | R 데이터 프레임 통합 |
+| CmdStanR | R | RStan 의 현대 대안 |
+| PyStan | Python | Python 생태계 |
+| CmdStanPy | Python | 현대 Python 인터페이스 |
+| cmdstanr/cmdstanpy | R/Python | CmdStan 래퍼, 최신 |
+| Stan.jl | Julia | Julia 인터페이스 |
+
+현대 표준: **CmdStan + 언어별 래퍼**. 과거 RStan 직접 컴파일 대비 설치 간단.
+
+## 세 절을 관통하는 직관 모음
+
+### HMC 는 "물리학으로 MCMC 극복"
+
+통계 계산이 **물리학 시뮬레이션**에서 차용. 에너지 보존 + symplectic 이 핵심. 통계-물리의 만남.
+
+### 자동화의 계층
+
+- 이론 (12.4) → 알고리즘.
+- 구현 (12.5) → 적용.
+- 소프트웨어 (12.6) → 사용자.
+
+각 층이 **상위 층의 복잡도를 숨기는** 추상화. Stan 사용자는 HMC 수식을 모르고도 적용 가능.
+
+### "자동" 의 한계
+
+Stan/PyMC 의 자동 NUTS 가 실패하는 경우:
+
+- 다봉 사후 (Ch.12.3 tempering 필요).
+- 극단 funnel (non-centered 필수).
+- 이산 파라미터 (marginalize 또는 Gibbs 결합).
+- 비연속 사후 (HMC 기본 미지원).
+
+"자동" 은 **대부분의 모형**에 대한 기본값. 예외는 여전히 전문가 개입 필요.
+
+## 코드 — PyMC HMC/NUTS 예제
+
+### 8 학교 Non-centered with PyMC
+
+```python
+import pymc as pm
+import numpy as np
+import arviz as az
+
+y = np.array([28, 8, -3, 7, -1, 1, 18, 12])
+sigma = np.array([15, 10, 16, 11, 9, 11, 10, 18])
+J = 8
+
+with pm.Model() as eight_schools:
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfNormal("tau", 10)
+    eta = pm.Normal("eta", 0, 1, shape=J)
+    theta = pm.Deterministic("theta", mu + tau * eta)
+    obs = pm.Normal("y", theta, sigma, observed=y)
+
+    idata = pm.sample(
+        draws=2000, tune=1000, chains=4, target_accept=0.95, random_seed=122
+    )
+
+print(az.summary(idata, var_names=["mu", "tau", "theta"]))
+print(f"Divergences: {idata.sample_stats.diverging.sum().item()}")
+```
+
+기대 결과: 모든 $\widehat{R} < 1.01$, ESS 수백~천, divergences 0 (non-centered 이므로).
+
+### Centered 비교
+
+```python
+with pm.Model() as eight_schools_centered:
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfNormal("tau", 10)
+    theta = pm.Normal("theta", mu, tau, shape=J)
+    obs = pm.Normal("y", theta, sigma, observed=y)
+
+    idata_c = pm.sample(
+        draws=2000, tune=1000, chains=4, target_accept=0.95, random_seed=122
+    )
+
+print(az.summary(idata_c, var_names=["mu", "tau", "theta"]))
+print(f"Divergences: {idata_c.sample_stats.diverging.sum().item()}")
+```
+
+Centered 는 **divergences 수십~수백** 예상 — funnel 때문. Non-centered 와 **같은 모형, 다른 파라미터화**.
+
+### HMC Leapfrog 수동 구현
+
+교육용. 2D 정규 목표.
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(125)
+
+# 목표: N(0, I_2)
+def log_p(theta):
+    return -0.5 * np.sum(theta**2)
+
+def grad_log_p(theta):
+    return -theta
+
+def leapfrog(theta, phi, M_inv, epsilon, L, grad_fn):
+    theta = theta.copy()
+    phi = phi.copy()
+    # Half-step phi
+    phi += 0.5 * epsilon * grad_fn(theta)
+    for _ in range(L - 1):
+        theta += epsilon * (M_inv @ phi)
+        phi += epsilon * grad_fn(theta)
+    theta += epsilon * (M_inv @ phi)
+    phi += 0.5 * epsilon * grad_fn(theta)
+    return theta, phi
+
+def hmc_step(theta, M, epsilon, L, log_p_fn, grad_fn, rng):
+    d = len(theta)
+    M_inv = np.linalg.inv(M)
+    L_chol = np.linalg.cholesky(M)
+    # 모멘텀 재추출
+    phi = L_chol @ rng.normal(0, 1, d)
+    # Leapfrog
+    theta_new, phi_new = leapfrog(theta, phi, M_inv, epsilon, L, grad_fn)
+    # 수용률
+    H_current = -log_p_fn(theta) + 0.5 * phi @ M_inv @ phi
+    H_new = -log_p_fn(theta_new) + 0.5 * phi_new @ M_inv @ phi_new
+    log_r = H_current - H_new
+    if np.log(rng.uniform()) < log_r:
+        return theta_new, True
+    else:
+        return theta, False
+
+# 실행
+d = 2
+M = np.eye(d)
+epsilon = 0.25
+L = 20
+theta = np.array([3.0, 3.0])
+n_iter = 2000
+samples = np.zeros((n_iter, d))
+accepts = 0
+for t in range(n_iter):
+    theta, accepted = hmc_step(theta, M, epsilon, L, log_p, grad_log_p, rng)
+    samples[t] = theta
+    accepts += accepted
+
+print(f"수용률: {accepts / n_iter:.3f}")
+print(f"사후 평균: {samples.mean(axis=0).round(3)}  (참: [0, 0])")
+print(f"사후 분산: {samples.var(axis=0).round(3)}  (참: [1, 1])")
+```
+
+기대: 수용률 0.9~0.95, 사후 평균 0, 분산 1.
+
+## 실전 체크리스트
+
+HMC 실무 12 단계.
+
+1. **Stan/PyMC 기본** — 수동 HMC 피하기.
+2. **Non-centered 먼저** — 계층 모형 표준.
+3. **$\tau > 0$ 등 제약은 `<lower=0>`** — Stan 자동 변환.
+4. **$\nabla \log p$ 해석적** — autodiff 활용.
+5. **초기 target_accept = 0.8** — 기본값.
+6. **Divergences 0 목표** — 있으면 0.95~0.99.
+7. **Warm-up 1000** — 기본.
+8. **$\widehat{R} < 1.01, ESS \ge 400$** — 수렴 기준.
+9. **Divergence → non-centered + 재매개변수화** — 근본 해결.
+10. **Max treedepth 경고 → 증가** — 긴 궤적 필요.
+11. **E-BFMI 낮음 → 모형 재검토** — 에너지 분포 문제.
+12. **사후 예측 점검** (Ch.6) — HMC 수렴 ≠ 모형 타당성.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Ch.12 Overview (02-12-0)](./02-12-0-efficient-mcmc.qmd) — 효율 MCMC 지도
+- [§ 12.1~12.3 심화 (02-12-1)](./02-12-1-reparameterization-metropolis-tuning-slice.qmd) — 재매개변수화·튜닝
+- [Ch.11 시리즈](./02-11-0-mcmc-basics.qmd) — MCMC 기초
+
+**Ch.12 후속**
+
+- `02-12-3-*` — § 12.7~12.8 (문헌·연습)
+
+**후속 주제**
+
+- Ch.13 Variational Inference — MCMC 대안
+- Ch.15 Hierarchical Linear Models — HMC 본격 활용
+- Ch.22 Finite Mixture Models — HMC + discrete marginalization
+
+**관련 개념**
+
+- Duane, Kennedy, Pendleton, Roweth (1987) — HMC 원저 (물리학)
+- Neal (2011), *MCMC using Hamiltonian Dynamics* — 통계 도입
+- Hoffman & Gelman (2014) — NUTS
+- Beskos et al. (2013) — HMC 최적 수용률 65%
+- Girolami & Calderhead (2011) — Riemannian HMC
+- Carpenter et al. (2017) — Stan 논문
+- Betancourt (2017) — *A Conceptual Introduction to HMC*
+- Stan Development Team — Stan User's Guide
+- Salvatier, Wiecki, Fonnesbeck (2016) — PyMC 원 논문
+- Phan, Pradhan, Jankowiak (2019) — NumPyro

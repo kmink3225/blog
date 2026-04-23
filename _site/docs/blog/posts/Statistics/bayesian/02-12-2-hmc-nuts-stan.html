@@ -1,0 +1,1709 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.543">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="Ch.12 overview 가 HMC 를 “무작위 보행 극복” 의 혁명으로 소개했다면, 이 포스트는 § 12.4~12.6 의 수식과 알고리즘 세부. HMC 가 모멘텀 변수 \phi \sim \mathrm{N}(0, M) 를 도입해 결합 사후 p(\theta, \phi \mid y)
+= p(\phi) p(\theta \mid y) 를 구성하는 방식, Hamilton 방정식 d\theta/dt
+= M^{-1}\phi, d\phi/dt = \nabla \log p 의 에너지 보존 원리, leapfrog integrator 의 symplectic 성질과 half-step/full-step/half-step 분해가 왜 time-reversible 인지, 식 (12.3) 의 수용 비율 p(\theta^*)p(\phi^*) /
+p(\theta^{t-1})p(\phi^{t-1}) 이 연속 극한에서 1 에 수렴하는 이유, 튜닝 파라미터 M, \epsilon, L 의 세 시간 척도와 최적 수용률 65%, 8 학교 계층 정규 모형의 gradient 해석적 유도 (식 마다 sigma_j 와 tau 의 역수 항), Gelman 의 실제 튜닝 궤적 (\epsilon_0 = 0.1 \to 0.05, L_0 = 10
+\to 20, 수용률 0.23/0.59/0.02/0.57 → 0.52/0.68/0.75/0.51), \tau > 0 제약을 \log \tau 변환으로 해소할 때 나타나는 Jacobian 항 \tau 와 gradient 의 -(J-1) 교정, NUTS 의 “U-turn 까지 계속” 알고리즘과 detailed balance 를 유지하는 양방향 확장, Riemannian HMC 의 curvature 기반 mass matrix, Stan 의 자동 미분이 어떻게 chain rule 역전파로 finite difference 보다 빠른지, warm-up 단계에서 M, \epsilon adaptive 설정 — 각 수식 옆에 “왜 이 단계가 필요한가” 를 붙여 전개한다.">
+
+<title>Kwangmin Kim - § 12.4~12.6 — Hamiltonian Monte Carlo·NUTS·Stan</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Kwangmin Kim - § 12.4~12.6 — Hamiltonian Monte Carlo·NUTS·Stan">
+<meta property="og:description" content="Ch.12 overview 가 HMC 를 “무작위 보행 극복” 의 혁명으로 소개했다면, 이 포스트는 § 12.4~12.6 의 수식과 알고리즘 세부. HMC 가 모멘텀 변수 \(\phi \sim \mathrm{N}(0, M)\) 를 도입해 결합 사후 \(p(\theta, \phi \mid y)
+= p(\phi) p(\theta \mid y)\) 를 구성하는 방식, Hamilton 방정식 \(d\theta/dt
+= M^{-1}\phi, d\phi/dt = \nabla \log p\) 의 에너지 보존 원리, leapfrog integrator 의 symplectic 성질과 half-step/full-step/half-step 분해가 왜 time-reversible 인지, 식 (12.3) 의 수용 비율 \(p(\theta^*)p(\phi^*) /
+p(\theta^{t-1})p(\phi^{t-1})\) 이 연속 극한에서 1 에 수렴하는 이유, 튜닝 파라미터 \(M, \epsilon, L\) 의 세 시간 척도와 최적 수용률 65%, 8 학교 계층 정규 모형의 gradient 해석적 유도 (식 마다 sigma_j 와 tau 의 역수 항), Gelman 의 실제 튜닝 궤적 (\(\epsilon_0 = 0.1 \to 0.05\), \(L_0 = 10
+\to 20\), 수용률 0.23/0.59/0.02/0.57 → 0.52/0.68/0.75/0.51), \(\tau > 0\) 제약을 \(\log \tau\) 변환으로 해소할 때 나타나는 Jacobian 항 \(\tau\) 와 gradient 의 \(-(J-1)\) 교정, NUTS 의 “U-turn 까지 계속” 알고리즘과 detailed balance 를 유지하는 양방향 확장, Riemannian HMC 의 curvature 기반 mass matrix, Stan 의 자동 미분이 어떻게 chain rule 역전파로 finite difference 보다 빠른지, warm-up 단계에서 \(M, \epsilon\) adaptive 설정 — 각 수식 옆에 “왜 이 단계가 필요한가” 를 붙여 전개한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+          <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">§ 12.4~12.6 — Hamiltonian Monte Carlo·NUTS·Stan</h1>
+            <p class="subtitle lead">Gelman BDA Ch.12 심화 — 증강 사후와 Hamilton 방정식, leapfrog 3 단계 정확 유도, 수용 비율 식 (12.3) 에너지 해석, 8 학교 10차원 gradient + <span class="math inline">\(\log\tau\)</span> Jacobian, NUTS 의 U-turn 조건, Stan 자동 미분</p>
+                  <div>
+        <div class="description">
+          <p>Ch.12 overview 가 HMC 를 “무작위 보행 극복” 의 혁명으로 소개했다면, 이 포스트는 § 12.4~12.6 의 <strong>수식과 알고리즘 세부</strong>. HMC 가 모멘텀 변수 <span class="math inline">\(\phi \sim \mathrm{N}(0, M)\)</span> 를 도입해 결합 사후 <span class="math inline">\(p(\theta, \phi \mid y)
+          = p(\phi) p(\theta \mid y)\)</span> 를 구성하는 방식, Hamilton 방정식 <span class="math inline">\(d\theta/dt
+          = M^{-1}\phi, d\phi/dt = \nabla \log p\)</span> 의 에너지 보존 원리, leapfrog integrator 의 symplectic 성질과 half-step/full-step/half-step 분해가 왜 time-reversible 인지, 식 (12.3) 의 수용 비율 <span class="math inline">\(p(\theta^*)p(\phi^*) /
+          p(\theta^{t-1})p(\phi^{t-1})\)</span> 이 연속 극한에서 1 에 수렴하는 이유, 튜닝 파라미터 <span class="math inline">\(M, \epsilon, L\)</span> 의 세 시간 척도와 최적 수용률 65%, 8 학교 계층 정규 모형의 gradient 해석적 유도 (식 마다 sigma_j 와 tau 의 역수 항), Gelman 의 실제 튜닝 궤적 (<span class="math inline">\(\epsilon_0 = 0.1 \to 0.05\)</span>, <span class="math inline">\(L_0 = 10
+          \to 20\)</span>, 수용률 0.23/0.59/0.02/0.57 → 0.52/0.68/0.75/0.51), <span class="math inline">\(\tau &gt; 0\)</span> 제약을 <span class="math inline">\(\log \tau\)</span> 변환으로 해소할 때 나타나는 Jacobian 항 <span class="math inline">\(\tau\)</span> 와 gradient 의 <span class="math inline">\(-(J-1)\)</span> 교정, NUTS 의 “U-turn 까지 계속” 알고리즘과 detailed balance 를 유지하는 양방향 확장, Riemannian HMC 의 curvature 기반 mass matrix, Stan 의 자동 미분이 어떻게 chain rule 역전파로 finite difference 보다 빠른지, warm-up 단계에서 <span class="math inline">\(M, \epsilon\)</span> adaptive 설정 — 각 수식 옆에 “왜 이 단계가 필요한가” 를 붙여 전개한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Statistics</div>
+                <div class="quarto-category">Bayesian</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2026년 04월 23일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#개요-hmc-삼위일체" id="toc-개요-hmc-삼위일체" class="nav-link active" data-scroll-target="#개요-hmc-삼위일체"><span class="header-section-number">1</span> 개요 — HMC 삼위일체</a></li>
+  <li><a href="#hmc-원리와-알고리즘" id="toc-hmc-원리와-알고리즘" class="nav-link" data-scroll-target="#hmc-원리와-알고리즘"><span class="header-section-number">2</span> § 12.4 — HMC 원리와 알고리즘</a>
+  <ul class="collapse">
+  <li><a href="#무작위-보행의-한계-재확인" id="toc-무작위-보행의-한계-재확인" class="nav-link" data-scroll-target="#무작위-보행의-한계-재확인"><span class="header-section-number">2.1</span> 무작위 보행의 한계 재확인</a></li>
+  <li><a href="#hmc-의-물리적-모티브" id="toc-hmc-의-물리적-모티브" class="nav-link" data-scroll-target="#hmc-의-물리적-모티브"><span class="header-section-number">2.2</span> HMC 의 물리적 모티브</a></li>
+  <li><a href="#증강-사후" id="toc-증강-사후" class="nav-link" data-scroll-target="#증강-사후"><span class="header-section-number">2.3</span> 증강 사후</a></li>
+  <li><a href="#에너지-보존-왜-hmc-가-빠른가" id="toc-에너지-보존-왜-hmc-가-빠른가" class="nav-link" data-scroll-target="#에너지-보존-왜-hmc-가-빠른가"><span class="header-section-number">2.4</span> 에너지 보존 — 왜 HMC 가 빠른가</a></li>
+  <li><a href="#leapfrog-integrator-이산-근사" id="toc-leapfrog-integrator-이산-근사" class="nav-link" data-scroll-target="#leapfrog-integrator-이산-근사"><span class="header-section-number">2.5</span> Leapfrog Integrator — 이산 근사</a></li>
+  <li><a href="#왜-half-step-이-필요한가-symplectic-원리" id="toc-왜-half-step-이-필요한가-symplectic-원리" class="nav-link" data-scroll-target="#왜-half-step-이-필요한가-symplectic-원리"><span class="header-section-number">2.6</span> 왜 Half-step 이 필요한가 — Symplectic 원리</a></li>
+  <li><a href="#hmc-한-반복-식-12.3" id="toc-hmc-한-반복-식-12.3" class="nav-link" data-scroll-target="#hmc-한-반복-식-12.3"><span class="header-section-number">2.7</span> HMC 한 반복 — 식 (12.3)</a></li>
+  <li><a href="#수용-비율-해석" id="toc-수용-비율-해석" class="nav-link" data-scroll-target="#수용-비율-해석"><span class="header-section-number">2.8</span> 수용 비율 해석</a></li>
+  <li><a href="#튜닝-3-파라미터" id="toc-튜닝-3-파라미터" class="nav-link" data-scroll-target="#튜닝-3-파라미터"><span class="header-section-number">2.9</span> 튜닝 3 파라미터</a></li>
+  <li><a href="#제약-모수-처리" id="toc-제약-모수-처리" class="nav-link" data-scroll-target="#제약-모수-처리"><span class="header-section-number">2.10</span> 제약 모수 처리</a></li>
+  <li><a href="#nuts-no-u-turn-sampler" id="toc-nuts-no-u-turn-sampler" class="nav-link" data-scroll-target="#nuts-no-u-turn-sampler"><span class="header-section-number">2.11</span> NUTS — No-U-Turn Sampler</a></li>
+  <li><a href="#nuts-알고리즘-양방향-확장" id="toc-nuts-알고리즘-양방향-확장" class="nav-link" data-scroll-target="#nuts-알고리즘-양방향-확장"><span class="header-section-number">2.12</span> NUTS 알고리즘 — 양방향 확장</a></li>
+  <li><a href="#riemannian-hmc" id="toc-riemannian-hmc" class="nav-link" data-scroll-target="#riemannian-hmc"><span class="header-section-number">2.13</span> Riemannian HMC</a></li>
+  <li><a href="#hmc-gibbs-결합" id="toc-hmc-gibbs-결합" class="nav-link" data-scroll-target="#hmc-gibbs-결합"><span class="header-section-number">2.14</span> HMC + Gibbs 결합</a></li>
+  </ul></li>
+  <li><a href="#hmc-for-8-학교" id="toc-hmc-for-8-학교" class="nav-link" data-scroll-target="#hmc-for-8-학교"><span class="header-section-number">3</span> § 12.5 — HMC for 8 학교</a>
+  <ul class="collapse">
+  <li><a href="#모형-복습" id="toc-모형-복습" class="nav-link" data-scroll-target="#모형-복습"><span class="header-section-number">3.1</span> 모형 복습</a></li>
+  <li><a href="#log-posterior-유도" id="toc-log-posterior-유도" class="nav-link" data-scroll-target="#log-posterior-유도"><span class="header-section-number">3.2</span> Log-Posterior 유도</a></li>
+  <li><a href="#gradient-유도" id="toc-gradient-유도" class="nav-link" data-scroll-target="#gradient-유도"><span class="header-section-number">3.3</span> Gradient 유도</a></li>
+  <li><a href="#디버깅-수치-미분-검증" id="toc-디버깅-수치-미분-검증" class="nav-link" data-scroll-target="#디버깅-수치-미분-검증"><span class="header-section-number">3.4</span> 디버깅 — 수치 미분 검증</a></li>
+  <li><a href="#mass-matrix-초기-설정" id="toc-mass-matrix-초기-설정" class="nav-link" data-scroll-target="#mass-matrix-초기-설정"><span class="header-section-number">3.5</span> Mass Matrix 초기 설정</a></li>
+  <li><a href="#튜닝-궤적-실제-수치" id="toc-튜닝-궤적-실제-수치" class="nav-link" data-scroll-target="#튜닝-궤적-실제-수치"><span class="header-section-number">3.6</span> 튜닝 궤적 — 실제 수치</a></li>
+  <li><a href="#log-tau-변환-jacobian-처리" id="toc-log-tau-변환-jacobian-처리" class="nav-link" data-scroll-target="#log-tau-변환-jacobian-처리"><span class="header-section-number">3.7</span> <span class="math inline">\(\log \tau\)</span> 변환 — Jacobian 처리</a></li>
+  <li><a href="#mass-matrix-재설정" id="toc-mass-matrix-재설정" class="nav-link" data-scroll-target="#mass-matrix-재설정"><span class="header-section-number">3.8</span> Mass Matrix 재설정</a></li>
+  <li><a href="#왜-변환이-유익한가" id="toc-왜-변환이-유익한가" class="nav-link" data-scroll-target="#왜-변환이-유익한가"><span class="header-section-number">3.9</span> 왜 변환이 유익한가</a></li>
+  </ul></li>
+  <li><a href="#stan" id="toc-stan" class="nav-link" data-scroll-target="#stan"><span class="header-section-number">4</span> § 12.6 — Stan</a>
+  <ul class="collapse">
+  <li><a href="#설계-철학" id="toc-설계-철학" class="nav-link" data-scroll-target="#설계-철학"><span class="header-section-number">4.1</span> 설계 철학</a></li>
+  <li><a href="#stan-모델-언어-예제" id="toc-stan-모델-언어-예제" class="nav-link" data-scroll-target="#stan-모델-언어-예제"><span class="header-section-number">4.2</span> Stan 모델 언어 예제</a></li>
+  <li><a href="#자동-미분-autodiff" id="toc-자동-미분-autodiff" class="nav-link" data-scroll-target="#자동-미분-autodiff"><span class="header-section-number">4.3</span> 자동 미분 (Autodiff)</a></li>
+  <li><a href="#adaptation-warm-up" id="toc-adaptation-warm-up" class="nav-link" data-scroll-target="#adaptation-warm-up"><span class="header-section-number">4.4</span> Adaptation (Warm-up)</a></li>
+  <li><a href="#nuts-통합" id="toc-nuts-통합" class="nav-link" data-scroll-target="#nuts-통합"><span class="header-section-number">4.5</span> NUTS 통합</a></li>
+  <li><a href="#진단-경고" id="toc-진단-경고" class="nav-link" data-scroll-target="#진단-경고"><span class="header-section-number">4.6</span> 진단 경고</a></li>
+  <li><a href="#인터페이스" id="toc-인터페이스" class="nav-link" data-scroll-target="#인터페이스"><span class="header-section-number">4.7</span> 인터페이스</a></li>
+  </ul></li>
+  <li><a href="#세-절을-관통하는-직관-모음" id="toc-세-절을-관통하는-직관-모음" class="nav-link" data-scroll-target="#세-절을-관통하는-직관-모음"><span class="header-section-number">5</span> 세 절을 관통하는 직관 모음</a>
+  <ul class="collapse">
+  <li><a href="#hmc-는-물리학으로-mcmc-극복" id="toc-hmc-는-물리학으로-mcmc-극복" class="nav-link" data-scroll-target="#hmc-는-물리학으로-mcmc-극복"><span class="header-section-number">5.1</span> HMC 는 “물리학으로 MCMC 극복”</a></li>
+  <li><a href="#자동화의-계층" id="toc-자동화의-계층" class="nav-link" data-scroll-target="#자동화의-계층"><span class="header-section-number">5.2</span> 자동화의 계층</a></li>
+  <li><a href="#자동-의-한계" id="toc-자동-의-한계" class="nav-link" data-scroll-target="#자동-의-한계"><span class="header-section-number">5.3</span> “자동” 의 한계</a></li>
+  </ul></li>
+  <li><a href="#코드-pymc-hmcnuts-예제" id="toc-코드-pymc-hmcnuts-예제" class="nav-link" data-scroll-target="#코드-pymc-hmcnuts-예제"><span class="header-section-number">6</span> 코드 — PyMC HMC/NUTS 예제</a>
+  <ul class="collapse">
+  <li><a href="#학교-non-centered-with-pymc" id="toc-학교-non-centered-with-pymc" class="nav-link" data-scroll-target="#학교-non-centered-with-pymc"><span class="header-section-number">6.1</span> 8 학교 Non-centered with PyMC</a></li>
+  <li><a href="#centered-비교" id="toc-centered-비교" class="nav-link" data-scroll-target="#centered-비교"><span class="header-section-number">6.2</span> Centered 비교</a></li>
+  <li><a href="#hmc-leapfrog-수동-구현" id="toc-hmc-leapfrog-수동-구현" class="nav-link" data-scroll-target="#hmc-leapfrog-수동-구현"><span class="header-section-number">6.3</span> HMC Leapfrog 수동 구현</a></li>
+  </ul></li>
+  <li><a href="#실전-체크리스트" id="toc-실전-체크리스트" class="nav-link" data-scroll-target="#실전-체크리스트"><span class="header-section-number">7</span> 실전 체크리스트</a></li>
+  <li><a href="#관련-주제" id="toc-관련-주제" class="nav-link" data-scroll-target="#관련-주제"><span class="header-section-number">8</span> 관련 주제</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="개요-hmc-삼위일체" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="개요-hmc-삼위일체"><span class="header-section-number">1</span> 개요 — HMC 삼위일체</h2>
+<p>Ch.12 § 12.4~12.6 은 현대 MCMC 의 <strong>중심 삼각형</strong>.</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>절</th>
+<th>역할</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>12.4</td>
+<td>HMC 알고리즘 자체 — 원리·leapfrog·튜닝·NUTS</td>
+</tr>
+<tr class="even">
+<td>12.5</td>
+<td>8 학교 계층 정규에 HMC 적용 — 실전 gradient + 튜닝</td>
+</tr>
+<tr class="odd">
+<td>12.6</td>
+<td>Stan — HMC 를 자동화하는 계산 환경</td>
+</tr>
+</tbody>
+</table>
+<p>세 절이 <strong>“이론 → 예제 → 자동화”</strong> 의 피라미드. <a href="../../../../../docs/blog/posts/Statistics/bayesian/02-12-0-efficient-mcmc.html">Overview (02-12-0)</a> 가 큰 그림이었다면, 이 포스트는 <strong>수식 + 구현 + 실전 수치</strong>.</p>
+<p>Ch.11 의 Gibbs/Metropolis 가 <strong>어떻게 샘플링이 가능한가</strong> 를 보였다면, HMC 는 <strong>어떻게 빠르게 가능한가</strong> 를 보인다. 고차원 복잡 모형이 실제로 적합 가능하게 된 전환점.</p>
+</section>
+<section id="hmc-원리와-알고리즘" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="hmc-원리와-알고리즘"><span class="header-section-number">2</span> § 12.4 — HMC 원리와 알고리즘</h2>
+<section id="무작위-보행의-한계-재확인" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="무작위-보행의-한계-재확인"><span class="header-section-number">2.1</span> 무작위 보행의 한계 재확인</h3>
+<p>Ch.11 의 Gibbs·Metropolis 는 모두 <strong>local random walk</strong>. 공간 대각선 <span class="math inline">\(R\)</span> 건너가려면:</p>
+<ul>
+<li>Metropolis: <span class="math inline">\(O(R^2 / \epsilon^2)\)</span> 단계. <span class="math inline">\(\epsilon\)</span> 은 점프 크기.</li>
+<li>Gibbs: <span class="math inline">\(O(R^2 / \sigma^2)\)</span> 비슷한 구조.</li>
+</ul>
+<p>고차원·강한 상관 사후에서 이 2차 비용이 지배적. 재매개변수화 (§ 12.1) 가 도움 되지만 근본 해결은 아님.</p>
+</section>
+<section id="hmc-의-물리적-모티브" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="hmc-의-물리적-모티브"><span class="header-section-number">2.2</span> HMC 의 물리적 모티브</h3>
+<p>HMC (Duane et al.&nbsp;1987) 는 <strong>해밀턴 역학</strong>에서 영감. 물리:</p>
+<ul>
+<li>입자 위치 <span class="math inline">\(\theta\)</span>.</li>
+<li><strong>모멘텀</strong> <span class="math inline">\(\phi\)</span>.</li>
+<li>포텐셜 에너지 <span class="math inline">\(U(\theta) = -\log p(\theta \mid y)\)</span>.</li>
+<li>운동 에너지 <span class="math inline">\(K(\phi) = \tfrac{1}{2} \phi^\top M^{-1} \phi\)</span>.</li>
+<li><strong>전체 에너지 (해밀토니안)</strong>: <span class="math inline">\(H(\theta, \phi) = U(\theta) + K(\phi)\)</span>.</li>
+</ul>
+<p>입자가 에너지 <span class="math inline">\(H\)</span> 를 보존하며 <strong>직선·곡선 궤적</strong>으로 이동. Brown 운동과 질적으로 다름.</p>
+</section>
+<section id="증강-사후" class="level3" data-number="2.3">
+<h3 data-number="2.3" class="anchored" data-anchor-id="증강-사후"><span class="header-section-number">2.3</span> 증강 사후</h3>
+<p>HMC 의 수학적 핵심: 목표 분포를 <span class="math inline">\((\theta, \phi)\)</span> 의 결합 분포로 확장.</p>
+<p><span class="math display">\[
+p(\theta, \phi \mid y) = p(\phi) \cdot p(\theta \mid y)
+\]</span></p>
+<p><strong>모멘텀 분포</strong> <span class="math inline">\(p(\phi) = \mathrm{N}(0, M)\)</span> 는 <strong>독립</strong>. <span class="math inline">\(\phi\)</span> 를 marginalize 하면 원 사후 <span class="math inline">\(p(\theta \mid y)\)</span> 회복.</p>
+<p>주의: <span class="math inline">\(\phi\)</span> 는 <strong>보조 변수</strong> — 계산 중간 산물, 관심 대상 아님.</p>
+</section>
+<section id="에너지-보존-왜-hmc-가-빠른가" class="level3" data-number="2.4">
+<h3 data-number="2.4" class="anchored" data-anchor-id="에너지-보존-왜-hmc-가-빠른가"><span class="header-section-number">2.4</span> 에너지 보존 — 왜 HMC 가 빠른가</h3>
+<p><span class="math inline">\((\theta, \phi)\)</span> 의 로그 결합 밀도:</p>
+<p><span class="math display">\[
+\log p(\theta, \phi \mid y) = \log p(\theta \mid y) - \tfrac{1}{2} \phi^\top M^{-1} \phi = -H(\theta, \phi) + C
+\]</span></p>
+<p>해밀턴 방정식:</p>
+<p><span class="math display">\[
+\frac{d\theta}{dt} = \frac{\partial H}{\partial \phi} = M^{-1} \phi, \quad \frac{d\phi}{dt} = -\frac{\partial H}{\partial \theta} = \nabla \log p(\theta \mid y)
+\]</span></p>
+<p><strong>중요 성질</strong>:</p>
+<ol type="1">
+<li><span class="math inline">\(H\)</span> 가 연속 궤적 위에서 <strong>일정</strong> (에너지 보존).</li>
+<li><strong>Volume-preserving</strong>: <span class="math inline">\((\theta, \phi)\)</span> 부피 보존 (Liouville 정리).</li>
+</ol>
+<p>이 성질이 HMC 의 수용 비율이 1 에 가깝도록 만든다.</p>
+</section>
+<section id="leapfrog-integrator-이산-근사" class="level3" data-number="2.5">
+<h3 data-number="2.5" class="anchored" data-anchor-id="leapfrog-integrator-이산-근사"><span class="header-section-number">2.5</span> Leapfrog Integrator — 이산 근사</h3>
+<p>연속 해밀턴 방정식을 유한 step 으로 이산화. Leapfrog (개구리 뛰기) 는 <strong>symplectic</strong> integrator — 에너지·부피 근사 보존.</p>
+<p><strong>한 leapfrog step</strong> (크기 <span class="math inline">\(\epsilon\)</span>):</p>
+<p><strong>(a) Half-step <span class="math inline">\(\phi\)</span></strong>: <span class="math display">\[
+\phi \leftarrow \phi + \tfrac{\epsilon}{2} \nabla \log p(\theta \mid y)
+\]</span></p>
+<p><strong>(b) Full-step <span class="math inline">\(\theta\)</span></strong>: <span class="math display">\[
+\theta \leftarrow \theta + \epsilon M^{-1} \phi
+\]</span></p>
+<p><strong>(c) Half-step <span class="math inline">\(\phi\)</span></strong>: <span class="math display">\[
+\phi \leftarrow \phi + \tfrac{\epsilon}{2} \nabla \log p(\theta \mid y)
+\]</span></p>
+<ol start="3" type="a">
+<li>후 다음 반복의 (a) 는 같은 연산 — <strong>연속 half-step = full-step</strong> 으로 합쳐 효율.</li>
+</ol>
+</section>
+<section id="왜-half-step-이-필요한가-symplectic-원리" class="level3" data-number="2.6">
+<h3 data-number="2.6" class="anchored" data-anchor-id="왜-half-step-이-필요한가-symplectic-원리"><span class="header-section-number">2.6</span> 왜 Half-step 이 필요한가 — Symplectic 원리</h3>
+<p>단순 Euler 방법 (<span class="math inline">\(\phi\)</span> 먼저 full, <span class="math inline">\(\theta\)</span> 먼저 full) 은 에너지 표류. Leapfrog 는 <strong>대칭 분해</strong>로 표류 감소.</p>
+<p>수학적으로: <span class="math inline">\(\epsilon\)</span> 크기 오차가 <strong>시간 반전 대칭</strong> 덕에 <strong><span class="math inline">\(\epsilon^2\)</span> 로 취소</strong>. <span class="math inline">\(L \epsilon\)</span> 총 궤적에서 오차가 <span class="math inline">\(L \epsilon^2\)</span> — 긴 궤적에도 안정.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Leapfrog 의 “half-step” 은 왜 혁명인가
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>단순 Euler: 위치와 모멘텀을 번갈아 full step. 에너지 <strong>계통적 표류</strong> → 수용률 0 에 수렴.</p>
+<p>Leapfrog: <strong><span class="math inline">\(\phi\)</span> 를 <span class="math inline">\(\theta\)</span> 업데이트 전후로 대칭 분할</strong>. 시간 반전 시 완전 같은 궤적 → 대칭 오차가 상쇄.</p>
+<p>이 대칭성이 HMC 를 <strong>긴 궤적에도 안정</strong>하게 만든다. <span class="math inline">\(L = 100, 1000\)</span> 단계도 가능. 비교: 단순 Euler 는 <span class="math inline">\(L = 10\)</span> 에서도 수용률 붕괴.</p>
+<p>더 정확한 integrator (Runge-Kutta 4) 도 있지만 <strong>symplectic 성질 없음</strong> → 장거리 궤적에서 더 나쁨. Symplectic 이 HMC 의 숨은 주역.</p>
+</div>
+</div>
+</section>
+<section id="hmc-한-반복-식-12.3" class="level3" data-number="2.7">
+<h3 data-number="2.7" class="anchored" data-anchor-id="hmc-한-반복-식-12.3"><span class="header-section-number">2.7</span> HMC 한 반복 — 식 (12.3)</h3>
+<p><strong>알고리즘</strong>:</p>
+<ol type="1">
+<li><strong>모멘텀 재추출</strong>: <span class="math inline">\(\phi \sim \mathrm{N}(0, M)\)</span>. 이전 <span class="math inline">\(\phi\)</span> 버림.</li>
+<li><strong>Leapfrog <span class="math inline">\(L\)</span> 단계</strong>: <span class="math inline">\((\theta, \phi) \to (\theta^*, \phi^*)\)</span>.</li>
+<li><strong>수용/기각</strong>:</li>
+</ol>
+<p><span class="math display">\[
+r = \frac{p(\theta^* \mid y) \, p(\phi^*)}{p(\theta^{t-1} \mid y) \, p(\phi^{t-1})} \tag{12.3}
+\]</span></p>
+<p><span class="math inline">\(\theta^t = \theta^*\)</span> with probability <span class="math inline">\(\min(r, 1)\)</span>, else <span class="math inline">\(\theta^{t-1}\)</span>.</p>
+<p><span class="math inline">\(\phi\)</span> 는 매번 재추출되므로 <span class="math inline">\(\phi^t\)</span> 저장 불필요.</p>
+</section>
+<section id="수용-비율-해석" class="level3" data-number="2.8">
+<h3 data-number="2.8" class="anchored" data-anchor-id="수용-비율-해석"><span class="header-section-number">2.8</span> 수용 비율 해석</h3>
+<p>식 (12.3) 는 <strong>Metropolis 의 비율 $= $ 결합 사후 비율</strong>.</p>
+<p><strong>연속 극한</strong> (<span class="math inline">\(\epsilon \to 0\)</span>): leapfrog 가 연속 궤적에 수렴 → 에너지 <span class="math inline">\(H\)</span> 정확 보존 → <span class="math inline">\(r = 1\)</span> (항상 수용).</p>
+<p><strong>유한 <span class="math inline">\(\epsilon\)</span></strong>: 작은 에너지 편차 → 수용률 약간 &lt; 1.</p>
+<p><strong>실무</strong>: <span class="math inline">\(\epsilon\)</span> 조정으로 수용률을 <strong>65%</strong> (최적 이론값) 근처로.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — 왜 “65%” 인가
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Metropolis 의 최적 23% 와 비교해 왜 HMC 는 65%?</p>
+<p>Metropolis: random walk — <strong>정보 없이</strong> 제안. 정확한 방향 찾기 어려움 → 대부분 기각해야 정교한 탐색.</p>
+<p>HMC: gradient 정보 사용 — 제안이 “지능적”. 대부분 좋은 방향. 수용률 높아도 탐색 효율 유지.</p>
+<p>또 다른 해석: 수용률 = “궤적의 정확도”. Leapfrog 오차가 작으면 수용률 높음. 너무 높으면 오차 잡을 여지 있는 큰 <span class="math inline">\(\epsilon\)</span> 에 비해 <strong>소심한 설정</strong> — 더 긴 궤적으로 더 멀리 갈 수 있음.</p>
+<p>65% 보다 낮으면 <span class="math inline">\(\epsilon\)</span> 감소, 높으면 증가. 이론 (Beskos et al.&nbsp;2013) 가 <span class="math inline">\(0.651\)</span> 로 구체.</p>
+</div>
+</div>
+</section>
+<section id="튜닝-3-파라미터" class="level3" data-number="2.9">
+<h3 data-number="2.9" class="anchored" data-anchor-id="튜닝-3-파라미터"><span class="header-section-number">2.9</span> 튜닝 3 파라미터</h3>
+<p>HMC 는 Metropolis 보다 복잡. 3 개 파라미터.</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>파라미터</th>
+<th>역할</th>
+<th>설정</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(M\)</span> (mass matrix)</td>
+<td>공간 스케일 조정</td>
+<td>사후 공분산 역수 근사, 대각</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\epsilon\)</span> (step size)</td>
+<td>이산화 정밀도</td>
+<td>수용률 65% 목표</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(L\)</span> (leapfrog steps)</td>
+<td>궤적 길이</td>
+<td><span class="math inline">\(L \epsilon\)</span> = 공간 스케일</td>
+</tr>
+</tbody>
+</table>
+<p><strong>기본값</strong>: <span class="math inline">\(\epsilon L = 1\)</span> (사후 스케일이 1 로 정규화됐다 가정), <span class="math inline">\(L = 10\)</span>.</p>
+</section>
+<section id="제약-모수-처리" class="level3" data-number="2.10">
+<h3 data-number="2.10" class="anchored" data-anchor-id="제약-모수-처리"><span class="header-section-number">2.10</span> 제약 모수 처리</h3>
+<p>HMC 는 <strong>연속·부분 미분 가능</strong> 사후에서 작동. 제약 모수 처리 방법.</p>
+<p><strong>방법 1 — 변환 (선호)</strong>:</p>
+<ul>
+<li>양수 <span class="math inline">\(\tau &gt; 0\)</span> → <span class="math inline">\(\log \tau\)</span> (실수 전체).</li>
+<li>확률 <span class="math inline">\(p \in (0, 1)\)</span> → <span class="math inline">\(\mathrm{logit}(p)\)</span>.</li>
+<li>합 제약 <span class="math inline">\(\sum \alpha_k = 1\)</span> → stick-breaking.</li>
+</ul>
+<p>변환 후 <strong>Jacobian</strong> 보정 필요 — 로그 사후에 <span class="math inline">\(\log \lvert J \rvert\)</span> 추가.</p>
+<p><strong>방법 2 — Bouncing</strong>:</p>
+<p>경계에 도달하면 모멘텀 부호 변경 → 반사. Detailed balance 유지.</p>
+<p><strong>방법 3 — Rejection</strong>:</p>
+<p>경계 밖으로 나가면 그 궤적 기각. 단순하지만 비효율.</p>
+<p>실무: <strong>방법 1</strong>이 표준. Stan 이 자동 수행.</p>
+</section>
+<section id="nuts-no-u-turn-sampler" class="level3" data-number="2.11">
+<h3 data-number="2.11" class="anchored" data-anchor-id="nuts-no-u-turn-sampler"><span class="header-section-number">2.11</span> NUTS — No-U-Turn Sampler</h3>
+<p>HMC 의 가장 까다로운 튜닝: <strong><span class="math inline">\(L\)</span> 선택</strong>.</p>
+<ul>
+<li><span class="math inline">\(L\)</span> 너무 작음: 각 반복이 조금만 이동 → 느림.</li>
+<li><span class="math inline">\(L\)</span> 너무 큼: <strong>U-turn</strong> (궤적이 돌아와 원점 근처) → 계산 낭비.</li>
+</ul>
+<p>NUTS (Hoffman &amp; Gelman 2014) 의 아이디어:</p>
+<blockquote class="blockquote">
+<p>궤적이 <strong>돌아오기 시작</strong> 할 때까지 계속 확장.</p>
+</blockquote>
+<p><strong>U-turn 조건</strong>: <span class="math inline">\(\phi \cdot (\theta - \theta_0) &lt; 0\)</span>. 모멘텀과 시작점으로의 변위 벡터가 반대 방향.</p>
+</section>
+<section id="nuts-알고리즘-양방향-확장" class="level3" data-number="2.12">
+<h3 data-number="2.12" class="anchored" data-anchor-id="nuts-알고리즘-양방향-확장"><span class="header-section-number">2.12</span> NUTS 알고리즘 — 양방향 확장</h3>
+<p>단순 “U-turn 까지 계속” 은 <strong>detailed balance 깸</strong>. NUTS 는 영리하게:</p>
+<ol type="1">
+<li><strong>양방향 확장</strong>: 궤적을 시간 앞·뒤로 이진 트리처럼 확장.</li>
+<li><strong>멈춤 조건</strong>: 양 끝 subtree 중 하나가 U-turn 이면 중단.</li>
+<li><strong>표본 선택</strong>: 전체 궤적에서 <strong>확률 가중 무작위 선택</strong>.</li>
+</ol>
+<p><strong>결과</strong>: <span class="math inline">\(L\)</span> 자동 선택, detailed balance 유지, <span class="math inline">\(\epsilon\)</span> 만 튜닝 필요.</p>
+<p>Stan 의 기본 샘플러. PyMC 도 기본.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — NUTS 가 “자동” 인 진짜 의미
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>NUTS 가 튜닝 없는 게 아님. <strong><span class="math inline">\(\epsilon\)</span> 은 여전히 튜닝 필요</strong>. 그러나 <strong><span class="math inline">\(L\)</span> 이 없어짐</strong> — 각 반복마다 궤적 길이가 적응적으로 달라짐.</p>
+<p>실무적 의미: 사후 분포의 <strong>영역별 적응</strong>. 평평한 영역에선 긴 궤적 (많은 leapfrog), 좁은 영역에선 짧은 궤적.</p>
+<p>이 적응이 중요한 이유: 계층 모형의 funnel 같은 구조는 <strong>영역마다 다른 step size</strong> 가 이상적. NUTS 가 자동 적용.</p>
+<p>하지만 NUTS 도 완벽하지 않음: 꼬리가 매우 짧거나 길면 여전히 어려움. Riemannian HMC 가 해결책.</p>
+</div>
+</div>
+</section>
+<section id="riemannian-hmc" class="level3" data-number="2.13">
+<h3 data-number="2.13" class="anchored" data-anchor-id="riemannian-hmc"><span class="header-section-number">2.13</span> Riemannian HMC</h3>
+<p>더 고급 확장: <strong>mass matrix <span class="math inline">\(M\)</span> 자체를 위치 의존</strong> 으로.</p>
+<p><span class="math inline">\(M(\theta) = \text{Fisher info}(\theta)\)</span> 또는 <strong>local Hessian</strong>.</p>
+<p>장점: 곡률 변화하는 사후에 적응. 단점: 각 leapfrog step 에 Hessian 계산 → 고차원 비싸다.</p>
+<p>Stan 은 완전 Riemannian 미지원. 실험적 구현 존재.</p>
+</section>
+<section id="hmc-gibbs-결합" class="level3" data-number="2.14">
+<h3 data-number="2.14" class="anchored" data-anchor-id="hmc-gibbs-결합"><span class="header-section-number">2.14</span> HMC + Gibbs 결합</h3>
+<p>HMC 는 <strong>연속 모수만</strong> 처리. 이산 모수 (mixture component index, model indicator) 는?</p>
+<p><strong>해결</strong>: 블록 샘플링.</p>
+<ul>
+<li>연속 블록: HMC.</li>
+<li>이산 블록: Gibbs / Metropolis / slice.</li>
+</ul>
+<p>계층 모형에서는 HMC 가 <strong>각 그룹을 블록으로</strong> 처리해 속도 이득도 가능 — 한 반복당 한 <span class="math inline">\(p(y^{(j)} \mid \eta^{(j)})\)</span> 평가.</p>
+</section>
+</section>
+<section id="hmc-for-8-학교" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="hmc-for-8-학교"><span class="header-section-number">3</span> § 12.5 — HMC for 8 학교</h2>
+<p>Gelman 의 구체 튜닝 궤적. HMC 실전 감각.</p>
+<section id="모형-복습" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="모형-복습"><span class="header-section-number">3.1</span> 모형 복습</h3>
+<p><span class="math inline">\(J = 8\)</span> 학교, 효과 <span class="math inline">\(y_j\)</span>, 표준 오차 <span class="math inline">\(\sigma_j\)</span> 알려짐:</p>
+<p><span class="math display">\[
+y_j \mid \alpha_j \sim \mathrm{N}(\alpha_j, \sigma_j^2), \quad \alpha_j \mid \mu, \tau \sim \mathrm{N}(\mu, \tau^2)
+\]</span></p>
+<p>Prior: <span class="math inline">\(p(\mu, \tau) \propto 1\)</span>.</p>
+<p><strong>10 차원 모수</strong>: <span class="math inline">\(\theta = (\alpha_1, \ldots, \alpha_8, \mu, \tau)\)</span>.</p>
+</section>
+<section id="log-posterior-유도" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="log-posterior-유도"><span class="header-section-number">3.2</span> Log-Posterior 유도</h3>
+<p><span class="math display">\[
+\log p(\theta \mid y) = -\sum_j \frac{(\alpha_j - y_j)^2}{2\sigma_j^2} - \sum_j \frac{(\alpha_j - \mu)^2}{2\tau^2} - J \log \tau + C
+\]</span></p>
+</section>
+<section id="gradient-유도" class="level3" data-number="3.3">
+<h3 data-number="3.3" class="anchored" data-anchor-id="gradient-유도"><span class="header-section-number">3.3</span> Gradient 유도</h3>
+<p>HMC 의 핵심 요구사항: <span class="math inline">\(\nabla \log p\)</span> 해석적 계산.</p>
+<p><strong><span class="math inline">\(\alpha_j\)</span> 편미분</strong>:</p>
+<p><span class="math display">\[
+\frac{\partial \log p}{\partial \alpha_j} = -\frac{\alpha_j - y_j}{\sigma_j^2} - \frac{\alpha_j - \mu}{\tau^2}
+\]</span></p>
+<p>두 항 해석:</p>
+<ul>
+<li>첫 항: 데이터 우도 (<span class="math inline">\(y_j\)</span> 쪽으로 당김).</li>
+<li>둘째 항: 계층 prior (<span class="math inline">\(\mu\)</span> 쪽으로 당김).</li>
+</ul>
+<p><strong><span class="math inline">\(\mu\)</span> 편미분</strong>:</p>
+<p><span class="math display">\[
+\frac{\partial \log p}{\partial \mu} = -\sum_{j=1}^J \frac{\mu - \alpha_j}{\tau^2} = \frac{\sum_j \alpha_j - J \mu}{\tau^2}
+\]</span></p>
+<p><strong><span class="math inline">\(\tau\)</span> 편미분</strong>:</p>
+<p><span class="math display">\[
+\frac{\partial \log p}{\partial \tau} = -\frac{J}{\tau} + \sum_{j=1}^J \frac{(\alpha_j - \mu)^2}{\tau^3}
+\]</span></p>
+<p>세 항:</p>
+<ul>
+<li><span class="math inline">\(-J/\tau\)</span>: prior 체계적 기울기.</li>
+<li>둘째: 그룹 간 편차 제곱 정보.</li>
+</ul>
+</section>
+<section id="디버깅-수치-미분-검증" class="level3" data-number="3.4">
+<h3 data-number="3.4" class="anchored" data-anchor-id="디버깅-수치-미분-검증"><span class="header-section-number">3.4</span> 디버깅 — 수치 미분 검증</h3>
+<p>Gelman 권고: 해석 gradient 와 <strong>수치 gradient</strong> 비교.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1"></a><span class="kw">def</span> num_grad(log_p, theta, h<span class="op">=</span><span class="fl">1e-4</span>):</span>
+<span id="cb1-2"><a href="#cb1-2"></a>    g <span class="op">=</span> np.zeros_like(theta)</span>
+<span id="cb1-3"><a href="#cb1-3"></a>    <span class="cf">for</span> i <span class="kw">in</span> <span class="bu">range</span>(<span class="bu">len</span>(theta)):</span>
+<span id="cb1-4"><a href="#cb1-4"></a>        theta_p <span class="op">=</span> theta.copy()<span class="op">;</span> theta_p[i] <span class="op">+=</span> h</span>
+<span id="cb1-5"><a href="#cb1-5"></a>        theta_m <span class="op">=</span> theta.copy()<span class="op">;</span> theta_m[i] <span class="op">-=</span> h</span>
+<span id="cb1-6"><a href="#cb1-6"></a>        g[i] <span class="op">=</span> (log_p(theta_p) <span class="op">-</span> log_p(theta_m)) <span class="op">/</span> (<span class="dv">2</span> <span class="op">*</span> h)</span>
+<span id="cb1-7"><a href="#cb1-7"></a>    <span class="cf">return</span> g</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>두 gradient 가 소수점 4~5 자리 일치해야 버그 없음.</p>
+</section>
+<section id="mass-matrix-초기-설정" class="level3" data-number="3.5">
+<h3 data-number="3.5" class="anchored" data-anchor-id="mass-matrix-초기-설정"><span class="header-section-number">3.5</span> Mass Matrix 초기 설정</h3>
+<p>Gelman 의 선택: <span class="math inline">\(M = \mathrm{diag}(15^{-2}, \ldots, 15^{-2})\)</span> — 모든 모수 스케일 15 가정.</p>
+<p>근거: Table 5.2 데이터의 대략적 분산. 엄밀할 필요 없음 — “stiffness 차이 제거” 용도.</p>
+</section>
+<section id="튜닝-궤적-실제-수치" class="level3" data-number="3.6">
+<h3 data-number="3.6" class="anchored" data-anchor-id="튜닝-궤적-실제-수치"><span class="header-section-number">3.6</span> 튜닝 궤적 — 실제 수치</h3>
+<p>Gelman 이 책에 기록한 실험 시퀀스.</p>
+<section id="시도-1-epsilon_0-0.1-l_0-10" class="level4" data-number="3.6.1">
+<h4 data-number="3.6.1" class="anchored" data-anchor-id="시도-1-epsilon_0-0.1-l_0-10"><span class="header-section-number">3.6.1</span> 시도 1: <span class="math inline">\(\epsilon_0 = 0.1, L_0 = 10\)</span></h4>
+<p>4 체인 × 100 반복. 수용률 <code>[0.23, 0.59, 0.02, 0.57]</code>.</p>
+<ul>
+<li>체인마다 다름 → 초기 <span class="math inline">\(\theta\)</span> 위치별 민감.</li>
+<li>평균 0.35 — 목표 65% 보다 많이 낮음.</li>
+<li><span class="math inline">\(\widehat{R} &gt; 2\)</span> — 수렴 안 됨.</li>
+</ul>
+<p><strong>진단</strong>: <span class="math inline">\(\epsilon\)</span> 이 너무 큼 → 수용률 낮음.</p>
+</section>
+<section id="시도-2-epsilon_0-0.05-l_0-20" class="level4" data-number="3.6.2">
+<h4 data-number="3.6.2" class="anchored" data-anchor-id="시도-2-epsilon_0-0.05-l_0-20"><span class="header-section-number">3.6.2</span> 시도 2: <span class="math inline">\(\epsilon_0 = 0.05, L_0 = 20\)</span></h4>
+<p><span class="math inline">\(\epsilon_0 L_0 = 1\)</span> 유지하면서 <span class="math inline">\(\epsilon\)</span> 절반, <span class="math inline">\(L\)</span> 두 배.</p>
+<p>수용률 <code>[0.72, 0.87, 0.33, 0.55]</code>. 평균 0.62 — 목표 근접. 그러나 <span class="math inline">\(\widehat{R}\)</span> 여전히 &gt; 1.2.</p>
+</section>
+<section id="시도-3-시도-2-튜닝-1000-반복" class="level4" data-number="3.6.3">
+<h4 data-number="3.6.3" class="anchored" data-anchor-id="시도-3-시도-2-튜닝-1000-반복"><span class="header-section-number">3.6.3</span> 시도 3: 시도 2 튜닝 + 1000 반복</h4>
+<p>수용률 <code>[0.52, 0.68, 0.75, 0.51]</code>. <span class="math inline">\(\widehat{R} &lt; 1.2\)</span>.</p>
+</section>
+<section id="시도-4-10000-반복" class="level4" data-number="3.6.4">
+<h4 data-number="3.6.4" class="anchored" data-anchor-id="시도-4-10000-반복"><span class="header-section-number">3.6.4</span> 시도 4: 10,000 반복</h4>
+<p><span class="math inline">\(\widehat{R} &lt; 1.1\)</span> for all — <strong>수렴 도달</strong>.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — HMC 튜닝의 실제 난이도
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>교재의 이 시퀀스를 보면 HMC 가 <strong>“플러그앤드플레이” 아님</strong>. 여러 차례 시도 필요.</p>
+<p>Stan/PyMC 의 자동 튜닝이 왜 중요한지 이 예제가 말함: <strong>warm-up 단계에서 adaptation</strong> 으로 같은 과정 자동 수행. 사용자는 <code>iter=1000, warmup=500</code> 지정만.</p>
+<p>그래도 Stan 의 자동화가 실패하는 경우가 있음 — divergent transitions, max treedepth 경고. 이런 경우는 <strong>모형 재매개변수화</strong> (non-centered) 가 근본 해결.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="log-tau-변환-jacobian-처리" class="level3" data-number="3.7">
+<h3 data-number="3.7" class="anchored" data-anchor-id="log-tau-변환-jacobian-처리"><span class="header-section-number">3.7</span> <span class="math inline">\(\log \tau\)</span> 변환 — Jacobian 처리</h3>
+<p>제약 <span class="math inline">\(\tau &gt; 0\)</span> 해소: <strong><span class="math inline">\(\tau \to \log \tau\)</span></strong>.</p>
+<p>변환된 공간의 로그 사후:</p>
+<p><span class="math display">\[
+\log p(\theta', y) = \log p(\theta \mid y) + \log \tau
+\]</span></p>
+<p>마지막 <span class="math inline">\(\log \tau\)</span> 는 Jacobian — <span class="math inline">\(dt = d(\log \tau) \cdot \tau\)</span> 의 <span class="math inline">\(\tau\)</span> 기여.</p>
+<p><strong>새 gradient</strong> (마지막 성분):</p>
+<p><span class="math display">\[
+\frac{\partial}{\partial \log \tau} \log p = \tau \cdot \frac{\partial}{\partial \tau} \log p + 1 = -(J - 1) + \sum_j \frac{(\alpha_j - \mu)^2}{\tau^2}
+\]</span></p>
+<p><span class="math inline">\(-J/\tau\)</span> 가 <span class="math inline">\(\tau\)</span> 곱해 <span class="math inline">\(-J\)</span> 되고, Jacobian <span class="math inline">\(+1\)</span> 이 더해져 <span class="math inline">\(-(J-1)\)</span>.</p>
+</section>
+<section id="mass-matrix-재설정" class="level3" data-number="3.8">
+<h3 data-number="3.8" class="anchored" data-anchor-id="mass-matrix-재설정"><span class="header-section-number">3.8</span> Mass Matrix 재설정</h3>
+<p><span class="math inline">\(\log \tau\)</span> 의 스케일은 1 (로그 척도) 이므로:</p>
+<ul>
+<li><span class="math inline">\(\alpha_j, \mu\)</span>: mass 15 (변함 없음).</li>
+<li><span class="math inline">\(\log \tau\)</span>: <strong>mass 1</strong>.</li>
+</ul>
+<p>새 <span class="math inline">\(M = \mathrm{diag}(15^{-2}, \ldots, 15^{-2}, 1^{-2})\)</span>.</p>
+</section>
+<section id="왜-변환이-유익한가" class="level3" data-number="3.9">
+<h3 data-number="3.9" class="anchored" data-anchor-id="왜-변환이-유익한가"><span class="header-section-number">3.9</span> 왜 변환이 유익한가</h3>
+<p><span class="math inline">\(\tau\)</span> 직접 샘플: <span class="math inline">\(\tau = 0\)</span> 근처에서 <strong>경계 문제</strong> — leapfrog 이 음수로 갈 수 있음.</p>
+<p><span class="math inline">\(\log \tau\)</span>: <span class="math inline">\(-\infty\)</span> 까지 허용 (funnel 의 목 효과적 표현). HMC 가 자유롭게 움직임.</p>
+<p>단, <strong>funnel 자체는 여전히</strong> — non-centered 변환이 더 근본적 해결책.</p>
+</section>
+</section>
+<section id="stan" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="stan"><span class="header-section-number">4</span> § 12.6 — Stan</h2>
+<section id="설계-철학" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="설계-철학"><span class="header-section-number">4.1</span> 설계 철학</h3>
+<p><strong>Stan</strong>: Sampling through adaptive neighborhoods. Andrew Gelman·Bob Carpenter 팀 (Columbia).</p>
+<p><strong>목표</strong>: HMC 의 성능을 <strong>임의 베이즈 모형</strong>에 자동 적용.</p>
+<p><strong>핵심 구성</strong>:</p>
+<ol type="1">
+<li><strong>모델 언어</strong> (Stan code).</li>
+<li><strong>자동 미분</strong> (C++ autodiff).</li>
+<li><strong>NUTS + adaptation</strong> (warm-up 자동 튜닝).</li>
+<li><strong>수렴 진단</strong> (R-hat, ESS 자동 보고).</li>
+<li><strong>인터페이스</strong> (R, Python, Julia).</li>
+</ol>
+</section>
+<section id="stan-모델-언어-예제" class="level3" data-number="4.2">
+<h3 data-number="4.2" class="anchored" data-anchor-id="stan-모델-언어-예제"><span class="header-section-number">4.2</span> Stan 모델 언어 예제</h3>
+<p>8 학교 모형:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode numberSource stan number-lines code-with-copy"><code class="sourceCode stan"><span id="cb2-1"><a href="#cb2-1"></a><span class="kw">data</span> {</span>
+<span id="cb2-2"><a href="#cb2-2"></a>  <span class="dt">int</span>&lt;<span class="kw">lower</span>=<span class="dv">0</span>&gt; J;</span>
+<span id="cb2-3"><a href="#cb2-3"></a>  <span class="dt">vector</span>[J] y;</span>
+<span id="cb2-4"><a href="#cb2-4"></a>  <span class="dt">vector</span>&lt;<span class="kw">lower</span>=<span class="dv">0</span>&gt;[J] sigma;</span>
+<span id="cb2-5"><a href="#cb2-5"></a>}</span>
+<span id="cb2-6"><a href="#cb2-6"></a><span class="kw">parameters</span> {</span>
+<span id="cb2-7"><a href="#cb2-7"></a>  <span class="dt">real</span> mu;</span>
+<span id="cb2-8"><a href="#cb2-8"></a>  <span class="dt">real</span>&lt;<span class="kw">lower</span>=<span class="dv">0</span>&gt; tau;</span>
+<span id="cb2-9"><a href="#cb2-9"></a>  <span class="dt">vector</span>[J] eta;          <span class="co">// non-centered</span></span>
+<span id="cb2-10"><a href="#cb2-10"></a>}</span>
+<span id="cb2-11"><a href="#cb2-11"></a><span class="kw">transformed parameters</span> {</span>
+<span id="cb2-12"><a href="#cb2-12"></a>  <span class="dt">vector</span>[J] theta = mu + tau * eta;</span>
+<span id="cb2-13"><a href="#cb2-13"></a>}</span>
+<span id="cb2-14"><a href="#cb2-14"></a><span class="kw">model</span> {</span>
+<span id="cb2-15"><a href="#cb2-15"></a>  eta ~ normal(<span class="dv">0</span>, <span class="dv">1</span>);</span>
+<span id="cb2-16"><a href="#cb2-16"></a>  y ~ normal(theta, sigma);</span>
+<span id="cb2-17"><a href="#cb2-17"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>자동</strong>: <span class="math inline">\(\tau &gt; 0\)</span> 제약은 <code>&lt;lower=0&gt;</code> 키워드. Stan 이 내부적으로 <span class="math inline">\(\log \tau\)</span> 변환 + Jacobian 추가.</p>
+</section>
+<section id="자동-미분-autodiff" class="level3" data-number="4.3">
+<h3 data-number="4.3" class="anchored" data-anchor-id="자동-미분-autodiff"><span class="header-section-number">4.3</span> 자동 미분 (Autodiff)</h3>
+<p>HMC 의 요구: <span class="math inline">\(\nabla \log p\)</span>. 수치 미분은 <span class="math inline">\(d + 1\)</span> 회 함수 평가 → 느림.</p>
+<p><strong>Stan 의 autodiff</strong>:</p>
+<ol type="1">
+<li><strong>Expression tree</strong> 구성: 모형 코드를 C++ AST 로 파싱.</li>
+<li><strong>Forward pass</strong>: 현재 값에서 log p 계산 + 모든 중간값 저장.</li>
+<li><strong>Reverse pass</strong>: chain rule 역전파. <span class="math inline">\(\partial \log p / \partial x\)</span> 를 한 번에 모든 <span class="math inline">\(x\)</span> 에 대해 계산.</li>
+</ol>
+<p><strong>비용</strong>: forward 1 회 + reverse 1 회 <span class="math inline">\(\approx\)</span> 함수 평가 1.5~3 회. <span class="math inline">\(d\)</span> 차원이든 상수.</p>
+<p><strong>속도</strong>: <span class="math inline">\(d = 1000\)</span> 에서 수치 미분 대비 <strong>500 배 이상 빠름</strong>.</p>
+</section>
+<section id="adaptation-warm-up" class="level3" data-number="4.4">
+<h3 data-number="4.4" class="anchored" data-anchor-id="adaptation-warm-up"><span class="header-section-number">4.4</span> Adaptation (Warm-up)</h3>
+<p>Stan 의 warm-up 단계:</p>
+<ol type="1">
+<li><strong>Initial</strong>: 기본 <span class="math inline">\(\epsilon = 1\)</span>, <span class="math inline">\(M = I\)</span>.</li>
+<li><strong>Phase I</strong> (75 iter): <span class="math inline">\(\epsilon\)</span> dual averaging 으로 조정.</li>
+<li><strong>Phase II</strong> (25 + 50 + 100 + … iter): <span class="math inline">\(M\)</span> 추정 + <span class="math inline">\(\epsilon\)</span> 재조정 (창 크기 점점 커짐).</li>
+<li><strong>Phase III</strong> (50 iter): 마지막 <span class="math inline">\(\epsilon\)</span> fine-tune.</li>
+</ol>
+<p>Total warm-up: 1000 반복 (기본). 이후 adaptation 고정 → proper Markov chain.</p>
+</section>
+<section id="nuts-통합" class="level3" data-number="4.5">
+<h3 data-number="4.5" class="anchored" data-anchor-id="nuts-통합"><span class="header-section-number">4.5</span> NUTS 통합</h3>
+<p>Stan 은 NUTS 를 기본으로 사용. <code>adapt_delta</code> 파라미터로 목표 수용률 조정:</p>
+<ul>
+<li>기본 0.8. Divergent transitions 많으면 0.95~0.99 로 올림.</li>
+<li>높은 <span class="math inline">\(\delta\)</span> → 작은 <span class="math inline">\(\epsilon\)</span> → 긴 warm-up 필요.</li>
+</ul>
+</section>
+<section id="진단-경고" class="level3" data-number="4.6">
+<h3 data-number="4.6" class="anchored" data-anchor-id="진단-경고"><span class="header-section-number">4.6</span> 진단 경고</h3>
+<p>Stan 이 자동 제공하는 진단.</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th>경고</th>
+<th>의미</th>
+<th>해결</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(\widehat{R} &gt; 1.05\)</span></td>
+<td>수렴 안 됨</td>
+<td>더 길게</td>
+</tr>
+<tr class="even">
+<td>ESS 낮음</td>
+<td>자기상관 많음</td>
+<td>재매개변수화</td>
+</tr>
+<tr class="odd">
+<td>Divergent transitions</td>
+<td>곡률 급격</td>
+<td>non-centered, adapt_delta 올림</td>
+</tr>
+<tr class="even">
+<td>Max treedepth</td>
+<td>궤적 너무 김</td>
+<td>max_treedepth 증가</td>
+</tr>
+<tr class="odd">
+<td>E-BFMI 낮음</td>
+<td>Energy transition 문제</td>
+<td>모형 재검토</td>
+</tr>
+</tbody>
+</table>
+<p>이 진단이 Stan 의 실무 가치의 절반 — 맹목적 샘플링 방지.</p>
+</section>
+<section id="인터페이스" class="level3" data-number="4.7">
+<h3 data-number="4.7" class="anchored" data-anchor-id="인터페이스"><span class="header-section-number">4.7</span> 인터페이스</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th>인터페이스</th>
+<th>언어</th>
+<th>특징</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>CmdStan</td>
+<td>C++ 직접</td>
+<td>가장 빠름, dependency 최소</td>
+</tr>
+<tr class="even">
+<td>RStan</td>
+<td>R</td>
+<td>R 데이터 프레임 통합</td>
+</tr>
+<tr class="odd">
+<td>CmdStanR</td>
+<td>R</td>
+<td>RStan 의 현대 대안</td>
+</tr>
+<tr class="even">
+<td>PyStan</td>
+<td>Python</td>
+<td>Python 생태계</td>
+</tr>
+<tr class="odd">
+<td>CmdStanPy</td>
+<td>Python</td>
+<td>현대 Python 인터페이스</td>
+</tr>
+<tr class="even">
+<td>cmdstanr/cmdstanpy</td>
+<td>R/Python</td>
+<td>CmdStan 래퍼, 최신</td>
+</tr>
+<tr class="odd">
+<td>Stan.jl</td>
+<td>Julia</td>
+<td>Julia 인터페이스</td>
+</tr>
+</tbody>
+</table>
+<p>현대 표준: <strong>CmdStan + 언어별 래퍼</strong>. 과거 RStan 직접 컴파일 대비 설치 간단.</p>
+</section>
+</section>
+<section id="세-절을-관통하는-직관-모음" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="세-절을-관통하는-직관-모음"><span class="header-section-number">5</span> 세 절을 관통하는 직관 모음</h2>
+<section id="hmc-는-물리학으로-mcmc-극복" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="hmc-는-물리학으로-mcmc-극복"><span class="header-section-number">5.1</span> HMC 는 “물리학으로 MCMC 극복”</h3>
+<p>통계 계산이 <strong>물리학 시뮬레이션</strong>에서 차용. 에너지 보존 + symplectic 이 핵심. 통계-물리의 만남.</p>
+</section>
+<section id="자동화의-계층" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="자동화의-계층"><span class="header-section-number">5.2</span> 자동화의 계층</h3>
+<ul>
+<li>이론 (12.4) → 알고리즘.</li>
+<li>구현 (12.5) → 적용.</li>
+<li>소프트웨어 (12.6) → 사용자.</li>
+</ul>
+<p>각 층이 <strong>상위 층의 복잡도를 숨기는</strong> 추상화. Stan 사용자는 HMC 수식을 모르고도 적용 가능.</p>
+</section>
+<section id="자동-의-한계" class="level3" data-number="5.3">
+<h3 data-number="5.3" class="anchored" data-anchor-id="자동-의-한계"><span class="header-section-number">5.3</span> “자동” 의 한계</h3>
+<p>Stan/PyMC 의 자동 NUTS 가 실패하는 경우:</p>
+<ul>
+<li>다봉 사후 (Ch.12.3 tempering 필요).</li>
+<li>극단 funnel (non-centered 필수).</li>
+<li>이산 파라미터 (marginalize 또는 Gibbs 결합).</li>
+<li>비연속 사후 (HMC 기본 미지원).</li>
+</ul>
+<p>“자동” 은 <strong>대부분의 모형</strong>에 대한 기본값. 예외는 여전히 전문가 개입 필요.</p>
+</section>
+</section>
+<section id="코드-pymc-hmcnuts-예제" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="코드-pymc-hmcnuts-예제"><span class="header-section-number">6</span> 코드 — PyMC HMC/NUTS 예제</h2>
+<section id="학교-non-centered-with-pymc" class="level3" data-number="6.1">
+<h3 data-number="6.1" class="anchored" data-anchor-id="학교-non-centered-with-pymc"><span class="header-section-number">6.1</span> 8 학교 Non-centered with PyMC</h3>
+<div class="sourceCode" id="cb3"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1"></a><span class="im">import</span> pymc <span class="im">as</span> pm</span>
+<span id="cb3-2"><a href="#cb3-2"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb3-3"><a href="#cb3-3"></a><span class="im">import</span> arviz <span class="im">as</span> az</span>
+<span id="cb3-4"><a href="#cb3-4"></a></span>
+<span id="cb3-5"><a href="#cb3-5"></a>y <span class="op">=</span> np.array([<span class="dv">28</span>, <span class="dv">8</span>, <span class="op">-</span><span class="dv">3</span>, <span class="dv">7</span>, <span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">18</span>, <span class="dv">12</span>])</span>
+<span id="cb3-6"><a href="#cb3-6"></a>sigma <span class="op">=</span> np.array([<span class="dv">15</span>, <span class="dv">10</span>, <span class="dv">16</span>, <span class="dv">11</span>, <span class="dv">9</span>, <span class="dv">11</span>, <span class="dv">10</span>, <span class="dv">18</span>])</span>
+<span id="cb3-7"><a href="#cb3-7"></a>J <span class="op">=</span> <span class="dv">8</span></span>
+<span id="cb3-8"><a href="#cb3-8"></a></span>
+<span id="cb3-9"><a href="#cb3-9"></a><span class="cf">with</span> pm.Model() <span class="im">as</span> eight_schools:</span>
+<span id="cb3-10"><a href="#cb3-10"></a>    mu <span class="op">=</span> pm.Normal(<span class="st">"mu"</span>, <span class="dv">0</span>, <span class="dv">10</span>)</span>
+<span id="cb3-11"><a href="#cb3-11"></a>    tau <span class="op">=</span> pm.HalfNormal(<span class="st">"tau"</span>, <span class="dv">10</span>)</span>
+<span id="cb3-12"><a href="#cb3-12"></a>    eta <span class="op">=</span> pm.Normal(<span class="st">"eta"</span>, <span class="dv">0</span>, <span class="dv">1</span>, shape<span class="op">=</span>J)</span>
+<span id="cb3-13"><a href="#cb3-13"></a>    theta <span class="op">=</span> pm.Deterministic(<span class="st">"theta"</span>, mu <span class="op">+</span> tau <span class="op">*</span> eta)</span>
+<span id="cb3-14"><a href="#cb3-14"></a>    obs <span class="op">=</span> pm.Normal(<span class="st">"y"</span>, theta, sigma, observed<span class="op">=</span>y)</span>
+<span id="cb3-15"><a href="#cb3-15"></a></span>
+<span id="cb3-16"><a href="#cb3-16"></a>    idata <span class="op">=</span> pm.sample(</span>
+<span id="cb3-17"><a href="#cb3-17"></a>        draws<span class="op">=</span><span class="dv">2000</span>, tune<span class="op">=</span><span class="dv">1000</span>, chains<span class="op">=</span><span class="dv">4</span>, target_accept<span class="op">=</span><span class="fl">0.95</span>, random_seed<span class="op">=</span><span class="dv">122</span></span>
+<span id="cb3-18"><a href="#cb3-18"></a>    )</span>
+<span id="cb3-19"><a href="#cb3-19"></a></span>
+<span id="cb3-20"><a href="#cb3-20"></a><span class="bu">print</span>(az.summary(idata, var_names<span class="op">=</span>[<span class="st">"mu"</span>, <span class="st">"tau"</span>, <span class="st">"theta"</span>]))</span>
+<span id="cb3-21"><a href="#cb3-21"></a><span class="bu">print</span>(<span class="ss">f"Divergences: </span><span class="sc">{</span>idata<span class="sc">.</span>sample_stats<span class="sc">.</span>diverging<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">.</span>item()<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>기대 결과: 모든 <span class="math inline">\(\widehat{R} &lt; 1.01\)</span>, ESS 수백~천, divergences 0 (non-centered 이므로).</p>
+</section>
+<section id="centered-비교" class="level3" data-number="6.2">
+<h3 data-number="6.2" class="anchored" data-anchor-id="centered-비교"><span class="header-section-number">6.2</span> Centered 비교</h3>
+<div class="sourceCode" id="cb4"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1"></a><span class="cf">with</span> pm.Model() <span class="im">as</span> eight_schools_centered:</span>
+<span id="cb4-2"><a href="#cb4-2"></a>    mu <span class="op">=</span> pm.Normal(<span class="st">"mu"</span>, <span class="dv">0</span>, <span class="dv">10</span>)</span>
+<span id="cb4-3"><a href="#cb4-3"></a>    tau <span class="op">=</span> pm.HalfNormal(<span class="st">"tau"</span>, <span class="dv">10</span>)</span>
+<span id="cb4-4"><a href="#cb4-4"></a>    theta <span class="op">=</span> pm.Normal(<span class="st">"theta"</span>, mu, tau, shape<span class="op">=</span>J)</span>
+<span id="cb4-5"><a href="#cb4-5"></a>    obs <span class="op">=</span> pm.Normal(<span class="st">"y"</span>, theta, sigma, observed<span class="op">=</span>y)</span>
+<span id="cb4-6"><a href="#cb4-6"></a></span>
+<span id="cb4-7"><a href="#cb4-7"></a>    idata_c <span class="op">=</span> pm.sample(</span>
+<span id="cb4-8"><a href="#cb4-8"></a>        draws<span class="op">=</span><span class="dv">2000</span>, tune<span class="op">=</span><span class="dv">1000</span>, chains<span class="op">=</span><span class="dv">4</span>, target_accept<span class="op">=</span><span class="fl">0.95</span>, random_seed<span class="op">=</span><span class="dv">122</span></span>
+<span id="cb4-9"><a href="#cb4-9"></a>    )</span>
+<span id="cb4-10"><a href="#cb4-10"></a></span>
+<span id="cb4-11"><a href="#cb4-11"></a><span class="bu">print</span>(az.summary(idata_c, var_names<span class="op">=</span>[<span class="st">"mu"</span>, <span class="st">"tau"</span>, <span class="st">"theta"</span>]))</span>
+<span id="cb4-12"><a href="#cb4-12"></a><span class="bu">print</span>(<span class="ss">f"Divergences: </span><span class="sc">{</span>idata_c<span class="sc">.</span>sample_stats<span class="sc">.</span>diverging<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">.</span>item()<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>Centered 는 <strong>divergences 수십~수백</strong> 예상 — funnel 때문. Non-centered 와 <strong>같은 모형, 다른 파라미터화</strong>.</p>
+</section>
+<section id="hmc-leapfrog-수동-구현" class="level3" data-number="6.3">
+<h3 data-number="6.3" class="anchored" data-anchor-id="hmc-leapfrog-수동-구현"><span class="header-section-number">6.3</span> HMC Leapfrog 수동 구현</h3>
+<p>교육용. 2D 정규 목표.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb5-2"><a href="#cb5-2"></a></span>
+<span id="cb5-3"><a href="#cb5-3"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">125</span>)</span>
+<span id="cb5-4"><a href="#cb5-4"></a></span>
+<span id="cb5-5"><a href="#cb5-5"></a><span class="co"># 목표: N(0, I_2)</span></span>
+<span id="cb5-6"><a href="#cb5-6"></a><span class="kw">def</span> log_p(theta):</span>
+<span id="cb5-7"><a href="#cb5-7"></a>    <span class="cf">return</span> <span class="op">-</span><span class="fl">0.5</span> <span class="op">*</span> np.<span class="bu">sum</span>(theta<span class="op">**</span><span class="dv">2</span>)</span>
+<span id="cb5-8"><a href="#cb5-8"></a></span>
+<span id="cb5-9"><a href="#cb5-9"></a><span class="kw">def</span> grad_log_p(theta):</span>
+<span id="cb5-10"><a href="#cb5-10"></a>    <span class="cf">return</span> <span class="op">-</span>theta</span>
+<span id="cb5-11"><a href="#cb5-11"></a></span>
+<span id="cb5-12"><a href="#cb5-12"></a><span class="kw">def</span> leapfrog(theta, phi, M_inv, epsilon, L, grad_fn):</span>
+<span id="cb5-13"><a href="#cb5-13"></a>    theta <span class="op">=</span> theta.copy()</span>
+<span id="cb5-14"><a href="#cb5-14"></a>    phi <span class="op">=</span> phi.copy()</span>
+<span id="cb5-15"><a href="#cb5-15"></a>    <span class="co"># Half-step phi</span></span>
+<span id="cb5-16"><a href="#cb5-16"></a>    phi <span class="op">+=</span> <span class="fl">0.5</span> <span class="op">*</span> epsilon <span class="op">*</span> grad_fn(theta)</span>
+<span id="cb5-17"><a href="#cb5-17"></a>    <span class="cf">for</span> _ <span class="kw">in</span> <span class="bu">range</span>(L <span class="op">-</span> <span class="dv">1</span>):</span>
+<span id="cb5-18"><a href="#cb5-18"></a>        theta <span class="op">+=</span> epsilon <span class="op">*</span> (M_inv <span class="op">@</span> phi)</span>
+<span id="cb5-19"><a href="#cb5-19"></a>        phi <span class="op">+=</span> epsilon <span class="op">*</span> grad_fn(theta)</span>
+<span id="cb5-20"><a href="#cb5-20"></a>    theta <span class="op">+=</span> epsilon <span class="op">*</span> (M_inv <span class="op">@</span> phi)</span>
+<span id="cb5-21"><a href="#cb5-21"></a>    phi <span class="op">+=</span> <span class="fl">0.5</span> <span class="op">*</span> epsilon <span class="op">*</span> grad_fn(theta)</span>
+<span id="cb5-22"><a href="#cb5-22"></a>    <span class="cf">return</span> theta, phi</span>
+<span id="cb5-23"><a href="#cb5-23"></a></span>
+<span id="cb5-24"><a href="#cb5-24"></a><span class="kw">def</span> hmc_step(theta, M, epsilon, L, log_p_fn, grad_fn, rng):</span>
+<span id="cb5-25"><a href="#cb5-25"></a>    d <span class="op">=</span> <span class="bu">len</span>(theta)</span>
+<span id="cb5-26"><a href="#cb5-26"></a>    M_inv <span class="op">=</span> np.linalg.inv(M)</span>
+<span id="cb5-27"><a href="#cb5-27"></a>    L_chol <span class="op">=</span> np.linalg.cholesky(M)</span>
+<span id="cb5-28"><a href="#cb5-28"></a>    <span class="co"># 모멘텀 재추출</span></span>
+<span id="cb5-29"><a href="#cb5-29"></a>    phi <span class="op">=</span> L_chol <span class="op">@</span> rng.normal(<span class="dv">0</span>, <span class="dv">1</span>, d)</span>
+<span id="cb5-30"><a href="#cb5-30"></a>    <span class="co"># Leapfrog</span></span>
+<span id="cb5-31"><a href="#cb5-31"></a>    theta_new, phi_new <span class="op">=</span> leapfrog(theta, phi, M_inv, epsilon, L, grad_fn)</span>
+<span id="cb5-32"><a href="#cb5-32"></a>    <span class="co"># 수용률</span></span>
+<span id="cb5-33"><a href="#cb5-33"></a>    H_current <span class="op">=</span> <span class="op">-</span>log_p_fn(theta) <span class="op">+</span> <span class="fl">0.5</span> <span class="op">*</span> phi <span class="op">@</span> M_inv <span class="op">@</span> phi</span>
+<span id="cb5-34"><a href="#cb5-34"></a>    H_new <span class="op">=</span> <span class="op">-</span>log_p_fn(theta_new) <span class="op">+</span> <span class="fl">0.5</span> <span class="op">*</span> phi_new <span class="op">@</span> M_inv <span class="op">@</span> phi_new</span>
+<span id="cb5-35"><a href="#cb5-35"></a>    log_r <span class="op">=</span> H_current <span class="op">-</span> H_new</span>
+<span id="cb5-36"><a href="#cb5-36"></a>    <span class="cf">if</span> np.log(rng.uniform()) <span class="op">&lt;</span> log_r:</span>
+<span id="cb5-37"><a href="#cb5-37"></a>        <span class="cf">return</span> theta_new, <span class="va">True</span></span>
+<span id="cb5-38"><a href="#cb5-38"></a>    <span class="cf">else</span>:</span>
+<span id="cb5-39"><a href="#cb5-39"></a>        <span class="cf">return</span> theta, <span class="va">False</span></span>
+<span id="cb5-40"><a href="#cb5-40"></a></span>
+<span id="cb5-41"><a href="#cb5-41"></a><span class="co"># 실행</span></span>
+<span id="cb5-42"><a href="#cb5-42"></a>d <span class="op">=</span> <span class="dv">2</span></span>
+<span id="cb5-43"><a href="#cb5-43"></a>M <span class="op">=</span> np.eye(d)</span>
+<span id="cb5-44"><a href="#cb5-44"></a>epsilon <span class="op">=</span> <span class="fl">0.25</span></span>
+<span id="cb5-45"><a href="#cb5-45"></a>L <span class="op">=</span> <span class="dv">20</span></span>
+<span id="cb5-46"><a href="#cb5-46"></a>theta <span class="op">=</span> np.array([<span class="fl">3.0</span>, <span class="fl">3.0</span>])</span>
+<span id="cb5-47"><a href="#cb5-47"></a>n_iter <span class="op">=</span> <span class="dv">2000</span></span>
+<span id="cb5-48"><a href="#cb5-48"></a>samples <span class="op">=</span> np.zeros((n_iter, d))</span>
+<span id="cb5-49"><a href="#cb5-49"></a>accepts <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb5-50"><a href="#cb5-50"></a><span class="cf">for</span> t <span class="kw">in</span> <span class="bu">range</span>(n_iter):</span>
+<span id="cb5-51"><a href="#cb5-51"></a>    theta, accepted <span class="op">=</span> hmc_step(theta, M, epsilon, L, log_p, grad_log_p, rng)</span>
+<span id="cb5-52"><a href="#cb5-52"></a>    samples[t] <span class="op">=</span> theta</span>
+<span id="cb5-53"><a href="#cb5-53"></a>    accepts <span class="op">+=</span> accepted</span>
+<span id="cb5-54"><a href="#cb5-54"></a></span>
+<span id="cb5-55"><a href="#cb5-55"></a><span class="bu">print</span>(<span class="ss">f"수용률: </span><span class="sc">{</span>accepts <span class="op">/</span> n_iter<span class="sc">:.3f}</span><span class="ss">"</span>)</span>
+<span id="cb5-56"><a href="#cb5-56"></a><span class="bu">print</span>(<span class="ss">f"사후 평균: </span><span class="sc">{</span>samples<span class="sc">.</span>mean(axis<span class="op">=</span><span class="dv">0</span>)<span class="sc">.</span><span class="bu">round</span>(<span class="dv">3</span>)<span class="sc">}</span><span class="ss">  (참: [0, 0])"</span>)</span>
+<span id="cb5-57"><a href="#cb5-57"></a><span class="bu">print</span>(<span class="ss">f"사후 분산: </span><span class="sc">{</span>samples<span class="sc">.</span>var(axis<span class="op">=</span><span class="dv">0</span>)<span class="sc">.</span><span class="bu">round</span>(<span class="dv">3</span>)<span class="sc">}</span><span class="ss">  (참: [1, 1])"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>기대: 수용률 0.9~0.95, 사후 평균 0, 분산 1.</p>
+</section>
+</section>
+<section id="실전-체크리스트" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="실전-체크리스트"><span class="header-section-number">7</span> 실전 체크리스트</h2>
+<p>HMC 실무 12 단계.</p>
+<ol type="1">
+<li><strong>Stan/PyMC 기본</strong> — 수동 HMC 피하기.</li>
+<li><strong>Non-centered 먼저</strong> — 계층 모형 표준.</li>
+<li><strong><span class="math inline">\(\tau &gt; 0\)</span> 등 제약은 <code>&lt;lower=0&gt;</code></strong> — Stan 자동 변환.</li>
+<li><strong><span class="math inline">\(\nabla \log p\)</span> 해석적</strong> — autodiff 활용.</li>
+<li><strong>초기 target_accept = 0.8</strong> — 기본값.</li>
+<li><strong>Divergences 0 목표</strong> — 있으면 0.95~0.99.</li>
+<li><strong>Warm-up 1000</strong> — 기본.</li>
+<li><strong><span class="math inline">\(\widehat{R} &lt; 1.01, ESS \ge 400\)</span></strong> — 수렴 기준.</li>
+<li><strong>Divergence → non-centered + 재매개변수화</strong> — 근본 해결.</li>
+<li><strong>Max treedepth 경고 → 증가</strong> — 긴 궤적 필요.</li>
+<li><strong>E-BFMI 낮음 → 모형 재검토</strong> — 에너지 분포 문제.</li>
+<li><strong>사후 예측 점검</strong> (Ch.6) — HMC 수렴 ≠ 모형 타당성.</li>
+</ol>
+</section>
+<section id="관련-주제" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">8</span> 관련 주제</h2>
+<p><strong>선행 지식</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-12-0-efficient-mcmc.html">Ch.12 Overview (02-12-0)</a> — 효율 MCMC 지도</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-12-1-reparameterization-metropolis-tuning-slice.html">§ 12.1~12.3 심화 (02-12-1)</a> — 재매개변수화·튜닝</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-11-0-mcmc-basics.html">Ch.11 시리즈</a> — MCMC 기초</li>
+</ul>
+<p><strong>Ch.12 후속</strong></p>
+<ul>
+<li><code>02-12-3-*</code> — § 12.7~12.8 (문헌·연습)</li>
+</ul>
+<p><strong>후속 주제</strong></p>
+<ul>
+<li>Ch.13 Variational Inference — MCMC 대안</li>
+<li>Ch.15 Hierarchical Linear Models — HMC 본격 활용</li>
+<li>Ch.22 Finite Mixture Models — HMC + discrete marginalization</li>
+</ul>
+<p><strong>관련 개념</strong></p>
+<ul>
+<li>Duane, Kennedy, Pendleton, Roweth (1987) — HMC 원저 (물리학)</li>
+<li>Neal (2011), <em>MCMC using Hamiltonian Dynamics</em> — 통계 도입</li>
+<li>Hoffman &amp; Gelman (2014) — NUTS</li>
+<li>Beskos et al.&nbsp;(2013) — HMC 최적 수용률 65%</li>
+<li>Girolami &amp; Calderhead (2011) — Riemannian HMC</li>
+<li>Carpenter et al.&nbsp;(2017) — Stan 논문</li>
+<li>Betancourt (2017) — <em>A Conceptual Introduction to HMC</em></li>
+<li>Stan Development Team — Stan User’s Guide</li>
+<li>Salvatier, Wiecki, Fonnesbeck (2016) — PyMC 원 논문</li>
+<li>Phan, Pradhan, Jankowiak (2019) — NumPyro</li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>
