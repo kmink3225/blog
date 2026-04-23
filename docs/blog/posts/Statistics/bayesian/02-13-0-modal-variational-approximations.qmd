@@ -1,0 +1,560 @@
+---
+title: "Ch.13 Modal and Distributional Approximations — MCMC 없이도 가능한 근사"
+subtitle: "Gelman BDA Ch.13 개관 — 사후 최빈값·정규 근사·EM·변분 추론(VI)·기대 전파(EP)·경계 회피 prior"
+description: |
+  Ch.10~12 가 MCMC 로 사후 분포에서 **정확한 (상관된) 표본**을 얻는
+  방법이었다면, Ch.13 은 **근사 분포**로 접근해 빠르고 확장 가능한
+  계산을 제공한다. 이 포스트는 Ch.13 의 전체 지도를 제공한다. 사후
+  최빈값 탐색 (Newton-Raphson, BFGS, 조건부 최대화), 8 학교의 $\tau$
+  경계 문제와 $\mathrm{Gamma}(2, \cdot)$ 경계 회피 prior, 최빈값 중심
+  정규 근사 $\mathrm{N}(\hat{\theta}, -\nabla^2 \log p (\hat{\theta})^{-1})$,
+  EM 알고리즘으로 주변 사후 최빈값 탐색 (E-step 잠재 변수 기댓값, M-step
+  최적화), 조건부·주변 분해 전략, **변분 추론** 의 ELBO 최대화와 평균장
+  근사 $q(\theta) = \prod q_j(\theta_j)$, **기대 전파** 의 factor 순차 근사,
+  MCMC 와 근사의 trade-off — 각 방법 옆에 "언제 쓰고 어떤 편향을 감수하는가"
+  를 붙여 전개한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — MCMC 대안이 필요한 이유
+
+Ch.10~12 의 MCMC 는 사후에서 **정확한 표본** ($n \to \infty$ 극한에서). 그러나:
+
+- **수렴 시간**: 복잡 모형에서 수 시간~수 일.
+- **수렴 진단**: $\widehat{R}, n_{\mathrm{eff}}$ 확인 부담.
+- **확장성**: 관측 $n$ 이 수백만이면 한 번 gradient 평가도 무거움.
+
+Ch.13 의 대안: **근사 분포로 직접 계산**. 정확성을 포기하고 속도 획득.
+
+::: {.callout-note}
+## Ch.13 의 네 축
+
+1. **사후 최빈값** (§ 13.1~13.2) — 최적화로 $\hat{\theta}$ 찾기.
+2. **정규 근사** (§ 13.3) — $\hat{\theta}$ 주변 Laplace.
+3. **EM + 조건부 분해** (§ 13.4~13.6) — 주변 사후 최빈값.
+4. **VI / EP** (§ 13.7~13.8) — 사후 전체 근사.
+
+각 방법이 **MCMC 의 특정 단계를 대체**. 혼합 사용도 가능.
+:::
+
+### Ch.13 의 구조
+
+| 절 | 주제 |
+|---|---|
+| 13.1 | 사후 최빈값 찾기 (최적화) |
+| 13.2 | 경계 회피 prior |
+| 13.3 | 정규 / 혼합 정규 근사 |
+| 13.4 | EM 알고리즘 |
+| 13.5 | 조건부·주변 분해 |
+| 13.6 | 8 학교 재조명 |
+| 13.7 | 변분 추론 (VI) |
+| 13.8 | 기대 전파 (EP) |
+| 13.10 | Unknown normalizing factors |
+
+### MCMC vs 근사의 Trade-off
+
+| 기준 | MCMC | 근사 (Ch.13) |
+|---|---|---|
+| 정확성 | 점근적으로 정확 | **편향** 잔존 |
+| 속도 | 느림 | 빠름 |
+| 확장성 | 관측 $n$ 에 선형 | $n$ 에 선형 이하 (mini-batch) |
+| 진단 | $\widehat{R}, n_{\mathrm{eff}}$ | 직접 지표 없음 |
+| 불확실성 | 사후 전체 | 제한 (VI 는 과소 추정 경향) |
+
+**실무 조합**:
+
+1. **근사로 빠른 탐색** → 모형 선택.
+2. **MCMC 로 최종 검증** — 중요 모형에 대해.
+3. **VI 가 MCMC 시작점** — warm-up 가속.
+
+### 직관 — 근사 추론의 "3 세대"
+
+1. **1 세대 (Ch.13.1~13.3)**: Laplace 근사. 단일 정규.
+2. **2 세대 (Ch.13.4~13.6)**: EM + 조건부. 잠재 변수 처리.
+3. **3 세대 (Ch.13.7~13.8)**: VI + EP. 분포 최적화.
+
+각 세대가 이전의 한계를 극복. 현대 딥러닝의 변분 autoencoder, Bayesian neural network 등이 3 세대 직접 응용.
+
+## § 13.1 — 사후 최빈값 찾기
+
+### 왜 최빈값부터?
+
+사후 전체 추정 전에 **위치 파악**. 최빈값 $\hat{\theta}$ 가 다음 단계의 출발:
+
+- 정규 근사 중심 (§ 13.3).
+- MCMC 초기값.
+- 점 추정 (MAP).
+
+### 조건부 최대화 (Coordinate Ascent)
+
+가장 단순한 방법.
+
+1. $\theta^{(0)}$ 에서 시작.
+2. 각 반복:
+   - $\theta_1$ 을 $\theta_{-1}$ 고정 상태에서 최대화.
+   - $\theta_2$ 도 동일.
+   - ... $\theta_d$ 까지.
+3. 수렴까지 반복.
+
+**장점**: 구현 단순. 조건부 최대화가 해석적이면 빠름.
+**단점**: 상관 변수에서 느림 (Gibbs 와 같은 지그재그).
+
+### Newton-Raphson
+
+Taylor 2차 전개 이용.
+
+$$
+\theta^{(t+1)} = \theta^{(t)} - [\nabla^2 \log p(\theta^{(t)})]^{-1} \nabla \log p(\theta^{(t)})
+$$
+
+**직관**: 2차 근사의 최대값으로 직접 점프.
+
+**장점**: 2차 수렴 (오차 제곱 감소).
+**단점**: Hessian 계산·역행렬 비용. 시작점이 멀면 불안정.
+
+### Quasi-Newton (BFGS)
+
+Newton 의 Hessian 을 **반복적으로 근사**. 각 step 마다 rank-1 또는 rank-2 update.
+
+**장점**: Hessian 직접 계산 불필요. 안정적.
+**단점**: 메모리 $O(d^2)$.
+
+**L-BFGS** (Limited-memory): 최근 $m$ step 만 저장. 고차원 실무 표준.
+
+### Conjugate Gradient
+
+Hessian 을 전혀 저장 안 함. 메모리 $O(d)$. 초대형 문제.
+
+::: {.callout-tip}
+## 직관 — 최적화 알고리즘 선택
+
+| 상황 | 알고리즘 |
+|---|---|
+| $d < 100$, 단순 | Coordinate ascent |
+| $d < 1000$, Hessian 가능 | Newton-Raphson |
+| $d < 10{^5}$, 일반적 | BFGS |
+| $d \ge 10^5$ | L-BFGS, Conjugate Gradient |
+| 확률적 | Adam, SGD (ML 문맥) |
+
+베이즈 맥락에서는 대부분 **BFGS/L-BFGS** 가 기본. Scipy `optimize.minimize(method="L-BFGS-B")`.
+:::
+
+### 수치 미분
+
+해석적 gradient 어려우면 유한 차분:
+
+$$
+\frac{\partial f}{\partial \theta_i} \approx \frac{f(\theta + h e_i) - f(\theta - h e_i)}{2h}
+$$
+
+**$h$ 선택**: $h \approx \sqrt{\epsilon_{\text{machine}}} \cdot |\theta_i| \approx 10^{-8} \cdot |\theta_i|$.
+
+$h$ 너무 작으면 수치 오차, 너무 크면 truncation 오차.
+
+## § 13.2 — 경계 회피 Prior
+
+### 8 학교의 $\tau$ 경계 문제
+
+Ch.5.5 의 계층 정규: $\theta_j \sim \mathrm{N}(\mu, \tau^2)$, prior $p(\tau) \propto 1$.
+
+**최빈값 탐색**: $\tau$ 의 주변 posterior 가 종종 **$\tau = 0$ 에서 최대**. 즉 "완전 풀링이 최적" 판정.
+
+**문제**: $\tau = 0$ 은 경계 — 모든 $\theta_j = \mu$. 계층 구조 상실. MAP 를 요약 통계로 쓰면 shrinkage 무한대.
+
+### 해결 — Gamma(2, ·) Prior
+
+Gelman 권고: $\tau^2 \sim \mathrm{Gamma}(2, \lambda)$.
+
+**왜 Gamma(2, ·)**?
+
+- $\tau^2 = 0$ 에서 밀도 0 → **경계 접근 시 사후 억제**.
+- $\tau^2 \to \infty$ 에서 $e^{-\lambda \tau^2}$ 로 감소 → 발산 방지.
+- shape 2 의 minimal 정보성.
+
+Posterior mode 가 $\tau > 0$ 영역에 내부 해.
+
+::: {.callout-tip}
+## 직관 — 경계는 왜 problematic 인가
+
+**MAP 는 점 추정**. 분포가 smooth 하면 mode 가 대표값으로 합리적.
+
+경계에서 mode 발생 = 분포가 **"코너 솔루션"**. 사후 분산이 mode 근처 대칭이 아니고, 정규 근사 (§ 13.3) 가 엉망.
+
+특히 $\tau = 0$ 은 **$\theta_j$ 공간의 차원 붕괴** (모든 $\theta_j$ 가 같은 점). 의미 있는 계층 분산이 있는 자료라면 **경계 mode 는 전부 풀링 편향**.
+
+Gamma(2, ·) prior 는 "weak informative" — 데이터가 강하면 압도당하지만 데이터 부족 시 mode 를 경계에서 밀어낸다.
+
+현대 실무: Ch.12 의 HMC 는 posterior 전체를 샘플링하므로 경계 문제 덜 심각. 그러나 **점 추정 시** (EM 등) 는 여전히 Gamma prior 권고.
+:::
+
+## § 13.3 — 정규·혼합 정규 근사
+
+### Laplace 근사 — 복습
+
+Ch.4, Ch.10 에서 다룬 기본:
+
+$$
+p(\theta \mid y) \approx \mathrm{N}(\hat{\theta}, -[\nabla^2 \log p(\hat{\theta})]^{-1})
+$$
+
+$\hat{\theta}$ = MAP, Hessian 이 공분산 역수.
+
+### 언제 잘 작동하나
+
+- **대표본** ($n$ 큼): Bernstein-von Mises 정리 보장.
+- **Smooth·unimodal**: 경계 효과 없음.
+- **identifiable**: 모수가 잘 추정됨.
+
+### 실패 모드
+
+- **비정규 꼬리**: t 분포 같은 heavy-tail 사후.
+- **다봉**: 여러 mode.
+- **경계**: MAP 가 경계에 → § 13.2 경계 회피.
+- **skewness**: 비대칭 사후.
+
+### 혼합 정규 근사
+
+단일 정규 부족 시: **여러 정규의 혼합**.
+
+$$
+p(\theta \mid y) \approx \sum_k w_k \mathrm{N}(\theta \mid \mu_k, \Sigma_k)
+$$
+
+다봉 분포 대응. 각 정규 성분은 로컬 Laplace 근사.
+
+**사용처**: MCMC 시작점 선택 (각 mode 에서 하나씩), importance sampling envelope.
+
+## § 13.4 — EM 알고리즘
+
+### 아이디어
+
+EM (Expectation-Maximization, Dempster-Laird-Rubin 1977): **잠재 변수**가 있는 모형의 주변 사후 최빈값 탐색.
+
+관심: $\gamma$ 의 주변 사후 $p(\gamma \mid y)$. $\gamma$ 외 다른 모수 $z$ (잠재) 존재:
+
+$$
+p(\gamma \mid y) = \int p(\gamma, z \mid y) dz
+$$
+
+직접 최대화 어려움 — 적분 필요.
+
+### EM 절차
+
+1. **E-step**: 현재 $\gamma^{(t)}$ 에서 잠재 $z$ 의 조건부 기대 log-likelihood 계산.
+
+$$
+Q(\gamma \mid \gamma^{(t)}) = \mathbb{E}_{z \mid \gamma^{(t)}, y}[\log p(\gamma, z \mid y)]
+$$
+
+2. **M-step**: $Q$ 를 $\gamma$ 에 대해 최대화.
+
+$$
+\gamma^{(t+1)} = \arg\max_\gamma Q(\gamma \mid \gamma^{(t)})
+$$
+
+수렴할 때까지 반복.
+
+### 왜 작동하는가
+
+**핵심 정리**: 각 반복에서 **$\log p(\gamma \mid y)$ 증가**. Jensen 부등식으로 증명.
+
+$$
+\log p(\gamma^{(t+1)} \mid y) \ge \log p(\gamma^{(t)} \mid y)
+$$
+
+수렴 → 국소 최대점.
+
+::: {.callout-tip}
+## 직관 — EM 의 두 단계 의미
+
+**E-step**: "**만약 내가 현재 $\gamma$ 를 믿는다면, 잠재 $z$ 는 평균 어디에 있을까?**"
+
+**M-step**: "**그 평균 $z$ 하에서, $\gamma$ 가 데이터를 가장 잘 설명하는 값은?**"
+
+두 단계가 서로 **개선 의무**. 각 단계가 이전보다 나쁘지 않은 $\gamma$ 반환 보장.
+
+비유: **부부 간 의사 소통**. 한 사람이 현재 상황 정리 (E-step), 다른 사람이 개선안 제시 (M-step). 반복하면 둘 다 만족하는 균형점 수렴.
+
+응용: 혼합 모형 (Ch.22), HMM, 결측 데이터 (Ch.18), 요인 분석.
+:::
+
+### EM vs MCMC
+
+EM 은 **점 추정** 만 제공. 사후 분산 없음.
+
+추가 단계:
+
+1. EM 으로 $\hat{\gamma}$ 찾기.
+2. $\hat{\gamma}$ 주변 Laplace → 사후 분산.
+3. 또는 MCMC 초기값으로 사용.
+
+## § 13.5 — 조건부·주변 분해
+
+### 고차원 사후 분해 전략
+
+Ch.5 계층 모형: $\theta = (\gamma, \phi)$ where $\phi$ 는 hyperparameter.
+
+$$
+p(\theta \mid y) = p(\phi \mid y) \cdot p(\gamma \mid \phi, y)
+$$
+
+**두 단계**:
+
+1. **$\phi$ 의 주변 사후** 근사 (저차원 → 직접 또는 grid).
+2. **$\phi$ 조건부 $\gamma$** 공액 조건부 (해석적).
+
+이것이 § 11.6 의 Gibbs 의 **"해석 + 수치"** 혼합 전략.
+
+### 근사 전략 결합
+
+- $\phi$: 저차원 → Laplace.
+- $\gamma \mid \phi$: 공액 → 직접.
+- 전체 예측: $\phi$ 에 대한 기대.
+
+$$
+p(\gamma \mid y) = \int p(\gamma \mid \phi, y) p(\phi \mid y) d\phi \approx \int p(\gamma \mid \phi, y) \mathrm{N}(\phi \mid \hat{\phi}, V_\phi) d\phi
+$$
+
+적분은 Monte Carlo: $\phi^{(s)} \sim \mathrm{N}(\hat{\phi}, V_\phi)$ 추출 후 $\gamma^{(s)} \sim p(\gamma \mid \phi^{(s)}, y)$.
+
+### § 13.6 — 8 학교 재조명
+
+§ 11.6 와 같은 모형, 다른 계산.
+
+**EM 접근**:
+
+1. $(\theta_{1:J})$ 를 잠재 변수로 취급.
+2. E-step: 조건부 $\theta_j \mid \mu, \tau, y$ 기댓값 계산 (정규 공액).
+3. M-step: $\mu, \tau$ 최대화.
+
+결과: $\hat{\mu}, \hat{\tau}$. 8 학교의 $\hat{\tau}$ 가 경계 근처 → § 13.2 prior 중요.
+
+## § 13.7 — 변분 추론 (VI)
+
+### 아이디어
+
+사후 $p(\theta \mid y)$ 에 **가장 가까운 단순 분포 $q(\theta)$** 찾기.
+
+$$
+q^* = \arg\min_q \mathrm{KL}(q(\theta) \| p(\theta \mid y))
+$$
+
+KL divergence 를 최소화. 결과 $q^*$ 를 사후 대용.
+
+### ELBO
+
+KL 최소화 = **ELBO (Evidence Lower Bound) 최대화**.
+
+유도:
+
+$$
+\log p(y) = \mathrm{KL}(q \| p(\theta \mid y)) + \underbrace{\mathbb{E}_q[\log p(y, \theta) - \log q(\theta)]}_{\mathrm{ELBO}}
+$$
+
+$\log p(y)$ 상수. KL ≥ 0 → ELBO ≤ $\log p(y)$. ELBO 최대화 ↔ KL 최소화.
+
+**ELBO 계산**:
+
+$$
+\mathrm{ELBO}(q) = \mathbb{E}_q[\log p(y \mid \theta)] - \mathrm{KL}(q(\theta) \| p(\theta))
+$$
+
+첫 항: 기대 log-likelihood. 둘째: prior 와 근사의 발산.
+
+### Mean-Field 근사
+
+가장 단순한 $q$: 독립 곱.
+
+$$
+q(\theta) = \prod_{j=1}^d q_j(\theta_j)
+$$
+
+최적화: 각 $q_j$ 를 순차 업데이트.
+
+**업데이트 규칙**:
+
+$$
+\log q_j^*(\theta_j) \propto \mathbb{E}_{q_{-j}}[\log p(y, \theta)]
+$$
+
+다른 $q_{-j}$ 고정 하에서 조건부 기대 로그 결합 밀도.
+
+### VI 의 편향
+
+**KL(q || p)** 방향성: $q > 0$ 인데 $p \approx 0$ 인 곳 강하게 페널티 → $q$ 가 $p$ 의 **한 mode 에만 집중**.
+
+**결과**: VI 사후가 **과소 분산** (일반적). 꼬리 무시.
+
+대안: **Reverse KL(p || q)** — EP 와 관련. 분산 과대.
+
+::: {.callout-tip}
+## 직관 — VI 가 "왜 과소 추정" 하는가
+
+$\mathrm{KL}(q \| p) = \int q \log(q/p)$.
+
+$q$ 가 $p$ 의 낮은 밀도 영역에서 큰 값 → $q \log(q / \epsilon) = +\infty$ → KL 폭발.
+
+따라서 VI 는 $q$ 를 **$p$ 의 높은 밀도 영역 안**에 가둠. 꼬리·외곽 포기.
+
+실무 함의: VI 사후의 95% 구간이 **실제 95% 구간보다 좁다**. 의사결정에 사용 주의.
+
+대안: **ADVI** (Automatic Differentiation VI, Kucukelbir et al. 2017), **Normalizing Flows** (2016+) — 더 유연한 $q$ 가족.
+:::
+
+### ADVI — 자동 변분 추론
+
+Stan, PyMC 에 내장. 모형 지정만 하면 자동 VI.
+
+절차:
+
+1. 모수를 실수 공간으로 변환.
+2. $q(\theta) = \mathrm{N}(\mu, \mathrm{diag}(\sigma^2))$ 평균장 정규.
+3. Stochastic gradient 로 ELBO 최대화.
+
+**속도**: MCMC 대비 10~100 배.
+
+## § 13.8 — 기대 전파 (EP)
+
+### 아이디어
+
+사후를 **factor 곱**으로 분해:
+
+$$
+p(\theta \mid y) \propto \prod_i f_i(\theta)
+$$
+
+각 $f_i$ 를 근사 $\tilde{f}_i$ 로 대체:
+
+$$
+q(\theta) = \prod_i \tilde{f}_i(\theta), \quad \tilde{f}_i(\theta) \in \text{지수족}
+$$
+
+**순차 업데이트**: 각 $\tilde{f}_i$ 를 나머지 고정 하에서 최적화.
+
+### 구체 절차
+
+현재 근사 $q = \prod \tilde{f}_i$. $\tilde{f}_k$ 업데이트:
+
+1. **Cavity**: $q_{\setminus k} = q / \tilde{f}_k = \prod_{i \ne k} \tilde{f}_i$.
+2. **Tilted**: $q_{\setminus k} \cdot f_k$ — 근사 제외 + 진짜 $f_k$.
+3. **Projection**: Tilted 분포를 지수족으로 moment matching.
+4. **새 $\tilde{f}_k$**: projection / cavity.
+
+### VI vs EP
+
+| 측면 | VI | EP |
+|---|---|---|
+| 목표 | $\mathrm{KL}(q \| p)$ | $\mathrm{KL}(p \| q)$ (local) |
+| 편향 | 분산 과소 | 분산 과대 (일반) |
+| 수렴 | 단조 ELBO | 보장 없음 (순환) |
+| 구현 | 자동 (ADVI) | 모형 특화 |
+
+**실무**: VI 가 더 보편. EP 는 Gaussian process, Bayesian neural nets 특정 영역.
+
+## § 13.10 — Unknown Normalizing Factors
+
+### 문제
+
+일부 모형: $p(y \mid \theta) = f(y, \theta) / Z(\theta)$.
+
+$Z(\theta) = \int f(y, \theta) dy$ 가 **$\theta$ 에 의존**. Ising 모형, 공간 점 과정 등.
+
+### 도전
+
+Standard MCMC 의 수용 비율:
+
+$$
+r = \frac{p(y \mid \theta^*) p(\theta^*)}{p(y \mid \theta) p(\theta)}
+$$
+
+$Z(\theta^*) / Z(\theta)$ 포함 — **알 수 없음**.
+
+### 해결 접근
+
+- **Exchange algorithm** (Murray, Ghahramani, MacKay 2006): $Z$ 없이 수용률 계산.
+- **Pseudo-marginal MCMC** (Andrieu, Roberts 2009): $p(y \mid \theta)$ 불편 추정량으로 대체.
+- **ABC** (Approximate Bayesian Computation): likelihood 평가 완전 회피, 시뮬레이션 기반.
+
+Ch.13 에서는 간단히 언급. 특수 분야 연구 주제.
+
+## 통합 관점 — 근사 방법 선택 지도
+
+| 방법 | 비용 | 편향 | 사용처 |
+|---|---|---|---|
+| Laplace | 저 | 중 | 빠른 점 추정 |
+| 혼합 Laplace | 중 | 중 | 다봉 처리 |
+| EM | 중 | - (MAP) | 잠재 변수 모형 |
+| VI (ADVI) | 저~중 | 분산 과소 | 대규모 (딥러닝 포함) |
+| EP | 중~고 | 분산 과대 | GP, neural nets |
+| MCMC | 고 | 0 (점근) | 황금 표준 |
+
+**실무 플로우**:
+
+1. **VI 로 빠른 탐색** → 모형 선택.
+2. **MCMC 로 최종 검증** → 중요 결과.
+3. **EM 으로 점 추정** → ML 호환 보고.
+
+## 응용 분야
+
+| 분야 | Ch.13 도구의 역할 |
+|---|---|
+| 대규모 계층 모형 | VI 로 수천 단위 계층 |
+| 베이즈 신경망 | VI / EP |
+| 토픽 모델 (LDA) | VI 변종 (Blei 2003) |
+| 혼합 모형 | EM 또는 VI |
+| 공간 통계 | INLA (Laplace 계층) |
+| 필터링 | 확장 Kalman = Laplace |
+| 기계 학습 | VAE, VI 기반 생성 모형 |
+
+## 실전 체크리스트
+
+근사 추론 10 단계.
+
+1. **MCMC 먼저 시도** — 작동하면 그대로 사용.
+2. **대규모 시 VI 고려** — Stan/PyMC ADVI 기본.
+3. **경계 예상 → weakly informative prior** — $\mathrm{Gamma}(2, \cdot)$ 등.
+4. **최적화는 BFGS/L-BFGS** — 표준 선택.
+5. **EM 은 잠재 변수 모형에만** — 혼합, HMM, 결측.
+6. **VI 분산 과소 주의** — 의사결정 구간 확인.
+7. **VI 를 MCMC warm-up 으로** — 초기값 제공.
+8. **여러 근사 비교** — Ch.6~7 도구로 예측 성능.
+9. **Normalizing factor 문제** → 전문가 상담.
+10. **최종 보고엔 MCMC** — 중요 결정 문제.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Bayesian Part III 개관](./02-bayesian-part3-overview.qmd) — Ch.10~13 지도
+- [Ch.10 Overview (02-10-0)](./02-10-0-computation-intro.qmd) — 근사 vs 시뮬레이션 기초
+- [Ch.12 Overview (02-12-0)](./02-12-0-efficient-mcmc.qmd) — MCMC 효율
+- [Ch.4 Asymptotics](./00-4-0-asymptotics.qmd) — Laplace 근사 이론
+
+**Ch.13 세부 절** (후속 작성 예정)
+
+- `02-13-1-*` — § 13.1~13.3 심화 (mode 찾기·경계 prior·정규 근사)
+- `02-13-2-*` — § 13.4~13.6 심화 (EM·조건부 분해·8 학교)
+- `02-13-3-*` — § 13.7~13.8 심화 (VI·EP)
+- `02-13-4-*` — § 13.10~13.12 (unknown norms·문헌·연습)
+
+**후속 주제**
+
+- Ch.14~18 Regression — 회귀 본격 활용
+- Ch.21 Gaussian Processes — EP 의 응용
+- Ch.22 Finite Mixtures — EM 의 응용
+
+**관련 개념**
+
+- Dempster, Laird, Rubin (1977) — EM 원저
+- Jordan et al. (1999) — Variational methods
+- Minka (2001) — Expectation Propagation
+- Blei, Ng, Jordan (2003) — LDA + VI
+- Rue, Martino, Chopin (2009) — INLA
+- Kucukelbir et al. (2017) — Automatic Differentiation VI
+- Blei, Kucukelbir, McAuliffe (2017), *Variational Inference: A Review for Statisticians*
+- Rezende & Mohamed (2015) — Normalizing Flows
+- Kingma & Welling (2014) — Variational Autoencoder
