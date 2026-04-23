@@ -1,0 +1,1570 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.543">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="Ch.10 이 “단순 도구로 풀 수 있는 문제” 의 한계까지 다뤘다면, Ch.11 은 그 한계 너머 — MCMC (Markov chain Monte Carlo) 로 임의 사후 분포에서 추출하는 일반 방법을 연다. 이 포스트는 Ch.11 의 전체 지도를 제공한다. Markov chain 이 “기억이 직전 상태뿐” 인 순차 추출에서 왜 목표 분포로 수렴하는지, Gibbs sampler 가 조건부 분포 p(\theta_j \mid \theta_{-j}, y) 를 순환하며 추출하는 구조, Metropolis 의 대칭 점프 + 수용률 \min(r, 1) 과 Hastings 확장의 비대칭 보정 (식 11.2) 의 유도, 왜 이 알고리즘이 detailed balance 로 정상 분포를 보장하는지, Gibbs 와 Metropolis 를 블록으로 조합하는 실무 패턴, \hat{R} (potential scale reduction) 과 split-\hat{R} 의 수렴 진단, 자기상관 시간 \tau 를 이용한 effective sample size n_{\mathrm{eff}}, 8 학교 계층 정규 모형의 Gibbs 적용 — 각 알고리즘 옆에 “언제 쓰고 언제 느린가” 를 붙여 전개한다.">
+
+<title>Kwangmin Kim - Ch.11 Basics of Markov Chain Simulation — 베이즈 계산의 혁명</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Kwangmin Kim - Ch.11 Basics of Markov Chain Simulation — 베이즈 계산의 혁명">
+<meta property="og:description" content="Ch.10 이 “단순 도구로 풀 수 있는 문제” 의 한계까지 다뤘다면, Ch.11 은 그 한계 너머 — MCMC (Markov chain Monte Carlo) 로 임의 사후 분포에서 추출하는 일반 방법을 연다. 이 포스트는 Ch.11 의 전체 지도를 제공한다. Markov chain 이 “기억이 직전 상태뿐” 인 순차 추출에서 왜 목표 분포로 수렴하는지, Gibbs sampler 가 조건부 분포 \(p(\theta_j \mid \theta_{-j}, y)\) 를 순환하며 추출하는 구조, Metropolis 의 대칭 점프 + 수용률 \(\min(r, 1)\) 과 Hastings 확장의 비대칭 보정 (식 11.2) 의 유도, 왜 이 알고리즘이 detailed balance 로 정상 분포를 보장하는지, Gibbs 와 Metropolis 를 블록으로 조합하는 실무 패턴, \(\hat{R}\) (potential scale reduction) 과 split-\(\hat{R}\) 의 수렴 진단, 자기상관 시간 \(\tau\) 를 이용한 effective sample size \(n_{\mathrm{eff}}\), 8 학교 계층 정규 모형의 Gibbs 적용 — 각 알고리즘 옆에 “언제 쓰고 언제 느린가” 를 붙여 전개한다.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+          <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">Ch.11 Basics of Markov Chain Simulation — 베이즈 계산의 혁명</h1>
+            <p class="subtitle lead">Gelman BDA Ch.11 개관 — Gibbs sampler·Metropolis-Hastings·수렴 진단 <span class="math inline">\(\hat{R}\)</span>·effective sample size·8 학교 계층 정규</p>
+                  <div>
+        <div class="description">
+          <p>Ch.10 이 “단순 도구로 풀 수 있는 문제” 의 한계까지 다뤘다면, Ch.11 은 그 한계 너머 — <strong>MCMC (Markov chain Monte Carlo)</strong> 로 임의 사후 분포에서 추출하는 일반 방법을 연다. 이 포스트는 Ch.11 의 전체 지도를 제공한다. Markov chain 이 “기억이 직전 상태뿐” 인 순차 추출에서 왜 목표 분포로 수렴하는지, Gibbs sampler 가 조건부 분포 <span class="math inline">\(p(\theta_j \mid \theta_{-j}, y)\)</span> 를 순환하며 추출하는 구조, Metropolis 의 대칭 점프 + 수용률 <span class="math inline">\(\min(r, 1)\)</span> 과 Hastings 확장의 비대칭 보정 (식 11.2) 의 유도, 왜 이 알고리즘이 detailed balance 로 정상 분포를 보장하는지, Gibbs 와 Metropolis 를 블록으로 조합하는 실무 패턴, <span class="math inline">\(\hat{R}\)</span> (potential scale reduction) 과 split-<span class="math inline">\(\hat{R}\)</span> 의 수렴 진단, 자기상관 시간 <span class="math inline">\(\tau\)</span> 를 이용한 effective sample size <span class="math inline">\(n_{\mathrm{eff}}\)</span>, 8 학교 계층 정규 모형의 Gibbs 적용 — 각 알고리즘 옆에 “언제 쓰고 언제 느린가” 를 붙여 전개한다.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Statistics</div>
+                <div class="quarto-category">Bayesian</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2026년 04월 23일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#개요-mcmc-의-혁명" id="toc-개요-mcmc-의-혁명" class="nav-link active" data-scroll-target="#개요-mcmc-의-혁명"><span class="header-section-number">1</span> 개요 — MCMC 의 혁명</a>
+  <ul class="collapse">
+  <li><a href="#왜-이게-혁명인가" id="toc-왜-이게-혁명인가" class="nav-link" data-scroll-target="#왜-이게-혁명인가"><span class="header-section-number">1.1</span> 왜 이게 혁명인가</a></li>
+  <li><a href="#ch.11-의-구조" id="toc-ch.11-의-구조" class="nav-link" data-scroll-target="#ch.11-의-구조"><span class="header-section-number">1.2</span> Ch.11 의 구조</a></li>
+  <li><a href="#직관-접근법의-180-도-전환" id="toc-직관-접근법의-180-도-전환" class="nav-link" data-scroll-target="#직관-접근법의-180-도-전환"><span class="header-section-number">1.3</span> 직관 — “접근법의 180 도 전환”</a></li>
+  </ul></li>
+  <li><a href="#mcmc-일반론" id="toc-mcmc-일반론" class="nav-link" data-scroll-target="#mcmc-일반론"><span class="header-section-number">2</span> MCMC 일반론</a>
+  <ul class="collapse">
+  <li><a href="#markov-chain-의-수학" id="toc-markov-chain-의-수학" class="nav-link" data-scroll-target="#markov-chain-의-수학"><span class="header-section-number">2.1</span> Markov Chain 의 수학</a></li>
+  <li><a href="#정상-분포-stationary-distribution" id="toc-정상-분포-stationary-distribution" class="nav-link" data-scroll-target="#정상-분포-stationary-distribution"><span class="header-section-number">2.2</span> 정상 분포 (Stationary Distribution)</a></li>
+  <li><a href="#mcmc-의-목표" id="toc-mcmc-의-목표" class="nav-link" data-scroll-target="#mcmc-의-목표"><span class="header-section-number">2.3</span> MCMC 의 목표</a></li>
+  <li><a href="#수렴-조건-3-요건" id="toc-수렴-조건-3-요건" class="nav-link" data-scroll-target="#수렴-조건-3-요건"><span class="header-section-number">2.4</span> 수렴 조건 — 3 요건</a></li>
+  </ul></li>
+  <li><a href="#gibbs-sampler" id="toc-gibbs-sampler" class="nav-link" data-scroll-target="#gibbs-sampler"><span class="header-section-number">3</span> § 11.1 — Gibbs Sampler</a>
+  <ul class="collapse">
+  <li><a href="#아이디어-조건부-분포-순환" id="toc-아이디어-조건부-분포-순환" class="nav-link" data-scroll-target="#아이디어-조건부-분포-순환"><span class="header-section-number">3.1</span> 아이디어 — 조건부 분포 순환</a></li>
+  <li><a href="#왜-이게-작동하는가" id="toc-왜-이게-작동하는가" class="nav-link" data-scroll-target="#왜-이게-작동하는가"><span class="header-section-number">3.2</span> 왜 이게 작동하는가</a></li>
+  <li><a href="#언제-gibbs-가-자연스러운가" id="toc-언제-gibbs-가-자연스러운가" class="nav-link" data-scroll-target="#언제-gibbs-가-자연스러운가"><span class="header-section-number">3.3</span> 언제 Gibbs 가 자연스러운가</a></li>
+  <li><a href="#한계-상관-시-느린-수렴" id="toc-한계-상관-시-느린-수렴" class="nav-link" data-scroll-target="#한계-상관-시-느린-수렴"><span class="header-section-number">3.4</span> 한계 — 상관 시 느린 수렴</a></li>
+  </ul></li>
+  <li><a href="#metropolis-hastings" id="toc-metropolis-hastings" class="nav-link" data-scroll-target="#metropolis-hastings"><span class="header-section-number">4</span> § 11.2 — Metropolis-Hastings</a>
+  <ul class="collapse">
+  <li><a href="#metropolis-알고리즘-대칭-점프" id="toc-metropolis-알고리즘-대칭-점프" class="nav-link" data-scroll-target="#metropolis-알고리즘-대칭-점프"><span class="header-section-number">4.1</span> Metropolis 알고리즘 — 대칭 점프</a></li>
+  <li><a href="#왜-작동하는가-detailed-balance" id="toc-왜-작동하는가-detailed-balance" class="nav-link" data-scroll-target="#왜-작동하는가-detailed-balance"><span class="header-section-number">4.2</span> 왜 작동하는가 — Detailed Balance</a></li>
+  <li><a href="#metropolis-hastings-비대칭-확장" id="toc-metropolis-hastings-비대칭-확장" class="nav-link" data-scroll-target="#metropolis-hastings-비대칭-확장"><span class="header-section-number">4.3</span> Metropolis-Hastings — 비대칭 확장</a></li>
+  <li><a href="#좋은-점프-분포-j-의-조건" id="toc-좋은-점프-분포-j-의-조건" class="nav-link" data-scroll-target="#좋은-점프-분포-j-의-조건"><span class="header-section-number">4.4</span> 좋은 점프 분포 <span class="math inline">\(J\)</span> 의 조건</a></li>
+  <li><a href="#수용률의-최적-값" id="toc-수용률의-최적-값" class="nav-link" data-scroll-target="#수용률의-최적-값"><span class="header-section-number">4.5</span> 수용률의 최적 값</a></li>
+  </ul></li>
+  <li><a href="#gibbs-와-metropolis-의-결합" id="toc-gibbs-와-metropolis-의-결합" class="nav-link" data-scroll-target="#gibbs-와-metropolis-의-결합"><span class="header-section-number">5</span> § 11.3 — Gibbs 와 Metropolis 의 결합</a>
+  <ul class="collapse">
+  <li><a href="#블록별-업데이트" id="toc-블록별-업데이트" class="nav-link" data-scroll-target="#블록별-업데이트"><span class="header-section-number">5.1</span> 블록별 업데이트</a></li>
+  <li><a href="#재매개변수화의-힘" id="toc-재매개변수화의-힘" class="nav-link" data-scroll-target="#재매개변수화의-힘"><span class="header-section-number">5.2</span> 재매개변수화의 힘</a></li>
+  </ul></li>
+  <li><a href="#수렴-진단" id="toc-수렴-진단" class="nav-link" data-scroll-target="#수렴-진단"><span class="header-section-number">6</span> § 11.4 — 수렴 진단</a>
+  <ul class="collapse">
+  <li><a href="#왜-진단이-필요한가" id="toc-왜-진단이-필요한가" class="nav-link" data-scroll-target="#왜-진단이-필요한가"><span class="header-section-number">6.1</span> 왜 진단이 필요한가</a></li>
+  <li><a href="#hatr-potential-scale-reduction" id="toc-hatr-potential-scale-reduction" class="nav-link" data-scroll-target="#hatr-potential-scale-reduction"><span class="header-section-number">6.2</span> <span class="math inline">\(\hat{R}\)</span> (Potential Scale Reduction)</a></li>
+  <li><a href="#해석" id="toc-해석" class="nav-link" data-scroll-target="#해석"><span class="header-section-number">6.3</span> 해석</a></li>
+  <li><a href="#split-hatr" id="toc-split-hatr" class="nav-link" data-scroll-target="#split-hatr"><span class="header-section-number">6.4</span> Split-<span class="math inline">\(\hat{R}\)</span></a></li>
+  <li><a href="#burn-in-과-warm-up" id="toc-burn-in-과-warm-up" class="nav-link" data-scroll-target="#burn-in-과-warm-up"><span class="header-section-number">6.5</span> Burn-in 과 Warm-up</a></li>
+  </ul></li>
+  <li><a href="#effective-sample-size" id="toc-effective-sample-size" class="nav-link" data-scroll-target="#effective-sample-size"><span class="header-section-number">7</span> § 11.5 — Effective Sample Size</a>
+  <ul class="collapse">
+  <li><a href="#왜-필요한가" id="toc-왜-필요한가" class="nav-link" data-scroll-target="#왜-필요한가"><span class="header-section-number">7.1</span> 왜 필요한가</a></li>
+  <li><a href="#정의" id="toc-정의" class="nav-link" data-scroll-target="#정의"><span class="header-section-number">7.2</span> 정의</a></li>
+  <li><a href="#해석-1" id="toc-해석-1" class="nav-link" data-scroll-target="#해석-1"><span class="header-section-number">7.3</span> 해석</a></li>
+  <li><a href="#mcmc-표준오차" id="toc-mcmc-표준오차" class="nav-link" data-scroll-target="#mcmc-표준오차"><span class="header-section-number">7.4</span> MCMC 표준오차</a></li>
+  <li><a href="#권고" id="toc-권고" class="nav-link" data-scroll-target="#권고"><span class="header-section-number">7.5</span> 권고</a></li>
+  </ul></li>
+  <li><a href="#학교-계층-정규-예제" id="toc-학교-계층-정규-예제" class="nav-link" data-scroll-target="#학교-계층-정규-예제"><span class="header-section-number">8</span> § 11.6 — 8 학교 계층 정규 예제</a>
+  <ul class="collapse">
+  <li><a href="#모형-복습" id="toc-모형-복습" class="nav-link" data-scroll-target="#모형-복습"><span class="header-section-number">8.1</span> 모형 복습</a></li>
+  <li><a href="#gibbs-sampler-전개" id="toc-gibbs-sampler-전개" class="nav-link" data-scroll-target="#gibbs-sampler-전개"><span class="header-section-number">8.2</span> Gibbs Sampler 전개</a></li>
+  <li><a href="#figure-관찰" id="toc-figure-관찰" class="nav-link" data-scroll-target="#figure-관찰"><span class="header-section-number">8.3</span> Figure 관찰</a></li>
+  <li><a href="#non-centered-파라미터화-예고" id="toc-non-centered-파라미터화-예고" class="nav-link" data-scroll-target="#non-centered-파라미터화-예고"><span class="header-section-number">8.4</span> Non-centered 파라미터화 예고</a></li>
+  </ul></li>
+  <li><a href="#통합-관점-mcmc-알고리즘-선택-지도" id="toc-통합-관점-mcmc-알고리즘-선택-지도" class="nav-link" data-scroll-target="#통합-관점-mcmc-알고리즘-선택-지도"><span class="header-section-number">9</span> 통합 관점 — MCMC 알고리즘 선택 지도</a></li>
+  <li><a href="#응용-분야" id="toc-응용-분야" class="nav-link" data-scroll-target="#응용-분야"><span class="header-section-number">10</span> 응용 분야</a></li>
+  <li><a href="#실전-체크리스트" id="toc-실전-체크리스트" class="nav-link" data-scroll-target="#실전-체크리스트"><span class="header-section-number">11</span> 실전 체크리스트</a></li>
+  <li><a href="#관련-주제" id="toc-관련-주제" class="nav-link" data-scroll-target="#관련-주제"><span class="header-section-number">12</span> 관련 주제</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="개요-mcmc-의-혁명" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="개요-mcmc-의-혁명"><span class="header-section-number">1</span> 개요 — MCMC 의 혁명</h2>
+<p>Ch.10 의 모든 도구 (격자·기각·중요도 샘플링) 는 저차원 또는 단순 구조에서 작동. <strong>고차원·복잡 계층 모형</strong>은 이 한계를 넘는다. 해답이 <strong>MCMC (Markov chain Monte Carlo)</strong>.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+MCMC 의 핵심 아이디어
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>목표</strong>: 사후 <span class="math inline">\(p(\theta \mid y)\)</span> 에서 직접 추출 불가능할 때도 <strong>근사 추출</strong>.</p>
+<p><strong>전략</strong>:</p>
+<ol type="1">
+<li>현재 <span class="math inline">\(\theta^{t-1}\)</span> 에서 다음 <span class="math inline">\(\theta^t\)</span> 를 <strong>전이 분포</strong> <span class="math inline">\(T(\theta^t \mid \theta^{t-1})\)</span> 로 추출.</li>
+<li><span class="math inline">\(T\)</span> 를 영리하게 설계해 <strong>장기 분포가 <span class="math inline">\(p(\theta \mid y)\)</span> 에 수렴</strong>하게 만든다.</li>
+<li>충분히 오래 돌린 후 표본을 사후 표본으로 간주.</li>
+</ol>
+<p>결과: <span class="math inline">\(\{\theta^t\}\)</span> 는 <strong>Markov chain</strong> (한 시점 전 값에만 의존). 연속된 표본은 <strong>상관</strong> — 독립 표본이 아니지만, 장기 평균은 <span class="math inline">\(p(\theta \mid y)\)</span> 의 기댓값.</p>
+</div>
+</div>
+<section id="왜-이게-혁명인가" class="level3" data-number="1.1">
+<h3 data-number="1.1" class="anchored" data-anchor-id="왜-이게-혁명인가"><span class="header-section-number">1.1</span> 왜 이게 혁명인가</h3>
+<p>1970~1980년대: 베이즈 분석이 <strong>“이론적으로만 좋고 계산 불가능”</strong> 상태. 계층 모형·GLM·결측 데이터 모두 닫힌 형태 없음.</p>
+<p>1990년: Gelfand-Smith 논문이 <strong>Gibbs sampling 을 베이즈에 체계적 적용</strong>. 이후 10 년 내 BUGS 소프트웨어 등장, 베이즈가 <strong>응용 가능 분야</strong>로 변모.</p>
+<p>Ch.11 은 이 혁명의 기초 알고리즘을 다룬다.</p>
+</section>
+<section id="ch.11-의-구조" class="level3" data-number="1.2">
+<h3 data-number="1.2" class="anchored" data-anchor-id="ch.11-의-구조"><span class="header-section-number">1.2</span> Ch.11 의 구조</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th>절</th>
+<th>주제</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>11.1</td>
+<td>Gibbs sampler — 조건부 공액 활용</td>
+</tr>
+<tr class="even">
+<td>11.2</td>
+<td>Metropolis-Hastings — 임의 분포</td>
+</tr>
+<tr class="odd">
+<td>11.3</td>
+<td>Gibbs + Metropolis 조합</td>
+</tr>
+<tr class="even">
+<td>11.4</td>
+<td>수렴 진단 <span class="math inline">\(\hat{R}\)</span></td>
+</tr>
+<tr class="odd">
+<td>11.5</td>
+<td>Effective sample size</td>
+</tr>
+<tr class="even">
+<td>11.6</td>
+<td>8 학교 계층 정규 예제</td>
+</tr>
+<tr class="odd">
+<td>11.7</td>
+<td>참고문헌</td>
+</tr>
+<tr class="even">
+<td>11.8</td>
+<td>연습문제</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="직관-접근법의-180-도-전환" class="level3" data-number="1.3">
+<h3 data-number="1.3" class="anchored" data-anchor-id="직관-접근법의-180-도-전환"><span class="header-section-number">1.3</span> 직관 — “접근법의 180 도 전환”</h3>
+<p>Ch.10 의 직접·기각·중요도 샘플링: <strong>“목표 분포를 그대로 샘플하자”</strong>. Ch.11 의 MCMC: <strong>“목표 분포로 <strong>수렴</strong>하는 과정을 만들자”</strong>.</p>
+<p>근본적 차이:</p>
+<ul>
+<li>직접: 한 번에 독립 표본 확보. 차원 저주 취약.</li>
+<li>MCMC: <strong>순차 근사</strong>. 차원 고차 OK, but <strong>수렴 확인 필요</strong>.</li>
+</ul>
+<p>이 tradeoff 가 Ch.11 의 모든 내용을 관통. 알고리즘 (11.1~11.3) + 진단 (11.4~11.5) 두 축이 항상 쌍.</p>
+</section>
+</section>
+<section id="mcmc-일반론" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="mcmc-일반론"><span class="header-section-number">2</span> MCMC 일반론</h2>
+<section id="markov-chain-의-수학" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="markov-chain-의-수학"><span class="header-section-number">2.1</span> Markov Chain 의 수학</h3>
+<p><span class="math inline">\(\{\theta^t\}_{t=0, 1, 2, \ldots}\)</span> 가 Markov chain 이면:</p>
+<p><span class="math display">\[
+p(\theta^t \mid \theta^{t-1}, \theta^{t-2}, \ldots, \theta^0) = p(\theta^t \mid \theta^{t-1}) = T(\theta^t \mid \theta^{t-1})
+\]</span></p>
+<p><strong>“기억이 직전 한 단계뿐”</strong> — 전이 분포 <span class="math inline">\(T\)</span> 가 과거 전체 이력을 대체.</p>
+</section>
+<section id="정상-분포-stationary-distribution" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="정상-분포-stationary-distribution"><span class="header-section-number">2.2</span> 정상 분포 (Stationary Distribution)</h3>
+<p>분포 <span class="math inline">\(\pi(\theta)\)</span> 가 <span class="math inline">\(T\)</span> 의 정상 분포:</p>
+<p><span class="math display">\[
+\pi(\theta') = \int T(\theta' \mid \theta) \pi(\theta) d\theta
+\]</span></p>
+<p>해석: “<span class="math inline">\(\theta \sim \pi\)</span> 에서 시작해 <span class="math inline">\(T\)</span> 로 한 번 전이해도 여전히 <span class="math inline">\(\pi\)</span>”. <strong>분포가 자기 자신으로 쓰인다</strong>.</p>
+</section>
+<section id="mcmc-의-목표" class="level3" data-number="2.3">
+<h3 data-number="2.3" class="anchored" data-anchor-id="mcmc-의-목표"><span class="header-section-number">2.3</span> MCMC 의 목표</h3>
+<p><span class="math inline">\(T\)</span> 를 설계하여 <strong>정상 분포 <span class="math inline">\(= p(\theta \mid y)\)</span></strong> 만족시킨다.</p>
+<p><strong>충분 조건</strong> (detailed balance):</p>
+<p><span class="math display">\[
+p(\theta \mid y) T(\theta' \mid \theta) = p(\theta' \mid y) T(\theta \mid \theta')
+\]</span></p>
+<p>이 대칭성이 성립하면 <span class="math inline">\(p(\theta \mid y)\)</span> 가 정상 분포. Metropolis-Hastings 수용 규칙이 정확히 이 조건 만족.</p>
+</section>
+<section id="수렴-조건-3-요건" class="level3" data-number="2.4">
+<h3 data-number="2.4" class="anchored" data-anchor-id="수렴-조건-3-요건"><span class="header-section-number">2.4</span> 수렴 조건 — 3 요건</h3>
+<p>정상 분포 존재 + <strong>유일</strong> 수렴에 필요:</p>
+<ol type="1">
+<li><strong>Irreducible (조건부 도달 가능)</strong>: 어떤 <span class="math inline">\(\theta\)</span> 에서 시작해도 <strong>유한 시간 내</strong> 다른 <span class="math inline">\(\theta'\)</span> 에 양의 확률로 도달.</li>
+<li><strong>Aperiodic (비주기적)</strong>: 체인이 특정 주기로 갇히지 않음.</li>
+<li><strong>Not transient (정회 가능)</strong>: 방문한 영역으로 <strong>무한히</strong> 돌아옴.</li>
+</ol>
+<p>정상 random walk 에선 거의 자동 성립. 퇴행 사례 (확률 0 인 사후 영역에 갇힘) 제외.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — 왜 3 조건이 수렴을 보장하는가
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>비유: 퍼즐 공간 탐색. 모든 조각에 <strong>도달 가능</strong> (irreducible) + <strong>주기적 덫 없음</strong> (aperiodic) + <strong>모든 영역으로 되돌아옴</strong> (recurrent) → 장기적으로 <strong>모든 상태를 자주 방문</strong>.</p>
+<p>Ergodic theorem: 이 조건 하에서 시간 평균 $= $ 공간 평균. 즉:</p>
+<p><span class="math display">\[
+\frac{1}{T} \sum_{t=1}^T h(\theta^t) \to \mathbb{E}_{\pi}[h(\theta)]
+\]</span></p>
+<p>MCMC 의 이론적 정당성이 여기. 실무에서는 <strong>수렴까지 시간이 얼마나 걸리는가</strong> (mixing time) 가 문제.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="gibbs-sampler" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="gibbs-sampler"><span class="header-section-number">3</span> § 11.1 — Gibbs Sampler</h2>
+<section id="아이디어-조건부-분포-순환" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="아이디어-조건부-분포-순환"><span class="header-section-number">3.1</span> 아이디어 — 조건부 분포 순환</h3>
+<p><span class="math inline">\(\theta = (\theta_1, \ldots, \theta_d)\)</span> 를 <span class="math inline">\(d\)</span> 블록으로 나눔. 각 반복에서 <strong><span class="math inline">\(d\)</span> 블록을 순차적</strong>으로 업데이트:</p>
+<ul>
+<li><span class="math inline">\(\theta_j\)</span> 를 나머지 <strong>최신 값들</strong> 조건부 분포에서 추출.</li>
+</ul>
+<p>반복 <span class="math inline">\(t\)</span> 의 단계 <span class="math inline">\(j\)</span>:</p>
+<p><span class="math display">\[
+\theta_j^t \sim p(\theta_j \mid \theta_{-j}^{t-1}, y)
+\]</span></p>
+<p><span class="math inline">\(\theta_{-j}^{t-1}\)</span> 은 이미 이번 <span class="math inline">\(t\)</span> 에서 업데이트 된 것 + 아직 <span class="math inline">\(t-1\)</span> 값인 것:</p>
+<p><span class="math display">\[
+\theta_{-j}^{t-1} = (\theta_1^t, \ldots, \theta_{j-1}^t, \theta_{j+1}^{t-1}, \ldots, \theta_d^{t-1})
+\]</span></p>
+</section>
+<section id="왜-이게-작동하는가" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="왜-이게-작동하는가"><span class="header-section-number">3.2</span> 왜 이게 작동하는가</h3>
+<p>각 조건부 추출이 <strong>그 구성요소의 정상 분포를 유지</strong>. <span class="math inline">\(d\)</span> 단계 전체가 종합 정상 분포를 유지.</p>
+<p>Gibbs 가 Metropolis-Hastings 특수 케이스인 이유: 조건부 추출 = <strong>수용 확률 1 의 점프</strong>.</p>
+</section>
+<section id="언제-gibbs-가-자연스러운가" class="level3" data-number="3.3">
+<h3 data-number="3.3" class="anchored" data-anchor-id="언제-gibbs-가-자연스러운가"><span class="header-section-number">3.3</span> 언제 Gibbs 가 자연스러운가</h3>
+<p><strong>조건부 공액</strong> 모형에서 절대적 강점. 계층 모형의 일반 구조:</p>
+<p><span class="math display">\[
+y \mid \theta, \sigma \sim \mathrm{N}(\theta, \sigma^2), \quad \theta \mid \mu, \tau \sim \mathrm{N}(\mu, \tau^2), \quad \ldots
+\]</span></p>
+<p>각 조건부가 정규·역감마 등 표준 분포 → 직접 추출 가능. Gibbs 기본 선택.</p>
+</section>
+<section id="한계-상관-시-느린-수렴" class="level3" data-number="3.4">
+<h3 data-number="3.4" class="anchored" data-anchor-id="한계-상관-시-느린-수렴"><span class="header-section-number">3.4</span> 한계 — 상관 시 느린 수렴</h3>
+<p>이변량 정규 <span class="math inline">\(\rho = 0.8\)</span> 에서 Gibbs 는 <strong>계단식</strong> 이동 (수평·수직만). 상관 축 (대각선) 을 따르려면 수많은 단계 필요.</p>
+<p>일반 원리: <strong>조건부 변수 간 강한 상관이면 Gibbs 느림</strong>. 이 경우 재매개변수화 (Ch.12) 또는 HMC.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Gibbs 의 “축 정렬 이동” 한계
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Gibbs 는 각 반복에서 <strong>좌표축 방향</strong>으로만 이동. 사후가 축과 정렬되면 (독립) 효율적. 사후가 기울어지면 (<span class="math inline">\(\rho\)</span> 큼) 매우 비효율.</p>
+<p>비유: 체스에서 <strong>룩 (rook)</strong> 만 사용 — 직선 이동만. 대각 이동 못 함. 복잡한 경로는 지그재그.</p>
+<p>해결: <strong>bishop</strong> 역할의 HMC (Ch.12) 또는 <strong>회전 + 룩</strong> 재매개변수화.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="metropolis-hastings" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="metropolis-hastings"><span class="header-section-number">4</span> § 11.2 — Metropolis-Hastings</h2>
+<section id="metropolis-알고리즘-대칭-점프" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="metropolis-알고리즘-대칭-점프"><span class="header-section-number">4.1</span> Metropolis 알고리즘 — 대칭 점프</h3>
+<p>조건부 공액이 없을 때 범용 도구. 절차:</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Metropolis 알고리즘
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<ol type="1">
+<li><strong>시작점</strong> <span class="math inline">\(\theta^0\)</span> 선택, <span class="math inline">\(p(\theta^0 \mid y) &gt; 0\)</span>.</li>
+<li>각 <span class="math inline">\(t = 1, 2, \ldots\)</span>:
+<ul>
+<li><strong>제안</strong>: <span class="math inline">\(\theta^* \sim J_t(\theta^* \mid \theta^{t-1})\)</span>. 대칭 조건 <span class="math inline">\(J_t(a \mid b) = J_t(b \mid a)\)</span>.</li>
+<li><strong>밀도비</strong>: <span class="math display">\[
+r = \frac{p(\theta^* \mid y)}{p(\theta^{t-1} \mid y)} \tag{11.1}
+\]</span></li>
+<li><strong>수용</strong>: <span class="math inline">\(\theta^t = \theta^*\)</span> 확률 <span class="math inline">\(\min(r, 1)\)</span>, 아니면 <span class="math inline">\(\theta^t = \theta^{t-1}\)</span>.</li>
+</ul></li>
+</ol>
+</div>
+</div>
+<p>핵심: <strong>밀도비로 수용</strong> — 더 높은 밀도는 항상 수용, 낮은 밀도는 확률적으로만.</p>
+</section>
+<section id="왜-작동하는가-detailed-balance" class="level3" data-number="4.2">
+<h3 data-number="4.2" class="anchored" data-anchor-id="왜-작동하는가-detailed-balance"><span class="header-section-number">4.2</span> 왜 작동하는가 — Detailed Balance</h3>
+<p>목표 분포 <span class="math inline">\(p(\theta \mid y)\)</span> 에서 시작한 <span class="math inline">\(\theta^{t-1}\)</span> 과 새 <span class="math inline">\(\theta^t\)</span> 의 결합 분포 고려.</p>
+<p>두 점 <span class="math inline">\(\theta_a, \theta_b\)</span> 를 <span class="math inline">\(p(\theta_b \mid y) \ge p(\theta_a \mid y)\)</span> 로 라벨. <span class="math inline">\(\theta_a \to \theta_b\)</span> 전이:</p>
+<p><span class="math display">\[
+p(\theta^{t-1} = \theta_a, \theta^t = \theta_b) = p(\theta_a \mid y) J_t(\theta_b \mid \theta_a) \cdot \underbrace{1}_{\text{수용 확률}}
+\]</span></p>
+<p>반대 <span class="math inline">\(\theta_b \to \theta_a\)</span>:</p>
+<p><span class="math display">\[
+p(\theta^{t-1} = \theta_b, \theta^t = \theta_a) = p(\theta_b \mid y) J_t(\theta_a \mid \theta_b) \cdot \frac{p(\theta_a \mid y)}{p(\theta_b \mid y)} = p(\theta_a \mid y) J_t(\theta_a \mid \theta_b)
+\]</span></p>
+<p>대칭성 <span class="math inline">\(J_t(\theta_a \mid \theta_b) = J_t(\theta_b \mid \theta_a)\)</span> 이므로 <strong>두 확률이 같음</strong>.</p>
+<p>즉 <span class="math inline">\((\theta^{t-1}, \theta^t)\)</span> 의 결합 분포가 대칭 → 주변 분포 동일 → <strong><span class="math inline">\(\theta^t\)</span> 도 <span class="math inline">\(p(\theta \mid y)\)</span> 에서</strong>. <span class="math inline">\(p\)</span> 가 정상 분포.</p>
+</section>
+<section id="metropolis-hastings-비대칭-확장" class="level3" data-number="4.3">
+<h3 data-number="4.3" class="anchored" data-anchor-id="metropolis-hastings-비대칭-확장"><span class="header-section-number">4.3</span> Metropolis-Hastings — 비대칭 확장</h3>
+<p>대칭 제한 제거. 수용 비율:</p>
+<p><span class="math display">\[
+r = \frac{p(\theta^* \mid y) / J_t(\theta^* \mid \theta^{t-1})}{p(\theta^{t-1} \mid y) / J_t(\theta^{t-1} \mid \theta^*)} \tag{11.2}
+\]</span></p>
+<p><strong>“밀도비 <span class="math inline">\(\times\)</span> 역방향 점프 확률 / 정방향 점프 확률”</strong>. 비대칭 보정.</p>
+<p>장점: <strong>적응적 제안</strong> 가능 — 예를 들어 “경사를 타고 올라가는” 제안 분포 사용.</p>
+</section>
+<section id="좋은-점프-분포-j-의-조건" class="level3" data-number="4.4">
+<h3 data-number="4.4" class="anchored" data-anchor-id="좋은-점프-분포-j-의-조건"><span class="header-section-number">4.4</span> 좋은 점프 분포 <span class="math inline">\(J\)</span> 의 조건</h3>
+<p>§ 11.2 말미:</p>
+<ol type="1">
+<li><strong><span class="math inline">\(J\)</span> 에서 쉽게 추출 가능</strong>.</li>
+<li><strong>비율 <span class="math inline">\(r\)</span> 쉽게 계산</strong> — <span class="math inline">\(\log J\)</span> 값 계산 가능.</li>
+<li><strong>합리적 거리 점프</strong> — 너무 작으면 느림.</li>
+<li><strong>과도한 기각 피함</strong> — 수용률 모니터.</li>
+</ol>
+</section>
+<section id="수용률의-최적-값" class="level3" data-number="4.5">
+<h3 data-number="4.5" class="anchored" data-anchor-id="수용률의-최적-값"><span class="header-section-number">4.5</span> 수용률의 최적 값</h3>
+<p>이론 (Roberts, Gelman, Gilks 1997):</p>
+<ul>
+<li><strong>고차원 isotropic 정규 목표 + 정규 점프</strong> → 최적 수용률 <strong><span class="math inline">\(\approx 23.4\%\)</span></strong>.</li>
+<li><strong>1 차원 목표</strong> → <span class="math inline">\(\approx 44\%\)</span>.</li>
+</ul>
+<p>실무 목표:</p>
+<ul>
+<li>수용률 10% 미만 → 점프 너무 큼. <span class="math inline">\(J\)</span> scale 축소.</li>
+<li>수용률 70% 초과 → 점프 너무 작음. <span class="math inline">\(J\)</span> scale 확대.</li>
+<li>적정: <strong>20~40%</strong>.</li>
+</ul>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — 왜 수용률이 “중간” 이 좋은가
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>양 극단의 문제:</p>
+<ul>
+<li><strong>낮은 수용률</strong> (점프 크고 대부분 거절): 체인이 오래 정체 → 같은 표본 반복 → 효율 낮음.</li>
+<li><strong>높은 수용률</strong> (점프 작고 거의 수용): 체인이 천천히 이동 → 전 공간 탐색 오래.</li>
+</ul>
+<p>최적: <strong>공간을 빠르게 가로지르되 너무 멀리 뛰지 않음</strong>. 이론적으로 23.4% 는 고차원 정규에서 Markov chain 의 jump distance 의 기대값이 최대가 되는 지점.</p>
+<p>이 튜닝이 Ch.12 의 주요 주제 — 자동 adaptive sampler.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="gibbs-와-metropolis-의-결합" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="gibbs-와-metropolis-의-결합"><span class="header-section-number">5</span> § 11.3 — Gibbs 와 Metropolis 의 결합</h2>
+<section id="블록별-업데이트" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="블록별-업데이트"><span class="header-section-number">5.1</span> 블록별 업데이트</h3>
+<p>실제 모형은 <strong>일부 조건부는 공액, 일부는 아님</strong>. 해결: 블록별로 다른 샘플러.</p>
+<p><span class="math inline">\(\theta = (\theta_1, \theta_2, \theta_3, \theta_4)\)</span> 에서:</p>
+<ul>
+<li><span class="math inline">\(\theta_1 \mid \theta_{-1}, y\)</span>: 정규 공액 → Gibbs.</li>
+<li><span class="math inline">\(\theta_2 \mid \theta_{-2}, y\)</span>: 비공액 → Metropolis 1 차원.</li>
+<li><span class="math inline">\((\theta_3, \theta_4)\)</span>: 상관 — 결합 Metropolis 블록.</li>
+</ul>
+<p>각 단계가 조건부 정상 분포 유지 → 전체도 정상 분포 유지.</p>
+</section>
+<section id="재매개변수화의-힘" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="재매개변수화의-힘"><span class="header-section-number">5.2</span> 재매개변수화의 힘</h3>
+<p>강한 상관 사후에서 원래 좌표의 Gibbs 가 느림. 해결: <strong>선형 변환</strong>으로 상관 제거.</p>
+<p>예: <span class="math inline">\(\rho = 0.99\)</span> 인 <span class="math inline">\((\theta_1, \theta_2)\)</span> → <span class="math inline">\(\phi_1 = \theta_1 + \theta_2, \phi_2 = \theta_1 - \theta_2\)</span> 로 변환 → 대략 독립. Gibbs 가 빨라짐.</p>
+<p>Ch.12 의 <strong>non-centered parameterization</strong> 이 계층 모형에 이 원리를 일반화.</p>
+</section>
+</section>
+<section id="수렴-진단" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="수렴-진단"><span class="header-section-number">6</span> § 11.4 — 수렴 진단</h2>
+<section id="왜-진단이-필요한가" class="level3" data-number="6.1">
+<h3 data-number="6.1" class="anchored" data-anchor-id="왜-진단이-필요한가"><span class="header-section-number">6.1</span> 왜 진단이 필요한가</h3>
+<p>MCMC 의 함정: <strong>“작동하지만 수렴 안 했을 때”</strong>. 체인이 특정 영역에 갇혀 이동 안 하면, 관측된 표본이 사후의 한 영역만 반영.</p>
+<p><strong>Figure 11.1a vs 11.1b</strong>: 50 반복 vs 1000 반복. 50 반복에선 명백히 덜 수렴.</p>
+</section>
+<section id="hatr-potential-scale-reduction" class="level3" data-number="6.2">
+<h3 data-number="6.2" class="anchored" data-anchor-id="hatr-potential-scale-reduction"><span class="header-section-number">6.2</span> <span class="math inline">\(\hat{R}\)</span> (Potential Scale Reduction)</h3>
+<p><strong>여러 독립 체인</strong>을 과분산 시작점에서 실행. 체인 간 일치를 정량화.</p>
+<p><span class="math inline">\(m\)</span> 체인, 각각 <span class="math inline">\(n\)</span> 반복. 스칼라 추정량 <span class="math inline">\(\psi\)</span> (예: <span class="math inline">\(\theta_1\)</span>, 또는 <span class="math inline">\(\log p(\theta \mid y)\)</span>):</p>
+<p><strong>체인 내 분산</strong> <span class="math inline">\(W\)</span>: 각 체인의 분산의 평균.</p>
+<p><span class="math display">\[
+W = \frac{1}{m} \sum_{j=1}^m s_j^2, \quad s_j^2 = \frac{1}{n-1} \sum_i (\psi_{ij} - \bar{\psi}_{\cdot j})^2
+\]</span></p>
+<p><strong>체인 간 분산</strong> <span class="math inline">\(B\)</span>: 체인 평균들의 분산.</p>
+<p><span class="math display">\[
+B = \frac{n}{m-1} \sum_{j=1}^m (\bar{\psi}_{\cdot j} - \bar{\psi}_{\cdot \cdot})^2
+\]</span></p>
+<p><strong>주변 분산 추정</strong>:</p>
+<p><span class="math display">\[
+\widehat{\mathrm{var}}^+(\psi \mid y) = \frac{n-1}{n} W + \frac{1}{n} B
+\]</span></p>
+<p>수렴하면 <span class="math inline">\(W\)</span> 와 <span class="math inline">\(\widehat{\mathrm{var}}^+\)</span> 가 같아짐. <span class="math inline">\(\hat{R}\)</span> 은 이 비율:</p>
+<p><span class="math display">\[
+\hat{R} = \sqrt{\frac{\widehat{\mathrm{var}}^+(\psi \mid y)}{W}}
+\]</span></p>
+</section>
+<section id="해석" class="level3" data-number="6.3">
+<h3 data-number="6.3" class="anchored" data-anchor-id="해석"><span class="header-section-number">6.3</span> 해석</h3>
+<ul>
+<li><span class="math inline">\(\hat{R} = 1\)</span>: 수렴 완료.</li>
+<li><span class="math inline">\(\hat{R} \approx 1.01{-}1.05\)</span>: 충분히 수렴 (실무 기준).</li>
+<li><span class="math inline">\(\hat{R} &gt; 1.1\)</span>: 수렴 안 됨 — 더 돌려라.</li>
+<li><span class="math inline">\(\hat{R} &gt; 1.5\)</span>: 심각. 모형·알고리즘 재검토.</li>
+</ul>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — <span class="math inline">\(\hat{R}\)</span> 의 의미
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>“여러 체인의 평균 흩뿌림 (B)” 과 “각 체인 내부 흩뿌림 (W)” 비교.</p>
+<ul>
+<li>수렴 전: 체인들이 서로 다른 영역 탐색 → <span class="math inline">\(B \gg W\)</span> → <span class="math inline">\(\hat{R} \gg 1\)</span>.</li>
+<li>수렴 후: 모든 체인이 같은 분포 → <span class="math inline">\(B \approx W\)</span> → <span class="math inline">\(\hat{R} \approx 1\)</span>.</li>
+</ul>
+<p><span class="math inline">\(\hat{R} &gt; 1\)</span> 은 “<strong>더 오래 돌리면 사후 분산이 더 커질 것</strong>” 을 의미. 즉 현재 추정이 실제보다 좁음 (덜 탐색).</p>
+</div>
+</div>
+</section>
+<section id="split-hatr" class="level3" data-number="6.4">
+<h3 data-number="6.4" class="anchored" data-anchor-id="split-hatr"><span class="header-section-number">6.4</span> Split-<span class="math inline">\(\hat{R}\)</span></h3>
+<p>강화판: 각 체인을 <strong>전반부·후반부</strong>로 나눠 <span class="math inline">\(\hat{R}\)</span> 계산.</p>
+<ul>
+<li>체인 내부도 정상성 가정 검증.</li>
+<li>초기 burn-in 이 남아 있으면 split-<span class="math inline">\(\hat{R}\)</span> 로 감지.</li>
+</ul>
+</section>
+<section id="burn-in-과-warm-up" class="level3" data-number="6.5">
+<h3 data-number="6.5" class="anchored" data-anchor-id="burn-in-과-warm-up"><span class="header-section-number">6.5</span> Burn-in 과 Warm-up</h3>
+<p>첫 부분 버리는 전통: 시작점의 영향 제거.</p>
+<p>실무:</p>
+<ul>
+<li>전통적: 전체 반복의 절반 버림.</li>
+<li>현대 (Stan): <strong>warm-up</strong> 에서 adaptation 병행, 그 후 본 샘플링.</li>
+</ul>
+</section>
+</section>
+<section id="effective-sample-size" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="effective-sample-size"><span class="header-section-number">7</span> § 11.5 — Effective Sample Size</h2>
+<section id="왜-필요한가" class="level3" data-number="7.1">
+<h3 data-number="7.1" class="anchored" data-anchor-id="왜-필요한가"><span class="header-section-number">7.1</span> 왜 필요한가</h3>
+<p>MCMC 표본은 <strong>상관</strong>. 독립 표본 <span class="math inline">\(n\)</span> 개와 같은 정보를 얻으려면 MCMC 표본이 <strong>더 많이</strong> 필요.</p>
+<p>예: <span class="math inline">\(n = 1000\)</span> MCMC 표본이 사실상 200 독립 표본과 동등.</p>
+</section>
+<section id="정의" class="level3" data-number="7.2">
+<h3 data-number="7.2" class="anchored" data-anchor-id="정의"><span class="header-section-number">7.2</span> 정의</h3>
+<p>자기상관 함수 <span class="math inline">\(\rho_t = \mathrm{Cor}(\psi^s, \psi^{s+t})\)</span> (시차 <span class="math inline">\(t\)</span>). 자기상관 시간:</p>
+<p><span class="math display">\[
+\tau = 1 + 2 \sum_{t=1}^\infty \rho_t
+\]</span></p>
+<p>Effective sample size:</p>
+<p><span class="math display">\[
+n_{\mathrm{eff}} = \frac{mn}{\tau}
+\]</span></p>
+<p>실무 근사 (Gelman et al.&nbsp;2014):</p>
+<p><span class="math display">\[
+\hat{n}_{\mathrm{eff}} = \frac{mn}{1 + 2 \sum_{t=1}^T \hat{\rho}_t}
+\]</span></p>
+<p><span class="math inline">\(T\)</span> = 자기상관이 무시 수준이 되는 시차.</p>
+</section>
+<section id="해석-1" class="level3" data-number="7.3">
+<h3 data-number="7.3" class="anchored" data-anchor-id="해석-1"><span class="header-section-number">7.3</span> 해석</h3>
+<ul>
+<li><span class="math inline">\(n_{\mathrm{eff}} / mn \approx 1\)</span>: 거의 독립 샘플.</li>
+<li><span class="math inline">\(0.1 \sim 1\)</span>: 정상.</li>
+<li><span class="math inline">\(&lt; 0.1\)</span>: 효율 낮음 — 재매개변수화 고려.</li>
+</ul>
+<p>Stan·PyMC 는 자동 계산·경고.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — 자기상관이 왜 표본 효율을 떨어뜨리는가
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><span class="math inline">\(\theta^t\)</span> 가 <span class="math inline">\(\theta^{t-1}\)</span> 과 비슷하면, 두 표본이 <strong>“거의 같은 정보”</strong>. <span class="math inline">\(n\)</span> 표본 얻었어도 실제 정보량은 <span class="math inline">\(n/\tau\)</span> 개.</p>
+<p>극단: <span class="math inline">\(\tau = 100\)</span> 이면 <span class="math inline">\(n_{\mathrm{eff}} = n/100\)</span>. 1000 표본이 사실상 10 개 독립 표본 수준. Monte Carlo 오차가 <span class="math inline">\(\sqrt{10}\)</span> 만 감소 — 실망적.</p>
+<p>해결: <strong>재매개변수화로 상관 감소</strong> (Ch.12), 또는 더 긴 체인. 근본적으로는 알고리즘 교체 (Gibbs → HMC).</p>
+</div>
+</div>
+</section>
+<section id="mcmc-표준오차" class="level3" data-number="7.4">
+<h3 data-number="7.4" class="anchored" data-anchor-id="mcmc-표준오차"><span class="header-section-number">7.4</span> MCMC 표준오차</h3>
+<p><span class="math inline">\(\hat{\psi} = \bar{\psi}_{\mathrm{all chains}}\)</span> 의 오차:</p>
+<p><span class="math display">\[
+\mathrm{SE}_{\mathrm{MCMC}}[\hat{\psi}] = \frac{s_\psi}{\sqrt{n_{\mathrm{eff}}}}
+\]</span></p>
+<p><span class="math inline">\(n_{\mathrm{eff}}\)</span> 가 독립 표본과 같은 역할. Ch.10.5 의 <span class="math inline">\(s_\theta / \sqrt{S}\)</span> 와 같은 공식 — <strong><span class="math inline">\(S \to n_{\mathrm{eff}}\)</span></strong> 로 치환.</p>
+</section>
+<section id="권고" class="level3" data-number="7.5">
+<h3 data-number="7.5" class="anchored" data-anchor-id="권고"><span class="header-section-number">7.5</span> 권고</h3>
+<ul>
+<li>사후 평균·중앙값: <span class="math inline">\(n_{\mathrm{eff}} \ge 400\)</span>.</li>
+<li>사후 구간 끝: <span class="math inline">\(n_{\mathrm{eff}} \ge 1000\)</span>.</li>
+<li>희귀 사건: <span class="math inline">\(n_{\mathrm{eff}} \ge 10000\)</span>.</li>
+</ul>
+<p>Ch.10.5 의 수치와 정합.</p>
+</section>
+</section>
+<section id="학교-계층-정규-예제" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="학교-계층-정규-예제"><span class="header-section-number">8</span> § 11.6 — 8 학교 계층 정규 예제</h2>
+<section id="모형-복습" class="level3" data-number="8.1">
+<h3 data-number="8.1" class="anchored" data-anchor-id="모형-복습"><span class="header-section-number">8.1</span> 모형 복습</h3>
+<p><span class="math inline">\(J = 8\)</span> 학교, 처치 효과 <span class="math inline">\(y_j\)</span>, 표준 오차 <span class="math inline">\(\sigma_j\)</span> 알려짐. 계층:</p>
+<p><span class="math display">\[
+y_j \mid \theta_j \sim \mathrm{N}(\theta_j, \sigma_j^2), \quad \theta_j \mid \mu, \tau \sim \mathrm{N}(\mu, \tau^2)
+\]</span></p>
+<p>Prior: <span class="math inline">\(p(\mu, \tau) \propto 1\)</span> (uniform on <span class="math inline">\(\tau\)</span>).</p>
+</section>
+<section id="gibbs-sampler-전개" class="level3" data-number="8.2">
+<h3 data-number="8.2" class="anchored" data-anchor-id="gibbs-sampler-전개"><span class="header-section-number">8.2</span> Gibbs Sampler 전개</h3>
+<p>각 조건부가 공액 → Gibbs.</p>
+<p><strong><span class="math inline">\(\theta_j \mid \mu, \tau, y\)</span></strong>: 정규 공액.</p>
+<p><span class="math display">\[
+\theta_j \mid \mu, \tau, y \sim \mathrm{N}\!\left(\frac{y_j/\sigma_j^2 + \mu/\tau^2}{1/\sigma_j^2 + 1/\tau^2}, \frac{1}{1/\sigma_j^2 + 1/\tau^2}\right)
+\]</span></p>
+<p><strong><span class="math inline">\(\mu \mid \theta, \tau, y\)</span></strong>: <span class="math inline">\(\theta_j\)</span> 들의 평균.</p>
+<p><span class="math display">\[
+\mu \mid \theta, \tau, y \sim \mathrm{N}(\bar{\theta}, \tau^2/J)
+\]</span></p>
+<p><strong><span class="math inline">\(\tau \mid \theta, \mu, y\)</span></strong>: 공액 아님 (비정규) — 역감마 계열 또는 grid 샘플링.</p>
+<p>각 반복:</p>
+<ol type="1">
+<li><span class="math inline">\(\theta_j\)</span> 8 개 업데이트 (정규 공액).</li>
+<li><span class="math inline">\(\mu\)</span> 업데이트.</li>
+<li><span class="math inline">\(\tau\)</span> 업데이트 (grid 또는 Metropolis).</li>
+</ol>
+</section>
+<section id="figure-관찰" class="level3" data-number="8.3">
+<h3 data-number="8.3" class="anchored" data-anchor-id="figure-관찰"><span class="header-section-number">8.3</span> Figure 관찰</h3>
+<p>수렴 후 <span class="math inline">\(\tau\)</span> 가 0 근처에서 약간 positive 집중 → <strong>완전 풀링과 풀링 없음 중간</strong>. Ch.5.5 의 shrinkage 패턴 재확인.</p>
+</section>
+<section id="non-centered-파라미터화-예고" class="level3" data-number="8.4">
+<h3 data-number="8.4" class="anchored" data-anchor-id="non-centered-파라미터화-예고"><span class="header-section-number">8.4</span> Non-centered 파라미터화 예고</h3>
+<p><span class="math inline">\(\tau\)</span> 가 0 근처로 가면 <span class="math inline">\(\theta_j\)</span> 공간이 <strong>깔대기</strong> (funnel): 낮은 <span class="math inline">\(\tau\)</span> 에서 <span class="math inline">\(\theta_j\)</span> 공간이 매우 좁아짐 → MCMC 에 <strong>기하학적 장애</strong>.</p>
+<p>해결: <span class="math inline">\(\theta_j = \mu + \tau \cdot \eta_j\)</span> where <span class="math inline">\(\eta_j \sim \mathrm{N}(0, 1)\)</span>. Ch.12 의 핵심 주제.</p>
+</section>
+</section>
+<section id="통합-관점-mcmc-알고리즘-선택-지도" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="통합-관점-mcmc-알고리즘-선택-지도"><span class="header-section-number">9</span> 통합 관점 — MCMC 알고리즘 선택 지도</h2>
+<table class="table">
+<thead>
+<tr class="header">
+<th>알고리즘</th>
+<th>조건</th>
+<th>장점</th>
+<th>단점</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Gibbs</strong></td>
+<td>조건부 공액</td>
+<td>간단, 수용률 100%</td>
+<td>상관 시 느림</td>
+</tr>
+<tr class="even">
+<td><strong>Metropolis</strong></td>
+<td>임의 사후</td>
+<td>범용</td>
+<td>튜닝 필요</td>
+</tr>
+<tr class="odd">
+<td><strong>Metropolis-Hastings</strong></td>
+<td>비대칭 제안</td>
+<td>유연</td>
+<td>더 복잡한 튜닝</td>
+</tr>
+<tr class="even">
+<td><strong>Gibbs + Metropolis 블록</strong></td>
+<td>혼합 구조</td>
+<td>실용</td>
+<td>수렴 보장 주의</td>
+</tr>
+<tr class="odd">
+<td><strong>HMC/NUTS</strong> (Ch.12)</td>
+<td>미분 가능 사후</td>
+<td>상관·고차원 효율</td>
+<td>미분 계산</td>
+</tr>
+<tr class="even">
+<td><strong>변분 추론</strong> (Ch.13)</td>
+<td>초대형</td>
+<td>고속</td>
+<td>근사</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Ch.11 의 메시지</strong>: 간단한 문제부터 Gibbs, 점차 Metropolis → HMC. 진단 (11.4~11.5) 은 <strong>항상</strong> 필수.</p>
+</section>
+<section id="응용-분야" class="level2" data-number="10">
+<h2 data-number="10" class="anchored" data-anchor-id="응용-분야"><span class="header-section-number">10</span> 응용 분야</h2>
+<table class="table">
+<thead>
+<tr class="header">
+<th>분야</th>
+<th>MCMC 의 역할</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>계층 모형</td>
+<td>교육·의료·경제의 다단 구조</td>
+</tr>
+<tr class="even">
+<td>GLM·비선형 회귀</td>
+<td>비공액 likelihood 범용 도구</td>
+</tr>
+<tr class="odd">
+<td>결측 데이터</td>
+<td>결측 imputation 통합</td>
+</tr>
+<tr class="even">
+<td>공간 통계</td>
+<td>Gaussian process, CAR 모형</td>
+</tr>
+<tr class="odd">
+<td>시계열</td>
+<td>상태공간 모형</td>
+</tr>
+<tr class="even">
+<td>유전체학</td>
+<td>계통수 추정, 동적 모형</td>
+</tr>
+<tr class="odd">
+<td>기계학습</td>
+<td>Bayesian neural networks, LDA</td>
+</tr>
+<tr class="even">
+<td>경제·금융</td>
+<td>확률적 변동성, DSGE</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="실전-체크리스트" class="level2" data-number="11">
+<h2 data-number="11" class="anchored" data-anchor-id="실전-체크리스트"><span class="header-section-number">11</span> 실전 체크리스트</h2>
+<p>MCMC 를 실무에 녹이는 12 단계.</p>
+<ol type="1">
+<li><strong>알고리즘 선택</strong> — 조건부 공액이면 Gibbs, 아니면 Metropolis/HMC.</li>
+<li><strong>여러 체인</strong> — 최소 4 개 독립 체인, 과분산 시작점.</li>
+<li><strong>충분한 반복</strong> — 처음엔 <span class="math inline">\(n = 1000\)</span>, 진단 후 조정.</li>
+<li><strong>Warm-up/burn-in</strong> — 전반부 (또는 warm-up) 버림.</li>
+<li><strong><span class="math inline">\(\hat{R}\)</span> 확인</strong> — 모든 모수에서 <span class="math inline">\(&lt; 1.01\)</span> 목표.</li>
+<li><strong>Split-<span class="math inline">\(\hat{R}\)</span></strong> — 더 엄격한 진단.</li>
+<li><strong><span class="math inline">\(n_{\mathrm{eff}}\)</span> 확인</strong> — 최소 400, 꼬리는 1000+.</li>
+<li><strong>Trace plot</strong> — 육안으로 체인 혼합 확인.</li>
+<li><strong>수용률 모니터</strong> — Metropolis 는 20~40%.</li>
+<li><strong>비효율 시 재매개변수화</strong> — non-centered 등.</li>
+<li><strong>자동 도구 우선</strong> — Stan, PyMC 사용.</li>
+<li><strong>사후 예측 점검</strong> — Ch.6 도구로 fit 검증.</li>
+</ol>
+</section>
+<section id="관련-주제" class="level2" data-number="12">
+<h2 data-number="12" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">12</span> 관련 주제</h2>
+<p><strong>선행 지식</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-bayesian-part3-overview.html">Bayesian Part III 개관</a> — Ch.10~13 지도</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-10-0-computation-intro.html">Ch.10 Overview (02-10-0)</a> — MCMC 이전 도구들</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/00-5-0-hierarchical.html">Ch.5 Hierarchical Models</a> — MCMC 가 가장 유용한 분야</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/01-7-1-information-criteria-bayes-factors.html">Ch.7 § 7.1~7.4 심화</a> — log-posterior 의 scoring rules</li>
+</ul>
+<p><strong>Ch.11 세부 절</strong> (후속 작성 예정)</p>
+<ul>
+<li><code>02-11-1-*</code> — § 11.1~11.3 심화 (Gibbs·Metropolis 수식 유도 + 증명)</li>
+<li><code>02-11-2-*</code> — § 11.4~11.6 심화 (진단 정밀 + 8 학교 구현 상세)</li>
+<li><code>02-11-3-*</code> — § 11.7~11.8 심화 (문헌·연습)</li>
+</ul>
+<p><strong>후속 주제</strong></p>
+<ul>
+<li>Ch.12 Efficient MCMC — HMC, NUTS, Stan 상세</li>
+<li>Ch.13 Variational Inference — MCMC 대안 근사</li>
+<li>Ch.15 Hierarchical Regression — MCMC 가 본격 활용되는 곳</li>
+</ul>
+<p><strong>관련 개념</strong></p>
+<ul>
+<li>Geman &amp; Geman (1984) — Gibbs sampler 원저 (이미지 처리)</li>
+<li>Gelfand &amp; Smith (1990) — 베이즈 통계에 Gibbs 도입</li>
+<li>Metropolis et al.&nbsp;(1953) — Metropolis 알고리즘 원저</li>
+<li>Hastings (1970) — Metropolis-Hastings 일반화</li>
+<li>Gelman &amp; Rubin (1992) — <span class="math inline">\(\hat{R}\)</span> 원저</li>
+<li>Roberts, Gelman, Gilks (1997) — Metropolis 최적 수용률 23.4%</li>
+<li>Roberts &amp; Rosenthal (1998) — MCMC 수렴 이론</li>
+<li>Liu (2001) — Monte Carlo 전반</li>
+<li>Brooks, Gelman, Jones, Meng (2011), <em>Handbook of MCMC</em> — 종합 참고서</li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>
