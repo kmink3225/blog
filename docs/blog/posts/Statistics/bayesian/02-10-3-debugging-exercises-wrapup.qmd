@@ -1,0 +1,700 @@
+---
+title: "§ 10.7~10.9 — 디버깅·문헌·연습 + Ch.10 결산"
+subtitle: "Gelman BDA Ch.10 심화 — Fake data debugging 5 단계, residual plot, 50% coverage 검증, 문헌 지도, 연습 1·2·3·4·6·7 풀이 + Ch.10 심화 시리즈 4 포스트 논리 지도"
+description: |
+  § 10.4~10.6 이 중요도 샘플링·시뮬레이션 수·계산 환경의 실무층이었다면,
+  § 10.7~10.9 는 Ch.10 의 결말 — **"계산이 제대로 됐는지 어떻게 알 것인가"
+  + 참고문헌 지도 + 연습문제로 개념 반복** 이다. 베이즈 계산의 진짜 난제는
+  "코드가 돌아가는가" 가 아니라 "결과가 맞는가" — 작동하는 코드도 잘못된
+  답을 낼 수 있다. Fake data debugging 5 단계 (진짜 $\theta$ 고르기·데이터
+  생성·사후 추론·비교·residual plot) 가 이 문제에 어떻게 대응하는지,
+  50% 구간이 50% 확률로 진값을 포함해야 하는 coverage 원리, "모형을
+  단순화해서 이상 발견" 의 점진적 재축 전략, § 10.8 문헌의 Ripley·
+  Gentle·Liu·Kong-Liu-Wong 좌표, § 10.9 연습 1 (2.5%/97.5% quantile
+  정확도 $0.1\sigma$ 얻기 위한 $n$ 유도), 연습 2 (8 학교 $S = 200$ 이
+  왜 실무적으로 충분한지), 연습 3 (두 이항 $p_1 > p_2$ 확률 시뮬레이션),
+  연습 4 (기각 샘플링의 유계성 증명), 연습 6·7 (IS 의 good/bad behavior
+  및 분산 과소 추정 원인), 마지막으로 Ch.10 심화 시리즈 4 포스트 (overview·
+  10.1~10.3·10.4~10.6·10.7~10.9) 의 논리 지도 — 각 수식 옆에 "왜 이
+  검증이 통과되면 신뢰할 수 있는가" 를 붙여 전개한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — Ch.10 의 마무리 세 절
+
+§ 10.7~10.9 는 베이즈 계산의 **"맞는지 확인하는 법" + 계보 + 반복 훈련**.
+
+| 절 | 역할 |
+|---|---|
+| 10.7 | 디버깅 — fake data, 단순화, 수렴 점검 |
+| 10.8 | 문헌 좌표계 (Ripley·Gentle·Liu 등) |
+| 10.9 | 연습문제 8 개 — 개념 반복 + 정확도 수식 훈련 |
+
+[Overview (02-10-0)](./02-10-0-computation-intro.qmd), [§ 10.1~10.3 (02-10-1)](./02-10-1-numerical-integration-approximations-rejection.qmd), [§ 10.4~10.6 (02-10-2)](./02-10-2-importance-sampling-environments.qmd) 의 마무리편. Ch.10 심화 시리즈 4 포스트로 완결된다.
+
+## § 10.7 — 디버깅 전략
+
+### 왜 베이즈 계산에 디버깅이 특수한가
+
+전통 프로그래밍 버그: **오류 메시지** 로 감지. "division by zero" 같은 예외.
+
+베이즈 버그: **수치는 정상 범위** 에 있으면서 **답이 틀림**. 예:
+
+- 사후 평균이 1.5 여야 하는데 1.3. 겉보기 정상.
+- 95% 구간이 너무 좁음 — 하지만 숫자 자체는 합리적.
+- 희귀 사건 확률이 0.001 vs 0.003. 시뮬레이션 변동인지 버그인지 불명.
+
+**베이즈 디버깅의 핵심 전략**: "참값" 을 알 수 있는 상황을 만들어 추정치와 비교. 이것이 **fake data simulation**.
+
+### Fake Data Debugging — 5 단계
+
+::: {.callout-note}
+## 정의 — Fake Data Debugging Procedure
+
+모형의 정확성 검증을 위한 표준 절차.
+
+1. **"참" 모수 벡터 $\theta^{\mathrm{true}}$ 고르기**. 엄밀하게는 prior 에서 random draw, 그러나 비정보 prior 이면 임의 합리값.
+
+2. **계층 모형이면 hyperparameter 부터 결정**. 합리적 hyperparameter 선택 후, 조건부 prior 에서 하위 모수 추출.
+
+3. **큰 가상 데이터셋 $y^{\mathrm{fake}} \sim p(y \mid \theta^{\mathrm{true}})$ 생성**. $n$ 충분히 크면 사후가 참값 근처로 수렴해야.
+
+4. **$p(\theta \mid y^{\mathrm{fake}})$ 에서 사후 추론 실행**.
+
+5. **추정 사후와 $\theta^{\mathrm{true}}$ 비교**. 각 모수에 대해 50% 구간이 참값을 **50% 확률로** 포함해야 한다.
+:::
+
+### 왜 "50% 구간 50% 커버" 인가
+
+베이즈 추론의 **빈도주의적 정합성**. 모형이 옳고 prior 에서 $\theta^{\mathrm{true}}$ 를 추출했다면:
+
+$$
+\Pr(\theta^{\mathrm{true}} \in \text{50\% CI}) = 0.5
+$$
+
+단, 이 관계는 **prior 에서 $\theta^{\mathrm{true}}$ 를 추출했을 때만** 엄밀히 성립. 실무에서는 합리적 단일 $\theta^{\mathrm{true}}$ 로도 유용한 검증.
+
+::: {.callout-tip}
+## 직관 — Coverage 검증이 왜 버그를 잡는가
+
+수식적으로: 사후 $p(\theta \mid y)$ 가 올바르다면, 자체 구간이 자체 확률을 만족해야 함. "50% 구간이 50% 포함" 은 **순환 성질** 같지만, 계산 오류가 있으면 이 자체 일관성이 깨진다.
+
+구체 예:
+
+- MCMC 샘플링 코드가 잘못되어 사후가 **너무 좁음** → 50% 구간이 참값을 30% 만 포함.
+- Prior 조건 반영 안 됨 → 특정 방향으로 편향, 20% 또는 80% coverage.
+- Likelihood 함수 부호 오류 → 구간이 엉뚱한 곳, 거의 0% coverage.
+
+단일 실험에서는 coverage 단순 확률 (50%) 을 관측 못 하지만, **여러 fake 데이터셋** 또는 **여러 모수** 에 걸쳐 집계하면 통계 가능.
+:::
+
+### Residual Plot 접근법
+
+고차원 모형 (수백 모수) 에서 각 모수의 참값을 개별 확인하는 대신 **한 그림**으로 요약.
+
+**절차**:
+
+1. 각 스칼라 모수 $\theta_j$ 에 대해:
+   - 예측값: $\hat{\theta}_j = \mathbb{E}[\theta_j \mid y^{\mathrm{fake}}]$ (사후 평균).
+   - 오차: $e_j = \theta_j^{\mathrm{true}} - \hat{\theta}_j$.
+2. $(\hat{\theta}_j, e_j)$ 산점도 (한 점 = 한 모수).
+3. **기대되는 패턴**: 평균 0, 예측값에 따른 체계적 패턴 없음.
+
+**문제 진단**:
+
+- 전체 평균 $\ne 0$ → **체계적 편향** (상수 offset 버그).
+- 예측값 증가에 따라 오차 감소 → **shrinkage 과도**.
+- 분산이 예측값에 따라 변화 → **heteroscedastic 버그**.
+
+### Coverage 테이블 접근법
+
+여러 모수에 걸친 집계 확인:
+
+1. 50% 구간 포함 비율 계산: $\frac{1}{J} \sum_j \mathbb{1}\{\theta_j^{\mathrm{true}} \in \text{50\% CI}_j\}$.
+2. 이 비율이 0.5 근처여야.
+3. 비율 $\ne 0.5$ 면 **구간 크기 문제** (너무 좁거나 너무 넓음).
+
+이 검증의 확장: **여러 $\theta^{\mathrm{true}}$** 에서 반복해 coverage 를 평균. Cook, Gelman, Rubin (2006) 의 "calibration check".
+
+### 점진적 단순화 전략
+
+사후가 이상할 때: **"추가한 기능을 하나씩 빼며" 문제 위치 찾기**.
+
+단계별 예:
+
+1. **모수 제거** — 모형에서 $\theta_k$ 를 아예 제거, 동작 확인.
+2. **모수 고정** — $\theta_k = 0$ 으로 고정 (null value), 계산에 포함시켜도 영향 없는지.
+3. **합리적 고정** — $\theta_k = \theta_k^{\mathrm{reasonable}}$ 로 고정.
+4. **강한 prior** — $\theta_k$ 에 매우 좁은 prior (실질적으로 고정).
+5. **정상 prior** — 완전 베이즈 추론.
+
+각 단계에서 전 단계와 비교. **결과가 갑자기 변하는 단계가 버그 위치**.
+
+### 수렴 점검을 디버깅으로
+
+Ch.11.4 의 수렴 진단 (R-hat, ESS) 을 디버깅 도구로 재해석.
+
+**R-hat > 1.1** 원인 가능성:
+
+- 버그 (우도 함수 오류).
+- 다봉 사후 (mode 간 이동 못 함).
+- Non-identifiability (모수 쌍이 교환 가능).
+- 약한 prior (무한 ridge).
+
+R-hat 이 안 낮아지면 → **모형 재검토**, MCMC 더 돌리는 건 답 아님.
+
+### 사후 예측 점검으로서의 디버깅
+
+Ch.6 의 $y^{\mathrm{rep}}$ 점검도 디버깅 도구. $y^{\mathrm{rep}}$ 의 분포가 $y$ 와 크게 다르면:
+
+- 모형 misfit (실제 잘못된 가정).
+- **또는** 계산 버그.
+
+두 원인 구별은 **단순 모형에서 시작해 확장** — 또 점진적 재축.
+
+::: {.callout-tip}
+## 직관 — Ch.6 와 § 10.7 의 관계
+
+Ch.6 의 사후 예측 점검은 "**모형이 데이터에 맞나**" 를 본다. § 10.7 은 "**코드가 모형을 맞게 구현했나**" 를 본다.
+
+같은 도구 ($y^{\mathrm{rep}}$ 시뮬레이션), 다른 관점:
+
+- Ch.6: 참 데이터 $y$ 와 $y^{\mathrm{rep}}$ 비교. 모형 선택·확장 결정.
+- § 10.7: 가상 데이터 $y^{\mathrm{fake}}$ (참 모수 알려짐) 로 같은 모형 적합 후 참값 복원 확인.
+
+실무 전략: **두 관점 모두** 사용. 한 쪽만 보면 "모형 맞다 (fit 좋음) + 계산 틀렸다 (복원 실패)" 또는 "계산 맞다 (복원 성공) + 모형 틀렸다 (real data misfit)" 상황에 잡힘.
+:::
+
+## § 10.8 — 문헌 좌표
+
+### 일반 시뮬레이션
+
+- **Ripley (1987), *Stochastic Simulation*** — 통계 관점 고전. Uniform 난수 생성·표준 분포.
+- **Gentle (2003), *Random Number Generation and Monte Carlo Methods*** — 현대 판.
+- **Hammersley & Handscomb (1964)** — 시뮬레이션의 원전.
+- **Thisted (1988)** — 통계 계산 전반.
+- **Robert & Casella (2004), *Monte Carlo Statistical Methods*** — 알고리즘 종합.
+
+### 수치 적분
+
+- **Press et al. (1986), *Numerical Recipes*** — 적분 루틴.
+- **Smith et al. (1985), O'Hagan & Forster (2004)** — 베이즈 응용.
+
+### Bayesian Quadrature
+
+- **O'Hagan (1991)** — Gaussian process prior 로 적분.
+- **Rasmussen & Ghahramani (2003)** — 현대 확장.
+- **Rue, Martino, Chopin (2009)** — INLA 의 적응 격자.
+
+### Importance Sampling
+
+- **Hammersley & Handscomb (1964)** — 초기 참고.
+- **Geweke (1989)** — Gibbs 이전 베이즈 IS.
+- **Liu (2001), Ch.2~4** — MCMC 맥락.
+- **Kong, Liu, Wong (1996)** — 가중치 분산으로 신뢰도 평가.
+- **Ionides (2008)** — 상위 가중치 truncation.
+- **Gelfand, Dey, Chang (1992)** — 빠른 LOO-CV (PSIS-LOO 의 전신).
+
+### Importance Resampling
+
+- **Rubin (1987b)** — SIR 원저.
+- **Smith & Gelfand (1992)** — 교육적 설명.
+- **Kitagawa (1996)** — stratified / deterministic resampling.
+
+### Debugging
+
+- **Cook, Gelman, Rubin (2006)** — fake data simulation 의 공식 절차.
+- **Gelman & Hill (2007, Ch.8)** — 응용 실무.
+- **Kass et al. (1998)** — 실무 이슈 종합.
+
+### Bayesian Software
+
+- **Spiegelhalter et al. (1994, 2003), Plummer (2003)** — BUGS, JAGS.
+- **Lunn et al. (2009)** — BUGS 프로젝트 리뷰.
+- **Stan Development Team** — Stan 공식.
+- **Carpenter et al. (2017)** — Stan 논문 (Ch.10 이후 출판).
+
+## § 10.9 — 연습문제 풀이
+
+### 문제 1 — Quantile 정확도
+
+**문제**. 사후 $\theta \mid y$ 가 정규, $S$ 개 독립 샘플. 2.5%, 97.5% quantile 추정치의 정확도가 $0.1 \sigma_\theta$ 이 되려면 $S$ 얼마?
+
+**풀이**. 정규 분포의 quantile 추정량 표준오차 (Mosteller 공식):
+
+$$
+\mathrm{SD}[\hat{q}_p] \approx \frac{\sigma_\theta}{\sqrt{S}} \cdot \frac{\sqrt{p(1-p)}}{f(q_p)}
+$$
+
+$f(q_p)$ = density at quantile. 정규 $\mathrm{N}(0, \sigma^2)$ 에서 $q_{0.025} = -1.96 \sigma$, $f(q_{0.025}) = \phi(-1.96) / \sigma$ with $\phi(1.96) \approx 0.0584$.
+
+$p = 0.025$:
+
+$$
+\mathrm{SD}[\hat{q}_{0.025}] \approx \frac{\sigma}{\sqrt{S}} \cdot \frac{\sqrt{0.025 \cdot 0.975}}{0.0584}
+\approx \frac{\sigma}{\sqrt{S}} \cdot 2.68
+$$
+
+$0.1 \sigma$ 와 같게:
+
+$$
+\frac{2.68}{\sqrt{S}} = 0.1 \Rightarrow S \approx 720
+$$
+
+**답**: $S \approx 720$. 평균 추정에는 $S = 100$ 충분했지만, 꼬리 quantile 은 **약 7 배 더 필요**.
+
+::: {.callout-tip}
+## 직관 — 왜 quantile 이 평균보다 많은 $S$ 를 요구하는가
+
+평균: 모든 표본이 기여. 분산 $\sigma^2/S$.
+
+Quantile: **해당 위치 근처 표본**만 의미 있게 기여. 2.5% quantile 추정에 쓰이는 "근처" 표본 수는 $S$ 가 아니라 훨씬 적다.
+
+수학적으로: density $f(q_p)$ 가 분모에 들어감. 중앙 quantile ($p = 0.5$) 은 $f$ 최대 → SD 작음. 꼬리 quantile 은 $f$ 작음 → SD 큼.
+
+원리: **"평균보다 꼬리, 꼬리보다 극단 꼬리"** 가 추정 어려움. $p = 0.01$ 이면 $S$ 가 몇 배 더 필요.
+:::
+
+### 문제 2 — 8 학교 실제 정확도
+
+**문제**. 100 독립 샘플, 사후 $\theta_1 \mid y \approx \mathrm{N}(8, 4^2)$.
+
+**(a) 사후 평균 추정의 SD**:
+
+$$
+\mathrm{SD}[\bar{\theta}_1] = \frac{4}{\sqrt{100}} = 0.4
+$$
+
+**(b) SD 0.1 달성 $S$**:
+
+$$
+\frac{4}{\sqrt{S}} = 0.1 \Rightarrow S = 1600
+$$
+
+**(c) 2.5%, 97.5% quantile SD** (문제 1 공식):
+
+$$
+\mathrm{SD}[\hat{q}_{0.025}] = \frac{4}{\sqrt{100}} \cdot 2.68 = 1.07
+$$
+
+**(d) quantile SD 0.1 달성 $S$**:
+
+$$
+\frac{4 \cdot 2.68}{\sqrt{S}} = 0.1 \Rightarrow S \approx 11{,}500
+$$
+
+**(e) 8 학교 (Table 5.3)**: $\theta_1 \approx \mathrm{N}(10, \text{이전 예제})$, $S = 200$. 95% 구간 $[-2, 31]$ 의 폭으로 $\sigma_\theta \approx 8$. 2.5%, 97.5% quantile SD:
+
+$$
+\mathrm{SD}[\hat{q}_{0.025}] \approx \frac{8}{\sqrt{200}} \cdot 2.68 \approx 1.52
+$$
+
+즉 95% 구간 끝점이 **$\pm 1.52$ 의 시뮬레이션 불확실성**.
+
+**(f) 왜 200 이 충분한가**: $\pm 1.5$ 의 시뮬레이션 오차는 구간 폭 33 (=31-(-2)) 의 약 5%. 실무적으로 구간이 "대략 $[-3, 32]$" 수준 결론이 안정적으로 나옴. 더 정밀한 끝점이 **의사결정에 차이 없음** → $S = 200$ 충분.
+
+### 문제 3 — 두 이항 사후 비교
+
+**문제**. $y_1 \sim \mathrm{Bin}(10, p_1) = 6$, $y_2 \sim \mathrm{Bin}(20, p_2) = 10$. Prior: $p_i \sim \mathrm{Beta}(1, 1)$.
+
+**사후**:
+
+$$
+p_1 \mid y_1 \sim \mathrm{Beta}(7, 5), \quad p_2 \mid y_2 \sim \mathrm{Beta}(11, 11)
+$$
+
+**(a) 시뮬레이션**:
+
+```python
+import numpy as np
+rng = np.random.default_rng(10)
+p1 = rng.beta(7, 5, size=10_000)
+p2 = rng.beta(11, 11, size=10_000)
+diff = p1 - p2
+print(f"E[p_1 - p_2]: {diff.mean():.3f}")
+print(f"95% 구간: [{np.quantile(diff, 0.025):.3f}, {np.quantile(diff, 0.975):.3f}]")
+print(f"Pr(p_1 > p_2): {(p1 > p2).mean():.3f}")
+```
+
+예상: $E[p_1] \approx 7/12 = 0.583$, $E[p_2] \approx 11/22 = 0.5$. $E[p_1 - p_2] \approx 0.08$. 95% 구간 $\approx [-0.22, 0.38]$. $\Pr(p_1 > p_2) \approx 0.65$.
+
+**(b) 수치 적분** (격자):
+
+```python
+from scipy.stats import beta as beta_dist
+p_grid = np.linspace(0.001, 0.999, 200)
+pdf_p1 = beta_dist.pdf(p_grid, 7, 5)
+pdf_p2 = beta_dist.pdf(p_grid, 11, 11)
+
+# Pr(p_1 > p_2) = int int_{p_1 > p_2} f_1(p_1) f_2(p_2) dp_2 dp_1
+# 격자로 double integration
+dp = p_grid[1] - p_grid[0]
+prob = 0.0
+for p1v in p_grid:
+    mask = p_grid < p1v
+    prob += beta_dist.pdf(p1v, 7, 5) * (pdf_p2[mask] * dp).sum() * dp
+print(f"Pr(p_1 > p_2) [격자]: {prob:.3f}")
+```
+
+시뮬레이션과 격자 결과 일치 확인 → 두 방법 교차 검증.
+
+### 문제 4 — 기각 샘플링 증명
+
+**(a) 기각 샘플링이 $p(\theta \mid y)$ 샘플을 준다는 증명**.
+
+수용된 $\theta$ 의 조건부 분포:
+
+$$
+\Pr(\theta = t \mid \text{accept}) = \frac{\Pr(\text{accept} \mid \theta = t) g(t)}{\Pr(\text{accept})}
+$$
+
+분자:
+
+$$
+\Pr(\text{accept} \mid \theta = t) = \frac{p(t \mid y)}{M g(t)}
+$$
+
+따라서:
+
+$$
+\Pr(\text{accept} \mid \theta = t) g(t) = \frac{p(t \mid y)}{M}
+$$
+
+분모:
+
+$$
+\Pr(\text{accept}) = \int \frac{p(\theta \mid y)}{M g(\theta)} g(\theta) d\theta = \frac{1}{M} \int p(\theta \mid y) d\theta = \frac{1}{M}
+$$
+
+따라서:
+
+$$
+\Pr(\theta = t \mid \text{accept}) = \frac{p(t \mid y)/M}{1/M} = p(t \mid y)
+$$
+
+수용된 표본이 정확히 목표 분포. $\square$
+
+**(b) 유계성 조건 필요성**.
+
+$M$ 이 존재하지 않으면 $p(\theta \mid y) / g(\theta)$ 가 어떤 영역에서 무한대 → 수용 확률 $\frac{p(\theta \mid y)}{M g(\theta)} > 1$ → 확률 정의 안 됨.
+
+실용적: $g$ 꼬리가 $p$ 보다 얇으면 꼬리에서 비율 무한 → 알고리즘 적용 불가.
+
+### 문제 6 — IS 잘 작동하는 경우
+
+**문제**. $p = \mathrm{N}(0, 1)$, $g = t_3(0, 1)$. IS 로 $E[\theta], \mathrm{Var}[\theta]$ 추정.
+
+**왜 잘 작동하는가**: $t_3$ 꼬리가 정규보다 **두껍다** → $g \ge p$ 꼬리에서, 즉 $p/g$ 유계 → 유한 분산.
+
+```python
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(10)
+S = 10_000
+theta_g = rng.standard_t(df=3, size=S)  # g = t_3
+log_p = stats.norm.logpdf(theta_g)
+log_g = stats.t.logpdf(theta_g, df=3)
+log_w = log_p - log_g
+log_w -= log_w.max()
+w = np.exp(log_w)
+w_tilde = w / w.sum()
+
+est_mean = (w_tilde * theta_g).sum()
+est_var = (w_tilde * (theta_g - est_mean)**2).sum()
+S_eff = 1 / (w_tilde**2).sum()
+
+print(f"E[theta] 추정: {est_mean:.3f} (참: 0.000)")
+print(f"Var[theta] 추정: {est_var:.3f} (참: 1.000)")
+print(f"S_eff: {S_eff:.0f} / {S}")
+```
+
+예상: $E \approx 0$, $\mathrm{Var} \approx 1$, $S_{\mathrm{eff}}/S \approx 0.7{-}0.9$. 신뢰성 있음.
+
+### 문제 7 — IS 잘 안 되는 경우
+
+**문제**. $p = t_3(0, 1)$, $g = \mathrm{N}(0, 1)$ (꼬리 반대).
+
+```python
+rng = np.random.default_rng(10)
+theta_g = rng.normal(0, 1, size=S)  # g = Normal
+log_p = stats.t.logpdf(theta_g, df=3)
+log_g = stats.norm.logpdf(theta_g)
+log_w = log_p - log_g
+log_w -= log_w.max()
+w = np.exp(log_w)
+w_tilde = w / w.sum()
+
+est_mean = (w_tilde * theta_g).sum()
+est_var = (w_tilde * (theta_g - est_mean)**2).sum()
+S_eff = 1 / (w_tilde**2).sum()
+
+print(f"E[theta] 추정: {est_mean:.3f} (참: 0.000)")
+print(f"Var[theta] 추정: {est_var:.3f} (참 t_3: 3.000)")
+print(f"S_eff: {S_eff:.0f} / {S}")
+```
+
+예상: $E \approx 0$ (대칭 덕), $\mathrm{Var} \ll 3$ (과소 추정), $S_{\mathrm{eff}}/S \ll 1$.
+
+**왜 분산이 과소 추정되는가**:
+
+$t_3$ 의 분산 = 3 (분포 정의). 꼬리에 질량이 많음.
+
+$g = \mathrm{N}$ 은 꼬리에서 0 에 빠르게 감소. $g$ 에서 추출된 $\theta$ 는 **꼬리 영역 관측 안 됨** → 큰 $\theta$ 의 기여가 가중치에 반영되지만, 애초에 추출이 안 됨.
+
+수학적으로: $g$ 의 꼬리에서 $p(\theta)/g(\theta) \to \infty$. 이론적으로 가중치가 이를 보정해야 하지만, 유한 표본에서는 **큰 $\theta$ 에 해당하는 표본이 거의 없음** → 보정 실패.
+
+결과: 중심부만 IS 가 잘 추정, 꼬리는 무시됨 → 분산 과소 추정.
+
+::: {.callout-tip}
+## 직관 — IS 분산 과소 추정의 수학
+
+"**무한 분산 $w$ 의 조용한 실패**" 의 구체 예.
+
+$p = t_3$, $g = \mathrm{N}$, 고려 $\theta$ = 10 (꼬리). $p(10) \approx 10^{-3}$, $g(10) \approx 10^{-23}$. 가중치 $w = 10^{20}$.
+
+이 $\theta = 10$ 이 **관측되기만 하면** 평균에 큰 기여. 그러나 $g$ 에서 $\theta = 10$ 이 나올 확률 $\approx 10^{-23}$ — 실무에서 관측 불가능.
+
+결과: 이론적 기여를 현실에서 관측 못 함 → 꼬리 질량 **시스템적 과소 평가** → 분산 과소 추정.
+
+교훈: **"기대값 공식이 맞다" ≠ "유한 $S$ 에서 정확하다"**. IS 의 정규 수렴은 분산 조건 하에서만 보장.
+:::
+
+### 연습문제 요약표
+
+| 문제 | 주제 | 핵심 결과 |
+|---|---|---|
+| 1 | Quantile 정확도 | $S \approx 720$ for $0.1\sigma$ quantile |
+| 2 | 8 학교 $S = 200$ 정당성 | 구간 끝 SD 1.5 < 구간 폭 33 의 5% |
+| 3 | 두 이항 비교 | $\Pr(p_1 > p_2) \approx 0.65$, 시뮬레이션 vs 격자 일치 |
+| 4 | Rejection 증명 | 수용 조건부 분포 = 목표 분포 |
+| 6 | IS well-behaved | $g = t$ 꼬리 두꺼움, $S_{\mathrm{eff}}/S$ 높음 |
+| 7 | IS ill-behaved | $g = \mathrm{N}$ 꼬리 얇음, 분산 과소 |
+
+## Ch.10 심화 시리즈 — 4 포스트 논리 지도
+
+Ch.10 의 완결된 경로.
+
+| 포스트 | 역할 | 핵심 메시지 |
+|---|---|---|
+| [02-10-0 Overview](./02-10-0-computation-intro.qmd) | 지도 | Part III 출발점, 계산의 두 축 |
+| [02-10-1 §10.1~10.3](./02-10-1-numerical-integration-approximations-rejection.qmd) | 기초 | 수치 적분, Laplace, 직접/기각 |
+| [02-10-2 §10.4~10.6](./02-10-2-importance-sampling-environments.qmd) | 실무 | IS, $S_{\mathrm{eff}}$, 환경 |
+| **02-10-3 §10.7~10.9** (본편) | 검증·결산 | Fake data debugging, 연습, 통합 |
+
+**Ch.10 의 한 문장**:
+
+> 해석적 계산이 불가능한 사후를 **수치 적분·분포 근사·시뮬레이션**의 3 도구로 근사하되, 각 도구의 정확도 (격자 오차·근사 편향·유효 표본 크기) 를 명시하고 **fake data 로 계산 자체를 검증**한다. MCMC 전에 이 장의 도구로 풀릴지 먼저 시도한다.
+
+## 전체 코드 — Fake Data Debugging 실례
+
+실제 모형에서 buggy vs correct 두 버전을 적합 → coverage 비교.
+
+### 합성 문제 — 정규 계층 모형
+
+```python
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(23)
+
+# 참 모수
+mu_true = 5.0
+tau_true = 2.0
+J = 10
+theta_true = rng.normal(mu_true, tau_true, size=J)
+
+# 가상 데이터
+sigma_known = 1.5
+y = np.array([rng.normal(t, sigma_known) for t in theta_true])
+y = y.reshape(J)
+
+print(f"참 mu: {mu_true:.2f}")
+print(f"참 tau: {tau_true:.2f}")
+print(f"참 theta: {theta_true.round(2)}")
+print(f"관측 y: {y.round(2)}")
+```
+
+### Correct 모형
+
+격자 + 조건부 샘플링 (Gelman 스타일):
+
+```python
+# Step 1: p(mu, tau | y) 의 격자
+mu_grid = np.linspace(0, 10, 60)
+tau_grid = np.linspace(0.1, 6, 60)
+log_post_mutau = np.zeros((len(mu_grid), len(tau_grid)))
+
+for i, mu in enumerate(mu_grid):
+    for j, tau in enumerate(tau_grid):
+        # marginal: y_k ~ N(mu, tau^2 + sigma^2)
+        var_marginal = tau**2 + sigma_known**2
+        log_lik = stats.norm.logpdf(y, mu, np.sqrt(var_marginal)).sum()
+        # uniform prior on mu, tau
+        log_post_mutau[i, j] = log_lik
+
+log_post_mutau -= log_post_mutau.max()
+p_mutau = np.exp(log_post_mutau)
+p_mutau /= p_mutau.sum()
+
+# Step 2: 격자에서 샘플링
+p_flat = p_mutau.flatten()
+idx_flat = rng.choice(len(p_flat), size=2000, replace=True, p=p_flat)
+i_samples, j_samples = np.unravel_index(idx_flat, p_mutau.shape)
+mu_samples = mu_grid[i_samples]
+tau_samples = tau_grid[j_samples]
+
+# Step 3: theta_k | mu, tau, y 조건부 샘플링 (정규 공액)
+theta_samples = np.zeros((2000, J))
+for s in range(2000):
+    mu_s, tau_s = mu_samples[s], tau_samples[s]
+    V = 1 / (1/tau_s**2 + 1/sigma_known**2)
+    M = V * (mu_s/tau_s**2 + y/sigma_known**2)
+    theta_samples[s] = rng.normal(M, np.sqrt(V))
+
+# 추정 평균 및 50% 구간
+theta_mean = theta_samples.mean(axis=0)
+theta_q25 = np.quantile(theta_samples, 0.25, axis=0)
+theta_q75 = np.quantile(theta_samples, 0.75, axis=0)
+
+# Coverage
+in_50 = (theta_true >= theta_q25) & (theta_true <= theta_q75)
+print(f"\nCorrect 모형:")
+print(f"50% 구간 내 포함 개수: {in_50.sum()} / {J} (기대 ~5)")
+print(f"참값 vs 추정 평균 상관: {np.corrcoef(theta_true, theta_mean)[0,1]:.3f}")
+```
+
+**기대 결과**: 50% 구간 포함 5/10 근처, 높은 상관.
+
+### Buggy 모형 — Likelihood 부호 오류 시뮬레이션
+
+```python
+# 버그: log_lik 에서 sigma 를 2 배로 잘못 사용
+log_post_mutau_bug = np.zeros((len(mu_grid), len(tau_grid)))
+for i, mu in enumerate(mu_grid):
+    for j, tau in enumerate(tau_grid):
+        var_bug = tau**2 + (sigma_known * 2)**2  # 버그!
+        log_lik = stats.norm.logpdf(y, mu, np.sqrt(var_bug)).sum()
+        log_post_mutau_bug[i, j] = log_lik
+
+log_post_mutau_bug -= log_post_mutau_bug.max()
+p_mutau_bug = np.exp(log_post_mutau_bug)
+p_mutau_bug /= p_mutau_bug.sum()
+
+# 같은 방식으로 샘플링
+p_flat_b = p_mutau_bug.flatten()
+idx_flat_b = rng.choice(len(p_flat_b), size=2000, replace=True, p=p_flat_b)
+i_b, j_b = np.unravel_index(idx_flat_b, p_mutau_bug.shape)
+mu_b = mu_grid[i_b]
+tau_b = tau_grid[j_b]
+
+theta_b = np.zeros((2000, J))
+for s in range(2000):
+    mu_s, tau_s = mu_b[s], tau_b[s]
+    V = 1 / (1/tau_s**2 + 1/(sigma_known*2)**2)
+    M = V * (mu_s/tau_s**2 + y/(sigma_known*2)**2)
+    theta_b[s] = rng.normal(M, np.sqrt(V))
+
+theta_mean_b = theta_b.mean(axis=0)
+theta_q25_b = np.quantile(theta_b, 0.25, axis=0)
+theta_q75_b = np.quantile(theta_b, 0.75, axis=0)
+
+in_50_b = (theta_true >= theta_q25_b) & (theta_true <= theta_q75_b)
+print(f"\nBuggy 모형:")
+print(f"50% 구간 내 포함 개수: {in_50_b.sum()} / {J} (기대 ~5)")
+print(f"Coverage 실패 → 버그 감지")
+```
+
+**기대 결과**: 50% 구간 포함이 5 에서 벗어남 (너무 넓은 구간이므로 일반적으로 과포함 또는 편향). **Coverage 검증이 버그를 잡음**.
+
+### Residual Plot
+
+```python
+import matplotlib.pyplot as plt
+errors_correct = theta_true - theta_mean
+errors_buggy = theta_true - theta_mean_b
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+axes[0].scatter(theta_mean, errors_correct)
+axes[0].axhline(0, color="k", linestyle="--")
+axes[0].set_title("Correct: 평균 0 근처 무패턴")
+axes[0].set_xlabel("예측값"); axes[0].set_ylabel("오차")
+
+axes[1].scatter(theta_mean_b, errors_buggy)
+axes[1].axhline(0, color="k", linestyle="--")
+axes[1].set_title("Buggy: 체계적 편차 관측")
+axes[1].set_xlabel("예측값"); axes[1].set_ylabel("오차")
+
+plt.tight_layout()
+```
+
+Correct: 산란된 점, 평균 0. Buggy: 체계적 패턴 (e.g., shrinkage 과도).
+
+## 실전 체크리스트 — Ch.10 전체 결산
+
+Ch.10 의 모든 교훈을 하나로.
+
+**계산 기법 선택**
+
+1. **차원으로 선택**: $d \le 3$ 격자, $d \ge 5$ 시뮬레이션, 중간 혼합.
+2. **공액 있으면 공액** — 해석적 속도.
+3. **부분 적분 가능성** — 주변-조건부 분해로 차원 축소.
+4. **MCMC 는 최후** — 단순 도구로 풀리면 시간 절약.
+
+**수치 안정성**
+
+5. **$\log q$ 기본** — overflow/underflow 방지.
+6. **$q$ 사용** — 정규화 상수 회피.
+7. **Envelope·kernel 꼬리 비교** — $g$ 꼬리 확인 먼저.
+
+**샘플링 품질 진단**
+
+8. **기각 수용률 모니터** — $<$ 10% 면 개선.
+9. **$S_{\mathrm{eff}}$ 계산** — IS 에서 필수.
+10. **PSIS-$\hat{k}$** — 0.7 초과면 IS 포기.
+
+**시뮬레이션 수**
+
+11. **$S = 100$ 기준** — 중심 추론.
+12. **Quantile·확률은 더** — 문제 1 공식.
+13. **해석적 보조** — 희귀 사건.
+
+**계산 환경**
+
+14. **Stan/PyMC 기본** — 검증된 자동화.
+15. **블랙박스 + 이해** — R-hat, ESS 점검.
+
+**검증**
+
+16. **Fake data debug** — 참값 복원 확인.
+17. **Coverage 50%** — 자체 일관성.
+18. **Residual plot** — 체계적 편차 탐지.
+19. **점진적 단순화** — 이상 시 모수 하나씩 제거.
+20. **Ch.6 + § 10.7 이중 체크** — 모형 fit + 계산 정확도 분리 검증.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Ch.10 Overview (02-10-0)](./02-10-0-computation-intro.qmd) — 지도
+- [§ 10.1~10.3 (02-10-1)](./02-10-1-numerical-integration-approximations-rejection.qmd) — 기초
+- [§ 10.4~10.6 (02-10-2)](./02-10-2-importance-sampling-environments.qmd) — 실무
+
+**후속 주제**
+
+- Ch.11 Basics of MCMC — Gibbs, Metropolis, 수렴 진단 (R-hat, ESS)
+- Ch.12 Efficient MCMC — HMC, NUTS, Stan 상세
+- Ch.13 Modal·Variational — EM, VI, EP
+
+**관련 개념**
+
+- Cook, Gelman, Rubin (2006) — calibration 검증 공식 절차
+- Gelman & Hill (2007, Ch.8) — 응용 디버깅
+- Kass et al. (1998) — 실무 이슈 종합
+- Rubin (1987a, 1987b) — SIR 원저
+- Carpenter et al. (2017) — Stan 논문
+- Talts et al. (2018) — *Validating Bayesian Inference Algorithms with Simulation-Based Calibration* — fake data debugging 의 현대 확장
