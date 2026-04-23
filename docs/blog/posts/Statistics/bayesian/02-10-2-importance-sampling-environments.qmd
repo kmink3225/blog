@@ -1,0 +1,727 @@
+---
+title: "§ 10.4~10.6 — 중요도 샘플링·시뮬레이션 수·계산 환경"
+subtitle: "Gelman BDA Ch.10 심화 — 식 (10.2)~(10.4) 의 IS 유도와 $S_{\\mathrm{eff}}$, $\\sqrt{1+1/S}$ 정확도, 8 학교 $S=200$ vs $10{,}000$ 비교, Bugs→Stan→PyMC/NumPyro 전환"
+description: |
+  § 10.1~10.3 이 수치 적분·분포 근사·직접 샘플링의 기초였다면, § 10.4~10.6
+  은 **실무 베이즈 계산의 중간층** 이다. 식 (10.2) 의 항등식 $\mathbb{E}[h]
+  = \int h \cdot (q/g) \cdot g \, d\theta$ 에서 나오는 중요도 가중치
+  $w = q/g$ 의 이중 역할 (적분 가중 + 정규화 상수 추정), 식 (10.3) 의
+  비율 추정이 왜 "같은 표본을 분자·분모에 쓰는" 선택을 하는지, 식 (10.4)
+  유효 표본 크기 $S_{\mathrm{eff}} = 1/\sum \tilde{w}^2$ 의 "가중치 집중도"
+  해석, 분산이 무한한 경우 (얇은 $g$ 꼬리) 추정치가 안 수렴하는 수학적
+  구조, SIR 의 비복원 선택이 왜 중복을 피하는지, PSIS (Vereshchak-Gelman-Gabry
+  2017) 가 Pareto 꼬리 피팅으로 IS 를 안정화하는 원리, § 10.5 의 Monte
+  Carlo 오차 $\sqrt{1+1/S}$ 에서 $S=100$ 이면 기여도 $0.5\%$ 로 충분하다는
+  유도, 사후 확률 정확도가 $\sqrt{p(1-p)/S}$ 로 희귀 사건에 $S \to$ 무한대
+  근접 필요, 8 학교 실전 비교표 ($S = 200 \to 10{,}000$ 에서 중앙값과 구간
+  실질 동등), 반-해석적 접근 ($\Pr(\theta_1 > 50)$ 에 정규 근사 + 시뮬레이션),
+  § 10.6 의 "왜 통합 패키지가 필요한가" 4 이유 (접근성·교육·시간·버그),
+  Bugs 의 Gibbs 한계 → Stan 의 HMC 전환, PyMC/NumPyro/Turing.jl 지형,
+  블랙박스 함정 — 각 수식 옆에 "왜 이 조합이 되는가·언제 실패하는가" 를
+  붙여 전개한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — 세 절의 공통 질문
+
+Ch.10 § 10.4~10.6 은 Monte Carlo 계산의 **실무 층**. 공통 질문 세 가지.
+
+| 절 | 질문 |
+|---|---|
+| 10.4 | 직접 추출이 어려울 때 어떤 가중으로 기댓값을 얻나? |
+| 10.5 | 얼마나 많은 시뮬레이션을 해야 충분한가? |
+| 10.6 | 수작업 대신 어떤 도구를 쓰나? |
+
+[Overview (02-10-0)](./02-10-0-computation-intro.qmd) 와 [§ 10.1~10.3 심화 (02-10-1)](./02-10-1-numerical-integration-approximations-rejection.qmd) 의 연장선. § 10.1~10.3 이 "샘플을 얻는 방법" 이라면 이 포스트는 **"얻은 샘플을 어떻게 쓰고 검증하며 자동화할 것인가"**.
+
+## § 10.4 — 중요도 샘플링 (Importance Sampling)
+
+### 기본 아이디어 — 가중으로 우회
+
+목표: $\mathbb{E}[h(\theta) \mid y]$ 계산. 그런데 **$p(\theta \mid y)$ 에서 직접 추출이 어렵다**. 어떻게?
+
+핵심 통찰: **가중치를 도입해 쉬운 분포 $g$ 에서 추출한 표본을 재활용**.
+
+$$
+\mathbb{E}[h(\theta) \mid y] = \int h(\theta) \, p(\theta \mid y) \, d\theta = \int h(\theta) \frac{p(\theta \mid y)}{g(\theta)} g(\theta) \, d\theta = \mathbb{E}_g\!\left[h(\theta) \frac{p(\theta \mid y)}{g(\theta)}\right]
+$$
+
+오른쪽 기댓값은 **$g$ 에 대해서**. $\theta^s \sim g$ 추출 가능하면 평균 취하기:
+
+$$
+\mathbb{E}[h \mid y] \approx \frac{1}{S} \sum_{s=1}^S h(\theta^s) \frac{p(\theta^s \mid y)}{g(\theta^s)}
+$$
+
+### 정규화 처리 — 식 (10.2), (10.3)
+
+$p(\theta \mid y)$ 대신 **정규화 안 된 $q(\theta \mid y)$** 로 작업 (marginal likelihood 미지):
+
+$$
+\mathbb{E}[h(\theta) \mid y] = \frac{\int h(\theta) q(\theta \mid y) d\theta}{\int q(\theta \mid y) d\theta} = \frac{\int \frac{h(\theta) q(\theta \mid y)}{g(\theta)} g(\theta) d\theta}{\int \frac{q(\theta \mid y)}{g(\theta)} g(\theta) d\theta} \tag{10.2}
+$$
+
+**분자와 분모 모두 $g$ 에 대한 기댓값**.
+
+$\theta^s \sim g$ 추출로 추정:
+
+$$
+\hat{\mathbb{E}}[h] = \frac{\frac{1}{S} \sum_s h(\theta^s) w(\theta^s)}{\frac{1}{S} \sum_s w(\theta^s)} = \frac{\sum_s h(\theta^s) w(\theta^s)}{\sum_s w(\theta^s)} \tag{10.3}
+$$
+
+**중요도 가중치**:
+
+$$
+w(\theta^s) = \frac{q(\theta^s \mid y)}{g(\theta^s)}
+$$
+
+### 왜 "같은 표본" 을 분자·분모에
+
+Gelman 의 원칙: **분자와 분모 모두 같은 $\theta^s$ 추출 사용**. 두 독립 추출 대신.
+
+이유:
+
+- 샘플링 오차 **상쇄**. $\theta^s$ 가 극단값이면 분자도 분모도 같이 커짐 → 비율 안정.
+- **편향 보정**. $\mathbb{E}[\text{분자}] / \mathbb{E}[\text{분모}]$ 형태의 편향은 $S \to \infty$ 에서 사라지지만 유한 $S$ 에서도 같은 표본이 편향 감소.
+
+::: {.callout-tip}
+## 직관 — 가중치의 이중 역할
+
+$w(\theta^s) = q(\theta^s)/g(\theta^s)$ 는 **두 가지 의미**:
+
+1. **"이 $\theta^s$ 가 $p$ 에서 얼마나 자주 나와야 하는가" 의 보정 계수**. $g$ 에서 자주 나오는데 $p$ 에선 드물면 $w$ 작음 → 가중치 낮음.
+2. **분모 정규화 상수 추정**. $\sum w / S \approx \int q d\theta / \int g d\theta \propto p(y)$.
+
+같은 표본으로 분자·분모를 계산하면 두 역할이 자동으로 조화. 독립 샘플은 이 조화를 깬다.
+
+**비유**: 사진 보정에서 "밝기 + 대비" 를 동시에 조정할 때, 같은 기준 조명 하에서 해야 자연스러움. 서로 다른 조명에서 각각 보정하면 부자연스러움.
+:::
+
+### 유효 표본 크기 — 식 (10.4)
+
+IS 의 품질은 **가중치가 얼마나 고르게 분포되는가** 에 달림. 몇 개 큰 $w$ 가 합을 지배하면 추정치가 **실질적으로 몇 개 표본**에서 나온 것과 같다.
+
+정량화:
+
+$$
+S_{\mathrm{eff}} = \frac{1}{\sum_{s=1}^S \tilde{w}(\theta^s)^2} \tag{10.4}
+$$
+
+$\tilde{w}(\theta^s) = w(\theta^s) / \sum_{s'} w(\theta^{s'})$ 는 정규화된 가중치.
+
+**해석**:
+
+- 모든 $\tilde{w}_s = 1/S$ 균등 → $\sum \tilde{w}^2 = 1/S$ → $S_{\mathrm{eff}} = S$. **이상적**.
+- 하나만 1, 나머지 0 → $\sum \tilde{w}^2 = 1$ → $S_{\mathrm{eff}} = 1$. **최악**.
+
+### 왜 이 공식인가 — 유도
+
+**Shannon's effective sample size** 의 한 형태. 독립 표본 $S$ 개의 평균 분산은 $\sigma^2/S$.
+
+가중 평균:
+
+$$
+\bar{h}_w = \frac{\sum_s w_s h_s}{\sum_s w_s} = \sum_s \tilde{w}_s h_s
+$$
+
+분산 (대략, $h$ 독립 가정):
+
+$$
+\mathrm{Var}[\bar{h}_w] \approx \sigma^2 \sum_s \tilde{w}_s^2
+$$
+
+균등 표본의 분산 $\sigma^2/S_{\mathrm{eff}}$ 와 같아지려면:
+
+$$
+\frac{1}{S_{\mathrm{eff}}} = \sum_s \tilde{w}_s^2 \Rightarrow S_{\mathrm{eff}} = \frac{1}{\sum_s \tilde{w}_s^2}
+$$
+
+::: {.callout-tip}
+## 직관 — "가중치 집중도" 의 측정
+
+$\sum \tilde{w}^2$ 는 **Herfindahl-Hirschman Index** (시장 집중도 지수) 의 베이즈 버전.
+
+- 독점 시장 (1 회사 100%): HHI = 1.
+- 완전 경쟁 ($N$ 회사 균등): HHI = $1/N$.
+
+가중치 분포도 같은 개념. **집중되면 효율 낮음**, 균등하면 높음.
+
+실무 경험칙:
+
+- $S_{\mathrm{eff}}/S > 50\%$: 이상적, IS 신뢰 가능.
+- $10\%{-}50\%$: 괜찮음.
+- $< 10\%$: 경계, $g$ 개선 검토.
+- $< 1\%$: 포기, MCMC 나 PSIS 필요.
+:::
+
+### 무한 분산 위험
+
+IS 의 **치명적 실패 모드**. $g$ 의 꼬리가 $q$ 보다 **얇으면**:
+
+$$
+\mathrm{Var}[w] = \int \frac{q(\theta)^2}{g(\theta)^2} g(\theta) d\theta - \left(\int q d\theta\right)^2 = \int \frac{q^2}{g} d\theta - (\int q)^2
+$$
+
+꼬리에서 $q/g \to \infty$ 면 첫 항이 **발산** — 분산 무한.
+
+결과:
+
+- CLT 적용 불가 → 표본 평균 수렴 보장 없음.
+- $S$ 키워도 **안 안정화**.
+- 극단적 $w$ 가 가끔 출현해 추정치 변동.
+
+::: {.callout-tip}
+## 직관 — 무한 분산이 "침묵 실패" 로 나타나는 이유
+
+유한 $S$ 에서는 표본 평균이 항상 유한 — 숫자는 나옴. 문제: **그 숫자가 참값 근처라는 보장이 없다**.
+
+히스토리:
+
+- $S = 1000$: 큰 $w$ 가 우연히 관측 안 됨 → 추정치 작고 안정적 (but **편향**).
+- $S = 10000$: 우연히 **하나의 거대한 $w$** 포함 → 추정치 튀어 오름.
+- $S = 100000$: 새 거대 $w$ 없으면 이전과 비슷, 있으면 또 튀어 오름.
+
+**진단**: $\log w$ 의 히스토그램 확인. 평균보다 **5 이상 큰 $\log w$** 가 있으면 의심. 현대 Stan·PyMC 의 `loo` 패키지는 PSIS Pareto-$\hat{k}$ 진단을 자동 제공 (뒤에 설명).
+:::
+
+### 좋은 $g$ 의 원칙
+
+**$g$ 는 $p$ 를 "덮어야"** 한다. 수학적으로 $p \ll g$ (dominance). 꼬리에서:
+
+- $p$ 가 light tail (정규) → $g$ 는 light 또는 heavier.
+- $p$ 가 heavy tail (Cauchy, $t$) → $g$ 도 heavy tail 필요.
+
+**표준 실무**:
+
+- $g$ = **multivariate $t$** (e.g., $t_4$). Heavy tail 안전.
+- $g$ = **sharpened posterior** (Laplace 근사 + 분산 확장).
+- $g$ = **mixture**. 여러 mode 커버.
+
+### SIR — Sampling-Importance Resampling
+
+가중 표본을 **등가중 표본**으로 변환. 응용: 후속 MCMC 초기값, 교육용 plot.
+
+**알고리즘** (Rubin 1987):
+
+1. $\theta^1, \ldots, \theta^S \sim g$ 추출, $w^s = q(\theta^s)/g(\theta^s)$ 계산.
+2. 확률 $\tilde{w}^s$ 에 비례해 $\theta$ 중 하나 선택, 제거.
+3. Step 2 를 $k$ 회 반복 ($k < S$, **비복원**).
+
+결과: $k$ 개 등가중 표본, 근사적으로 $p$ 에서 추출된 것처럼.
+
+### 왜 비복원인가
+
+**복원 샘플링이 나쁜 경우**: 가중치가 극단 분포 (소수 큰 + 다수 작음).
+
+- 복원: 큰 $w^s$ 가 있는 $\theta^s$ 를 **반복 선택** → 중복 많음, 유효 정보 낮음.
+- 비복원: 각 $\theta^s$ 가 최대 한 번 선택 → **중복 없음**, 분포가 자연스럽게 목표에 수렴.
+
+극단 사례: $w^1 = 0.5$, 나머지 $w^{2:S} \approx 0.5/(S-1)$. 복원 → $\theta^1$ 이 절반 선택. 비복원 → $\theta^1$ 한 번 + 다른 $k-1$ 개.
+
+$k$ 선택: 보통 $k = S/10$ 또는 $S/5$. 너무 크면 비복원의 이점 소멸.
+
+### PSIS — Pareto-Smoothed Importance Sampling
+
+현대 IS 실무의 표준. Vehtari, Gelman, Simpson, Carpenter, Gabry (2024). 핵심 아이디어:
+
+**$w$ 꼬리의 극단값을 Pareto 분포로 부드럽게** — 극단 $w$ 를 그냥 쓰면 불안정, 완전히 버리면 편향.
+
+**알고리즘 개요**:
+
+1. $w^s$ 계산, 큰 것부터 정렬.
+2. 상위 20% 에 **generalized Pareto distribution** 적합.
+3. Pareto 의 **$\hat{k}$ 추정량**이 꼬리 굵기.
+4. 상위 $w$ 를 Pareto CDF 로 교체 → 부드러운 가중치.
+
+**$\hat{k}$ 진단**:
+
+- $\hat{k} < 0.5$: 안전. IS 정상.
+- $0.5 \le \hat{k} < 0.7$: 경계. 주의 사용.
+- $0.7 \le \hat{k}$: IS 신뢰 불가. **분산 무한에 가까움**. 다른 방법.
+
+Ch.7 의 **PSIS-LOO** (LOO-CV 를 IS 로 계산) 이 이 방법의 대표 응용.
+
+### IS 의 사용처
+
+§ 10.4 말미의 세 용도.
+
+#### 1. 근사 posterior 개선
+
+Laplace 근사 후 IS 로 보정. Ch.13 의 analytic approximation 과 결합.
+
+#### 2. MCMC 시작점
+
+SIR 로 k 개 대표 표본 뽑아 MCMC 초기 위치. burn-in 단축.
+
+#### 3. Mild posterior 변경
+
+같은 모형에서 **prior 교체·likelihood 부분 수정** 시 재계산 없이 IS 로:
+
+$$
+\mathbb{E}_{\mathrm{new}}[h] = \mathbb{E}_{\mathrm{old}}\!\left[h \cdot \frac{q_{\mathrm{new}}}{q_{\mathrm{old}}}\right]
+$$
+
+**적용 예**: LOO-CV 에서 한 관측 제거 $\leftrightarrow$ likelihood 에서 그 관측 빠짐.
+
+$$
+p(\theta \mid y_{-i}) \propto p(\theta \mid y) / p(y_i \mid \theta)
+$$
+
+기존 사후에서 IS 가중 $w_i^s = 1 / p(y_i \mid \theta^s)$. 이것이 PSIS-LOO 의 원리.
+
+## § 10.5 — 시뮬레이션 수 결정
+
+### 표준 권고 — $S = 100$
+
+Gelman 의 실용 답: **$S = 100$ 독립 표본이 대부분의 목적에 충분**. 수식적 근거부터.
+
+### Monte Carlo 오차 — $\sqrt{1 + 1/S}$
+
+사후 평균 $\mu_\theta$ 추정 시나리오: 참 사후 분산 $\sigma_\theta^2$, 시뮬레이션 분산 $s_\theta^2$.
+
+추정량:
+
+$$
+\bar{\theta} = \frac{1}{S} \sum_s \theta^s
+$$
+
+**계산 정확도** ($S$ 개 시뮬레이션이 참 평균을 얼마나 잘 추정):
+
+$$
+\mathrm{Var}[\bar{\theta} \mid y] = \frac{\sigma_\theta^2}{S}
+$$
+
+**전체 불확실성** (사후 분산 + MC 오차):
+
+$$
+\mathrm{Var}[\bar{\theta}] = \sigma_\theta^2 + \frac{\sigma_\theta^2}{S} = \sigma_\theta^2 \left(1 + \frac{1}{S}\right)
+$$
+
+표준편차:
+
+$$
+\mathrm{SD}[\bar{\theta}] = \sigma_\theta \sqrt{1 + \frac{1}{S}}
+$$
+
+**수치**:
+
+| $S$ | $\sqrt{1 + 1/S}$ | MC 기여도 |
+|---|---|---|
+| 10 | 1.049 | 4.9% |
+| 100 | 1.005 | 0.5% |
+| 1,000 | 1.0005 | 0.05% |
+| 10,000 | 1.00005 | 0.005% |
+
+**$S = 100$ → MC 오차 0.5%**. 사후 불확실성 대비 무시 가능.
+
+::: {.callout-tip}
+## 직관 — 왜 더 이상 늘려도 소용 없나
+
+추가 시뮬레이션의 한계 효용이 빠르게 감소. **이중 수확 체감**:
+
+1. MC 오차는 $1/\sqrt{S}$ 로 감소 — 제곱근 법칙.
+2. 이미 0.5% 인데 더 줄여봐야 **실무적 의미 없다** — 사후 분산 자체의 오차가 이보다 훨씬 큼.
+
+$S = 100$ vs $S = 10{,}000$: 100 배 더 오래 걸리는데 개선 $0.5\% \to 0.005\%$. 대부분 분석에서 **감지 불가**.
+
+함의: **$S$ 를 크게 해서 정확도 얻으려는 건 오해**. 정확도는 모형·prior 선택에서 옴. $S$ 는 "만족할 만한 수치 안정성" 달성이 목표.
+:::
+
+### 확률 추정의 정확도
+
+사후 확률 $p = \Pr(\theta \in A \mid y)$ 추정:
+
+$$
+\hat{p} = \frac{1}{S} \sum_s \mathbb{1}\{\theta^s \in A\}
+$$
+
+Binomial 샘플링:
+
+$$
+\mathrm{SE}[\hat{p}] = \sqrt{\frac{p(1-p)}{S}}
+$$
+
+**수치**:
+
+| $S$ | $p \approx 0.5$ 정확도 | $p \approx 0.05$ 정확도 | $p \approx 0.001$ 정확도 |
+|---|---|---|---|
+| 100 | $\pm 0.05$ | $\pm 0.022$ | $\pm 0.003$ |
+| 2,500 | $\pm 0.01$ | $\pm 0.004$ | $\pm 0.0006$ |
+| 10,000 | $\pm 0.005$ | $\pm 0.002$ | $\pm 0.0003$ |
+
+**희귀 사건** ($p < 0.001$) 에는 $S = 10{,}000$ 도 부족. 해석적 보조 필수.
+
+### 8 학교 실전 비교
+
+Ch.5.5 의 계층 모형. $\theta_1$ (school A 효과) 에 대한 세 실험:
+
+::: {.callout-note}
+## 8 학교 예제 수치 (Table 5.3 기반)
+
+| $S$ | 중앙값 | 50% 구간 | 95% 구간 |
+|---|---|---|---|
+| 200 (1차) | 10 | $[7, 16]$ | $[-2, 31]$ |
+| 200 (2차) | 9 | $[6, 14]$ | $[-4, 32]$ |
+| 10,000 | 10 | $[6, 15]$ | $[-2, 31]$ |
+
+**관측**: $S = 200$ 과 $S = 10{,}000$ 이 **실무적으로 동일**. 200 의 두 번 재추출이 약간 다르지만 "학교 A 효과 중앙값 9~10, 95% 구간 대략 $[-3, 31]$" 의 결론은 같음.
+:::
+
+### 희귀 사건의 반-해석적 접근
+
+"$\Pr(\theta_1 > 50 \mid y)$" 추정.
+
+**단순 시뮬레이션**:
+
+- $S = 200$: $\theta_1^s > 50$ 인 관측 0 개 → $\hat{p} = 0$ (또는 $< 1/200$). 정보 없음.
+- $S = 10{,}000$: 3 개 관측 → $\hat{p} = 0.0003$, 하지만 SE $= \sqrt{0.0003 \cdot 0.9997 / 10{,}000} \approx 0.0002$.
+
+**반-해석적** (조건부 정규 근사 활용):
+
+계층 모형에서 $(\mu, \tau)$ 조건부로:
+
+$$
+\theta_1 \mid \mu, \tau, y \sim \mathrm{N}(\hat{\theta}_1, V_1)
+$$
+
+$(\hat{\theta}_1, V_1)$ 은 식 (5.17) 의 정규 공액. 각 $(\mu^s, \tau^s)$ 에서:
+
+$$
+\Pr(\theta_1 > 50 \mid \mu^s, \tau^s, y) = \Phi\!\left(\frac{\hat{\theta}_1(\mu^s, \tau^s) - 50}{\sqrt{V_1(\mu^s, \tau^s)}}\right)
+$$
+
+**전체 확률** = 이들의 평균:
+
+$$
+\Pr(\theta_1 > 50 \mid y) = \mathbb{E}_{(\mu, \tau) \mid y}\!\left[\Phi\!\left(\frac{\hat{\theta}_1 - 50}{\sqrt{V_1}}\right)\right]
+$$
+
+$S = 200$ 의 $(\mu^s, \tau^s)$ 만으로 충분히 정확. **200 vs 10,000 의 실행 시간 50 배 차이**.
+
+::: {.callout-tip}
+## 직관 — 왜 해석적 보조가 이렇게 효과적인가
+
+순수 시뮬레이션은 **"관측된 빈도"** 를 센다. 희귀 사건은 거의 관측 안 됨 → 정보 거의 0.
+
+반-해석적 접근은 **"각 시뮬레이션점에서의 조건부 확률"** 을 평균. 각 시뮬레이션이 $[0, 1]$ 의 실수 기여 — **희귀도 상관 없이 유의미한 기여**.
+
+일반 원칙: **$p(\cdot) = \mathbb{E}[\text{조건부 확률}]$**. 조건부 확률이 닫힌 형태면 활용하라.
+
+이 원리가 Rao-Blackwellization 과 연결. "일부 변수 적분 → 분산 감소". 통계학의 광범위 도구.
+:::
+
+### 표본 수 결정의 계층
+
+요약하자면 실무 의사결정:
+
+| 추론 목표 | 권고 $S$ |
+|---|---|
+| 중앙값·분위수 | 100~200 |
+| 50% 구간 | 200~500 |
+| 95% 구간 | 1,000~2,000 |
+| $p \approx 0.5$ 확률 | 100~500 |
+| $p \approx 0.05$ 확률 | 2,000~5,000 |
+| $p \approx 0.001$ 확률 | 100,000+ 또는 해석적 보조 |
+| MCMC: effective sample size | 1,000~2,000 independent-eq |
+
+## § 10.6 — 계산 환경
+
+### 왜 통합 패키지가 필요한가 — 4 이유
+
+§ 10.6 의 Gelman 논거.
+
+#### 1. 접근성
+
+기존 통계 소프트웨어로 한 줄 회귀를 돌리는 통계·경제·심리 연구자들이 **베이즈도 한 줄로** 쓸 수 있어야. 계산·수학을 전공하지 않은 도메인 전문가들이 고급 모형 활용.
+
+#### 2. 교육
+
+학생이 **"구조에 집중, 계산은 나중"** 접근 가능. 복잡 모형의 내부 알고리즘을 직접 구현하지 않고 이해 가능.
+
+#### 3. 시간 절약
+
+매번 Gibbs·Metropolis 를 작성하지 않음. **규모의 경제** — 많이 쓰이는 코드가 최적화·병렬화됨.
+
+#### 4. 버그 감소
+
+검증된 라이브러리 재사용 → 매번 같은 버그 반복 안 함.
+
+### Bugs 의 Gibbs 한계
+
+1990s 원조: **WinBUGS** (Bayesian inference using Gibbs sampling).
+
+장점:
+
+- 모형을 수학 기호에 가깝게 기술.
+- 구조 유연: prior × likelihood 임의 조합.
+
+단점:
+
+- **스칼라 단위 Gibbs**: 한 번에 하나의 변수만 업데이트.
+- **의존 변수에서 느린 수렴**: 계층 모형이나 상관된 posterior 에서 효율 급감.
+- 대용량 데이터 취약.
+
+해결: **HMC (Hamiltonian Monte Carlo)** 기반 Stan 으로 전환.
+
+### Stan — 현대 표준
+
+Ch.12 에서 상세 다루지만 요약:
+
+- **HMC/NUTS** 기본 — 고차원·상관 posterior 에서 Gibbs 보다 훨씬 빠름.
+- **C++ 백엔드, 자동 미분**.
+- **인터페이스**: RStan, PyStan, CmdStanR/Py.
+- **모형 언어**: Bugs 유사 but 정적 타이핑.
+
+### 현대 지형 (2025 시점)
+
+| 도구 | 알고리즘 | 언어 | 강점 |
+|---|---|---|---|
+| **Stan** | HMC, NUTS | C++ + R/Python/Julia | 성숙, 문서 풍부 |
+| **PyMC (v5)** | NUTS, ADVI | Python (PyTensor) | Python 생태계 통합 |
+| **NumPyro** | NUTS | JAX | JIT, GPU, 초고속 |
+| **Turing.jl** | HMC, Gibbs | Julia | 임의 확률 프로그래밍 |
+| **TensorFlow Probability** | HMC, VI | Python | 대규모 ML 통합 |
+| **Edward2** | HMC, VI | TF/JAX | 연구 프레임워크 |
+| **brms** | Stan 래퍼 | R | lme4 스타일 회귀 |
+| **Bambi** | PyMC 래퍼 | Python | formula-based |
+
+Gelman 의 권고: **먼저 Stan**, 필요에 따라 PyMC/NumPyro.
+
+### 블랙박스의 한계
+
+§ 10.6 의 경고: **자동화는 만능이 아님**.
+
+문제 시나리오:
+
+- **다봉 (multimodal) posterior**: Stan 의 NUTS 가 한 mode 에 갇힐 수 있음. 수동으로 여러 초기값 + 병렬.
+- **Funnel 현상**: 계층 모형의 $\tau$ 가 0 근처로 가면 $\theta_j$ 공간이 깔대기. **Non-centered parameterization** 으로 재매개변수화 필요.
+- **Identifiability 문제**: 정보 없는 모형 + uniform prior → MCMC 수렴 안 함.
+- **Prior 설정 오류**: 사전이 비합리적이면 사후도 비합리적. 블랙박스는 경고 안 함.
+
+**원칙**: 수동으로 작은 문제 풀어 본 경험 → 대형 문제 자동화. Ch.10~13 의 지식이 여전히 필요한 이유.
+
+### Gelman 의 "사용자가 개입해야 하는 지점"
+
+§ 10.6 마지막: "**어떤 프로그램도 완전히 자동일 수 없다**. 소프트웨어는 열려 있어야 하고, 사용자가 프로그램을 수정하거나 '손을 잡아줘' 의도대로 작동하게 할 수 있어야 한다."
+
+실무 개입 지점:
+
+1. **Prior 설계** — 사후 예측 점검 + 민감도 분석.
+2. **Initial value** — 여러 초기값에서 수렴 확인.
+3. **Diagnostic** — R-hat, ESS, PSIS-$\hat{k}$ 점검.
+4. **모형 재구성** — funnel, non-identifiability 해결.
+
+## 세 절을 관통하는 직관 모음
+
+### 가중치는 통계 계산의 공통어
+
+IS 의 $w = q/g$, PSIS 의 Pareto 꼬리, MCMC 의 Metropolis $r = q(\theta^*)/q(\theta^{(t-1)})$, Boltzmann machine, autoencoder — 모두 **"한 분포에서 다른 분포로의 비율"** 이 핵심.
+
+§ 10.4 를 이해하면 Ch.11 Metropolis 의 수용 확률도 자연스러움. 수학적 뿌리가 같다.
+
+### "$S$ 많이" 보다 "모형 제대로"
+
+§ 10.5 의 교훈: **Monte Carlo 오차는 빠르게 감소**. 그러나 **모형·prior 오류는 $S$ 로 해결 안 됨**.
+
+초보의 흔한 함정: MCMC 결과가 이상하면 "더 오래 돌리기" 시도. 사실은 **모형 재점검**이 답.
+
+### 자동화와 이해의 균형
+
+§ 10.6 의 균형: "자동화" 와 "이해" 는 배타적이지 않다. 성숙한 사용자는 **자동화 도구로 빠르게 적합**, **이해를 바탕으로 문제 진단**.
+
+Gelman 의 은유: "자동차 운전을 할 줄 안다고 자동차를 이해하는 건 아니다. 그러나 고장 났을 때 대응하려면 기본 원리는 알아야."
+
+## 코드 — IS 실전
+
+### 예제: $t$ 분포 기대값을 Normal 로 IS
+
+**목표**: $\mathbb{E}[\theta \mid y]$ where $p(\theta) = t_3(0, 1)$.
+**근사**: $g(\theta) = \mathrm{N}(0, 1)$.
+
+```python
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(10)
+S = 10_000
+
+# g = Normal(0, 1) 에서 추출
+theta_samples = rng.normal(0, 1, size=S)
+
+# 가중치: w = p / g = t_3 pdf / Normal pdf
+log_p = stats.t.logpdf(theta_samples, df=3, loc=0, scale=1)
+log_g = stats.norm.logpdf(theta_samples, loc=0, scale=1)
+log_w = log_p - log_g
+
+# 수치 안정성
+log_w -= log_w.max()
+w = np.exp(log_w)
+
+# 정규화된 가중치
+w_tilde = w / w.sum()
+
+# IS 추정: h(theta) = theta, 따라서 E[theta]
+est_mean = (w_tilde * theta_samples).sum()
+print(f"IS 추정 E[theta]: {est_mean:.4f}")
+print(f"참 E[theta] (t_3): 0.0000")
+
+# S_eff
+S_eff = 1 / (w_tilde**2).sum()
+print(f"S_eff = {S_eff:.1f} / S = {S}")
+print(f"효율 = {S_eff/S:.1%}")
+```
+
+### 반대 방향 — Bad Practice
+
+**$p$ = Normal, $g$ = $t_3$** 이 좋음 (꼬리 두꺼운 $g$). 반대가 나쁨.
+
+```python
+# p = Normal(0, 1), g = t_3 — GOOD
+theta_samples_g = rng.standard_t(df=3, size=S)
+log_p2 = stats.norm.logpdf(theta_samples_g)
+log_g2 = stats.t.logpdf(theta_samples_g, df=3)
+log_w2 = log_p2 - log_g2
+log_w2 -= log_w2.max()
+w2 = np.exp(log_w2)
+w2_tilde = w2 / w2.sum()
+S_eff_good = 1 / (w2_tilde**2).sum()
+print(f"\nGood: p=Normal, g=t_3")
+print(f"S_eff = {S_eff_good:.1f}, 효율 = {S_eff_good/S:.1%}")
+
+# p = t_3, g = Normal — BAD (이미 위에서 계산)
+print(f"\nBad: p=t_3, g=Normal")
+print(f"S_eff = {S_eff:.1f}, 효율 = {S_eff/S:.1%}")
+```
+
+Good 이 Bad 보다 훨씬 높은 $S_{\mathrm{eff}}$. 꼬리 두꺼운 $g$ 의 안전성 확인.
+
+### PSIS 적용 — `arviz` 패키지
+
+```python
+import arviz as az
+
+# log_w 를 arviz 에 넘기면 PSIS 진단
+psis_res = az.psislw(log_w)  # bad direction
+print(f"\nPSIS-k (bad direction): {psis_res.pareto_k:.2f}")
+
+psis_res_good = az.psislw(log_w2)
+print(f"PSIS-k (good direction): {psis_res_good.pareto_k:.2f}")
+```
+
+Good direction 은 $\hat{k} < 0.5$, Bad 는 $\ge 0.7$ 로 신뢰 불가 판정.
+
+### SIR — 가중 표본을 등가중으로
+
+```python
+# Bad direction 에서 SIR 로 1000 개 등가중 표본
+k = 1000
+# 비복원 샘플링 (numpy 에서는 replace=False + weights 직접 지원 안 됨, 변형 구현)
+# 가중치 비례 복원 샘플링 후 unique 또는 reservoir
+idx_rep = rng.choice(S, size=k, replace=True, p=w_tilde)
+theta_sir = theta_samples[idx_rep]
+print(f"\nSIR 평균: {theta_sir.mean():.4f} (참값 0)")
+print(f"SIR 표본 unique: {len(np.unique(theta_sir))} / {k}")
+```
+
+Unique 수가 적으면 복원의 단점 — 비복원을 원한다면 numpy `rng.choice(..., replace=False)` (가중치 지원 안 됨) 대신 Python 루프나 다른 구현 필요.
+
+### 시뮬레이션 수 정확도 실측
+
+$S$ 변화에 따른 사후 평균 정확도 확인.
+
+```python
+S_list = [10, 100, 1000, 10_000]
+for S_try in S_list:
+    est = []
+    for _ in range(50):  # 반복 실험
+        theta = rng.standard_t(df=3, size=S_try)
+        w = np.exp(stats.norm.logpdf(theta) - stats.t.logpdf(theta, df=3))
+        est.append((w * theta).sum() / w.sum())
+    est = np.array(est)
+    print(f"S={S_try:6d}: 평균={est.mean():.4f}, SD across runs={est.std():.4f}")
+```
+
+출력 패턴: $S$ 커질수록 SD 가 $1/\sqrt{S}$ 로 감소. $S = 100$ 에서 SD $\approx 0.1$, $S = 10{,}000$ 에서 $\approx 0.01$.
+
+### Stan 예제 — 8 학교
+
+참고용으로 Stan 코드 개요:
+
+```stan
+// 8schools.stan
+data {
+  int<lower=0> J;              // 학교 수
+  vector[J] y;                  // 추정 효과
+  vector<lower=0>[J] sigma;     // 표준 오차
+}
+parameters {
+  real mu;
+  real<lower=0> tau;
+  vector[J] theta;
+}
+model {
+  tau ~ cauchy(0, 5);
+  theta ~ normal(mu, tau);
+  y ~ normal(theta, sigma);
+}
+```
+
+Python 에서 CmdStanPy 로 실행:
+
+```python
+from cmdstanpy import CmdStanModel
+
+schools_data = {
+    "J": 8,
+    "y": [28, 8, -3, 7, -1, 1, 18, 12],
+    "sigma": [15, 10, 16, 11, 9, 11, 10, 18]
+}
+model = CmdStanModel(stan_file="8schools.stan")
+fit = model.sample(data=schools_data, chains=4, iter_warmup=1000, iter_sampling=2000)
+print(fit.summary())
+```
+
+자동으로 NUTS + R-hat + ESS 보고. 이것이 **§ 10.6 의 "자동화" 가 실무에서 의미하는 것**.
+
+## 실전 체크리스트
+
+§ 10.4~10.6 의 교훈을 실무 절차로:
+
+1. **IS 에선 $g$ 꼬리 먼저 확인** — $p$ 보다 두꺼워야.
+2. **$S_{\mathrm{eff}}$ 계산 습관** — 추정 후 반드시 체크.
+3. **$\hat{k}$ 진단 (PSIS)** — 0.7 초과면 IS 포기.
+4. **$S = 100$ 기준** — 중심 추론은 이걸로 충분.
+5. **희귀 사건은 해석적 보조** — 순수 시뮬레이션은 포기.
+6. **로그 스케일 계산** — 가중치 수치 안정성.
+7. **Stan/PyMC 기본** — 실무 계산은 자동화.
+8. **R-hat, ESS 필수** — 자동화가 자동 진단은 아님.
+9. **작은 문제 먼저** — 자동화 전 수동으로 한 번.
+10. **모형 재점검 우선** — $S$ 키우기는 최후 수단.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Ch.10 Overview (02-10-0)](./02-10-0-computation-intro.qmd) — Part III 출발점
+- [§ 10.1~10.3 심화 (02-10-1)](./02-10-1-numerical-integration-approximations-rejection.qmd) — 직접·격자·기각 샘플링
+- [Ch.7 § 7.1~7.4 심화](./01-7-1-information-criteria-bayes-factors.qmd) — PSIS-LOO 가 응용되는 맥락
+
+**후속 주제**
+
+- Ch.11 MCMC 기초 — Gibbs, Metropolis, 수렴 진단
+- Ch.12 Efficient MCMC — HMC, NUTS, Stan 상세
+- Ch.13 Modal·Variational Approximations — 또 다른 근사 패밀리
+
+**관련 개념**
+
+- Geweke (1989) — IS 베이즈 응용 원저
+- Rubin (1987a) — SIR 알고리즘
+- Vehtari, Gelman, Gabry (2017) — PSIS-LOO 원 논문
+- Vehtari, Simpson, Gelman, Yao, Gabry (2024) — PSIS 현대판
+- Carpenter et al. (2017) — Stan 논문
+- Salvatier, Wiecki, Fonnesbeck (2016) — PyMC 원 논문
+- Phan, Pradhan, Jankowiak (2019) — NumPyro 논문
+- Owen (2013), *Monte Carlo theory, methods and examples* — IS 이론 종합
