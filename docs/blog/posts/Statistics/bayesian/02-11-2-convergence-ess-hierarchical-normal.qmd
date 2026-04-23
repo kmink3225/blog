@@ -1,0 +1,732 @@
+---
+title: "§ 11.4~11.6 — 수렴 진단·유효 표본 크기·계층 정규 예제"
+subtitle: "Gelman BDA Ch.11 심화 — 식 (11.3)(11.4) $\\widehat{R}$ 유도, 식 (11.5)~(11.8) $\\widehat{n}_{\\mathrm{eff}}$ variogram 기반 추정, split chain 진단, coagulation 계층 정규 Gibbs 전 수식 전개"
+description: |
+  § 11.1~11.3 이 Gibbs·Metropolis 알고리즘의 이론적 정합성이었다면,
+  § 11.4~11.6 은 실무 MCMC 의 완결 — **"얼마나 돌려야 충분한가" 를
+  객관적 통계량으로 답하고, 계층 정규 모형에서 전 과정을 실증** 한다.
+  과분산 시작점을 어떻게 만들고 warm-up 을 왜 전반부 절반으로 하는지,
+  Figure 11.3 의 두 함정 (mix 안 됨 vs stationarity 안 됨) 을 어떻게
+  split chain 이 동시 잡는지, within variance $W$ 와 between variance
+  $B$ 의 가중 평균 $\widehat{\mathrm{var}}^+$ (식 11.3) 가 왜 수렴 전
+  **과대 추정**이고 수렴 후 불편인지, $\widehat{R}$ (식 11.4) 이 $W$ 와
+  $\widehat{\mathrm{var}}^+$ 의 비율의 제곱근인 이유, Table 11.1 의
+  bivariate normal 에서 50/500/2000/5000 반복으로 $\widehat{R}$ 이 어떻게
+  감소하는지, 자기상관이 있는 표본의 분산 점근 공식 (식 11.5), 유효
+  표본 크기 정의 (식 11.6), variogram $V_t$ 기반 $\widehat{\rho}_t$
+  추정 (식 11.7), 부분합을 음수 페어에서 자르는 정지 규칙, 식 (11.8)
+  $\widehat{n}_{\mathrm{eff}}$, long-tailed 변환 전처리, coagulation 4
+  식단 24 동물 데이터의 hierarchical normal Gibbs 4 조건부 식
+  (11.9)~(11.17) 완전 전개, $\widehat{\theta}_j, V_{\theta_j}, \hat{\mu},
+  \hat{\sigma}^2, \hat{\tau}^2$ 의 수식적 의미, Table 11.3 의 10 chain
+  100 iteration 으로 $\widehat{R} \approx 1.01{-}1.05$ 달성, Metropolis
+  대안에서 $(\mu, \log\sigma, \log\tau)$ 3차원 점프 + $\theta$ 조건부
+  추출 의 하이브리드 구조 — 각 수식 옆에 "이 진단이 왜 실제로 수렴을
+  판정하는가" 를 붙여 전개한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — 세 절의 공통 질문
+
+§ 11.4~11.6 은 MCMC 실무의 **"충분함과 구현"**.
+
+| 절 | 질문 |
+|---|---|
+| 11.4 | 체인이 목표 분포로 수렴했는지 어떻게 판단하나 |
+| 11.5 | 상관된 MCMC 표본이 "실질적으로" 몇 개의 독립 표본과 같나 |
+| 11.6 | 계층 정규 모형에서 Gibbs 가 어떻게 구체적으로 작동하나 |
+
+[Overview (02-11-0)](./02-11-0-mcmc-basics.qmd) 와 [§ 11.1~11.3 심화 (02-11-1)](./02-11-1-gibbs-metropolis-combinations.qmd) 의 연장. 알고리즘이 "이론적으로 수렴" 하는 것과 "실무적으로 충분히 수렴한 것을 확인" 하는 것은 별개. 이 포스트는 후자.
+
+## § 11.4 — 수렴 진단
+
+### MCMC 추론의 두 난점
+
+독립 Monte Carlo 대비 MCMC 가 추가로 다뤄야 하는 문제.
+
+1. **수렴 미완료**: 체인이 아직 목표 분포에 도달 못 함 (Figure 11.1a 의 50 반복).
+2. **내부 상관**: 연속 표본이 상관 → $n$ 개 표본의 정보량이 $n$ 개 독립 표본보다 적음.
+
+두 난점은 **다른 해결**:
+
+- 수렴 미완료 → § 11.4 의 $\widehat{R}$.
+- 내부 상관 → § 11.5 의 $\widehat{n}_{\mathrm{eff}}$.
+
+Gelman 의 3 가지 실무 전략 (§ 11.4 서두):
+
+1. 여러 독립 체인 + **과분산 시작점**.
+2. between vs within 분산 비교.
+3. 비효율 시 알고리즘 개선 (Ch.12).
+
+### Warm-up (구 "Burn-in")
+
+MCMC 초기 반복은 **시작점의 영향** 을 받아 목표 분포와 다름. 일반 실무: **전반부 50% 버림**.
+
+::: {.callout-tip}
+## 직관 — 왜 "warm-up" 이고 "burn-in" 이 아닌가
+
+Gelman 3rd edition 은 용어를 바꿨다. 이유: "burn-in" 은 공학에서 "제품을 부하 걸어 결함 드러내기" — 단서가 맞지 않음.
+
+"Warm-up" 은 "체인이 분포 질량 영역으로 가까워지는 초기 단계" — 더 정확한 은유. 스포츠 준비 운동처럼 **본 경기 (샘플링) 전 체인을 "데우는"** 과정.
+
+실무 수치: Figure 11.2 의 Gibbs 는 warm-up 몇 회만 필요. Figure 11.1 의 Metropolis (작은 점프) 는 많은 warm-up 필요. **일률적 기준 없음** → 50% 를 보수적 기본값.
+:::
+
+### Thinning — 대부분 불필요
+
+"매 $k$ 번째만 저장" 전략. 현대 실무:
+
+- **저장 공간 문제** 시만 사용 (예: 초대형 모형).
+- **수렴·효율에는 도움 안 됨** — 자기상관된 표본을 버려 정보 잃음.
+
+Ch.10.5 의 "$S = 100$ 이면 충분" 원칙에 근거: 저장된 표본 1000 개 정도면 실무에 충분.
+
+### 과분산 시작점 (Overdispersed Starting Points)
+
+왜 필요한가: Figure 11.3a 가 명확히 보인다. **두 체인이 각자 안정돼 보여도 합치면 불일치** — 한 체인이 한 mode 에 갇히고 다른 체인이 다른 mode 에 갇힌 상태.
+
+**해결**: 시작점을 **목표 분포보다 넓은 분포**에서 추출.
+
+- 조잡한 추정 $\hat{\theta}$ 에 큰 SD 추가.
+- 또는 prior 에서 추출.
+
+**이유**: 시작점이 **과분산** 이면, 수렴 시 모든 체인이 **수축** 해 같은 분포. 모든 mode 가 있다면 모든 mode 에 최소 하나의 체인이 도달해야 함.
+
+### Within-sequence vs Between-sequence Variance
+
+수렴 진단의 핵심 아이디어. 수렴 후 두 분산이 같아야 한다.
+
+**설정**: $m$ 체인, 각 $n$ 반복. 스칼라 추정량 $\psi_{ij}$ ($i = 1, \ldots, n$; $j = 1, \ldots, m$).
+
+**Within variance** $W$ — 각 체인 내부 표본 분산의 평균:
+
+$$
+s_j^2 = \frac{1}{n-1} \sum_{i=1}^n (\psi_{ij} - \bar{\psi}_{\cdot j})^2, \quad W = \frac{1}{m} \sum_{j=1}^m s_j^2
+$$
+
+**Between variance** $B$ — 체인 평균들의 분산 ($\times n$):
+
+$$
+B = \frac{n}{m-1} \sum_{j=1}^m (\bar{\psi}_{\cdot j} - \bar{\psi}_{\cdot \cdot})^2, \quad \bar{\psi}_{\cdot \cdot} = \frac{1}{m} \sum_j \bar{\psi}_{\cdot j}
+$$
+
+$B$ 에 **$n$ 이 곱해진** 이유: 체인 평균 $\bar{\psi}_{\cdot j}$ 는 $n$ 개 표본 평균이므로 분산이 $\text{var}(\psi)/n$. $n$ 을 곱해 **원 분산 척도**로 복원.
+
+### 식 (11.3) — 주변 분산 추정량 $\widehat{\mathrm{var}}^+$
+
+$\mathrm{var}(\psi \mid y)$ 를 두 항의 가중 평균으로 추정:
+
+$$
+\widehat{\mathrm{var}}^+(\psi \mid y) = \frac{n-1}{n} W + \frac{1}{n} B \tag{11.3}
+$$
+
+**성질**:
+
+- 시작 분포가 과분산이면 **과대 추정** (upper bound).
+- 수렴 시 ($n \to \infty$) **불편 추정**.
+- Cluster sampling 의 분산 추정과 같은 구조.
+
+### 식 (11.4) — $\widehat{R}$ 의 정의와 해석
+
+Potential scale reduction factor:
+
+$$
+\widehat{R} = \sqrt{\frac{\widehat{\mathrm{var}}^+(\psi \mid y)}{W}} \tag{11.4}
+$$
+
+$n \to \infty$ 에서 $\widehat{R} \to 1$. **"더 돌리면 사후 분산이 얼마나 줄어들 것인가"** 의 추정치.
+
+::: {.callout-tip}
+## 직관 — $\widehat{R}$ 의 의미와 해석
+
+수렴 전:
+
+- 각 체인이 목표 분포의 일부만 탐색 → $W$ 가 **과소 추정**.
+- 체인 간 시작점이 흩어져 있음 → $B$ 가 실제 분산보다 **큼**.
+- $\widehat{\mathrm{var}}^+ > W$ → $\widehat{R} > 1$.
+
+수렴 후:
+
+- 각 체인이 전체 분포 탐색 → $W \approx \mathrm{var}(\psi \mid y)$.
+- 체인 평균들이 비슷 → $B \approx \mathrm{var}(\psi \mid y)$.
+- $\widehat{\mathrm{var}}^+ \approx W$ → $\widehat{R} \approx 1$.
+
+실무 임계: **$\widehat{R} < 1.1$** 기본, 엄격하면 $< 1.01$.
+
+$\widehat{R}$ 의 제곱근 선택 (원래는 비율) 은 "**추정량 표준편차의 비율**" 해석을 더 자연스럽게.
+:::
+
+### Split $\widehat{R}$ — 정지성 함께 검증
+
+Figure 11.3 의 두 함정:
+
+- (a): 체인이 각자 안정 보이지만 다른 mode — mixing 실패.
+- (b): 체인들이 같은 영역 탐색하지만 각자 비정지 (단조 이동) — stationarity 실패.
+
+단순 $\widehat{R}$ 은 (a) 만 잡음 (between variance 로). (b) 를 잡으려면?
+
+**Split chain 접근**: 각 체인을 **전반부·후반부로 나눠** 두 개로 취급.
+
+절차:
+
+1. 원본 체인 $m_0$ 개, 각 $n_0$ 반복. Warm-up 제거 후 각각 $n_1 = n_0/2$ 반복.
+2. 각 체인을 반으로 split: $m = 2 m_0$ chain, $n = n_1/2$ 반복씩.
+3. $m = 2 m_0$ 체인으로 $\widehat{R}$ 계산.
+
+수렴 시 각 체인의 전반부와 후반부가 **같은 분포** — $B$ 작음. 비정지면 반 사이 차이가 커서 $B$ 커짐 → $\widehat{R} > 1$.
+
+### Table 11.1 — Bivariate Normal 수렴 진단
+
+Figure 11.1 의 비효율 Metropolis (작은 점프). $\theta_1, \theta_2, \log p$ 세 요약의 95% 구간과 $\widehat{R}$.
+
+| 반복 수 | $\theta_1$ | $\theta_2$ | $\log p$ |
+|---|---|---|---|
+| 50 | $[-2.14, 3.74]$, **12.3** | $[-1.83, 2.70]$, **6.1** | $[-8.71, -0.17]$, **6.1** |
+| 500 | $[-3.17, 1.74]$, 1.3 | $[-2.17, 2.09]$, 1.7 | $[-5.23, -0.07]$, 1.3 |
+| 2000 | $[-1.83, 2.24]$, 1.2 | $[-1.74, 2.09]$, **1.03** | (생략) |
+| 5000 | $[-2.09, 1.98]$, **1.02** | $[-1.90, 1.95]$, 1.03 | $[-3.70, -0.03]$, **1.00** |
+| $\infty$ (참) | $[-1.96, 1.96]$, 1 | $[-1.96, 1.96]$, 1 | $[-3.69, -0.03]$, 1 |
+
+**관측**:
+
+- 50 반복: $\widehat{R} \approx 6{-}12$. 명백히 미수렴.
+- 500: $\widehat{R} \approx 1.3{-}1.7$. 여전히 부족.
+- 2000: $\theta_2$ 는 OK ($\widehat{R} = 1.03$), $\theta_1$ 은 경계 (1.2). 일관되지 않음.
+- 5000: 모두 $\widehat{R} < 1.05$. 실무 수렴.
+
+**교훈**: 모든 **관심 추정량** 에 대해 $\widehat{R}$ 확인. 하나라도 실패하면 모두 실패.
+
+### 로그 사후를 모니터하라
+
+§ 11.4 의 추천: $\log p(\theta \mid y)$ (또는 $\log q$) 를 **항상 별도 관심 추정량**으로 모니터.
+
+이유: 다차원 사후의 **일관된 요약**. 각 $\theta_j$ 가 수렴 보여도 전체 모형의 정보가 수렴했다는 보장 없음 — 로그 사후가 보완.
+
+실무: Stan, PyMC 가 `lp__` 자동 제공.
+
+## § 11.5 — 유효 표본 크기
+
+### 왜 필요한가
+
+MCMC 표본 $mn$ 개 있지만, **자기상관 때문에 $mn$ 개 독립 표본과 같은 정보가 아님**. 얼마나 등가?
+
+**설정**: 수렴 후 $m$ 체인 $\times$ $n$ 반복. 평균 $\bar{\psi}_{\cdot \cdot}$ 의 분산을 살펴본다.
+
+### 식 (11.5) — 자기상관 합의 영향
+
+상관된 표본의 평균 분산 점근 공식:
+
+$$
+\lim_{n \to \infty} mn \cdot \mathrm{var}(\bar{\psi}_{\cdot \cdot}) = \left(1 + 2 \sum_{t=1}^\infty \rho_t\right) \mathrm{var}(\psi \mid y) \tag{11.5}
+$$
+
+$\rho_t = \mathrm{Cor}(\psi^s, \psi^{s+t})$ 는 시차 $t$ 자기상관.
+
+**독립이면** $\rho_t = 0$ for $t \ge 1$ → $mn \cdot \mathrm{var}(\bar{\psi}) = \mathrm{var}(\psi \mid y)$. 즉 $\mathrm{var}(\bar{\psi}) = \mathrm{var}(\psi)/mn$ — 고전 CLT.
+
+**상관 있으면** 괄호 안 항이 1 보다 큼 → 분산 더 큼 → **$mn$ 표본의 효율 저하**.
+
+### 식 (11.6) — $n_{\mathrm{eff}}$ 정의
+
+(11.5) 를 다음 형태로 읽는다:
+
+$$
+\mathrm{var}(\bar{\psi}) \approx \frac{\mathrm{var}(\psi \mid y)}{n_{\mathrm{eff}}}
+$$
+
+$n_{\mathrm{eff}}$ 를 반대로 풀면:
+
+$$
+n_{\mathrm{eff}} = \frac{mn}{1 + 2 \sum_{t=1}^\infty \rho_t} \tag{11.6}
+$$
+
+해석: **"독립 표본이었다면 몇 개가 같은 분산을 주는가"**. 상관이 크면 $n_{\mathrm{eff}} \ll mn$.
+
+::: {.callout-tip}
+## 직관 — 자기상관 시간 $\tau_{\mathrm{ac}} = 1 + 2\sum \rho_t$
+
+$\tau_{\mathrm{ac}}$ 는 **"연속된 표본이 사실상 독립처럼 되기까지의 lag 시간"**. 공식 해석:
+
+- $\rho_1 = 0.5$: 한 단계 뒤까지 반 상관.
+- $\rho_t = 0.5^t$ (geometric decay): $\sum \rho_t = 1$, $\tau_{\mathrm{ac}} = 3$. 즉 **3 개 중 1 개 독립**.
+
+비유: 파도의 물결이 잦아들어 조용해지기까지의 시간. 점프가 작으면 오래 연결돼 $\tau_{\mathrm{ac}}$ 큼.
+
+Ch.12 의 HMC 가 목표하는 것: **$\tau_{\mathrm{ac}}$ 를 1 에 가깝게** (거의 독립).
+:::
+
+### $\widehat{\rho}_t$ 추정 — Variogram 방식
+
+$\rho_t$ 를 직접 추정하지 않고 variogram $V_t$ 통해 추정. 이유: between/within 분산 둘 다 활용.
+
+**Variogram**:
+
+$$
+V_t = \frac{1}{m(n-t)} \sum_{j=1}^m \sum_{i=t+1}^n (\psi_{i,j} - \psi_{i-t,j})^2
+$$
+
+해석: 시차 $t$ 떨어진 두 표본의 제곱 차이 평균.
+
+**$\rho_t$ 복원**: $\mathbb{E}(\psi_i - \psi_{i-t})^2 = 2(1 - \rho_t) \mathrm{var}(\psi)$ 이므로:
+
+$$
+\widehat{\rho}_t = 1 - \frac{V_t}{2 \widehat{\mathrm{var}}^+} \tag{11.7}
+$$
+
+분모의 $\widehat{\mathrm{var}}^+$ 는 식 (11.3) 의 주변 분산 추정. Split 기반이어서 **여러 체인 정보 통합**.
+
+### 식 (11.8) — 부분합 기반 $\widehat{n}_{\mathrm{eff}}$
+
+이론적으로 $\sum_{t=1}^\infty \widehat{\rho}_t$ 를 직접 합. 실무 문제: **큰 $t$ 에서 $\widehat{\rho}_t$ 가 잡음 지배** — 무한 합 발산.
+
+**해결** (Geyer 의 positive partial sum): 연속된 두 시차의 $\widehat{\rho}_{2t'} + \widehat{\rho}_{2t'+1}$ 가 **음수** 가 되는 순간 합 중단.
+
+$$
+\widehat{n}_{\mathrm{eff}} = \frac{mn}{1 + 2 \sum_{t=1}^T \widehat{\rho}_t} \tag{11.8}
+$$
+
+$T$ 는 첫 홀수 정수 $T$ 로 $\widehat{\rho}_{T+1} + \widehat{\rho}_{T+2} < 0$.
+
+::: {.callout-tip}
+## 직관 — "왜 연속 두 시차의 합이 음수일 때 끊는가"
+
+가역 Markov chain 의 이론: $\rho_{2t'} + \rho_{2t'+1}$ 는 **항상 양수** (Geyer 1992).
+
+유한 표본에서 $\widehat{\rho}_{2t'} + \widehat{\rho}_{2t'+1} < 0$ 면 **순수 잡음 영역 진입** → 추가 합이 유효 기여 없이 분산만 증가.
+
+정지 규칙의 이론적 정당성: **"진짜 $\rho_t$ 는 거의 0 이고 관측된 음수는 sampling 잡음"**. 이 시점부터는 샘플 더 써도 추정 불안정.
+
+Stan, PyMC 의 `ess_bulk`, `ess_tail` 모두 이 알고리즘 기반.
+:::
+
+### Long-tailed / Bounded 분포
+
+$\widehat{R}, \widehat{n}_{\mathrm{eff}}$ 는 평균·분산 기반 → **정규 근사** 전제. 비정규 사후에 약함.
+
+**전처리 변환** 권장:
+
+- 양수 모수 → $\log$.
+- $(0, 1)$ 모수 → $\mathrm{logit}$.
+- 긴 꼬리 → 순위 변환 (rank).
+
+변환 후 $\widehat{R}, \widehat{n}_{\mathrm{eff}}$ 계산. 현대 Stan 은 `ess_bulk` 와 `ess_tail` 을 분리해 쌍방 진단.
+
+### 정지 규칙 — $\widehat{n}_{\mathrm{eff}} \ge 5m$
+
+§ 11.5 의 기본 권고:
+
+$$
+\widehat{n}_{\mathrm{eff}} \ge 5m
+$$
+
+즉 **체인당 평균 10 개 독립 표본** (split 후 $m$ 은 2 배).
+
+이유 (Ch.10.5): $n_{\mathrm{eff}} = 10$ → MCMC SE 가 사후 SD 의 $\sqrt{1 + 1/10} - 1 \approx 5\%$. 실무 허용.
+
+더 정밀한 목적엔 높은 임계:
+
+- 중심 추론: $\widehat{n}_{\mathrm{eff}} \ge 400$.
+- 꼬리 분위수: $\ge 1000$.
+- 희귀 사건: $\ge 10000$.
+
+### 정지 후 해석
+
+$\widehat{R} < 1.1$ + $\widehat{n}_{\mathrm{eff}} \ge 5m$ 달성 시 **"실무적 수렴"** 선언. warm-up 제거 후 남은 $mn$ 표본을 그대로 사후 표본으로 사용.
+
+**주의**: 이는 **가설 검정이 아님**. $p$-value 없음. 비합격 시 "더 돌리기" 만 확정, 합격 시에도 **숨은 mode** 놓쳤을 가능성 배제 못 함.
+
+진짜 이상한 사후 (다봉, disconnected support) 는 $\widehat{R}$ 통과 후에도 의심 남음. 사후 예측 점검 (Ch.6) 과 병행.
+
+## § 11.6 — 계층 정규 모형 예제
+
+### 문제 설정 — Coagulation Data
+
+**Table 11.2** (Box, Hunter, Hunter 1978): 24 마리 동물, 4 다이어트 $(J = 4)$ 로 무작위 할당. 혈액 응고 시간 측정.
+
+| Diet | Measurements |
+|---|---|
+| A | 62, 60, 63, 59 |
+| B | 63, 67, 71, 64, 65, 66 |
+| C | 68, 66, 71, 67, 68, 68 |
+| D | 56, 62, 60, 61, 63, 64, 63, 59 |
+
+$n_j$ 는 다이어트별로 다름 (4, 6, 6, 8). 총 $n = 24$.
+
+### 모형
+
+데이터 수준:
+
+$$
+y_{ij} \mid \theta_j, \sigma \sim \mathrm{N}(\theta_j, \sigma^2), \quad i = 1, \ldots, n_j; \quad j = 1, \ldots, J
+$$
+
+계층 수준:
+
+$$
+\theta_j \mid \mu, \tau \sim \mathrm{N}(\mu, \tau^2)
+$$
+
+Prior:
+
+$$
+p(\mu, \log\sigma, \tau) \propto 1 \iff p(\mu, \log\sigma, \log\tau) \propto \tau
+$$
+
+$\log\sigma, \log\tau$ 균등이 아닌 $\sigma, \tau$ 균등이 포인트 — $\log\tau$ 균등은 prior 부적절.
+
+### 결합 사후
+
+$$
+p(\theta, \mu, \log\sigma, \log\tau \mid y) \propto \tau \prod_{j=1}^J \mathrm{N}(\theta_j \mid \mu, \tau^2) \prod_{j=1}^J \prod_{i=1}^{n_j} \mathrm{N}(y_{ij} \mid \theta_j, \sigma^2)
+$$
+
+4 개 모수 블록: $\theta, \mu, \sigma^2, \tau^2$. 모두 조건부 공액 → Gibbs 가능.
+
+### 조건부 분포 1 — $\theta_j \mid \mu, \sigma, \tau, y$
+
+$\theta_j$ 관련 항: $\mathrm{N}(\theta_j \mid \mu, \tau^2)$ (prior) $\times$ $\prod_i \mathrm{N}(y_{ij} \mid \theta_j, \sigma^2)$ (likelihood).
+
+정규 공액. 식 (11.9)~(11.11):
+
+$$
+\theta_j \mid \mu, \sigma, \tau, y \sim \mathrm{N}(\widehat{\theta}_j, V_{\theta_j})
+$$
+
+$$
+\widehat{\theta}_j = \frac{\frac{1}{\tau^2} \mu + \frac{n_j}{\sigma^2} \bar{y}_{\cdot j}}{\frac{1}{\tau^2} + \frac{n_j}{\sigma^2}}, \quad V_{\theta_j} = \frac{1}{\frac{1}{\tau^2} + \frac{n_j}{\sigma^2}}
+$$
+
+**정밀도 가중 평균** 형식: prior 평균 $\mu$ (정밀도 $1/\tau^2$) + 데이터 평균 $\bar{y}_{\cdot j}$ (정밀도 $n_j/\sigma^2$).
+
+::: {.callout-tip}
+## 직관 — $\theta_j$ 의 shrinkage
+
+$\widehat{\theta}_j$ 는 **그룹 평균 $\bar{y}_{\cdot j}$** 와 **전체 $\mu$** 의 가중 평균.
+
+- $\tau$ 작음 (그룹 간 차이 작음): $\mu$ 쪽으로 강한 shrinkage.
+- $\tau$ 큼 (그룹 간 차이 큼): $\bar{y}_{\cdot j}$ 유지.
+- $n_j$ 큼 (데이터 많음): $\bar{y}_{\cdot j}$ 쪽.
+- $n_j$ 작음 (데이터 적음): $\mu$ 쪽.
+
+이 **부분 풀링**이 계층 모형의 정수. Ch.5.5 의 8 학교와 같은 수식 구조.
+:::
+
+### 조건부 분포 2 — $\mu \mid \theta, \sigma, \tau, y$
+
+$\mu$ 는 $y$ 와 직접 무관. $\theta_j \sim \mathrm{N}(\mu, \tau^2)$ 에서만 정보. 균등 prior 하:
+
+$$
+\mu \mid \theta, \sigma, \tau, y \sim \mathrm{N}\!\left(\widehat{\mu}, \tau^2/J\right)
+$$
+
+$$
+\widehat{\mu} = \frac{1}{J} \sum_{j=1}^J \theta_j
+$$
+
+**$\theta_j$ 들의 표본 평균**. $\tau^2/J$ 는 $J = 4$ 개 정규 관측의 평균 분산.
+
+### 조건부 분포 3 — $\sigma^2 \mid \theta, \mu, \tau, y$
+
+데이터 전체에서 평균 $\theta_{j(i)}$ 가 알려진 정규 — 분산의 공액은 **scaled inverse $\chi^2$**.
+
+식 (11.14)(11.15):
+
+$$
+\sigma^2 \mid \theta, \mu, \tau, y \sim \mathrm{Inv}\text{-}\chi^2(n, \widehat{\sigma}^2)
+$$
+
+$$
+\widehat{\sigma}^2 = \frac{1}{n} \sum_{j=1}^J \sum_{i=1}^{n_j} (y_{ij} - \theta_j)^2
+$$
+
+**그룹별 오차 제곱합**을 $n = 24$ 로 나눈 평균. $n$ 자유도 이유: $p(\log\sigma) \propto 1$ 이 $\sigma^{-1}$ 가중 유발 → 일반 잔차 제곱 분포 $\chi^2_{n-J}$ 가 아닌 $\chi^2_n$.
+
+### 조건부 분포 4 — $\tau^2 \mid \theta, \mu, \sigma, y$
+
+$\theta_j \sim \mathrm{N}(\mu, \tau^2)$ 이 $\tau^2$ 의 유일한 정보. 식 (11.16)(11.17):
+
+$$
+\tau^2 \mid \theta, \mu, \sigma, y \sim \mathrm{Inv}\text{-}\chi^2(J - 1, \widehat{\tau}^2)
+$$
+
+$$
+\widehat{\tau}^2 = \frac{1}{J - 1} \sum_{j=1}^J (\theta_j - \mu)^2
+$$
+
+자유도 **$J - 1$**: $p(\tau) \propto 1$ prior 때문. $\log\tau$ 균등이면 $J - 1$ 이 아니라 $J$ 이 되어 사후 부적절.
+
+### Gibbs Sampler 요약
+
+각 반복에서 순차 업데이트:
+
+1. $\theta_j \sim \mathrm{N}(\widehat{\theta}_j, V_{\theta_j})$ for $j = 1, \ldots, J$. (식 11.10, 11.11 적용)
+2. $\mu \sim \mathrm{N}(\widehat{\mu}, \tau^2/J)$. (식 11.13)
+3. $\sigma^2 \sim \mathrm{Inv}\text{-}\chi^2(n, \widehat{\sigma}^2)$. (식 11.15)
+4. $\tau^2 \sim \mathrm{Inv}\text{-}\chi^2(J-1, \widehat{\tau}^2)$. (식 11.17)
+
+모든 단계 **공액 → Gibbs 100% 수용**.
+
+### 과분산 시작점
+
+§ 11.6 의 간단한 팁: 각 그룹에서 **한 관측 값을 무작위 선택** $\theta_j^{(0)}$. 이 값들이 자연스럽게 그룹 범위 커버.
+
+$\mu^{(0)} = $ $\theta_j^{(0)}$ 들의 평균. $\sigma, \tau$ 는 첫 반복의 Gibbs 단계로 추출.
+
+### Table 11.3 — 10 Chain 100 Iteration 결과
+
+| Estimand | 2.5% | 25% | median | 75% | 97.5% | $\widehat{R}$ |
+|---|---|---|---|---|---|:---:|
+| $\theta_1$ | 58.9 | 60.6 | 61.3 | 62.1 | 63.5 | 1.01 |
+| $\theta_2$ | 63.9 | 65.3 | 65.9 | 66.6 | 67.7 | 1.01 |
+| $\theta_3$ | 66.0 | 67.1 | 67.8 | 68.5 | 69.5 | 1.01 |
+| $\theta_4$ | 59.5 | 60.6 | 61.1 | 61.7 | 62.8 | 1.01 |
+| $\mu$ | 56.9 | 62.2 | 63.9 | 65.5 | 73.4 | 1.04 |
+| $\sigma$ | 1.8 | 2.2 | 2.4 | 2.6 | 3.3 | 1.00 |
+| $\tau$ | 2.1 | 3.6 | 4.9 | 7.6 | 26.6 | 1.05 |
+
+**관측**:
+
+- 모든 $\widehat{R} < 1.1$ → 100 반복으로 충분.
+- $\tau$ 의 구간 넓음 $[2.1, 26.6]$: **$J = 4$ 그룹만으로는 계층 분산 추정 불확실**.
+- $\sigma$ 는 정밀 ($[1.8, 3.3]$): $n = 24$ 총 관측으로 충분.
+
+### Metropolis 대안 — 하이브리드 전략
+
+Gibbs 가 있으니 Metropolis 불필요? 실전에서는 혼합이 더 효율적.
+
+**전략**: $\theta$ 는 $(\mu, \sigma, \tau)$ 조건부로 정규 공액 → **주변-조건부 분해**.
+
+1. $\log p(\mu, \log\sigma, \log\tau \mid y)$ 를 직접 계산 (marginal over $\theta$).
+2. Metropolis 로 $(\mu, \log\sigma, \log\tau)$ 3 차원 샘플.
+3. 각 Metropolis 반복 후 $\theta \sim \mathrm{N}(\widehat{\theta}, V_\theta)$ 조건부 추출.
+
+**장점**: 3 차원 공간에서 Metropolis → Gibbs 의 축 정렬 이동 없음. 재매개변수화 효과.
+
+**튜닝**: 점프 공분산 $= 2.4^2 / d \cdot \Sigma_{\mathrm{approx}}$ ($d = 3$, Roberts-Gelman-Gilks 최적).
+
+Gelman 보고: 500 반복으로 수렴, 수용률 0.35 (예상치 0.25~0.40 범위 내).
+
+## 코드 — Coagulation Gibbs 완전 구현
+
+### 데이터
+
+```python
+import numpy as np
+rng = np.random.default_rng(116)
+
+# Table 11.2
+groups = [
+    [62, 60, 63, 59],
+    [63, 67, 71, 64, 65, 66],
+    [68, 66, 71, 67, 68, 68],
+    [56, 62, 60, 61, 63, 64, 63, 59]
+]
+J = len(groups)
+y = [np.array(g, dtype=float) for g in groups]
+n_j = np.array([len(g) for g in groups])
+n = int(n_j.sum())
+ybar = np.array([g.mean() for g in y])
+print(f"J = {J}, n = {n}, ybar = {ybar.round(2)}")
+```
+
+### Gibbs 샘플러
+
+```python
+def gibbs_coagulation(n_iter, seed):
+    rng_local = np.random.default_rng(seed)
+    # 과분산 시작점
+    theta = np.array([rng_local.choice(g) for g in y], dtype=float)
+    mu = theta.mean()
+    sigma2 = 1.0  # dummy, 첫 반복에서 재샘플
+    tau2 = 1.0
+
+    chain = np.zeros((n_iter, J + 3))  # theta_1..4, mu, sigma, tau
+
+    for t in range(n_iter):
+        # 1. theta_j
+        V_theta = 1.0 / (1.0/tau2 + n_j/sigma2)
+        theta_hat = V_theta * (mu/tau2 + n_j*ybar/sigma2)
+        theta = rng_local.normal(theta_hat, np.sqrt(V_theta))
+
+        # 2. mu
+        mu_hat = theta.mean()
+        mu = rng_local.normal(mu_hat, np.sqrt(tau2/J))
+
+        # 3. sigma2: Inv-chi2(n, sigma_hat^2)
+        ss = sum(((g - theta[j])**2).sum() for j, g in enumerate(y))
+        sigma_hat2 = ss / n
+        sigma2 = n * sigma_hat2 / rng_local.chisquare(n)
+
+        # 4. tau2: Inv-chi2(J-1, tau_hat^2)
+        tau_hat2 = ((theta - mu)**2).sum() / (J - 1)
+        tau2 = (J - 1) * tau_hat2 / rng_local.chisquare(J - 1)
+
+        chain[t] = np.concatenate([theta, [mu, np.sqrt(sigma2), np.sqrt(tau2)]])
+
+    return chain
+
+# 10 chain 100 iteration
+chains = np.array([gibbs_coagulation(100, seed=i) for i in range(10)])
+print(f"Chain shape: {chains.shape}  # (chains, iters, params)")
+```
+
+### Warm-up 제거 + Split-$\widehat{R}$
+
+```python
+def split_Rhat(all_chains):
+    """chains: (M, N, D). 각 chain 을 반으로 split 후 R-hat 계산."""
+    M, N, D = all_chains.shape
+    # warm-up 제거: 전반부 50%
+    N_warm = N // 2
+    saved = all_chains[:, N_warm:, :]
+    # split: 남은 길이의 반으로
+    n = saved.shape[1] // 2
+    c1 = saved[:, :n, :]
+    c2 = saved[:, n:2*n, :]
+    split_chains = np.concatenate([c1, c2], axis=0)  # (2M, n, D)
+    m = split_chains.shape[0]
+
+    # Within variance
+    W = split_chains.var(axis=1, ddof=1).mean(axis=0)  # (D,)
+
+    # Between variance
+    chain_means = split_chains.mean(axis=1)  # (2M, D)
+    overall_mean = chain_means.mean(axis=0)
+    B = n * chain_means.var(axis=0, ddof=1)  # (D,)
+
+    # 식 (11.3)
+    var_plus = (n - 1) / n * W + B / n
+    # 식 (11.4)
+    Rhat = np.sqrt(var_plus / W)
+    return Rhat, var_plus, W
+
+Rhat, var_plus, W = split_Rhat(chains)
+names = [f"theta_{i+1}" for i in range(J)] + ["mu", "sigma", "tau"]
+for name, r in zip(names, Rhat):
+    print(f"R-hat({name}) = {r:.3f}")
+```
+
+기대 결과: 모든 $\widehat{R} < 1.1$. $\tau$ 는 상대적으로 높을 수 있음 ($\approx 1.05$).
+
+### Effective Sample Size 계산
+
+```python
+def ess_from_chains(all_chains):
+    """식 (11.8) 기반."""
+    M, N, D = all_chains.shape
+    N_warm = N // 2
+    saved = all_chains[:, N_warm:, :]
+    n = saved.shape[1] // 2
+    c1 = saved[:, :n, :]
+    c2 = saved[:, n:2*n, :]
+    split_chains = np.concatenate([c1, c2], axis=0)  # (2M, n, D)
+    m = split_chains.shape[0]
+
+    Rhat, var_plus, W = split_Rhat(all_chains)
+
+    n_eff = np.zeros(D)
+    for d in range(D):
+        # Variogram V_t
+        chain_d = split_chains[:, :, d]  # (m, n)
+        rhos = []
+        for lag in range(1, n):
+            V_t = np.mean((chain_d[:, lag:] - chain_d[:, :-lag])**2)
+            rho_t = 1 - V_t / (2 * var_plus[d])
+            rhos.append(rho_t)
+        # 부분합: 연속 두 lag 음수이면 중단
+        partial = 0.0
+        for t in range(0, len(rhos) - 1, 2):
+            pair_sum = rhos[t] + rhos[t + 1]
+            if pair_sum < 0:
+                break
+            partial += pair_sum
+        n_eff[d] = m * n / (1 + 2 * partial)
+    return n_eff
+
+n_eff = ess_from_chains(chains)
+for name, r, e in zip(names, Rhat, n_eff):
+    print(f"{name:10s}  R-hat = {r:.3f}  n_eff = {e:.0f}")
+```
+
+실행 예상: $\theta$ 들 $n_{\mathrm{eff}} \approx 500{-}1000$ (10 체인 × 100 반복 / 2 warm-up × 2 split = 총 1000 저장). $\tau$ 는 낮음 (상관 높음).
+
+### 사후 요약 비교 — Table 11.3 재현
+
+```python
+# 사후 표본 flatten (warm-up 제거 후 저장만)
+saved = chains[:, 50:, :].reshape(-1, J + 3)
+percentiles = [2.5, 25, 50, 75, 97.5]
+print(f"{'Estimand':<10s} | " + " | ".join([f"{p}%" for p in percentiles]))
+for d, name in enumerate(names):
+    q = np.percentile(saved[:, d], percentiles)
+    print(f"{name:<10s} | " + " | ".join([f"{v:>5.1f}" for v in q]))
+```
+
+기대 출력이 Table 11.3 과 매우 유사. $\tau$ 의 극단 분위수 (97.5%) 는 약간 다를 수 있음 — 통계적 변동.
+
+## 세 절을 관통하는 직관 모음
+
+### "수렴 후" 의 두 의미
+
+수렴 = **목표 분포 도달** (stationarity) + **모든 영역 탐색** (mixing).
+
+$\widehat{R}$ 이 둘 다 잡는 유일한 방법: split + between/within 비교.
+
+### $\widehat{R}$ 과 $n_{\mathrm{eff}}$ 의 역할 분담
+
+- $\widehat{R}$: **편향** 진단. "추정이 참값과 다른가".
+- $n_{\mathrm{eff}}$: **분산** 진단. "추정이 얼마나 정밀한가".
+
+둘 다 확인해야 "수렴 + 효율" 보장.
+
+### 계층 모형이 Gibbs 가 빛나는 곳
+
+각 조건부가 **정규·역감마** 같은 표준 분포 → 공액. Gibbs 100% 수용.
+
+Ch.5 의 이론이 Ch.11 의 알고리즘으로 **완벽히** 구현. Rat tumor, 8 schools, coagulation 이 모두 같은 패턴.
+
+## 실전 체크리스트
+
+§ 11.4~11.6 의 교훈을 실무 절차로:
+
+1. **$m \ge 4$ 체인** — split 후 $m \ge 8$ 로 진단 강화.
+2. **과분산 시작점** — 조잡한 추정 + 큰 SD.
+3. **Warm-up 50%** — 보수적 기본값.
+4. **Thinning 피하기** — 저장 공간 문제일 때만.
+5. **$\widehat{R}$ 모든 추정량** — 하나라도 실패면 미수렴.
+6. **$\log p$ 모니터** — 다차원 일관 요약.
+7. **$\widehat{R} < 1.1$ + $\widehat{n}_{\mathrm{eff}} \ge 5m$** — 실무 수렴 기준.
+8. **Long-tailed 변환** — 비정규 사후에 전처리.
+9. **계층 모형 Gibbs 우선** — 조건부 공액 활용.
+10. **$\theta$ marginal 후 Metropolis** — 하이퍼파라미터 공간만 점프.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Ch.11 Overview (02-11-0)](./02-11-0-mcmc-basics.qmd) — MCMC 지도
+- [§ 11.1~11.3 심화 (02-11-1)](./02-11-1-gibbs-metropolis-combinations.qmd) — Gibbs·Metropolis 이론
+- [Ch.5 Hierarchical Models](./00-5-0-hierarchical.qmd) — § 11.6 예제의 뿌리
+- [Ch.10 § 10.5](./02-10-2-importance-sampling-environments.qmd) — 시뮬레이션 표본 수
+
+**Ch.11 후속**
+
+- `02-11-3-*` — § 11.7~11.8 (문헌·연습)
+
+**후속 주제**
+
+- Ch.12 Efficient MCMC — HMC, NUTS, 재매개변수화 상세
+- Ch.13 Variational Inference — MCMC 대안
+
+**관련 개념**
+
+- Gelman & Rubin (1992b) — $\widehat{R}$ 원저
+- Brooks & Gelman (1998) — Multivariate $\widehat{R}$ 확장
+- Geyer (1992) — ESS 부분합 정지 규칙
+- Vehtari, Gelman, Simpson, Carpenter, Bürkner (2021) — Rank-normalized split-$\widehat{R}$ (현대 표준)
+- Gelman & Shirley (2011) — 수렴 진단 실무 리뷰
+- Box, Hunter, Hunter (1978) — Coagulation 데이터 원전
