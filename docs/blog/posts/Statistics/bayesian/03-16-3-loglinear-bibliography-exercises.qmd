@@ -1,0 +1,649 @@
+---
+title: "Ch.16 § 16.7~16.9 심화 — Loglinear Models·문헌·연습 + Ch.16 결산"
+subtitle: "Contingency table 다변량 범주형·Dirichlet-like prior 식 (16.17)·IPF 식 (16.18)·Bayesian IPF·연습문제 풀이 + Ch.16 시리즈 결산"
+description: |
+  Gelman BDA Ch.16의 마지막 세 절을 한 편으로 마무리한다.
+  § 16.7 Loglinear 모형 — 다변량 범주형 데이터의 contingency table을 Poisson/multinomial로 모델링,
+  saturated/null/independence 모델 위계, 식 (16.17) Dirichlet-like conjugate prior,
+  식 (16.18) IPF (iterative proportional fitting) 완전 유도·수렴 증명·Bayesian IPF 확장,
+  결측 데이터 imputation에서의 역할 (Ch.18 preview),
+  § 16.8 주제별 재구성한 GLM 문헌 지도,
+  § 16.9 연습문제 핵심 풀이 (식 (16.4) IWLS 유도·overdispersed bioassay·Cauchy Metropolis·IPF 수렴 증명·meta-analysis posterior propriety),
+  마지막으로 Ch.16 심화 3편 시리즈의 결산 로직맵과 Part IV 다음 편 예고 (Ch.17 Robust) 까지.
+categories:
+  - Statistics
+  - Bayesian
+  - GLM
+  - Loglinear-Models
+  - Contingency-Table
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요 — Ch.16 심화 시리즈의 마지막 편
+
+Ch.16 심화 시리즈 구성:
+
+* **03-16-0** — Ch.16 Overview (8 절 조망).
+* **03-16-1** — § 16.1~16.3 (Standard likelihoods · IWLS · weakly informative Cauchy prior).
+* **03-16-2** — § 16.4~16.6 (NYC 검문 · MRP · multinomial).
+* **03-16-3 (본편)** — § 16.7~16.9 (Loglinear · 문헌 · 연습) + Ch.16 결산.
+
+이 편은 **다변량 범주형 데이터 분석**의 고전적 도구인 **loglinear 모형**을 다룬다. 이는 Ch.18 결측 데이터 imputation 의 핵심 도구이기도 하다. 이어 Ch.16 전체 문헌 지도를 주제별로 정리하고, 연습문제를 풀이한 뒤 시리즈를 마무리한다.
+
+::: {.callout-tip}
+## 직관: Loglinear 모형의 위치
+
+Loglinear 모형은 단순히 "Poisson regression의 한 형태" 지만 실제로는 **여러 시각의 수렴점**:
+
+1. **Poisson regression**: cell count를 Poisson, log link.
+2. **Multinomial 로짓**: 조건부 분포의 범주형 확률.
+3. **Graphical model**: 변수 간 조건부 독립 구조.
+4. **Missing data imputation**: 범주형 변수들의 결합 분포 모델링.
+
+이 다면성 때문에 Gelman이 "별도 절"로 다룬다. 특히 **IPF (iterative proportional fitting)** 는 고전 통계학의 대표적 계산 알고리즘으로, **Bayesian 버전**이 Gibbs sampling과 동등함을 보이는 것이 § 16.7의 이론적 하이라이트.
+:::
+
+## § 16.7 Loglinear Models for Multivariate Discrete Data
+
+### 문제 설정
+
+**Contingency table**: 여러 범주 변수의 교차 분류된 count 표.
+
+예: 3-way table — 성별 (2) × 연령대 (4) × 질병 유무 (2) = $2 \times 4 \times 2 = 16$ cells. 각 cell에 관측 count $y_i$, $i = 1, \dots, 16$.
+
+**연구 질문**:
+
+* 변수들이 **독립**인가? (성별과 연령대가 독립? 연령대와 질병이 독립?)
+* 조건부 독립? (성별 주어지면 연령과 질병이 독립?)
+* 상호작용 패턴?
+
+### Likelihood 선택
+
+**Poisson model**:
+
+$$
+y_i | \mu_i \sim \text{Poisson}(\mu_i) \Leftrightarrow p(y | \mu) = \prod_{i=1}^n \frac{\mu_i^{y_i}}{y_i!} e^{-\mu_i}
+$$
+
+전체 표본 크기가 **자유롭게 변할 수 있을 때** 사용.
+
+**Multinomial model**: 전체 count $N = \sum y_i$ 가 design에 의해 **고정**된 경우:
+
+$$
+y | N, \pi \sim \text{Multinomial}(N, \pi)
+$$
+
+**Product multinomial**: 각 stratum 내 count 합이 고정 (예: 지역별 500명 설문).
+
+**관계**: Poisson 모델에서 $N$ 을 고정하면 multinomial model 도출 (conditional on $N$).
+
+### 모델 구조 — Log-linear
+
+**Expected counts** $\mu$ 를 log 스케일에서 선형:
+
+$$
+\log \mu = X \beta
+$$
+
+$X$ 는 **indicator 행렬** (0/1). 예를 들어 3-way table $2 \times 2 \times 2$:
+
+* Main effect (수준 indicator): 3개 변수 × (수준 수 - 1) indicator.
+* 2-way interaction: 변수 쌍의 곱.
+* 3-way interaction: 세 변수의 곱.
+
+### 모델 위계
+
+여러 수준의 모델:
+
+| 모델 | 포함 효과 | Cell 수 대비 모수 | 해석 |
+|------|-----------|-------------------|------|
+| **Null** | 상수만 | 1 | 모든 cell 동일 확률 |
+| **Independence** | Main effects only | $\sum (L_k - 1) + 1$ | 변수들 완전 독립 |
+| **Conditional independence** | Some 2-way only | 중간 | 특정 쌍 조건부 독립 |
+| **No 3-way** | All 2-way, no 3-way | Cell 수 - 1 | 짝 상호작용만 |
+| **Saturated** | 모든 상호작용 | = Cell 수 | Perfect fit (over-fit) |
+
+### 조건부 독립의 그래프적 해석
+
+::: {.callout-tip}
+## 직관: Loglinear 모형 = Graphical Model
+
+3개 범주 변수 $Z_1, Z_2, Z_3$.
+
+**$Z_1 Z_3$ 와 $Z_2 Z_3$ 상호작용만 포함** 하고 $Z_1 Z_2$ 는 빼면:
+
+$$
+\log \mu_{ijk} = \mu + \alpha_i + \beta_j + \gamma_k + (\alpha\gamma)_{ik} + (\beta\gamma)_{jk}
+$$
+
+이는 **"$Z_1$ 과 $Z_2$ 는 $Z_3$ 가 주어지면 조건부 독립"** 을 뜻한다.
+
+그래프: $Z_1 - Z_3 - Z_2$ ($Z_3$ 이 $Z_1$ 과 $Z_2$ 사이 매개).
+
+이것이 **graphical model** (Bayesian network, Markov random field) 의 기초. Loglinear 모형의 상호작용 항 구조 = 그래프 구조.
+
+이 관점은 **Ch.18 결측 데이터 imputation** 에서 핵심 — 범주 변수 간 joint 분포를 loglinear model로 압축 표현.
+:::
+
+### Structural Zeros vs Random Zeros
+
+**Structural zero**: cell이 정의상 불가능 ($\mu = 0$). 예: "전립선암을 가진 여성" cell.
+
+**Random zero**: 관측되지 않았지만 정의상 가능 ($\mu > 0$, $y = 0$).
+
+Gelman은 **structural zeros가 없다** 고 가정 (제거된 상태). Random zeros 는 계산에서 문제없이 처리.
+
+### Dirichlet-like Conjugate Prior — 식 (16.17)
+
+기대 cell count $\mu$ 에 대한 conjugate prior:
+
+$$
+p(\mu) \propto \prod_{i=1}^n \mu_i^{k_i - 1} \quad \text{(16.17)}
+$$
+
+**조건**: $p(\mu) = 0$ unless $\log \mu = X\beta$ for some $\beta$. 즉 loglinear 제약 위에서만 support.
+
+**해석**: 각 cell $i$ 에 **가상의 prior count** $k_i$. Multinomial의 Dirichlet prior와 동일 형태.
+
+**Noninformative 선택**: $k_i$ 를 0~1 사이 값으로. Jeffreys prior: $k_i = 1/2$.
+
+### Sampling Model별 차이
+
+* **Poisson**: $\sum \mu_i$ 제약 없음. (16.17)을 그대로 사용.
+* **Multinomial**: $\sum \mu_i = 1$ 제약. 이 경우 (16.17)은 정확히 **Dirichlet($k_1, \dots, k_n$)**.
+
+### IPF — Iterative Proportional Fitting
+
+Posterior mode (또는 MLE) 를 계산하는 고전 알고리즘. Deming-Stephan (1940) 이 원조.
+
+**핵심 아이디어**: 모델의 **sufficient statistics (marginal totals)** 에 반복 맞춤.
+
+### 식 (16.18) — IPF 알고리즘
+
+Multiplicative 재매개:
+
+$$
+\gamma_j = \exp(\beta_j), \quad \mu_i = \prod_j \gamma_j^{x_{ij}}
+$$
+
+**관심 marginal**:
+
+$$
+y_{j+} = \sum_i x_{ij} (y_i + k_i) \quad (\text{관측 + prior count, design matrix column } j)
+$$
+
+**IPF 업데이트 (단일 모수 $\gamma_j$)**:
+
+$$
+\gamma_j^{\text{new}} = \frac{y_{j+}}{\sum_i x_{ij} \mu_i^{\text{old}}} \cdot \gamma_j^{\text{old}}
+$$
+
+**Cell count 재조정**:
+
+$$
+\mu_i^{\text{new}} = \mu_i^{\text{old}} \cdot \left( \frac{\gamma_j^{\text{new}}}{\gamma_j^{\text{old}}} \right)^{x_{ij}} \quad \text{(16.18)}
+$$
+
+$x_{ij} = 1$ 인 cell만 재조정, 나머지는 그대로.
+
+**반복**: 모든 $j$ 에 대해 순회하며 수렴까지.
+
+### 왜 이 알고리즘이 작동하는가
+
+::: {.callout-tip}
+## 직관: IPF의 수렴 기제
+
+**1단계 의미**: $\gamma_j^{\text{new}}$ 업데이트로 **해당 margin이 데이터에 정확히 일치** 하도록.
+
+$$
+\sum_i x_{ij} \mu_i^{\text{new}} = \sum_i x_{ij} \mu_i^{\text{old}} \cdot \frac{\gamma_j^{\text{new}}}{\gamma_j^{\text{old}}} = \sum_i x_{ij} \mu_i^{\text{old}} \cdot \frac{y_{j+}}{\sum_i x_{ij} \mu_i^{\text{old}}} = y_{j+}
+$$
+
+즉 **margin $j$ 는 정확히 $y_{j+}$ 로 맞춰진다**. 다른 margins 은 일시적으로 어긋나지만 다음 step에 재조정.
+
+**수렴**: 매 iteration에서 **log-likelihood가 단조 증가** (Coordinate ascent). Deming-Stephan 원 증명.
+
+**계산 효율**: 각 step이 $O(n)$ (cells 수), 전체 iteration은 통상 수십 회. 고차원 contingency table에 매우 효율적.
+
+이것이 왜 **60년 넘게 표준**으로 쓰이는가 — 수학적 elegance + 계산 효율 + 해석 용이.
+:::
+
+### Bayesian IPF — Gibbs Sampler
+
+MLE가 아닌 **posterior 분포**에서 샘플링 하려면 각 step에 **randomness 추가**:
+
+$$
+\gamma_j^{\text{new}} = \frac{A}{2 y_{j+}} \cdot \frac{y_{j+}}{\sum_i x_{ij} \mu_i^{\text{old}}} \cdot \gamma_j^{\text{old}}
+$$
+
+여기서 $A \sim \chi^2_{2 y_{j+}}$ — 자유도 $2 y_{j+}$ 카이제곱 샘플.
+
+**해석**: 일반 IPF 업데이트에 $A / (2 y_{j+})$ 배. $\mathbb{E}[A / (2 y_{j+})] = 1$ 이므로 기댓값은 IPF와 동일하지만 **randomness 가 추가**.
+
+**Gelman-Rubin (1991) 증명**: 이 수정 IPF가 **$\gamma$ 에 대한 Gibbs sampler**. 즉
+
+$$
+\gamma_j | \gamma_{-j}, y \sim (\chi^2_{2 y_{j+}} / (2 y_{j+})) \cdot (\text{IPF update})
+$$
+
+이것이 정확히 Gibbs full conditional.
+
+### Multinomial 제약
+
+Multinomial 에서는 $\sum \mu_i = N$ (총 표본 크기). Bayesian IPF 각 step 후 $\mu$ 를 **정규화**:
+
+$$
+\mu_i^{\text{new}} \leftarrow \mu_i^{\text{new}} \cdot \frac{N}{\sum_k \mu_k^{\text{new}}}
+$$
+
+### 결측 데이터 Imputation (Ch.18 Preview)
+
+범주 변수들의 joint 분포에 불완전 데이터가 있으면:
+
+1. Loglinear model 을 full cell에 적합.
+2. 각 missing pattern에 대해 observed cells로부터 **conditional 분포** 계산.
+3. 결측 값을 conditional 분포에서 **imputation**.
+4. Imputed dataset 으로 downstream 분석.
+
+Ch.18 § 18.5 의 표준 접근. Loglinear 이 **categorical missing** 표준.
+
+### 다른 연속·계산 방법
+
+* **Log-likelihood gradient 직접 최적화**: IRLS 대신 scipy.optimize.
+* **MCMC (HMC)**: Loglinear 제약을 softmax parameterization으로 풀면 HMC 적용 가능.
+* **Variational Bayes**: Ormerod-Wand (2012) 계층 GLM VB.
+
+## § 16.8 Bibliographic Note — 주제별 재구성
+
+### GLM 이론 기초
+
+* **Nelder, Wedderburn (1972)** — "generalized linear model" 용어와 프레임 확립. Fisher scoring의 확장.
+* **McCullagh, Nelder (1989)** *Generalized Linear Models* — 빈도주의 GLM 표준서.
+* **Hinde (1982), Liang, McCullagh (1993)** — 과분산 모델링.
+* **Gelman, Hill (2007)** — 계산·그래프 중심 베이즈 GLM 입문.
+
+### 모델 진단
+
+* **Albert, Chib (1995)**, **Gelman, Goegebeur et al. (2000)** — discrete-data 회귀의 베이즈 잔차 분석.
+* **Landwehr, Pregibon, Shoemaker (1984)** — 잔차 플롯 고전.
+
+### Weakly Informative Prior
+
+* **Gelman, Jakulin, Pittau, Su (2008)** — Cauchy(0, 2.5) 권장 원 논문.
+* **Firth (1993)** — Penalized likelihood (bias reduction).
+* **Raftery (1996b)**, **Heinze, Schemper (2003)**, **Zorn (2005)** — 분리 처리 대안.
+
+### Contingency Tables & Loglinear
+
+* **Fienberg (1977)** *Analysis of Cross-Classified Data* — 교과서.
+* **Agresti (2002)** *Categorical Data Analysis* — 현대 표준.
+* **Good (1965)** — 계층 베이즈 contingency 초기 연구.
+* **Knuiman, Speed (1988)**, **Albert (1988)** — 분석적 근사 기반 베이즈.
+* **Bedrick, Christensen, Johnson (1996)** — GLM prior 전반.
+* **Deming, Stephan (1940)** — IPF 원조.
+* **Gelman, Rubin (1991)** — **Bayesian IPF** 제안.
+* **Meng, Rubin (1993)** — 결측 loglinear의 ECM.
+* **Dobra, Tebaldi, West (2003)** — 현대 contingency 베이즈.
+
+### Hierarchical GLM 계산
+
+* **Dempster, Selwyn, Weeks (1983)** — 로지스틱 초기 베이즈 (정규 근사 + importance sampling).
+* **Zeger, Karim (1991)**, **Karim, Zeger (1992)**, **Albert (1992)** — Varying coefficients GLM Gibbs.
+* **Dellaportas, Smith (1993)** — Adaptive rejection sampling Gibbs.
+* **Albert, Chib (1993)** — 잠재 연속 변수 Gibbs.
+* **Gelfand, Sahu (1999)** — GLM Gibbs 일반 논의.
+* **Clayton, Bernardinelli (1992)** — 질병 지도 계층 GLM.
+* **Datta (1999)** — 주 수준 실업률 계층.
+* **Ormerod, Wand (2012)** — 계층 GLM 변분 베이즈.
+* **Cseke, Heskes (2011)** — EP for GLM.
+
+### Stop-and-Frisk & MRP
+
+* **Spitzer (1999)** — NY 주 법무장관실 원 보고서.
+* **Gelman, Fagan, Kiss (2007)** — § 16.4 논문.
+* **Park, Gelman, Bafumi (2004)** — MRP 원 논문.
+* **Gelman, Little (1997)**, **Lax, Phillips (2009a,b)** — MRP 확장.
+* **Gelman, Shor et al. (2007)**, **Gelman, Ghitza (2013)** — MRP 정치 응용.
+* **Reilly, Gelman, Katz** — MRP 시계열.
+
+### 결측 데이터 GLM
+
+* **Belin et al. (1993)** — 인구 조사 조정 계층 로지스틱 ECM.
+* **Imai, van Dyk (2005)** — Unordered multinomial probit 베이즈.
+
+### Paired Comparisons (Chess, Rating)
+
+* **Bradley, Terry (1952)** — Paired comparisons 원 논문.
+* **Davidson, Beaver (1977)** — 동률·순서 효과 확장.
+* **Stern (1990)**, **David (1988)** — 일반 순위 모델.
+* **Glickman (1993)** — World Cup chess 분석.
+* **Johnson (1996, 1997)** — 순위·등급 계층 베이즈.
+* **Bradlow, Fader (2001)** — 순위 시계열.
+* **Jackman (2001), Martin, Quinn (2002)** — 정치 ideal points.
+
+## § 16.9 Exercises — 핵심 풀이
+
+Ch.16의 11문제 중 이론·실무적 핵심 5문제.
+
+### Exercise 16.1 — 식 (16.4) IWLS 유도
+
+**문제**: GLM 정규 근사 식 (16.4) 의 $z_i$ 와 $\sigma_i^2$ 를 유도하라.
+
+**풀이**: 03-16-1의 § 16.2 심화에서 이미 완전 유도. 요점 재기술:
+
+Log-likelihood $L(y_i | \eta_i, \phi)$ 를 $\hat\eta_i$ 에서 2차 Taylor 전개:
+
+$$
+L \approx L(\hat\eta_i) + L'(\hat\eta_i)(\eta_i - \hat\eta_i) + \frac{1}{2} L''(\hat\eta_i)(\eta_i - \hat\eta_i)^2
+$$
+
+완성 제곱:
+
+$$
+L \approx -\frac{1}{2\sigma_i^2}(z_i - \eta_i)^2 + \text{const}
+$$
+
+에서 $\sigma_i^2 = -1/L''(\hat\eta_i)$, $z_i = \hat\eta_i - L'(\hat\eta_i) / L''(\hat\eta_i)$.
+
+### Exercise 16.3 — Overdispersed Bioassay
+
+**문제**: Ch.3.7 bioassay 를 overdispersed GLM 으로 확장:
+
+$$
+\text{logit}(\theta_i) \sim N(\alpha + \beta x_i, \sigma^2)
+$$
+
+기본 로지스틱 $\text{logit}(\theta_i) = \alpha + \beta x_i$ 대신 "근사적으로 만족" 구조. $\sigma$ 추정.
+
+**모형 완성**:
+
+$$
+\begin{aligned}
+y_i | n_i, \theta_i &\sim \text{Bin}(n_i, \theta_i) \\
+\text{logit}(\theta_i) &\sim N(\alpha + \beta x_i, \sigma^2) \\
+(\alpha, \beta, \log \sigma) &\sim \text{uniform}
+\end{aligned}
+$$
+
+**의미**: 로지스틱 predictor 주변에 **관측별 정규 random effect** — 과분산 흡수.
+
+**(a) Ch.3.7 원 데이터** ($n_i = 5$, 4 dose levels): $\sigma$ 가 매우 부정확하게 추정 (데이터 적음). Posterior가 prior에 민감. Science 결론: $\alpha, \beta$ 자체는 큰 변화 없지만 예측 분산이 증가.
+
+**(b) 가상 대규모 데이터** ($n_i = 5000$): $\sigma$ 를 정확히 추정 가능. 만약 $\hat\sigma \gg 0$ 이면 단순 로지스틱 모델 부족 증거.
+
+**Python 스케치**:
+
+```python
+import pymc as pm
+
+with pm.Model() as od_bioassay:
+    alpha = pm.Normal("alpha", 0, 10)
+    beta = pm.Normal("beta", 0, 10)
+    log_sigma = pm.Normal("log_sigma", 0, 2)
+    sigma = pm.Deterministic("sigma", pm.math.exp(log_sigma))
+
+    # overdispersion: latent log-odds per observation
+    eps = pm.Normal("eps", 0, 1, shape=n_obs)
+    logit_theta = alpha + beta * x + sigma * eps
+    theta = pm.Deterministic("theta", pm.math.sigmoid(logit_theta))
+
+    pm.Binomial("y", n=n_trials, p=theta, observed=y_obs)
+    trace = pm.sample(2000, target_accept=0.95)
+```
+
+### Exercise 16.6 — Metropolis with Cauchy Prior
+
+**문제**: Poisson 회귀 $y_i \sim \text{Poisson}(e^{X_i \beta})$ 에 Cauchy(0, 2.5) prior 부여. Metropolis 알고리즘 구현 + fake data 검증.
+
+**Log posterior**:
+
+$$
+\log p(\beta | y) = \sum_i \left[ y_i X_i \beta - e^{X_i \beta} \right] - \sum_j \log(1 + (\beta_j / 2.5)^2) + \text{const}
+$$
+
+**Metropolis**:
+
+```python
+import numpy as np
+
+def log_posterior(beta, X, y, cauchy_scale=2.5):
+    eta = X @ beta
+    log_lik = np.sum(y * eta - np.exp(eta))
+    log_prior = -np.sum(np.log(1 + (beta / cauchy_scale)**2))
+    return log_lik + log_prior
+
+
+def metropolis(X, y, n_iter=5000, proposal_sd=0.1, seed=0):
+    rng = np.random.default_rng(seed)
+    k = X.shape[1]
+    beta = np.zeros(k)
+    samples = np.zeros((n_iter, k))
+    log_p = log_posterior(beta, X, y)
+
+    for t in range(n_iter):
+        beta_prop = beta + rng.normal(0, proposal_sd, k)
+        log_p_prop = log_posterior(beta_prop, X, y)
+        if np.log(rng.uniform()) < log_p_prop - log_p:
+            beta, log_p = beta_prop, log_p_prop
+        samples[t] = beta
+    return samples
+
+
+# fake data
+rng = np.random.default_rng(0)
+n, k = 50, 3
+X = np.column_stack([np.ones(n), rng.standard_normal(n), rng.binomial(1, 0.3, n)])
+beta_true = np.array([0.5, 0.3, -0.4])
+y = rng.poisson(np.exp(X @ beta_true))
+
+samples = metropolis(X, y, n_iter=10000, proposal_sd=0.05)
+print(f"Posterior mean: {samples[2000:].mean(axis=0).round(3)}")
+print(f"True:           {beta_true}")
+```
+
+**(c) 왜 과분산 모델로 확장?** Poisson은 분산 = 평균. 실제 count 데이터는 종종 분산 > 평균 — 숨은 heterogeneity, clustering 등. 과분산 무시하면 표준오차 과소 추정.
+
+**(d) Negative binomial 확장**:
+
+$$
+y_i | \mu_i, \phi \sim \text{NegBin}(\mu_i, \phi), \quad \log \mu_i = X_i \beta
+$$
+
+Parameterization 주의: $\mathrm{Var}(y) = \mu + \mu^2 / \phi$, $\phi \to \infty$ 에서 Poisson 수렴. $\phi$ 에 log-normal 또는 Half-Cauchy prior.
+
+### Exercise 16.8 — IPF 수렴 증명
+
+**문제 (a)**: IPF 알고리즘이 매 step에서 posterior density를 증가시킴을 증명.
+
+**풀이 스케치**: IPF 업데이트는 coordinate ascent. 각 $\gamma_j$ 업데이트가 다른 $\gamma_{-j}$ 고정 시의 **conditional log-likelihood** 를 최대화.
+
+Conditional log-likelihood:
+
+$$
+\log p(y | \gamma_j, \gamma_{-j}) \propto \sum_i \left[ y_i \log \mu_i - \mu_i \right] = \sum_i y_i \log \mu_i - \sum_i \mu_i
+$$
+
+$\gamma_j$ 에 대한 도함수 = 0 풀면
+
+$$
+\frac{d}{d\gamma_j} \sum_i \mu_i = \sum_i x_{ij} \prod_{l \neq j} \gamma_l^{x_{il}} = \sum_i x_{ij} \mu_i / \gamma_j
+$$
+
+와
+
+$$
+\frac{d}{d\gamma_j} \sum_i y_i \log \mu_i = \sum_i y_i x_{ij} / \gamma_j
+$$
+
+두 항 같음:
+
+$$
+\gamma_j^* = \frac{\sum_i y_i x_{ij}}{\sum_i x_{ij} \mu_i^{-j}} = \frac{y_{j+}}{\sum_i x_{ij} \mu_i^{\text{old}} / \gamma_j^{\text{old}}}
+$$
+
+이를 $\gamma_j^{\text{new}} / \gamma_j^{\text{old}}$ 로 정리하면 정확히 (16.18). Coordinate ascent이므로 **단조 증가 보장**.
+
+**(b) Bayesian IPF가 Gibbs sampler**: $\gamma_j | \gamma_{-j}, y$ 의 full conditional을 유도. Poisson likelihood + Dirichlet prior + 제약.
+
+$$
+\gamma_j | \gamma_{-j}, y \propto \gamma_j^{y_{j+}} \exp(-\gamma_j \cdot C) \quad (\text{여기서 } C = \sum_i x_{ij} \mu_i^{-j})
+$$
+
+이는 $\text{Gamma}(y_{j+} + 1, C)$ 분포. 정규화: $A \sim \chi^2_{2 y_{j+}} = \text{Gamma}(y_{j+}, 1/2)$ 에서
+
+$$
+\gamma_j^{\text{new}} = \frac{A}{2 C}
+$$
+
+IPF 업데이트 $y_{j+} / C$ 를 $(A / (2 y_{j+}))$ 로 확률화. 즉 Bayesian IPF = Gamma conjugate의 Gibbs.
+
+### Exercise 16.9 — Meta-analysis Posterior Propriety
+
+**문제**: § 16.6의 bivariate 메타 분석 모형에서 사후가 proper함을 증명.
+
+**(a) $\rho_{12}$ 조건부 proper**: $\rho_{12}$ 고정 시 나머지 모수 ($\beta, \alpha, \Lambda_{11}, \Lambda_{22}$) 의 결합 사후가 proper.
+
+**증명 스케치**: 조건부로 $\Lambda$ 는 2×2 공분산 (고정 $\rho_{12}$), 독립 uniform $\Lambda_{11}, \Lambda_{22}$. Bivariate normal 계층 likelihood + 정규 prior → Ch.14 weighted regression 구조. $\beta | \alpha, \Lambda$ 정규, $\alpha | \beta, \Lambda$ 정규, $\Lambda_{ii} | \beta$ inverse-Gamma-like with proper posterior ($n > 2$).
+
+**(b) 전체 posterior proper**: Marginal $p(\rho_{12} | y)$ 가 $[-1, 1]$ 에서 integrable.
+
+**주의**: uniform on $\rho$ 이지만 $|\rho| \to 1$ 에서 likelihood가 singular가 되진 않음 (22 관측 쌍이 non-zero variance). 데이터 많으면 posterior가 $\rho$ 에 concentration.
+
+## Ch.16 심화 시리즈 결산
+
+### 3편 논리 지도
+
+```
+[Ch.16 Overview] 03-16-0
+    ↓ 8개 절, GLM 3단 구조, MRP·loglinear 조망
+[§ 16.1~16.3] 03-16-1: Likelihoods + IWLS + Weakly Informative
+    ↓ Poisson/Binomial/Probit 식 (16.2)
+    ↓ 잠재 변수 식 (16.3), IWLS 식 (16.4) 완전 유도
+    ↓ 분리 문제 + Cauchy(0, 2.5) 근거
+[§ 16.4~16.6] 03-16-2: 응용 예제
+    ↓ NYC 식 (16.12) 과분산 Poisson — Ligon 판례
+    ↓ MRP 2단계 — Figure 16.6 ANOVA display
+    ↓ Bivariate 메타 식 (16.13)·multinomial·ordered·Chess
+[§ 16.7~16.9] 03-16-3 (본편): Loglinear + 결산
+    ↓ Contingency table + 식 (16.17) Dirichlet-like prior
+    ↓ IPF 식 (16.18) + Bayesian IPF = Gibbs 증명
+    ↓ 문헌 + 연습 풀이 + Ch.16 결산
+```
+
+### Ch.16 결산 실전 체크리스트
+
+**모형 선택** (01-16-0)
+
+1. 반응변수 **유형** 파악 → 적절한 likelihood (normal/Poisson/binomial/multinomial/log-linear).
+2. Link function 선택 (canonical이 기본).
+3. Offset 필요? (rate 모델링)
+4. 과분산 위험 있는가? → Negative binomial 또는 random effect.
+
+**Prior** (01-16-1)
+
+5. 로지스틱: Cauchy(0, 2.5), 상수항 Cauchy(0, 10).
+6. 연속 $x$ SD 0.5 표준화.
+7. 분리 의심되면 **prior 반드시 필요**.
+8. 계층 prior로 여러 계수 shrinkage.
+
+**계산** (01-16-1)
+
+9. IWLS 기반 정규 근사로 빠른 MLE·근사 사후.
+10. MCMC로 정확한 사후 (HMC, NUTS 권장).
+11. 잠재 변수 parameterization (probit) 이 Gibbs에 편리.
+12. Divergence → non-centered + target_accept 상향.
+
+**응용** (01-16-2)
+
+13. **과분산 Poisson**: offset 설정 + random effect 2중 구조 (그룹 + 관측별).
+14. **MRP**: Stage 1 multilevel regression + Stage 2 poststratification. 센서스 가중치 필수.
+15. **Bivariate 반응**: 평균+차이 reparameterization으로 decorrelate.
+16. **Multinomial/ordered**: 기준 범주 또는 cut-point 0 고정.
+
+**Loglinear** (01-16-3)
+
+17. Contingency table의 **graphical model 해석** 고려.
+18. Saturated 피하고 **sparse interaction** 구조 설계.
+19. IPF로 MLE 빠르게 (R의 `loglin()`, `MASS::loglm`).
+20. 베이즈 필요하면 Bayesian IPF 또는 STAN.
+21. 결측 데이터 imputation에서 핵심 도구 (Ch.18).
+
+**검증**
+
+22. Posterior predictive check 필수 (분포 적합도 확인).
+23. 잔차 분석 (Pearson, deviance residuals).
+24. 과분산·Zero inflation 진단.
+25. 인과 해석은 통계 패턴 + 도메인 지식 결합.
+
+### 구현 환경
+
+| 기능 | Python | R |
+|------|--------|---|
+| 빈도주의 GLM | `statsmodels.GLM` | `glm()`, `MASS::glm.nb` |
+| 베이즈 GLM | `pymc`, `numpyro`, `bambi` | `rstanarm::stan_glm`, `brms` |
+| Weakly informative | `pm.Cauchy` | `arm::bayesglm` |
+| MRP | `bambi`, 수동 Stan | `brms::brm` + `survey` |
+| Loglinear | `statsmodels.GLM(family=Poisson())` | `MASS::loglm`, `loglin()` |
+| IPF | `ipfn` 패키지 | `mipfp` |
+
+## Part IV 다음 편 예고
+
+Ch.16 심화 시리즈 **완결**. Part IV 의 다음 두 장:
+
+### Ch.17 — Models for Robust Inference
+
+**주제**: 이상치 robust 추론. 정규 분포의 "thin tail" 한계 극복.
+
+* $t$ 분포 기반 robust regression.
+* **Robit** (logistic/probit의 $t$ 확장).
+* 8 schools 재방문 (outlier 있을 때).
+* Scale mixture of normals.
+
+**Ch.16 와의 연결**: GLM likelihood 확장의 또 다른 방향 — **꼬리 분포 완화**. Poisson/binomial 은 "counts/proportions" 확장, $t$ 는 "heavy-tail" 확장.
+
+### Ch.18 — Models for Missing Data
+
+**주제**: 결측 데이터의 베이즈 처리.
+
+* MAR (Missing at Random) 가정.
+* Multiple imputation.
+* Data augmentation.
+* Categorical variable imputation (**loglinear 모형 활용**).
+
+**Ch.16 와의 연결**: Loglinear (§ 16.7) 이 결측 범주형 데이터 imputation 의 표준 도구. Ch.16을 Ch.18 의 전제로 활용.
+
+Part IV 완결 후 **Part V** (비선형·비모수 모형) 로 전환: GP, basis function, finite mixture, DP.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.16 Overview](./03-16-0-generalized-linear-models-overview.qmd)
+* [Ch.16 § 16.1~16.3 — Standard Likelihoods·IWLS·Weakly Informative](./03-16-1-standard-likelihoods-working-priors.qmd)
+* [Ch.16 § 16.4~16.6 — NYC·MRP·Multinomial](./03-16-2-police-stops-mrp-multinomial.qmd)
+* [Ch.14 § 14.7~14.10 — Augmented Regression](./03-14-3-unequal-variance-prior-exercises.qmd)
+* [Ch.15 § 15.6 — ANOVA Batching](./03-15-2-varying-slopes-computation-anova.qmd)
+
+**후속 주제 (Part IV)**
+
+* Ch.17 Robust Inference — $t$ 오차, robit regression
+* Ch.18 Missing Data — multiple imputation, loglinear imputation
+
+**관련 개념 (cross-category)**
+
+* [Contingency Table Analysis (Agresti)](../contingency-table.qmd)
+* [Graphical Models](../../Machine_Learning/graphical-models.qmd)
+* [Multiple Imputation](../multiple-imputation.qmd)
+* [Iterative Proportional Fitting in Survey](../../Data_Science/ipf-survey.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.16 § 16.7~16.9. CRC Press.
+* Fienberg, S. E. (1977). *The Analysis of Cross-Classified Categorical Data*. MIT Press.
+* Agresti, A. (2002). *Categorical Data Analysis* (2nd ed.). Wiley.
+* Good, I. J. (1965). *The Estimation of Probabilities: An Essay on Modern Bayesian Methods*. MIT Press.
+* Deming, W. E., & Stephan, F. F. (1940). On a Least Squares Adjustment of a Sampled Frequency Table. *Annals of Mathematical Statistics*, 11, 427-444.
+* Gelman, A., & Rubin, D. B. (1991). Simulating the Posterior Distribution of Loglinear Contingency Table Models. Technical Report.
+* Meng, X.-L., & Rubin, D. B. (1993). Maximum Likelihood Estimation via the ECM Algorithm. *Biometrika*, 80, 267-278.
+* Dobra, A., Tebaldi, C., & West, M. (2003). Bayesian Inference in Incomplete Multi-way Tables. Technical Report.
