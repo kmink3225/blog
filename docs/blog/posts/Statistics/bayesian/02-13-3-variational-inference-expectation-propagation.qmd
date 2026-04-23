@@ -1,0 +1,673 @@
+---
+title: "§ 13.7~13.8 — Variational Inference·Expectation Propagation"
+subtitle: "Gelman BDA Ch.13 심화 — 식 (13.15) KL 최소화, mean-field 좌표 상승, 8 학교 VI 식 (13.18)~(13.23) 완전 유도, EP 의 cavity/tilted/moment matching, Bioassay EP 실전"
+description: |
+  Ch.13 § 13.7~13.8 은 **근사 추론의 현대판**. 단일 Laplace 근사를 넘어
+  사후를 **단순 분포 가족의 최적 fit** 으로 근사하는 VI (Variational
+  Inference) 와, **factor 단위로 순차 근사** 하는 EP (Expectation
+  Propagation). 이 포스트는 두 알고리즘의 수식과 직관을 완전 전개.
+  § 13.7 의 VI 는 KL divergence $\mathrm{KL}(g \| p)$ 를 최소화하도록
+  $g(\theta \mid \phi)$ 를 iterative 갱신 — 식 (13.15) 정의와 0 하한,
+  mean-field 근사 $g(\theta) = \prod g_j(\theta_j)$ 구조, 좌표 상승
+  update $\log g_j \propto \mathbb{E}_{g_{-j}}[\log p(\theta \mid y)]$,
+  ELBO 최대화와 KL 최소화 의 등가성, 8 학교 hierarchical normal 예제
+  (식 13.16~13.23) 에서 각 $\alpha_j, \mu, \tau^2$ 의 $g_j$ 형태 유도
+  (정규+정규+inv-$\chi^2$), VI 수렴 증명 (각 단계 KL 단조 감소), VI 의
+  과소 분산 편향과 그 수학적 원인. § 13.8 의 EP 는 목표 분포의 factor
+  분해 $f(\theta) = \prod f_i(\theta)$ 에 대응해 $g(\theta) = \prod
+  g_i(\theta)$ 로 순차 근사 — cavity $g_{-i} = g/g_i$, tilted $g_{-i} f_i$,
+  moment matching 으로 $g_i$ 업데이트, 지수족·natural parameter·충분
+  통계량 구조, Bioassay 로지스틱 회귀에서 각 데이터점에 대한 6 단계 EP
+  업데이트 완전 전개, 수렴 보장 없음에도 실무 유효한 이유. VI vs EP
+  tradeoff 표, 현대 발전 (ADVI, normalizing flows, VAE) 연결.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — 두 근사 추론의 대비
+
+Ch.13 § 13.7~13.8 은 **사후 전체를 단일 분포로 근사**. Laplace 가 "mode 주변 정규" 였다면, VI/EP 는 **더 유연한 분포 가족**에서 최적화.
+
+| 측면 | VI | EP |
+|---|---|---|
+| 최적화 기준 | $\mathrm{KL}(g \| p)$ 최소화 | Moment matching (local KL) |
+| 분해 축 | **모수별** $g = \prod g_j(\theta_j)$ | **데이터점별** $g = \prod g_i(\theta)$ |
+| 수렴 | 단조 감소 KL 보장 | 보장 없음 (실무 양호) |
+| 편향 | 분산 **과소** | 분산 **과대** |
+| 속도 | 매우 빠름 | 비슷, 때로 더 느림 |
+
+두 방법 모두 **확장 가능** — 관측 $n$ 수십만~수백만에서 실용. MCMC 로 불가능한 규모.
+
+[Overview (02-13-0)](./02-13-0-modal-variational-approximations.qmd) 의 3 세대 근사 마지막 장.
+
+## § 13.7 — Variational Inference
+
+### 기본 아이디어
+
+목표 $p(\theta \mid y)$ 에서 추출 불가. 대신 **간단한 분포 가족** $\mathcal{G}$ 에서:
+
+$$
+g^* = \arg\min_{g \in \mathcal{G}} \mathrm{KL}(g \| p(\theta \mid y))
+$$
+
+$g^*$ 를 사후 대용으로 사용.
+
+### KL Divergence — 식 (13.15)
+
+$$
+\mathrm{KL}(g \| p) = -\mathbb{E}_g\!\left[\log \frac{p(\theta \mid y)}{g(\theta)}\right] = -\int g(\theta) \log \frac{p(\theta \mid y)}{g(\theta)} d\theta \tag{13.15}
+$$
+
+**성질**:
+
+- $\mathrm{KL} \ge 0$ (Gibbs 부등식).
+- 등호 $\iff g = p$ a.e..
+
+**목표**: $\mathcal{G}$ 범위 내 최소화. $g = p$ 가 $\mathcal{G}$ 에 없으면 **0 못 가짐**, 근사 편향 내재.
+
+### ELBO — 실제 최적화 대상
+
+$\mathrm{KL}(g \| p)$ 직접 계산 어려움: $p(\theta \mid y)$ 의 정규화 상수 $p(y)$ 미지.
+
+**우회**: Evidence Lower Bound (ELBO):
+
+$$
+\log p(y) = \mathrm{KL}(g \| p(\theta \mid y)) + \underbrace{\mathbb{E}_g[\log p(\theta, y) - \log g(\theta)]}_{\mathrm{ELBO}(g)}
+$$
+
+$\log p(y)$ 는 $g$ 무관 상수. **KL 최소화 ↔ ELBO 최대화**.
+
+$$
+\mathrm{ELBO}(g) = \mathbb{E}_g[\log p(\theta, y)] - \mathbb{E}_g[\log g(\theta)]
+$$
+
+첫 항: 결합 log density 기댓값. 둘째: 엔트로피 (음의 부호).
+
+실무: ELBO 계산은 **정규화 상수 불필요** — $p(\theta, y) = p(\theta) p(y \mid \theta)$ 로 충분.
+
+### Mean-Field 근사
+
+가장 흔한 $\mathcal{G}$ 선택: **성분 독립**.
+
+$$
+g(\theta \mid \phi) = \prod_{j=1}^J g_j(\theta_j \mid \phi_j)
+$$
+
+**단점**: 사후 성분 간 상관 무시 → **과소 분산**.
+**장점**: 각 $g_j$ 를 독립적으로 업데이트 가능.
+
+### 좌표 상승 업데이트
+
+Mean-field 하 최적 $g_j$:
+
+$$
+\log g_j^*(\theta_j) \propto \mathbb{E}_{g_{-j}}[\log p(\theta, y)]
+$$
+
+**유도**: ELBO 를 $g_j$ 에 대해 미분 0. 결과: 다른 $g_{-j}$ 고정 하에서 **log joint 의 conditional 기댓값** 이 최적 $\log g_j$.
+
+**Gibbs 샘플링과 대응**: Gibbs 는 $p(\theta_j \mid \theta_{-j}, y)$ 에서 **추출**, VI 는 $\mathbb{E}_{g_{-j}}[\log p]$ 로 **$g_j$ 분포 결정**. 추출 vs 분포 갱신.
+
+### 알고리즘
+
+1. 각 $g_j$ 파라미터 $\phi_j$ 초기화.
+2. 각 반복 $t$:
+   - 각 $j = 1, \ldots, J$ 에 대해:
+     - $\log g_j^{(t)}(\theta_j) \propto \mathbb{E}_{g_{-j}^{(t)}}[\log p(\theta, y)]$ 계산.
+     - $\phi_j$ 업데이트.
+3. ELBO 수렴 또는 $\phi$ 변화 없음 시 중단.
+
+### VI 가 단조 KL 감소 — 증명 스케치
+
+각 $g_j$ 업데이트가 **$\mathrm{ELBO}$ 증가** → KL 감소.
+
+$j$ 업데이트 시 다른 $g_{-j}$ 고정. $g_j$ 만의 함수로서 ELBO 는 $\mathrm{KL}(g_j \| g_j^*)$ 의 형태 — $g_j = g_j^*$ 에서 최대.
+
+따라서 각 업데이트가 **ELBO 비감소** (최대 또는 같음). 단조 수렴 보장.
+
+::: {.callout-tip}
+## 직관 — VI 를 EM 으로 이해하기
+
+EM 의 variational 관점 (§ 13.4 심화):
+
+- E-step: $q(\gamma) = p(\gamma \mid \phi^{\mathrm{old}}, y)$ (잠재 posterior 정확).
+- M-step: $\phi$ 최적화.
+
+VI: **둘 다 근사**. $q = \prod q_j$ 로 분해, 각 $q_j$ 가 "$\theta_j$ 의 잠재" 같은 역할.
+
+즉 **VI = EM 에서 "잠재" 분포도 parametric family 로 제약**. EM 은 VI 의 특수 경우 (정확 E-step).
+
+이 통일된 관점이 현대 ML 의 **Variational Autoencoder** (VAE), **Bayesian Neural Networks** 의 이론적 뿌리.
+:::
+
+### 8 학교 예제 — VI 유도
+
+Ch.5.5 의 hierarchical normal. 10 차원 $\theta = (\alpha_{1:8}, \mu, \tau)$.
+
+Log posterior (식 13.16):
+
+$$
+\log p(\theta \mid y) = -\tfrac{1}{2}\sum_j \frac{(y_j - \alpha_j)^2}{\sigma_j^2} - 8 \log \tau - \tfrac{1}{2\tau^2}\sum_j (\alpha_j - \mu)^2 + C
+$$
+
+**Mean-field**:
+
+$$
+g(\theta) = g(\mu) \cdot g(\tau^2) \cdot \prod_{j=1}^8 g(\alpha_j) \tag{13.17}
+$$
+
+### 각 $g_j$ 형태 — 수식 유도
+
+#### $\alpha_j$ 업데이트
+
+$\mathbb{E}_{g_{-\alpha_j}}[\log p]$ 에서 $\alpha_j$ 와 무관 항 제외:
+
+$$
+\mathbb{E}_{g_{-\alpha_j}}[\log p] = -\tfrac{(y_j - \alpha_j)^2}{2\sigma_j^2} - \tfrac{1}{2} \mathbb{E}[1/\tau^2] \mathbb{E}[(\alpha_j - \mu)^2] + C
+$$
+
+**$\alpha_j$ 에 대한 2차 함수** → 지수화하면 **정규 kernel**. 식 (13.18):
+
+$$
+g(\alpha_j) = \mathrm{N}\!\left(\alpha_j \mid \frac{y_j/\sigma_j^2 + \mathbb{E}[1/\tau^2] \mathbb{E}[\mu]}{1/\sigma_j^2 + \mathbb{E}[1/\tau^2]}, \frac{1}{1/\sigma_j^2 + \mathbb{E}[1/\tau^2]}\right)
+$$
+
+**정밀도 가중 평균** 구조 — Gibbs 의 조건부와 동일.
+
+#### $\mu$ 업데이트
+
+$\alpha_j, \mu$ 의 cross term 만 고려:
+
+$$
+\mathbb{E}_{g_{-\mu}}[\log p] = -\tfrac{1}{2} \mathbb{E}[1/\tau^2] \sum_j (\mathbb{E}[\alpha_j] - \mu)^2 + C
+$$
+
+식 (13.19):
+
+$$
+g(\mu) = \mathrm{N}\!\left(\mu \mid \tfrac{1}{8}\sum_j \mathbb{E}[\alpha_j], \tfrac{1}{8 \mathbb{E}[1/\tau^2]}\right)
+$$
+
+#### $\tau^2$ 업데이트
+
+$\log \tau$ 항과 $\tau^{-2}$ 항 수집:
+
+$$
+\mathbb{E}_{g_{-\tau^2}}[\log p] = -8 \log \tau - \tfrac{1}{2\tau^2} \sum_j \mathbb{E}[(\alpha_j - \mu)^2] + C
+$$
+
+**Inverse-$\chi^2$ kernel**. 식 (13.20):
+
+$$
+g(\tau^2) = \mathrm{Inv}\text{-}\chi^2\!\left(\tau^2 \mid 7, \tfrac{1}{7} \sum_j \mathbb{E}[(\alpha_j - \mu)^2]\right)
+$$
+
+### 필요한 기댓값들
+
+Update 에서 각 $g_j$ 의 모수로부터 기댓값 계산.
+
+$\alpha_j$ 정규 (식 13.21): $g(\alpha_j) = \mathrm{N}(M_{\alpha_j}, S^2_{\alpha_j})$.
+
+- $\mathbb{E}[\alpha_j] = M_{\alpha_j}$.
+
+$\mu$ 정규 (식 13.22): $g(\mu) = \mathrm{N}(M_\mu, S^2_\mu)$.
+
+- $\mathbb{E}[\mu] = M_\mu$.
+
+$\tau^2$ inv-$\chi^2$ (식 13.23): $g(\tau^2) = \mathrm{Inv}\text{-}\chi^2(7, M^2_\tau)$.
+
+- $\mathbb{E}[1/\tau^2] = 1/M^2_\tau$ (inv-$\chi^2$ 기대값).
+
+$\mathbb{E}[(\alpha_j - \mu)^2]$ 계산:
+
+$$
+\mathbb{E}[(\alpha_j - \mu)^2] = (M_{\alpha_j} - M_\mu)^2 + S^2_{\alpha_j} + S^2_\mu
+$$
+
+(독립 가정 하 분산 덧셈 + 평균 차이 제곱).
+
+### 수렴 확인 — KL Divergence 추적
+
+VI 알고리즘이 correct 라면 **KL 매 반복 단조 감소**. 8 학교에서 해석적 계산 가능:
+
+$$
+\mathrm{ELBO} = \text{(복잡 수식)}
+$$
+
+Figure 13.5 에서 **50 반복 내 수렴**. KL 단조 감소 확인.
+
+### 8 학교 VI vs Full Bayes 비교
+
+Figure 13.6: $\alpha_1, \alpha_2, \alpha_3$ 의 VI 와 MCMC 비교.
+
+- VI 사후: **대칭 정규** (가정).
+- MCMC 사후: **비대칭** ($\tau$ 꼬리 영향).
+
+VI 가 **분산 과소 추정** 확인. 그러나 **평균·중앙값은 일치**.
+
+### VI 의 과소 분산 — 수학적 원인
+
+$\mathrm{KL}(g \| p) = \int g \log(g/p)$.
+
+$p$ 가 작은 영역에서 $g$ 가 크면 페널티 **폭발** ($\log(g / \epsilon) \to \infty$).
+
+따라서 $g$ 는 **$p$ 가 큰 영역 안에만** 위치. **꼬리 무시** → 분산 과소.
+
+반대 KL $\mathrm{KL}(p \| g)$ 는 다른 편향 (§ 13.8 EP).
+
+::: {.callout-tip}
+## 직관 — "Mode-seeking" vs "Mean-seeking"
+
+**VI (forward KL, $\mathrm{KL}(g \| p)$)**: "Mode-seeking". $g$ 가 $p$ 의 **한 mode 에 집중**.
+
+**EP (reverse KL, $\mathrm{KL}(p \| g)$)**: "Mean-seeking". $g$ 가 $p$ 의 **모든 mode 커버** 시도.
+
+다봉 $p$ 에서:
+
+- VI: 한 mode 에 정확히 맞춤. 다른 mode 무시.
+- EP: 모든 mode 포함. 양 mode 사이 "평균" 에 위치 — 평평한 $g$.
+
+**실무 함의**: VI 는 **단봉 가정** 에서 좋음. 다봉 의심 시 EP 또는 MCMC.
+
+ML 에서 VI 가 **VAE 생성 이미지의 "흐릿함"** 원인. 평균으로 수렴해 세부 상실.
+:::
+
+## § 13.8 — Expectation Propagation
+
+### EP 의 아이디어
+
+목표 분포 $p(\theta \mid y) = f(\theta)$ 를 **factor 곱**으로 분해:
+
+$$
+f(\theta) = \prod_{i=0}^n f_i(\theta) \tag{13.29}
+$$
+
+대표: $f_0(\theta) = p(\theta)$ (prior), $f_i(\theta) = p(y_i \mid \theta)$ (likelihood per point).
+
+### 근사 분포의 factor 분해
+
+$g(\theta)$ 도 **같은 구조**로:
+
+$$
+g(\theta) = \prod_{i=0}^n g_i(\theta) \tag{13.30}
+$$
+
+각 $g_i$ 가 대응 $f_i$ 를 근사. **$g_i$ 는 지수족** (주로 정규).
+
+VI (모수별 분해) vs EP (데이터별 분해) 의 근본 차이. EP 는 **상관 보존** 가능.
+
+### Cavity 와 Tilted Distribution
+
+EP 핵심 단위: **$g_i$ 하나씩 업데이트**.
+
+**Cavity distribution**: $g$ 에서 $g_i$ 를 **뺀** 것.
+
+$$
+g_{-i}(\theta) \propto \frac{g(\theta)}{g_i(\theta)}
+$$
+
+**Tilted distribution**: $g_{-i}$ 에 실제 $f_i$ 붙이기.
+
+$$
+g_{-i}(\theta) f_i(\theta)
+$$
+
+"Cavity 의 다른 factor 들 + 실제 $i$ 번째 factor". **$i$ 번째만** 정확한 분포.
+
+### Moment Matching — 업데이트
+
+Tilted distribution 이 일반적으로 지수족 아님. 이를 **지수족의 $g^{\mathrm{new}}$** 로 **moments 맞춤**.
+
+Gaussian $g = \mathrm{N}(\mu, \Sigma)$ 의 경우:
+
+$$
+\mu = \mathbb{E}_{\mathrm{tilted}}[\theta], \quad \Sigma = \mathrm{Cov}_{\mathrm{tilted}}[\theta]
+$$
+
+Tilted 의 평균·공분산을 $g^{\mathrm{new}}$ 의 것과 같게 설정.
+
+업데이트 $g_i$:
+
+$$
+g_i^{\mathrm{new}} = \frac{g^{\mathrm{new}}}{g_{-i}}
+$$
+
+### 왜 Moment Matching = Local KL 최소화
+
+지수족 $g$ 에 대해 $\mathrm{KL}(p \| g)$ 최소화는 **moments 맞추기와 등가** (exponential family 성질).
+
+즉 EP 는 **local KL (reverse direction) 을 factor 마다** 최소화. **Global KL** 은 보장 안 됨.
+
+### 지수족과 자연 모수
+
+EP 가 $g$ 를 지수족에 제한하는 이유:
+
+**지수족 밀도**:
+
+$$
+g(\theta) \propto \exp(\eta^\top T(\theta))
+$$
+
+$T(\theta)$ = 충분 통계량, $\eta$ = 자연 모수.
+
+**장점**: 곱셈이 **덧셈**으로 바뀜. $g_1 \cdot g_2$ 는 자연 모수 덧셈.
+
+$$
+g(\theta) \propto \exp((\eta_1 + \eta_2)^\top T(\theta))
+$$
+
+이게 EP 의 cavity 연산 $g / g_i$ 를 **자연 모수 뺄셈**으로 가능하게 함.
+
+정규 분포의 자연 모수: $(\Sigma^{-1}\mu, \Sigma^{-1})$. Precision matrix 와 scaled mean.
+
+### EP 알고리즘
+
+Factor $i$ 업데이트 단계:
+
+1. **Cavity**: 현재 $g$ 에서 $g_i$ 를 자연 모수 뺄셈.
+
+$$
+\Sigma_{-i}^{-1} \mu_{-i} = \Sigma^{-1}\mu - \Sigma_i^{-1}\mu_i, \quad \Sigma_{-i}^{-1} = \Sigma^{-1} - \Sigma_i^{-1}
+$$
+
+2. **Tilted**: $g_{-i} \cdot f_i$ 구성.
+
+3. **Moment Match**: Tilted 의 평균·공분산 → 새 $g^{\mathrm{new}}$.
+
+4. **업데이트 $g_i$**: $g_i^{\mathrm{new}} = g^{\mathrm{new}} / g_{-i}$ (자연 모수 뺄셈).
+
+5. **$g$ 재구성**: 모든 $g_i$ 의 곱 (자연 모수 덧셈).
+
+각 factor 순차 → **수렴**까지 반복.
+
+### Sequential vs Parallel EP
+
+- **Sequential**: 각 factor 후 $g$ 갱신. 안정적, 느림.
+- **Parallel**: 모든 factor 의 업데이트 계산 후 한 번에 $g$ 갱신. 빠름, 불안정 가능.
+
+### Bioassay EP 예제
+
+Ch.3.7 의 로지스틱 회귀. $y_i \sim \mathrm{Bin}(m_i, \mathrm{logit}^{-1}(X_i \theta))$, $\theta = (\theta_1, \theta_2)$.
+
+**Factor 분해**:
+
+- $f_0(\theta)$ = prior (uniform, 또는 $\mathrm{N}(\mu_0, \Sigma_0)$).
+- $f_i(\theta) = p(y_i \mid \theta)$ = 이항 likelihood.
+
+$g_i$ = $\mathrm{N}(\mu_i, \Sigma_i)$ 정규 근사.
+
+### EP 한 스텝 (자세히)
+
+#### Step 1: Cavity
+
+$$
+\Sigma_{-i}^{-1}\mu_{-i} = \Sigma^{-1}\mu - \Sigma_i^{-1}\mu_i, \quad \Sigma_{-i}^{-1} = \Sigma^{-1} - \Sigma_i^{-1}
+$$
+
+#### Step 2: 1 차원 투영
+
+$f_i$ 가 $X_i \theta$ 에만 의존 ($\eta_i = X_i \theta$, 스칼라). 따라서 $\theta$ 의 full distribution 대신 **$\eta_i$ 의 주변 분포**로 충분.
+
+$$
+M_{-i} = X_i \mu_{-i}, \quad V_{-i} = X_i \Sigma_{-i} X_i^\top
+$$
+
+#### Step 3: Tilted 의 moments 계산
+
+**1 차원 적분**:
+
+$$
+E_k = \int \eta^k \cdot \mathrm{N}(\eta \mid M_{-i}, V_{-i}) \cdot \mathrm{Bin}(y_i \mid m_i, \mathrm{logit}^{-1}(\eta)) d\eta, \quad k = 0, 1, 2
+$$
+
+Gauss-Kronrod quadrature 로 수치 적분. 적분 범위 $M_{-i} \pm 10 \sqrt{V_{-i}}$.
+
+$$
+M = E_1/E_0, \quad V = E_2/E_0 - M^2
+$$
+
+#### Step 4: 새 $g_i$
+
+Natural parameter 뺄셈:
+
+$$
+\frac{M_i^{\mathrm{new}}}{V_i^{\mathrm{new}}} = \frac{M}{V} - \frac{M_{-i}}{V_{-i}}, \quad \frac{1}{V_i^{\mathrm{new}}} = \frac{1}{V} - \frac{1}{V_{-i}}
+$$
+
+#### Step 5: Full space 로 변환
+
+$$
+\Sigma_i^{-1}\mu_i = X_i^\top \frac{M_i}{V_i}, \quad \Sigma_i^{-1} = X_i^\top \frac{1}{V_i} X_i
+$$
+
+#### Step 6: $g$ 재계산
+
+$$
+\Sigma^{-1}\mu = \Sigma_{-i}^{-1}\mu_{-i} + \Sigma_i^{-1}\mu_i, \quad \Sigma^{-1} = \Sigma_{-i}^{-1} + \Sigma_i^{-1}
+$$
+
+### EP 의 계산 효율성
+
+핵심: **$f_i$ 가 $X_i \theta$ 에만 의존** → **1 차원 적분으로 환원**.
+
+$n$ 데이터점 $\times$ 1 차원 quadrature = **선형 시간**.
+
+전체 $k$ 차원 적분 ($k = 모수 수$) 할 필요 없음.
+
+### EP 수렴 성질
+
+- **보장 없음**: 순환 또는 발산 가능.
+- **실무 양호**: log-concave $f_i$ + prior 로 초기화 하면 대부분 수렴.
+- **수렴 시**: Global KL 최적 보장 안 되지만 **marginal KL 의 sum** 최적.
+
+### Bioassay 수치 결과
+
+**4 반복 수렴** (Figure 13.7). $(\mu_1, \sigma_1, \mu_2, \sigma_2, \rho)$ 모두 안정.
+
+Laplace 대비:
+
+- Laplace (§ 4.1): 점 추정 $(0.8, 7.7)$, mode 중심 정규.
+- EP: 비대칭 posterior 더 정확. Tail 반영.
+
+MCMC 와 비교하면 EP 가 **더 가까움** — 특히 꼬리 영역.
+
+::: {.callout-tip}
+## 직관 — EP 가 VI 보다 "비대칭 분포에 강한" 이유
+
+VI (mean-field): 각 성분 독립 → 공분산 0 가정. 상관 있는 사후에 **부적합**.
+
+EP (factor-wise): 각 factor 에 정확한 $f_i$ 사용, $g$ 가 **전체 상관** 유지. 정규 가정은 유지하지만 공분산 살림.
+
+Bioassay 의 $(\theta_1, \theta_2)$ 강한 양 상관 → VI 는 두 독립 정규로 근사 (잘못), EP 는 **상관 있는 이변량 정규** (잘).
+
+일반 원리: **"분해 축"** 이 결정적. 모수별 분해 (VI) 는 간단하지만 상관 상실. 데이터별 분해 (EP) 는 상관 유지하지만 factor 가 지수족이어야.
+
+현대 발전: **Structured VI** 가 VI 에 특정 상관을 허용 — VI 와 EP 의 중간.
+:::
+
+## VI vs EP 비교
+
+| 측면 | VI | EP |
+|---|---|---|
+| 최적화 | Global KL(g\|p) 단조 감소 | Local KL factor-wise |
+| 편향 | 분산 과소 (mode-seeking) | 분산 과대 (mean-seeking) |
+| 다봉 | 한 mode 집중 | 모든 mode 평균 |
+| 상관 | Mean-field: 상실 | 유지 |
+| 수렴 | 보장 | 보장 없음 (실무 양호) |
+| 계산 | 조건부 공액 시 빠름 | 1D 적분 가능 시 빠름 |
+| 응용 | LDA, VAE, BNN | GP, Bayesian DNN, 로지스틱 |
+
+**실무 권고**:
+
+- **단순 계층·공액 모형** → VI.
+- **비공액·상관 중요** → EP.
+- **초대형·ML 통합** → ADVI (VI 의 자동화).
+
+## 현대 발전
+
+### ADVI — Automatic Differentiation VI
+
+Kucukelbir et al. (2017). Stan·PyMC 에 내장.
+
+절차:
+
+1. 모수를 실수 공간으로 변환 (Jacobian).
+2. $q(\theta \mid \mu, \sigma) = \mathrm{N}(\mu, \mathrm{diag}(\sigma^2))$ **mean-field 정규**.
+3. Stochastic gradient 로 ELBO 최대화.
+
+**속도**: MCMC 대비 10~100 배. 정확도: 모형 의존.
+
+### Normalizing Flows
+
+Rezende-Mohamed (2015). VI 의 $q$ 를 **유연화**.
+
+$q(\theta) = f_K \circ \ldots \circ f_1(\theta_0)$, $\theta_0 \sim \mathrm{N}$. 각 $f_k$ 가 invertible transform.
+
+Mean-field 의 과소 분산 문제 완화 — $q$ 가 임의 분포 근사 가능.
+
+### VAE — Variational Autoencoder
+
+Kingma-Welling (2014). VI + 신경망 생성 모형.
+
+- Encoder: $q(z \mid x)$ 변분 분포, 신경망 파라미터화.
+- Decoder: $p(x \mid z)$ likelihood.
+- ELBO 최대화 → 동시 학습.
+
+현대 생성 AI (GAN, diffusion 모델 이전) 의 기초.
+
+## 코드 — 8 학교 VI 구현
+
+### Mean-field VI
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(133)
+
+# 8 학교 데이터
+y = np.array([28, 8, -3, 7, -1, 1, 18, 12])
+sigma = np.array([15, 10, 16, 11, 9, 11, 10, 18])
+J = 8
+
+# VI 파라미터 초기화
+M_alpha = rng.normal(0, 5, J)
+S_alpha = np.ones(J) * 5.0
+M_mu = rng.normal(0, 5)
+S_mu = 5.0
+M_tau = 5.0  # scale
+nu_tau = 7
+
+def expected_inv_tau2(M_tau, nu_tau=7):
+    """E[1/tau^2] for Inv-chi^2(nu, M^2)."""
+    return 1 / M_tau**2
+
+def vi_update(n_iter=100):
+    global M_alpha, S_alpha, M_mu, S_mu, M_tau
+    history = []
+
+    for t in range(n_iter):
+        # Update alpha_j
+        E_inv_tau2 = expected_inv_tau2(M_tau)
+        for j in range(J):
+            prec = 1/sigma[j]**2 + E_inv_tau2
+            M_alpha[j] = (y[j]/sigma[j]**2 + E_inv_tau2 * M_mu) / prec
+            S_alpha[j] = 1 / np.sqrt(prec)
+
+        # Update mu
+        M_mu = M_alpha.mean()
+        S_mu = 1 / np.sqrt(J * E_inv_tau2)
+
+        # Update tau^2
+        sum_sq = np.sum((M_alpha - M_mu)**2 + S_alpha**2 + S_mu**2)
+        M_tau = np.sqrt(sum_sq / (J - 1))
+
+        history.append({
+            "M_alpha": M_alpha.copy(),
+            "S_alpha": S_alpha.copy(),
+            "M_mu": M_mu,
+            "S_mu": S_mu,
+            "M_tau": M_tau
+        })
+
+    return history
+
+hist = vi_update(100)
+print("VI 수렴 후:")
+print(f"  M_mu = {M_mu:.2f}, S_mu = {S_mu:.2f}")
+print(f"  M_tau = {M_tau:.2f}")
+print(f"  M_alpha = {M_alpha.round(2)}")
+```
+
+### MCMC 비교
+
+```python
+import pymc as pm
+import arviz as az
+
+with pm.Model() as m8:
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfNormal("tau", 10)
+    eta = pm.Normal("eta", 0, 1, shape=J)
+    theta = pm.Deterministic("theta", mu + tau * eta)
+    pm.Normal("y", theta, sigma, observed=y)
+    idata = pm.sample(2000, tune=1000, random_seed=133)
+
+mcmc_mu = idata.posterior["mu"].values.mean()
+mcmc_tau = idata.posterior["tau"].values.mean()
+print(f"\nMCMC 비교:")
+print(f"  mu: VI={M_mu:.2f}, MCMC={mcmc_mu:.2f}")
+print(f"  tau: VI={M_tau:.2f}, MCMC={mcmc_tau:.2f}")
+```
+
+기대 패턴:
+
+- 평균: VI ≈ MCMC.
+- 분산: VI < MCMC (과소 추정).
+- $\tau$: VI 가 특히 과소 (funnel 무시).
+
+## 실전 체크리스트
+
+§ 13.7~13.8 의 교훈을 실무 절차로:
+
+1. **MCMC 가능하면 MCMC** — 근사는 최후.
+2. **VI 는 ADVI 로 자동화** — Stan/PyMC 지원.
+3. **VI 분산 과소 주의** — 의사결정 구간 확인.
+4. **다봉 사후는 VI 비추** — 한 mode 에만 수렴.
+5. **EP 는 로지스틱·GP 에 강함** — 지수족 likelihood.
+6. **ELBO 수렴 모니터** — VI 디버깅.
+7. **Moment matching 수치 적분** — EP 에서 quadrature 품질 확인.
+8. **MCMC 결과와 교차 검증** — 소규모에서라도.
+9. **Normalizing flows 고려** — 유연한 $q$ 필요 시.
+10. **Structured VI** — 중요 상관 유지.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Ch.13 Overview (02-13-0)](./02-13-0-modal-variational-approximations.qmd) — 근사 지도
+- [§ 13.4~13.6 (02-13-2)](./02-13-2-em-conditional-marginal-hierarchical.qmd) — EM 의 variational 관점
+- [Ch.5 Hierarchical Models](./00-5-0-hierarchical.qmd) — 8 학교 원 모형
+
+**Ch.13 후속**
+
+- `02-13-4-*` — § 13.10~13.12 (unknown norms, 연습)
+
+**후속 주제**
+
+- Ch.21 Gaussian Processes — EP 의 본격 응용
+- Ch.22 Finite Mixtures — VI + latent
+
+**관련 개념**
+
+- Jordan, Ghahramani, Jaakkola, Saul (1999) — VI 리뷰
+- Blei, Ng, Jordan (2003) — LDA + VI
+- Minka (2001) — EP 원저
+- Rasmussen & Williams (2006) — GP + EP
+- Kucukelbir et al. (2017) — ADVI
+- Rezende & Mohamed (2015) — Normalizing Flows
+- Kingma & Welling (2014) — VAE
+- Blei, Kucukelbir, McAuliffe (2017) — VI 현대 리뷰
+- Hoffman et al. (2013) — Stochastic VI

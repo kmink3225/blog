@@ -1,0 +1,1621 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.543">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="Ch.13 § 13.7~13.8 은 근사 추론의 현대판. 단일 Laplace 근사를 넘어 사후를 단순 분포 가족의 최적 fit 으로 근사하는 VI (Variational Inference) 와, factor 단위로 순차 근사 하는 EP (Expectation Propagation). 이 포스트는 두 알고리즘의 수식과 직관을 완전 전개. § 13.7 의 VI 는 KL divergence \mathrm{KL}(g \| p) 를 최소화하도록 g(\theta \mid \phi) 를 iterative 갱신 — 식 (13.15) 정의와 0 하한, mean-field 근사 g(\theta) = \prod g_j(\theta_j) 구조, 좌표 상승 update \log g_j \propto \mathbb{E}_{g_{-j}}[\log p(\theta \mid y)], ELBO 최대화와 KL 최소화 의 등가성, 8 학교 hierarchical normal 예제 (식 13.16~13.23) 에서 각 \alpha_j, \mu, \tau^2 의 g_j 형태 유도 (정규+정규+inv-\chi^2), VI 수렴 증명 (각 단계 KL 단조 감소), VI 의 과소 분산 편향과 그 수학적 원인. § 13.8 의 EP 는 목표 분포의 factor 분해 f(\theta) = \prod f_i(\theta) 에 대응해 g(\theta) = \prod
+g_i(\theta) 로 순차 근사 — cavity g_{-i} = g/g_i, tilted g_{-i} f_i, moment matching 으로 g_i 업데이트, 지수족·natural parameter·충분 통계량 구조, Bioassay 로지스틱 회귀에서 각 데이터점에 대한 6 단계 EP 업데이트 완전 전개, 수렴 보장 없음에도 실무 유효한 이유. VI vs EP tradeoff 표, 현대 발전 (ADVI, normalizing flows, VAE) 연결.">
+
+<title>Kwangmin Kim - § 13.7~13.8 — Variational Inference·Expectation Propagation</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Kwangmin Kim - § 13.7~13.8 — Variational Inference·Expectation Propagation">
+<meta property="og:description" content="Ch.13 § 13.7~13.8 은 근사 추론의 현대판. 단일 Laplace 근사를 넘어 사후를 단순 분포 가족의 최적 fit 으로 근사하는 VI (Variational Inference) 와, factor 단위로 순차 근사 하는 EP (Expectation Propagation). 이 포스트는 두 알고리즘의 수식과 직관을 완전 전개. § 13.7 의 VI 는 KL divergence \(\mathrm{KL}(g \| p)\) 를 최소화하도록 \(g(\theta \mid \phi)\) 를 iterative 갱신 — 식 (13.15) 정의와 0 하한, mean-field 근사 \(g(\theta) = \prod g_j(\theta_j)\) 구조, 좌표 상승 update \(\log g_j \propto \mathbb{E}_{g_{-j}}[\log p(\theta \mid y)]\), ELBO 최대화와 KL 최소화 의 등가성, 8 학교 hierarchical normal 예제 (식 13.16~13.23) 에서 각 \(\alpha_j, \mu, \tau^2\) 의 \(g_j\) 형태 유도 (정규+정규+inv-\(\chi^2\)), VI 수렴 증명 (각 단계 KL 단조 감소), VI 의 과소 분산 편향과 그 수학적 원인. § 13.8 의 EP 는 목표 분포의 factor 분해 \(f(\theta) = \prod f_i(\theta)\) 에 대응해 \(g(\theta) = \prod
+g_i(\theta)\) 로 순차 근사 — cavity \(g_{-i} = g/g_i\), tilted \(g_{-i} f_i\), moment matching 으로 \(g_i\) 업데이트, 지수족·natural parameter·충분 통계량 구조, Bioassay 로지스틱 회귀에서 각 데이터점에 대한 6 단계 EP 업데이트 완전 전개, 수렴 보장 없음에도 실무 유효한 이유. VI vs EP tradeoff 표, 현대 발전 (ADVI, normalizing flows, VAE) 연결.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+          <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">§ 13.7~13.8 — Variational Inference·Expectation Propagation</h1>
+            <p class="subtitle lead">Gelman BDA Ch.13 심화 — 식 (13.15) KL 최소화, mean-field 좌표 상승, 8 학교 VI 식 (13.18)~(13.23) 완전 유도, EP 의 cavity/tilted/moment matching, Bioassay EP 실전</p>
+                  <div>
+        <div class="description">
+          <p>Ch.13 § 13.7~13.8 은 <strong>근사 추론의 현대판</strong>. 단일 Laplace 근사를 넘어 사후를 <strong>단순 분포 가족의 최적 fit</strong> 으로 근사하는 VI (Variational Inference) 와, <strong>factor 단위로 순차 근사</strong> 하는 EP (Expectation Propagation). 이 포스트는 두 알고리즘의 수식과 직관을 완전 전개. § 13.7 의 VI 는 KL divergence <span class="math inline">\(\mathrm{KL}(g \| p)\)</span> 를 최소화하도록 <span class="math inline">\(g(\theta \mid \phi)\)</span> 를 iterative 갱신 — 식 (13.15) 정의와 0 하한, mean-field 근사 <span class="math inline">\(g(\theta) = \prod g_j(\theta_j)\)</span> 구조, 좌표 상승 update <span class="math inline">\(\log g_j \propto \mathbb{E}_{g_{-j}}[\log p(\theta \mid y)]\)</span>, ELBO 최대화와 KL 최소화 의 등가성, 8 학교 hierarchical normal 예제 (식 13.16~13.23) 에서 각 <span class="math inline">\(\alpha_j, \mu, \tau^2\)</span> 의 <span class="math inline">\(g_j\)</span> 형태 유도 (정규+정규+inv-<span class="math inline">\(\chi^2\)</span>), VI 수렴 증명 (각 단계 KL 단조 감소), VI 의 과소 분산 편향과 그 수학적 원인. § 13.8 의 EP 는 목표 분포의 factor 분해 <span class="math inline">\(f(\theta) = \prod f_i(\theta)\)</span> 에 대응해 <span class="math inline">\(g(\theta) = \prod
+          g_i(\theta)\)</span> 로 순차 근사 — cavity <span class="math inline">\(g_{-i} = g/g_i\)</span>, tilted <span class="math inline">\(g_{-i} f_i\)</span>, moment matching 으로 <span class="math inline">\(g_i\)</span> 업데이트, 지수족·natural parameter·충분 통계량 구조, Bioassay 로지스틱 회귀에서 각 데이터점에 대한 6 단계 EP 업데이트 완전 전개, 수렴 보장 없음에도 실무 유효한 이유. VI vs EP tradeoff 표, 현대 발전 (ADVI, normalizing flows, VAE) 연결.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Statistics</div>
+                <div class="quarto-category">Bayesian</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2026년 04월 23일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#개요-두-근사-추론의-대비" id="toc-개요-두-근사-추론의-대비" class="nav-link active" data-scroll-target="#개요-두-근사-추론의-대비"><span class="header-section-number">1</span> 개요 — 두 근사 추론의 대비</a></li>
+  <li><a href="#variational-inference" id="toc-variational-inference" class="nav-link" data-scroll-target="#variational-inference"><span class="header-section-number">2</span> § 13.7 — Variational Inference</a>
+  <ul class="collapse">
+  <li><a href="#기본-아이디어" id="toc-기본-아이디어" class="nav-link" data-scroll-target="#기본-아이디어"><span class="header-section-number">2.1</span> 기본 아이디어</a></li>
+  <li><a href="#kl-divergence-식-13.15" id="toc-kl-divergence-식-13.15" class="nav-link" data-scroll-target="#kl-divergence-식-13.15"><span class="header-section-number">2.2</span> KL Divergence — 식 (13.15)</a></li>
+  <li><a href="#elbo-실제-최적화-대상" id="toc-elbo-실제-최적화-대상" class="nav-link" data-scroll-target="#elbo-실제-최적화-대상"><span class="header-section-number">2.3</span> ELBO — 실제 최적화 대상</a></li>
+  <li><a href="#mean-field-근사" id="toc-mean-field-근사" class="nav-link" data-scroll-target="#mean-field-근사"><span class="header-section-number">2.4</span> Mean-Field 근사</a></li>
+  <li><a href="#좌표-상승-업데이트" id="toc-좌표-상승-업데이트" class="nav-link" data-scroll-target="#좌표-상승-업데이트"><span class="header-section-number">2.5</span> 좌표 상승 업데이트</a></li>
+  <li><a href="#알고리즘" id="toc-알고리즘" class="nav-link" data-scroll-target="#알고리즘"><span class="header-section-number">2.6</span> 알고리즘</a></li>
+  <li><a href="#vi-가-단조-kl-감소-증명-스케치" id="toc-vi-가-단조-kl-감소-증명-스케치" class="nav-link" data-scroll-target="#vi-가-단조-kl-감소-증명-스케치"><span class="header-section-number">2.7</span> VI 가 단조 KL 감소 — 증명 스케치</a></li>
+  <li><a href="#학교-예제-vi-유도" id="toc-학교-예제-vi-유도" class="nav-link" data-scroll-target="#학교-예제-vi-유도"><span class="header-section-number">2.8</span> 8 학교 예제 — VI 유도</a></li>
+  <li><a href="#각-g_j-형태-수식-유도" id="toc-각-g_j-형태-수식-유도" class="nav-link" data-scroll-target="#각-g_j-형태-수식-유도"><span class="header-section-number">2.9</span> 각 <span class="math inline">\(g_j\)</span> 형태 — 수식 유도</a></li>
+  <li><a href="#필요한-기댓값들" id="toc-필요한-기댓값들" class="nav-link" data-scroll-target="#필요한-기댓값들"><span class="header-section-number">2.10</span> 필요한 기댓값들</a></li>
+  <li><a href="#수렴-확인-kl-divergence-추적" id="toc-수렴-확인-kl-divergence-추적" class="nav-link" data-scroll-target="#수렴-확인-kl-divergence-추적"><span class="header-section-number">2.11</span> 수렴 확인 — KL Divergence 추적</a></li>
+  <li><a href="#학교-vi-vs-full-bayes-비교" id="toc-학교-vi-vs-full-bayes-비교" class="nav-link" data-scroll-target="#학교-vi-vs-full-bayes-비교"><span class="header-section-number">2.12</span> 8 학교 VI vs Full Bayes 비교</a></li>
+  <li><a href="#vi-의-과소-분산-수학적-원인" id="toc-vi-의-과소-분산-수학적-원인" class="nav-link" data-scroll-target="#vi-의-과소-분산-수학적-원인"><span class="header-section-number">2.13</span> VI 의 과소 분산 — 수학적 원인</a></li>
+  </ul></li>
+  <li><a href="#expectation-propagation" id="toc-expectation-propagation" class="nav-link" data-scroll-target="#expectation-propagation"><span class="header-section-number">3</span> § 13.8 — Expectation Propagation</a>
+  <ul class="collapse">
+  <li><a href="#ep-의-아이디어" id="toc-ep-의-아이디어" class="nav-link" data-scroll-target="#ep-의-아이디어"><span class="header-section-number">3.1</span> EP 의 아이디어</a></li>
+  <li><a href="#근사-분포의-factor-분해" id="toc-근사-분포의-factor-분해" class="nav-link" data-scroll-target="#근사-분포의-factor-분해"><span class="header-section-number">3.2</span> 근사 분포의 factor 분해</a></li>
+  <li><a href="#cavity-와-tilted-distribution" id="toc-cavity-와-tilted-distribution" class="nav-link" data-scroll-target="#cavity-와-tilted-distribution"><span class="header-section-number">3.3</span> Cavity 와 Tilted Distribution</a></li>
+  <li><a href="#moment-matching-업데이트" id="toc-moment-matching-업데이트" class="nav-link" data-scroll-target="#moment-matching-업데이트"><span class="header-section-number">3.4</span> Moment Matching — 업데이트</a></li>
+  <li><a href="#왜-moment-matching-local-kl-최소화" id="toc-왜-moment-matching-local-kl-최소화" class="nav-link" data-scroll-target="#왜-moment-matching-local-kl-최소화"><span class="header-section-number">3.5</span> 왜 Moment Matching = Local KL 최소화</a></li>
+  <li><a href="#지수족과-자연-모수" id="toc-지수족과-자연-모수" class="nav-link" data-scroll-target="#지수족과-자연-모수"><span class="header-section-number">3.6</span> 지수족과 자연 모수</a></li>
+  <li><a href="#ep-알고리즘" id="toc-ep-알고리즘" class="nav-link" data-scroll-target="#ep-알고리즘"><span class="header-section-number">3.7</span> EP 알고리즘</a></li>
+  <li><a href="#sequential-vs-parallel-ep" id="toc-sequential-vs-parallel-ep" class="nav-link" data-scroll-target="#sequential-vs-parallel-ep"><span class="header-section-number">3.8</span> Sequential vs Parallel EP</a></li>
+  <li><a href="#bioassay-ep-예제" id="toc-bioassay-ep-예제" class="nav-link" data-scroll-target="#bioassay-ep-예제"><span class="header-section-number">3.9</span> Bioassay EP 예제</a></li>
+  <li><a href="#ep-한-스텝-자세히" id="toc-ep-한-스텝-자세히" class="nav-link" data-scroll-target="#ep-한-스텝-자세히"><span class="header-section-number">3.10</span> EP 한 스텝 (자세히)</a></li>
+  <li><a href="#ep-의-계산-효율성" id="toc-ep-의-계산-효율성" class="nav-link" data-scroll-target="#ep-의-계산-효율성"><span class="header-section-number">3.11</span> EP 의 계산 효율성</a></li>
+  <li><a href="#ep-수렴-성질" id="toc-ep-수렴-성질" class="nav-link" data-scroll-target="#ep-수렴-성질"><span class="header-section-number">3.12</span> EP 수렴 성질</a></li>
+  <li><a href="#bioassay-수치-결과" id="toc-bioassay-수치-결과" class="nav-link" data-scroll-target="#bioassay-수치-결과"><span class="header-section-number">3.13</span> Bioassay 수치 결과</a></li>
+  </ul></li>
+  <li><a href="#vi-vs-ep-비교" id="toc-vi-vs-ep-비교" class="nav-link" data-scroll-target="#vi-vs-ep-비교"><span class="header-section-number">4</span> VI vs EP 비교</a></li>
+  <li><a href="#현대-발전" id="toc-현대-발전" class="nav-link" data-scroll-target="#현대-발전"><span class="header-section-number">5</span> 현대 발전</a>
+  <ul class="collapse">
+  <li><a href="#advi-automatic-differentiation-vi" id="toc-advi-automatic-differentiation-vi" class="nav-link" data-scroll-target="#advi-automatic-differentiation-vi"><span class="header-section-number">5.1</span> ADVI — Automatic Differentiation VI</a></li>
+  <li><a href="#normalizing-flows" id="toc-normalizing-flows" class="nav-link" data-scroll-target="#normalizing-flows"><span class="header-section-number">5.2</span> Normalizing Flows</a></li>
+  <li><a href="#vae-variational-autoencoder" id="toc-vae-variational-autoencoder" class="nav-link" data-scroll-target="#vae-variational-autoencoder"><span class="header-section-number">5.3</span> VAE — Variational Autoencoder</a></li>
+  </ul></li>
+  <li><a href="#코드-8-학교-vi-구현" id="toc-코드-8-학교-vi-구현" class="nav-link" data-scroll-target="#코드-8-학교-vi-구현"><span class="header-section-number">6</span> 코드 — 8 학교 VI 구현</a>
+  <ul class="collapse">
+  <li><a href="#mean-field-vi" id="toc-mean-field-vi" class="nav-link" data-scroll-target="#mean-field-vi"><span class="header-section-number">6.1</span> Mean-field VI</a></li>
+  <li><a href="#mcmc-비교" id="toc-mcmc-비교" class="nav-link" data-scroll-target="#mcmc-비교"><span class="header-section-number">6.2</span> MCMC 비교</a></li>
+  </ul></li>
+  <li><a href="#실전-체크리스트" id="toc-실전-체크리스트" class="nav-link" data-scroll-target="#실전-체크리스트"><span class="header-section-number">7</span> 실전 체크리스트</a></li>
+  <li><a href="#관련-주제" id="toc-관련-주제" class="nav-link" data-scroll-target="#관련-주제"><span class="header-section-number">8</span> 관련 주제</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="개요-두-근사-추론의-대비" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="개요-두-근사-추론의-대비"><span class="header-section-number">1</span> 개요 — 두 근사 추론의 대비</h2>
+<p>Ch.13 § 13.7~13.8 은 <strong>사후 전체를 단일 분포로 근사</strong>. Laplace 가 “mode 주변 정규” 였다면, VI/EP 는 <strong>더 유연한 분포 가족</strong>에서 최적화.</p>
+<table class="table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>측면</th>
+<th>VI</th>
+<th>EP</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>최적화 기준</td>
+<td><span class="math inline">\(\mathrm{KL}(g \| p)\)</span> 최소화</td>
+<td>Moment matching (local KL)</td>
+</tr>
+<tr class="even">
+<td>분해 축</td>
+<td><strong>모수별</strong> <span class="math inline">\(g = \prod g_j(\theta_j)\)</span></td>
+<td><strong>데이터점별</strong> <span class="math inline">\(g = \prod g_i(\theta)\)</span></td>
+</tr>
+<tr class="odd">
+<td>수렴</td>
+<td>단조 감소 KL 보장</td>
+<td>보장 없음 (실무 양호)</td>
+</tr>
+<tr class="even">
+<td>편향</td>
+<td>분산 <strong>과소</strong></td>
+<td>분산 <strong>과대</strong></td>
+</tr>
+<tr class="odd">
+<td>속도</td>
+<td>매우 빠름</td>
+<td>비슷, 때로 더 느림</td>
+</tr>
+</tbody>
+</table>
+<p>두 방법 모두 <strong>확장 가능</strong> — 관측 <span class="math inline">\(n\)</span> 수십만~수백만에서 실용. MCMC 로 불가능한 규모.</p>
+<p><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-13-0-modal-variational-approximations.html">Overview (02-13-0)</a> 의 3 세대 근사 마지막 장.</p>
+</section>
+<section id="variational-inference" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="variational-inference"><span class="header-section-number">2</span> § 13.7 — Variational Inference</h2>
+<section id="기본-아이디어" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="기본-아이디어"><span class="header-section-number">2.1</span> 기본 아이디어</h3>
+<p>목표 <span class="math inline">\(p(\theta \mid y)\)</span> 에서 추출 불가. 대신 <strong>간단한 분포 가족</strong> <span class="math inline">\(\mathcal{G}\)</span> 에서:</p>
+<p><span class="math display">\[
+g^* = \arg\min_{g \in \mathcal{G}} \mathrm{KL}(g \| p(\theta \mid y))
+\]</span></p>
+<p><span class="math inline">\(g^*\)</span> 를 사후 대용으로 사용.</p>
+</section>
+<section id="kl-divergence-식-13.15" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="kl-divergence-식-13.15"><span class="header-section-number">2.2</span> KL Divergence — 식 (13.15)</h3>
+<p><span class="math display">\[
+\mathrm{KL}(g \| p) = -\mathbb{E}_g\!\left[\log \frac{p(\theta \mid y)}{g(\theta)}\right] = -\int g(\theta) \log \frac{p(\theta \mid y)}{g(\theta)} d\theta \tag{13.15}
+\]</span></p>
+<p><strong>성질</strong>:</p>
+<ul>
+<li><span class="math inline">\(\mathrm{KL} \ge 0\)</span> (Gibbs 부등식).</li>
+<li>등호 <span class="math inline">\(\iff g = p\)</span> a.e..</li>
+</ul>
+<p><strong>목표</strong>: <span class="math inline">\(\mathcal{G}\)</span> 범위 내 최소화. <span class="math inline">\(g = p\)</span> 가 <span class="math inline">\(\mathcal{G}\)</span> 에 없으면 <strong>0 못 가짐</strong>, 근사 편향 내재.</p>
+</section>
+<section id="elbo-실제-최적화-대상" class="level3" data-number="2.3">
+<h3 data-number="2.3" class="anchored" data-anchor-id="elbo-실제-최적화-대상"><span class="header-section-number">2.3</span> ELBO — 실제 최적화 대상</h3>
+<p><span class="math inline">\(\mathrm{KL}(g \| p)\)</span> 직접 계산 어려움: <span class="math inline">\(p(\theta \mid y)\)</span> 의 정규화 상수 <span class="math inline">\(p(y)\)</span> 미지.</p>
+<p><strong>우회</strong>: Evidence Lower Bound (ELBO):</p>
+<p><span class="math display">\[
+\log p(y) = \mathrm{KL}(g \| p(\theta \mid y)) + \underbrace{\mathbb{E}_g[\log p(\theta, y) - \log g(\theta)]}_{\mathrm{ELBO}(g)}
+\]</span></p>
+<p><span class="math inline">\(\log p(y)\)</span> 는 <span class="math inline">\(g\)</span> 무관 상수. <strong>KL 최소화 ↔︎ ELBO 최대화</strong>.</p>
+<p><span class="math display">\[
+\mathrm{ELBO}(g) = \mathbb{E}_g[\log p(\theta, y)] - \mathbb{E}_g[\log g(\theta)]
+\]</span></p>
+<p>첫 항: 결합 log density 기댓값. 둘째: 엔트로피 (음의 부호).</p>
+<p>실무: ELBO 계산은 <strong>정규화 상수 불필요</strong> — <span class="math inline">\(p(\theta, y) = p(\theta) p(y \mid \theta)\)</span> 로 충분.</p>
+</section>
+<section id="mean-field-근사" class="level3" data-number="2.4">
+<h3 data-number="2.4" class="anchored" data-anchor-id="mean-field-근사"><span class="header-section-number">2.4</span> Mean-Field 근사</h3>
+<p>가장 흔한 <span class="math inline">\(\mathcal{G}\)</span> 선택: <strong>성분 독립</strong>.</p>
+<p><span class="math display">\[
+g(\theta \mid \phi) = \prod_{j=1}^J g_j(\theta_j \mid \phi_j)
+\]</span></p>
+<p><strong>단점</strong>: 사후 성분 간 상관 무시 → <strong>과소 분산</strong>. <strong>장점</strong>: 각 <span class="math inline">\(g_j\)</span> 를 독립적으로 업데이트 가능.</p>
+</section>
+<section id="좌표-상승-업데이트" class="level3" data-number="2.5">
+<h3 data-number="2.5" class="anchored" data-anchor-id="좌표-상승-업데이트"><span class="header-section-number">2.5</span> 좌표 상승 업데이트</h3>
+<p>Mean-field 하 최적 <span class="math inline">\(g_j\)</span>:</p>
+<p><span class="math display">\[
+\log g_j^*(\theta_j) \propto \mathbb{E}_{g_{-j}}[\log p(\theta, y)]
+\]</span></p>
+<p><strong>유도</strong>: ELBO 를 <span class="math inline">\(g_j\)</span> 에 대해 미분 0. 결과: 다른 <span class="math inline">\(g_{-j}\)</span> 고정 하에서 <strong>log joint 의 conditional 기댓값</strong> 이 최적 <span class="math inline">\(\log g_j\)</span>.</p>
+<p><strong>Gibbs 샘플링과 대응</strong>: Gibbs 는 <span class="math inline">\(p(\theta_j \mid \theta_{-j}, y)\)</span> 에서 <strong>추출</strong>, VI 는 <span class="math inline">\(\mathbb{E}_{g_{-j}}[\log p]\)</span> 로 <strong><span class="math inline">\(g_j\)</span> 분포 결정</strong>. 추출 vs 분포 갱신.</p>
+</section>
+<section id="알고리즘" class="level3" data-number="2.6">
+<h3 data-number="2.6" class="anchored" data-anchor-id="알고리즘"><span class="header-section-number">2.6</span> 알고리즘</h3>
+<ol type="1">
+<li>각 <span class="math inline">\(g_j\)</span> 파라미터 <span class="math inline">\(\phi_j\)</span> 초기화.</li>
+<li>각 반복 <span class="math inline">\(t\)</span>:
+<ul>
+<li>각 <span class="math inline">\(j = 1, \ldots, J\)</span> 에 대해:
+<ul>
+<li><span class="math inline">\(\log g_j^{(t)}(\theta_j) \propto \mathbb{E}_{g_{-j}^{(t)}}[\log p(\theta, y)]\)</span> 계산.</li>
+<li><span class="math inline">\(\phi_j\)</span> 업데이트.</li>
+</ul></li>
+</ul></li>
+<li>ELBO 수렴 또는 <span class="math inline">\(\phi\)</span> 변화 없음 시 중단.</li>
+</ol>
+</section>
+<section id="vi-가-단조-kl-감소-증명-스케치" class="level3" data-number="2.7">
+<h3 data-number="2.7" class="anchored" data-anchor-id="vi-가-단조-kl-감소-증명-스케치"><span class="header-section-number">2.7</span> VI 가 단조 KL 감소 — 증명 스케치</h3>
+<p>각 <span class="math inline">\(g_j\)</span> 업데이트가 <strong><span class="math inline">\(\mathrm{ELBO}\)</span> 증가</strong> → KL 감소.</p>
+<p><span class="math inline">\(j\)</span> 업데이트 시 다른 <span class="math inline">\(g_{-j}\)</span> 고정. <span class="math inline">\(g_j\)</span> 만의 함수로서 ELBO 는 <span class="math inline">\(\mathrm{KL}(g_j \| g_j^*)\)</span> 의 형태 — <span class="math inline">\(g_j = g_j^*\)</span> 에서 최대.</p>
+<p>따라서 각 업데이트가 <strong>ELBO 비감소</strong> (최대 또는 같음). 단조 수렴 보장.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — VI 를 EM 으로 이해하기
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>EM 의 variational 관점 (§ 13.4 심화):</p>
+<ul>
+<li>E-step: <span class="math inline">\(q(\gamma) = p(\gamma \mid \phi^{\mathrm{old}}, y)\)</span> (잠재 posterior 정확).</li>
+<li>M-step: <span class="math inline">\(\phi\)</span> 최적화.</li>
+</ul>
+<p>VI: <strong>둘 다 근사</strong>. <span class="math inline">\(q = \prod q_j\)</span> 로 분해, 각 <span class="math inline">\(q_j\)</span> 가 “<span class="math inline">\(\theta_j\)</span> 의 잠재” 같은 역할.</p>
+<p>즉 <strong>VI = EM 에서 “잠재” 분포도 parametric family 로 제약</strong>. EM 은 VI 의 특수 경우 (정확 E-step).</p>
+<p>이 통일된 관점이 현대 ML 의 <strong>Variational Autoencoder</strong> (VAE), <strong>Bayesian Neural Networks</strong> 의 이론적 뿌리.</p>
+</div>
+</div>
+</section>
+<section id="학교-예제-vi-유도" class="level3" data-number="2.8">
+<h3 data-number="2.8" class="anchored" data-anchor-id="학교-예제-vi-유도"><span class="header-section-number">2.8</span> 8 학교 예제 — VI 유도</h3>
+<p>Ch.5.5 의 hierarchical normal. 10 차원 <span class="math inline">\(\theta = (\alpha_{1:8}, \mu, \tau)\)</span>.</p>
+<p>Log posterior (식 13.16):</p>
+<p><span class="math display">\[
+\log p(\theta \mid y) = -\tfrac{1}{2}\sum_j \frac{(y_j - \alpha_j)^2}{\sigma_j^2} - 8 \log \tau - \tfrac{1}{2\tau^2}\sum_j (\alpha_j - \mu)^2 + C
+\]</span></p>
+<p><strong>Mean-field</strong>:</p>
+<p><span class="math display">\[
+g(\theta) = g(\mu) \cdot g(\tau^2) \cdot \prod_{j=1}^8 g(\alpha_j) \tag{13.17}
+\]</span></p>
+</section>
+<section id="각-g_j-형태-수식-유도" class="level3" data-number="2.9">
+<h3 data-number="2.9" class="anchored" data-anchor-id="각-g_j-형태-수식-유도"><span class="header-section-number">2.9</span> 각 <span class="math inline">\(g_j\)</span> 형태 — 수식 유도</h3>
+<section id="alpha_j-업데이트" class="level4" data-number="2.9.1">
+<h4 data-number="2.9.1" class="anchored" data-anchor-id="alpha_j-업데이트"><span class="header-section-number">2.9.1</span> <span class="math inline">\(\alpha_j\)</span> 업데이트</h4>
+<p><span class="math inline">\(\mathbb{E}_{g_{-\alpha_j}}[\log p]\)</span> 에서 <span class="math inline">\(\alpha_j\)</span> 와 무관 항 제외:</p>
+<p><span class="math display">\[
+\mathbb{E}_{g_{-\alpha_j}}[\log p] = -\tfrac{(y_j - \alpha_j)^2}{2\sigma_j^2} - \tfrac{1}{2} \mathbb{E}[1/\tau^2] \mathbb{E}[(\alpha_j - \mu)^2] + C
+\]</span></p>
+<p><strong><span class="math inline">\(\alpha_j\)</span> 에 대한 2차 함수</strong> → 지수화하면 <strong>정규 kernel</strong>. 식 (13.18):</p>
+<p><span class="math display">\[
+g(\alpha_j) = \mathrm{N}\!\left(\alpha_j \mid \frac{y_j/\sigma_j^2 + \mathbb{E}[1/\tau^2] \mathbb{E}[\mu]}{1/\sigma_j^2 + \mathbb{E}[1/\tau^2]}, \frac{1}{1/\sigma_j^2 + \mathbb{E}[1/\tau^2]}\right)
+\]</span></p>
+<p><strong>정밀도 가중 평균</strong> 구조 — Gibbs 의 조건부와 동일.</p>
+</section>
+<section id="mu-업데이트" class="level4" data-number="2.9.2">
+<h4 data-number="2.9.2" class="anchored" data-anchor-id="mu-업데이트"><span class="header-section-number">2.9.2</span> <span class="math inline">\(\mu\)</span> 업데이트</h4>
+<p><span class="math inline">\(\alpha_j, \mu\)</span> 의 cross term 만 고려:</p>
+<p><span class="math display">\[
+\mathbb{E}_{g_{-\mu}}[\log p] = -\tfrac{1}{2} \mathbb{E}[1/\tau^2] \sum_j (\mathbb{E}[\alpha_j] - \mu)^2 + C
+\]</span></p>
+<p>식 (13.19):</p>
+<p><span class="math display">\[
+g(\mu) = \mathrm{N}\!\left(\mu \mid \tfrac{1}{8}\sum_j \mathbb{E}[\alpha_j], \tfrac{1}{8 \mathbb{E}[1/\tau^2]}\right)
+\]</span></p>
+</section>
+<section id="tau2-업데이트" class="level4" data-number="2.9.3">
+<h4 data-number="2.9.3" class="anchored" data-anchor-id="tau2-업데이트"><span class="header-section-number">2.9.3</span> <span class="math inline">\(\tau^2\)</span> 업데이트</h4>
+<p><span class="math inline">\(\log \tau\)</span> 항과 <span class="math inline">\(\tau^{-2}\)</span> 항 수집:</p>
+<p><span class="math display">\[
+\mathbb{E}_{g_{-\tau^2}}[\log p] = -8 \log \tau - \tfrac{1}{2\tau^2} \sum_j \mathbb{E}[(\alpha_j - \mu)^2] + C
+\]</span></p>
+<p><strong>Inverse-<span class="math inline">\(\chi^2\)</span> kernel</strong>. 식 (13.20):</p>
+<p><span class="math display">\[
+g(\tau^2) = \mathrm{Inv}\text{-}\chi^2\!\left(\tau^2 \mid 7, \tfrac{1}{7} \sum_j \mathbb{E}[(\alpha_j - \mu)^2]\right)
+\]</span></p>
+</section>
+</section>
+<section id="필요한-기댓값들" class="level3" data-number="2.10">
+<h3 data-number="2.10" class="anchored" data-anchor-id="필요한-기댓값들"><span class="header-section-number">2.10</span> 필요한 기댓값들</h3>
+<p>Update 에서 각 <span class="math inline">\(g_j\)</span> 의 모수로부터 기댓값 계산.</p>
+<p><span class="math inline">\(\alpha_j\)</span> 정규 (식 13.21): <span class="math inline">\(g(\alpha_j) = \mathrm{N}(M_{\alpha_j}, S^2_{\alpha_j})\)</span>.</p>
+<ul>
+<li><span class="math inline">\(\mathbb{E}[\alpha_j] = M_{\alpha_j}\)</span>.</li>
+</ul>
+<p><span class="math inline">\(\mu\)</span> 정규 (식 13.22): <span class="math inline">\(g(\mu) = \mathrm{N}(M_\mu, S^2_\mu)\)</span>.</p>
+<ul>
+<li><span class="math inline">\(\mathbb{E}[\mu] = M_\mu\)</span>.</li>
+</ul>
+<p><span class="math inline">\(\tau^2\)</span> inv-<span class="math inline">\(\chi^2\)</span> (식 13.23): <span class="math inline">\(g(\tau^2) = \mathrm{Inv}\text{-}\chi^2(7, M^2_\tau)\)</span>.</p>
+<ul>
+<li><span class="math inline">\(\mathbb{E}[1/\tau^2] = 1/M^2_\tau\)</span> (inv-<span class="math inline">\(\chi^2\)</span> 기대값).</li>
+</ul>
+<p><span class="math inline">\(\mathbb{E}[(\alpha_j - \mu)^2]\)</span> 계산:</p>
+<p><span class="math display">\[
+\mathbb{E}[(\alpha_j - \mu)^2] = (M_{\alpha_j} - M_\mu)^2 + S^2_{\alpha_j} + S^2_\mu
+\]</span></p>
+<p>(독립 가정 하 분산 덧셈 + 평균 차이 제곱).</p>
+</section>
+<section id="수렴-확인-kl-divergence-추적" class="level3" data-number="2.11">
+<h3 data-number="2.11" class="anchored" data-anchor-id="수렴-확인-kl-divergence-추적"><span class="header-section-number">2.11</span> 수렴 확인 — KL Divergence 추적</h3>
+<p>VI 알고리즘이 correct 라면 <strong>KL 매 반복 단조 감소</strong>. 8 학교에서 해석적 계산 가능:</p>
+<p><span class="math display">\[
+\mathrm{ELBO} = \text{(복잡 수식)}
+\]</span></p>
+<p>Figure 13.5 에서 <strong>50 반복 내 수렴</strong>. KL 단조 감소 확인.</p>
+</section>
+<section id="학교-vi-vs-full-bayes-비교" class="level3" data-number="2.12">
+<h3 data-number="2.12" class="anchored" data-anchor-id="학교-vi-vs-full-bayes-비교"><span class="header-section-number">2.12</span> 8 학교 VI vs Full Bayes 비교</h3>
+<p>Figure 13.6: <span class="math inline">\(\alpha_1, \alpha_2, \alpha_3\)</span> 의 VI 와 MCMC 비교.</p>
+<ul>
+<li>VI 사후: <strong>대칭 정규</strong> (가정).</li>
+<li>MCMC 사후: <strong>비대칭</strong> (<span class="math inline">\(\tau\)</span> 꼬리 영향).</li>
+</ul>
+<p>VI 가 <strong>분산 과소 추정</strong> 확인. 그러나 <strong>평균·중앙값은 일치</strong>.</p>
+</section>
+<section id="vi-의-과소-분산-수학적-원인" class="level3" data-number="2.13">
+<h3 data-number="2.13" class="anchored" data-anchor-id="vi-의-과소-분산-수학적-원인"><span class="header-section-number">2.13</span> VI 의 과소 분산 — 수학적 원인</h3>
+<p><span class="math inline">\(\mathrm{KL}(g \| p) = \int g \log(g/p)\)</span>.</p>
+<p><span class="math inline">\(p\)</span> 가 작은 영역에서 <span class="math inline">\(g\)</span> 가 크면 페널티 <strong>폭발</strong> (<span class="math inline">\(\log(g / \epsilon) \to \infty\)</span>).</p>
+<p>따라서 <span class="math inline">\(g\)</span> 는 <strong><span class="math inline">\(p\)</span> 가 큰 영역 안에만</strong> 위치. <strong>꼬리 무시</strong> → 분산 과소.</p>
+<p>반대 KL <span class="math inline">\(\mathrm{KL}(p \| g)\)</span> 는 다른 편향 (§ 13.8 EP).</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — “Mode-seeking” vs “Mean-seeking”
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>VI (forward KL, <span class="math inline">\(\mathrm{KL}(g \| p)\)</span>)</strong>: “Mode-seeking”. <span class="math inline">\(g\)</span> 가 <span class="math inline">\(p\)</span> 의 <strong>한 mode 에 집중</strong>.</p>
+<p><strong>EP (reverse KL, <span class="math inline">\(\mathrm{KL}(p \| g)\)</span>)</strong>: “Mean-seeking”. <span class="math inline">\(g\)</span> 가 <span class="math inline">\(p\)</span> 의 <strong>모든 mode 커버</strong> 시도.</p>
+<p>다봉 <span class="math inline">\(p\)</span> 에서:</p>
+<ul>
+<li>VI: 한 mode 에 정확히 맞춤. 다른 mode 무시.</li>
+<li>EP: 모든 mode 포함. 양 mode 사이 “평균” 에 위치 — 평평한 <span class="math inline">\(g\)</span>.</li>
+</ul>
+<p><strong>실무 함의</strong>: VI 는 <strong>단봉 가정</strong> 에서 좋음. 다봉 의심 시 EP 또는 MCMC.</p>
+<p>ML 에서 VI 가 <strong>VAE 생성 이미지의 “흐릿함”</strong> 원인. 평균으로 수렴해 세부 상실.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="expectation-propagation" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="expectation-propagation"><span class="header-section-number">3</span> § 13.8 — Expectation Propagation</h2>
+<section id="ep-의-아이디어" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="ep-의-아이디어"><span class="header-section-number">3.1</span> EP 의 아이디어</h3>
+<p>목표 분포 <span class="math inline">\(p(\theta \mid y) = f(\theta)\)</span> 를 <strong>factor 곱</strong>으로 분해:</p>
+<p><span class="math display">\[
+f(\theta) = \prod_{i=0}^n f_i(\theta) \tag{13.29}
+\]</span></p>
+<p>대표: <span class="math inline">\(f_0(\theta) = p(\theta)\)</span> (prior), <span class="math inline">\(f_i(\theta) = p(y_i \mid \theta)\)</span> (likelihood per point).</p>
+</section>
+<section id="근사-분포의-factor-분해" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="근사-분포의-factor-분해"><span class="header-section-number">3.2</span> 근사 분포의 factor 분해</h3>
+<p><span class="math inline">\(g(\theta)\)</span> 도 <strong>같은 구조</strong>로:</p>
+<p><span class="math display">\[
+g(\theta) = \prod_{i=0}^n g_i(\theta) \tag{13.30}
+\]</span></p>
+<p>각 <span class="math inline">\(g_i\)</span> 가 대응 <span class="math inline">\(f_i\)</span> 를 근사. <strong><span class="math inline">\(g_i\)</span> 는 지수족</strong> (주로 정규).</p>
+<p>VI (모수별 분해) vs EP (데이터별 분해) 의 근본 차이. EP 는 <strong>상관 보존</strong> 가능.</p>
+</section>
+<section id="cavity-와-tilted-distribution" class="level3" data-number="3.3">
+<h3 data-number="3.3" class="anchored" data-anchor-id="cavity-와-tilted-distribution"><span class="header-section-number">3.3</span> Cavity 와 Tilted Distribution</h3>
+<p>EP 핵심 단위: <strong><span class="math inline">\(g_i\)</span> 하나씩 업데이트</strong>.</p>
+<p><strong>Cavity distribution</strong>: <span class="math inline">\(g\)</span> 에서 <span class="math inline">\(g_i\)</span> 를 <strong>뺀</strong> 것.</p>
+<p><span class="math display">\[
+g_{-i}(\theta) \propto \frac{g(\theta)}{g_i(\theta)}
+\]</span></p>
+<p><strong>Tilted distribution</strong>: <span class="math inline">\(g_{-i}\)</span> 에 실제 <span class="math inline">\(f_i\)</span> 붙이기.</p>
+<p><span class="math display">\[
+g_{-i}(\theta) f_i(\theta)
+\]</span></p>
+<p>“Cavity 의 다른 factor 들 + 실제 <span class="math inline">\(i\)</span> 번째 factor”. <strong><span class="math inline">\(i\)</span> 번째만</strong> 정확한 분포.</p>
+</section>
+<section id="moment-matching-업데이트" class="level3" data-number="3.4">
+<h3 data-number="3.4" class="anchored" data-anchor-id="moment-matching-업데이트"><span class="header-section-number">3.4</span> Moment Matching — 업데이트</h3>
+<p>Tilted distribution 이 일반적으로 지수족 아님. 이를 <strong>지수족의 <span class="math inline">\(g^{\mathrm{new}}\)</span></strong> 로 <strong>moments 맞춤</strong>.</p>
+<p>Gaussian <span class="math inline">\(g = \mathrm{N}(\mu, \Sigma)\)</span> 의 경우:</p>
+<p><span class="math display">\[
+\mu = \mathbb{E}_{\mathrm{tilted}}[\theta], \quad \Sigma = \mathrm{Cov}_{\mathrm{tilted}}[\theta]
+\]</span></p>
+<p>Tilted 의 평균·공분산을 <span class="math inline">\(g^{\mathrm{new}}\)</span> 의 것과 같게 설정.</p>
+<p>업데이트 <span class="math inline">\(g_i\)</span>:</p>
+<p><span class="math display">\[
+g_i^{\mathrm{new}} = \frac{g^{\mathrm{new}}}{g_{-i}}
+\]</span></p>
+</section>
+<section id="왜-moment-matching-local-kl-최소화" class="level3" data-number="3.5">
+<h3 data-number="3.5" class="anchored" data-anchor-id="왜-moment-matching-local-kl-최소화"><span class="header-section-number">3.5</span> 왜 Moment Matching = Local KL 최소화</h3>
+<p>지수족 <span class="math inline">\(g\)</span> 에 대해 <span class="math inline">\(\mathrm{KL}(p \| g)\)</span> 최소화는 <strong>moments 맞추기와 등가</strong> (exponential family 성질).</p>
+<p>즉 EP 는 <strong>local KL (reverse direction) 을 factor 마다</strong> 최소화. <strong>Global KL</strong> 은 보장 안 됨.</p>
+</section>
+<section id="지수족과-자연-모수" class="level3" data-number="3.6">
+<h3 data-number="3.6" class="anchored" data-anchor-id="지수족과-자연-모수"><span class="header-section-number">3.6</span> 지수족과 자연 모수</h3>
+<p>EP 가 <span class="math inline">\(g\)</span> 를 지수족에 제한하는 이유:</p>
+<p><strong>지수족 밀도</strong>:</p>
+<p><span class="math display">\[
+g(\theta) \propto \exp(\eta^\top T(\theta))
+\]</span></p>
+<p><span class="math inline">\(T(\theta)\)</span> = 충분 통계량, <span class="math inline">\(\eta\)</span> = 자연 모수.</p>
+<p><strong>장점</strong>: 곱셈이 <strong>덧셈</strong>으로 바뀜. <span class="math inline">\(g_1 \cdot g_2\)</span> 는 자연 모수 덧셈.</p>
+<p><span class="math display">\[
+g(\theta) \propto \exp((\eta_1 + \eta_2)^\top T(\theta))
+\]</span></p>
+<p>이게 EP 의 cavity 연산 <span class="math inline">\(g / g_i\)</span> 를 <strong>자연 모수 뺄셈</strong>으로 가능하게 함.</p>
+<p>정규 분포의 자연 모수: <span class="math inline">\((\Sigma^{-1}\mu, \Sigma^{-1})\)</span>. Precision matrix 와 scaled mean.</p>
+</section>
+<section id="ep-알고리즘" class="level3" data-number="3.7">
+<h3 data-number="3.7" class="anchored" data-anchor-id="ep-알고리즘"><span class="header-section-number">3.7</span> EP 알고리즘</h3>
+<p>Factor <span class="math inline">\(i\)</span> 업데이트 단계:</p>
+<ol type="1">
+<li><strong>Cavity</strong>: 현재 <span class="math inline">\(g\)</span> 에서 <span class="math inline">\(g_i\)</span> 를 자연 모수 뺄셈.</li>
+</ol>
+<p><span class="math display">\[
+\Sigma_{-i}^{-1} \mu_{-i} = \Sigma^{-1}\mu - \Sigma_i^{-1}\mu_i, \quad \Sigma_{-i}^{-1} = \Sigma^{-1} - \Sigma_i^{-1}
+\]</span></p>
+<ol start="2" type="1">
+<li><p><strong>Tilted</strong>: <span class="math inline">\(g_{-i} \cdot f_i\)</span> 구성.</p></li>
+<li><p><strong>Moment Match</strong>: Tilted 의 평균·공분산 → 새 <span class="math inline">\(g^{\mathrm{new}}\)</span>.</p></li>
+<li><p><strong>업데이트 <span class="math inline">\(g_i\)</span></strong>: <span class="math inline">\(g_i^{\mathrm{new}} = g^{\mathrm{new}} / g_{-i}\)</span> (자연 모수 뺄셈).</p></li>
+<li><p><strong><span class="math inline">\(g\)</span> 재구성</strong>: 모든 <span class="math inline">\(g_i\)</span> 의 곱 (자연 모수 덧셈).</p></li>
+</ol>
+<p>각 factor 순차 → <strong>수렴</strong>까지 반복.</p>
+</section>
+<section id="sequential-vs-parallel-ep" class="level3" data-number="3.8">
+<h3 data-number="3.8" class="anchored" data-anchor-id="sequential-vs-parallel-ep"><span class="header-section-number">3.8</span> Sequential vs Parallel EP</h3>
+<ul>
+<li><strong>Sequential</strong>: 각 factor 후 <span class="math inline">\(g\)</span> 갱신. 안정적, 느림.</li>
+<li><strong>Parallel</strong>: 모든 factor 의 업데이트 계산 후 한 번에 <span class="math inline">\(g\)</span> 갱신. 빠름, 불안정 가능.</li>
+</ul>
+</section>
+<section id="bioassay-ep-예제" class="level3" data-number="3.9">
+<h3 data-number="3.9" class="anchored" data-anchor-id="bioassay-ep-예제"><span class="header-section-number">3.9</span> Bioassay EP 예제</h3>
+<p>Ch.3.7 의 로지스틱 회귀. <span class="math inline">\(y_i \sim \mathrm{Bin}(m_i, \mathrm{logit}^{-1}(X_i \theta))\)</span>, <span class="math inline">\(\theta = (\theta_1, \theta_2)\)</span>.</p>
+<p><strong>Factor 분해</strong>:</p>
+<ul>
+<li><span class="math inline">\(f_0(\theta)\)</span> = prior (uniform, 또는 <span class="math inline">\(\mathrm{N}(\mu_0, \Sigma_0)\)</span>).</li>
+<li><span class="math inline">\(f_i(\theta) = p(y_i \mid \theta)\)</span> = 이항 likelihood.</li>
+</ul>
+<p><span class="math inline">\(g_i\)</span> = <span class="math inline">\(\mathrm{N}(\mu_i, \Sigma_i)\)</span> 정규 근사.</p>
+</section>
+<section id="ep-한-스텝-자세히" class="level3" data-number="3.10">
+<h3 data-number="3.10" class="anchored" data-anchor-id="ep-한-스텝-자세히"><span class="header-section-number">3.10</span> EP 한 스텝 (자세히)</h3>
+<section id="step-1-cavity" class="level4" data-number="3.10.1">
+<h4 data-number="3.10.1" class="anchored" data-anchor-id="step-1-cavity"><span class="header-section-number">3.10.1</span> Step 1: Cavity</h4>
+<p><span class="math display">\[
+\Sigma_{-i}^{-1}\mu_{-i} = \Sigma^{-1}\mu - \Sigma_i^{-1}\mu_i, \quad \Sigma_{-i}^{-1} = \Sigma^{-1} - \Sigma_i^{-1}
+\]</span></p>
+</section>
+<section id="step-2-1-차원-투영" class="level4" data-number="3.10.2">
+<h4 data-number="3.10.2" class="anchored" data-anchor-id="step-2-1-차원-투영"><span class="header-section-number">3.10.2</span> Step 2: 1 차원 투영</h4>
+<p><span class="math inline">\(f_i\)</span> 가 <span class="math inline">\(X_i \theta\)</span> 에만 의존 (<span class="math inline">\(\eta_i = X_i \theta\)</span>, 스칼라). 따라서 <span class="math inline">\(\theta\)</span> 의 full distribution 대신 <strong><span class="math inline">\(\eta_i\)</span> 의 주변 분포</strong>로 충분.</p>
+<p><span class="math display">\[
+M_{-i} = X_i \mu_{-i}, \quad V_{-i} = X_i \Sigma_{-i} X_i^\top
+\]</span></p>
+</section>
+<section id="step-3-tilted-의-moments-계산" class="level4" data-number="3.10.3">
+<h4 data-number="3.10.3" class="anchored" data-anchor-id="step-3-tilted-의-moments-계산"><span class="header-section-number">3.10.3</span> Step 3: Tilted 의 moments 계산</h4>
+<p><strong>1 차원 적분</strong>:</p>
+<p><span class="math display">\[
+E_k = \int \eta^k \cdot \mathrm{N}(\eta \mid M_{-i}, V_{-i}) \cdot \mathrm{Bin}(y_i \mid m_i, \mathrm{logit}^{-1}(\eta)) d\eta, \quad k = 0, 1, 2
+\]</span></p>
+<p>Gauss-Kronrod quadrature 로 수치 적분. 적분 범위 <span class="math inline">\(M_{-i} \pm 10 \sqrt{V_{-i}}\)</span>.</p>
+<p><span class="math display">\[
+M = E_1/E_0, \quad V = E_2/E_0 - M^2
+\]</span></p>
+</section>
+<section id="step-4-새-g_i" class="level4" data-number="3.10.4">
+<h4 data-number="3.10.4" class="anchored" data-anchor-id="step-4-새-g_i"><span class="header-section-number">3.10.4</span> Step 4: 새 <span class="math inline">\(g_i\)</span></h4>
+<p>Natural parameter 뺄셈:</p>
+<p><span class="math display">\[
+\frac{M_i^{\mathrm{new}}}{V_i^{\mathrm{new}}} = \frac{M}{V} - \frac{M_{-i}}{V_{-i}}, \quad \frac{1}{V_i^{\mathrm{new}}} = \frac{1}{V} - \frac{1}{V_{-i}}
+\]</span></p>
+</section>
+<section id="step-5-full-space-로-변환" class="level4" data-number="3.10.5">
+<h4 data-number="3.10.5" class="anchored" data-anchor-id="step-5-full-space-로-변환"><span class="header-section-number">3.10.5</span> Step 5: Full space 로 변환</h4>
+<p><span class="math display">\[
+\Sigma_i^{-1}\mu_i = X_i^\top \frac{M_i}{V_i}, \quad \Sigma_i^{-1} = X_i^\top \frac{1}{V_i} X_i
+\]</span></p>
+</section>
+<section id="step-6-g-재계산" class="level4" data-number="3.10.6">
+<h4 data-number="3.10.6" class="anchored" data-anchor-id="step-6-g-재계산"><span class="header-section-number">3.10.6</span> Step 6: <span class="math inline">\(g\)</span> 재계산</h4>
+<p><span class="math display">\[
+\Sigma^{-1}\mu = \Sigma_{-i}^{-1}\mu_{-i} + \Sigma_i^{-1}\mu_i, \quad \Sigma^{-1} = \Sigma_{-i}^{-1} + \Sigma_i^{-1}
+\]</span></p>
+</section>
+</section>
+<section id="ep-의-계산-효율성" class="level3" data-number="3.11">
+<h3 data-number="3.11" class="anchored" data-anchor-id="ep-의-계산-효율성"><span class="header-section-number">3.11</span> EP 의 계산 효율성</h3>
+<p>핵심: <strong><span class="math inline">\(f_i\)</span> 가 <span class="math inline">\(X_i \theta\)</span> 에만 의존</strong> → <strong>1 차원 적분으로 환원</strong>.</p>
+<p><span class="math inline">\(n\)</span> 데이터점 <span class="math inline">\(\times\)</span> 1 차원 quadrature = <strong>선형 시간</strong>.</p>
+<p>전체 <span class="math inline">\(k\)</span> 차원 적분 (<span class="math inline">\(k = 모수 수\)</span>) 할 필요 없음.</p>
+</section>
+<section id="ep-수렴-성질" class="level3" data-number="3.12">
+<h3 data-number="3.12" class="anchored" data-anchor-id="ep-수렴-성질"><span class="header-section-number">3.12</span> EP 수렴 성질</h3>
+<ul>
+<li><strong>보장 없음</strong>: 순환 또는 발산 가능.</li>
+<li><strong>실무 양호</strong>: log-concave <span class="math inline">\(f_i\)</span> + prior 로 초기화 하면 대부분 수렴.</li>
+<li><strong>수렴 시</strong>: Global KL 최적 보장 안 되지만 <strong>marginal KL 의 sum</strong> 최적.</li>
+</ul>
+</section>
+<section id="bioassay-수치-결과" class="level3" data-number="3.13">
+<h3 data-number="3.13" class="anchored" data-anchor-id="bioassay-수치-결과"><span class="header-section-number">3.13</span> Bioassay 수치 결과</h3>
+<p><strong>4 반복 수렴</strong> (Figure 13.7). <span class="math inline">\((\mu_1, \sigma_1, \mu_2, \sigma_2, \rho)\)</span> 모두 안정.</p>
+<p>Laplace 대비:</p>
+<ul>
+<li>Laplace (§ 4.1): 점 추정 <span class="math inline">\((0.8, 7.7)\)</span>, mode 중심 정규.</li>
+<li>EP: 비대칭 posterior 더 정확. Tail 반영.</li>
+</ul>
+<p>MCMC 와 비교하면 EP 가 <strong>더 가까움</strong> — 특히 꼬리 영역.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — EP 가 VI 보다 “비대칭 분포에 강한” 이유
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>VI (mean-field): 각 성분 독립 → 공분산 0 가정. 상관 있는 사후에 <strong>부적합</strong>.</p>
+<p>EP (factor-wise): 각 factor 에 정확한 <span class="math inline">\(f_i\)</span> 사용, <span class="math inline">\(g\)</span> 가 <strong>전체 상관</strong> 유지. 정규 가정은 유지하지만 공분산 살림.</p>
+<p>Bioassay 의 <span class="math inline">\((\theta_1, \theta_2)\)</span> 강한 양 상관 → VI 는 두 독립 정규로 근사 (잘못), EP 는 <strong>상관 있는 이변량 정규</strong> (잘).</p>
+<p>일반 원리: <strong>“분해 축”</strong> 이 결정적. 모수별 분해 (VI) 는 간단하지만 상관 상실. 데이터별 분해 (EP) 는 상관 유지하지만 factor 가 지수족이어야.</p>
+<p>현대 발전: <strong>Structured VI</strong> 가 VI 에 특정 상관을 허용 — VI 와 EP 의 중간.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="vi-vs-ep-비교" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="vi-vs-ep-비교"><span class="header-section-number">4</span> VI vs EP 비교</h2>
+<table class="table">
+<thead>
+<tr class="header">
+<th>측면</th>
+<th>VI</th>
+<th>EP</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>최적화</td>
+<td>Global KL(g|p) 단조 감소</td>
+<td>Local KL factor-wise</td>
+</tr>
+<tr class="even">
+<td>편향</td>
+<td>분산 과소 (mode-seeking)</td>
+<td>분산 과대 (mean-seeking)</td>
+</tr>
+<tr class="odd">
+<td>다봉</td>
+<td>한 mode 집중</td>
+<td>모든 mode 평균</td>
+</tr>
+<tr class="even">
+<td>상관</td>
+<td>Mean-field: 상실</td>
+<td>유지</td>
+</tr>
+<tr class="odd">
+<td>수렴</td>
+<td>보장</td>
+<td>보장 없음 (실무 양호)</td>
+</tr>
+<tr class="even">
+<td>계산</td>
+<td>조건부 공액 시 빠름</td>
+<td>1D 적분 가능 시 빠름</td>
+</tr>
+<tr class="odd">
+<td>응용</td>
+<td>LDA, VAE, BNN</td>
+<td>GP, Bayesian DNN, 로지스틱</td>
+</tr>
+</tbody>
+</table>
+<p><strong>실무 권고</strong>:</p>
+<ul>
+<li><strong>단순 계층·공액 모형</strong> → VI.</li>
+<li><strong>비공액·상관 중요</strong> → EP.</li>
+<li><strong>초대형·ML 통합</strong> → ADVI (VI 의 자동화).</li>
+</ul>
+</section>
+<section id="현대-발전" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="현대-발전"><span class="header-section-number">5</span> 현대 발전</h2>
+<section id="advi-automatic-differentiation-vi" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="advi-automatic-differentiation-vi"><span class="header-section-number">5.1</span> ADVI — Automatic Differentiation VI</h3>
+<p>Kucukelbir et al.&nbsp;(2017). Stan·PyMC 에 내장.</p>
+<p>절차:</p>
+<ol type="1">
+<li>모수를 실수 공간으로 변환 (Jacobian).</li>
+<li><span class="math inline">\(q(\theta \mid \mu, \sigma) = \mathrm{N}(\mu, \mathrm{diag}(\sigma^2))\)</span> <strong>mean-field 정규</strong>.</li>
+<li>Stochastic gradient 로 ELBO 최대화.</li>
+</ol>
+<p><strong>속도</strong>: MCMC 대비 10~100 배. 정확도: 모형 의존.</p>
+</section>
+<section id="normalizing-flows" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="normalizing-flows"><span class="header-section-number">5.2</span> Normalizing Flows</h3>
+<p>Rezende-Mohamed (2015). VI 의 <span class="math inline">\(q\)</span> 를 <strong>유연화</strong>.</p>
+<p><span class="math inline">\(q(\theta) = f_K \circ \ldots \circ f_1(\theta_0)\)</span>, <span class="math inline">\(\theta_0 \sim \mathrm{N}\)</span>. 각 <span class="math inline">\(f_k\)</span> 가 invertible transform.</p>
+<p>Mean-field 의 과소 분산 문제 완화 — <span class="math inline">\(q\)</span> 가 임의 분포 근사 가능.</p>
+</section>
+<section id="vae-variational-autoencoder" class="level3" data-number="5.3">
+<h3 data-number="5.3" class="anchored" data-anchor-id="vae-variational-autoencoder"><span class="header-section-number">5.3</span> VAE — Variational Autoencoder</h3>
+<p>Kingma-Welling (2014). VI + 신경망 생성 모형.</p>
+<ul>
+<li>Encoder: <span class="math inline">\(q(z \mid x)\)</span> 변분 분포, 신경망 파라미터화.</li>
+<li>Decoder: <span class="math inline">\(p(x \mid z)\)</span> likelihood.</li>
+<li>ELBO 최대화 → 동시 학습.</li>
+</ul>
+<p>현대 생성 AI (GAN, diffusion 모델 이전) 의 기초.</p>
+</section>
+</section>
+<section id="코드-8-학교-vi-구현" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="코드-8-학교-vi-구현"><span class="header-section-number">6</span> 코드 — 8 학교 VI 구현</h2>
+<section id="mean-field-vi" class="level3" data-number="6.1">
+<h3 data-number="6.1" class="anchored" data-anchor-id="mean-field-vi"><span class="header-section-number">6.1</span> Mean-field VI</h3>
+<div class="sourceCode" id="cb1"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-2"><a href="#cb1-2"></a></span>
+<span id="cb1-3"><a href="#cb1-3"></a>rng <span class="op">=</span> np.random.default_rng(<span class="dv">133</span>)</span>
+<span id="cb1-4"><a href="#cb1-4"></a></span>
+<span id="cb1-5"><a href="#cb1-5"></a><span class="co"># 8 학교 데이터</span></span>
+<span id="cb1-6"><a href="#cb1-6"></a>y <span class="op">=</span> np.array([<span class="dv">28</span>, <span class="dv">8</span>, <span class="op">-</span><span class="dv">3</span>, <span class="dv">7</span>, <span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">18</span>, <span class="dv">12</span>])</span>
+<span id="cb1-7"><a href="#cb1-7"></a>sigma <span class="op">=</span> np.array([<span class="dv">15</span>, <span class="dv">10</span>, <span class="dv">16</span>, <span class="dv">11</span>, <span class="dv">9</span>, <span class="dv">11</span>, <span class="dv">10</span>, <span class="dv">18</span>])</span>
+<span id="cb1-8"><a href="#cb1-8"></a>J <span class="op">=</span> <span class="dv">8</span></span>
+<span id="cb1-9"><a href="#cb1-9"></a></span>
+<span id="cb1-10"><a href="#cb1-10"></a><span class="co"># VI 파라미터 초기화</span></span>
+<span id="cb1-11"><a href="#cb1-11"></a>M_alpha <span class="op">=</span> rng.normal(<span class="dv">0</span>, <span class="dv">5</span>, J)</span>
+<span id="cb1-12"><a href="#cb1-12"></a>S_alpha <span class="op">=</span> np.ones(J) <span class="op">*</span> <span class="fl">5.0</span></span>
+<span id="cb1-13"><a href="#cb1-13"></a>M_mu <span class="op">=</span> rng.normal(<span class="dv">0</span>, <span class="dv">5</span>)</span>
+<span id="cb1-14"><a href="#cb1-14"></a>S_mu <span class="op">=</span> <span class="fl">5.0</span></span>
+<span id="cb1-15"><a href="#cb1-15"></a>M_tau <span class="op">=</span> <span class="fl">5.0</span>  <span class="co"># scale</span></span>
+<span id="cb1-16"><a href="#cb1-16"></a>nu_tau <span class="op">=</span> <span class="dv">7</span></span>
+<span id="cb1-17"><a href="#cb1-17"></a></span>
+<span id="cb1-18"><a href="#cb1-18"></a><span class="kw">def</span> expected_inv_tau2(M_tau, nu_tau<span class="op">=</span><span class="dv">7</span>):</span>
+<span id="cb1-19"><a href="#cb1-19"></a>    <span class="co">"""E[1/tau^2] for Inv-chi^2(nu, M^2)."""</span></span>
+<span id="cb1-20"><a href="#cb1-20"></a>    <span class="cf">return</span> <span class="dv">1</span> <span class="op">/</span> M_tau<span class="op">**</span><span class="dv">2</span></span>
+<span id="cb1-21"><a href="#cb1-21"></a></span>
+<span id="cb1-22"><a href="#cb1-22"></a><span class="kw">def</span> vi_update(n_iter<span class="op">=</span><span class="dv">100</span>):</span>
+<span id="cb1-23"><a href="#cb1-23"></a>    <span class="kw">global</span> M_alpha, S_alpha, M_mu, S_mu, M_tau</span>
+<span id="cb1-24"><a href="#cb1-24"></a>    history <span class="op">=</span> []</span>
+<span id="cb1-25"><a href="#cb1-25"></a></span>
+<span id="cb1-26"><a href="#cb1-26"></a>    <span class="cf">for</span> t <span class="kw">in</span> <span class="bu">range</span>(n_iter):</span>
+<span id="cb1-27"><a href="#cb1-27"></a>        <span class="co"># Update alpha_j</span></span>
+<span id="cb1-28"><a href="#cb1-28"></a>        E_inv_tau2 <span class="op">=</span> expected_inv_tau2(M_tau)</span>
+<span id="cb1-29"><a href="#cb1-29"></a>        <span class="cf">for</span> j <span class="kw">in</span> <span class="bu">range</span>(J):</span>
+<span id="cb1-30"><a href="#cb1-30"></a>            prec <span class="op">=</span> <span class="dv">1</span><span class="op">/</span>sigma[j]<span class="op">**</span><span class="dv">2</span> <span class="op">+</span> E_inv_tau2</span>
+<span id="cb1-31"><a href="#cb1-31"></a>            M_alpha[j] <span class="op">=</span> (y[j]<span class="op">/</span>sigma[j]<span class="op">**</span><span class="dv">2</span> <span class="op">+</span> E_inv_tau2 <span class="op">*</span> M_mu) <span class="op">/</span> prec</span>
+<span id="cb1-32"><a href="#cb1-32"></a>            S_alpha[j] <span class="op">=</span> <span class="dv">1</span> <span class="op">/</span> np.sqrt(prec)</span>
+<span id="cb1-33"><a href="#cb1-33"></a></span>
+<span id="cb1-34"><a href="#cb1-34"></a>        <span class="co"># Update mu</span></span>
+<span id="cb1-35"><a href="#cb1-35"></a>        M_mu <span class="op">=</span> M_alpha.mean()</span>
+<span id="cb1-36"><a href="#cb1-36"></a>        S_mu <span class="op">=</span> <span class="dv">1</span> <span class="op">/</span> np.sqrt(J <span class="op">*</span> E_inv_tau2)</span>
+<span id="cb1-37"><a href="#cb1-37"></a></span>
+<span id="cb1-38"><a href="#cb1-38"></a>        <span class="co"># Update tau^2</span></span>
+<span id="cb1-39"><a href="#cb1-39"></a>        sum_sq <span class="op">=</span> np.<span class="bu">sum</span>((M_alpha <span class="op">-</span> M_mu)<span class="op">**</span><span class="dv">2</span> <span class="op">+</span> S_alpha<span class="op">**</span><span class="dv">2</span> <span class="op">+</span> S_mu<span class="op">**</span><span class="dv">2</span>)</span>
+<span id="cb1-40"><a href="#cb1-40"></a>        M_tau <span class="op">=</span> np.sqrt(sum_sq <span class="op">/</span> (J <span class="op">-</span> <span class="dv">1</span>))</span>
+<span id="cb1-41"><a href="#cb1-41"></a></span>
+<span id="cb1-42"><a href="#cb1-42"></a>        history.append({</span>
+<span id="cb1-43"><a href="#cb1-43"></a>            <span class="st">"M_alpha"</span>: M_alpha.copy(),</span>
+<span id="cb1-44"><a href="#cb1-44"></a>            <span class="st">"S_alpha"</span>: S_alpha.copy(),</span>
+<span id="cb1-45"><a href="#cb1-45"></a>            <span class="st">"M_mu"</span>: M_mu,</span>
+<span id="cb1-46"><a href="#cb1-46"></a>            <span class="st">"S_mu"</span>: S_mu,</span>
+<span id="cb1-47"><a href="#cb1-47"></a>            <span class="st">"M_tau"</span>: M_tau</span>
+<span id="cb1-48"><a href="#cb1-48"></a>        })</span>
+<span id="cb1-49"><a href="#cb1-49"></a></span>
+<span id="cb1-50"><a href="#cb1-50"></a>    <span class="cf">return</span> history</span>
+<span id="cb1-51"><a href="#cb1-51"></a></span>
+<span id="cb1-52"><a href="#cb1-52"></a>hist <span class="op">=</span> vi_update(<span class="dv">100</span>)</span>
+<span id="cb1-53"><a href="#cb1-53"></a><span class="bu">print</span>(<span class="st">"VI 수렴 후:"</span>)</span>
+<span id="cb1-54"><a href="#cb1-54"></a><span class="bu">print</span>(<span class="ss">f"  M_mu = </span><span class="sc">{</span>M_mu<span class="sc">:.2f}</span><span class="ss">, S_mu = </span><span class="sc">{</span>S_mu<span class="sc">:.2f}</span><span class="ss">"</span>)</span>
+<span id="cb1-55"><a href="#cb1-55"></a><span class="bu">print</span>(<span class="ss">f"  M_tau = </span><span class="sc">{</span>M_tau<span class="sc">:.2f}</span><span class="ss">"</span>)</span>
+<span id="cb1-56"><a href="#cb1-56"></a><span class="bu">print</span>(<span class="ss">f"  M_alpha = </span><span class="sc">{</span>M_alpha<span class="sc">.</span><span class="bu">round</span>(<span class="dv">2</span>)<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="mcmc-비교" class="level3" data-number="6.2">
+<h3 data-number="6.2" class="anchored" data-anchor-id="mcmc-비교"><span class="header-section-number">6.2</span> MCMC 비교</h3>
+<div class="sourceCode" id="cb2"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1"></a><span class="im">import</span> pymc <span class="im">as</span> pm</span>
+<span id="cb2-2"><a href="#cb2-2"></a><span class="im">import</span> arviz <span class="im">as</span> az</span>
+<span id="cb2-3"><a href="#cb2-3"></a></span>
+<span id="cb2-4"><a href="#cb2-4"></a><span class="cf">with</span> pm.Model() <span class="im">as</span> m8:</span>
+<span id="cb2-5"><a href="#cb2-5"></a>    mu <span class="op">=</span> pm.Normal(<span class="st">"mu"</span>, <span class="dv">0</span>, <span class="dv">10</span>)</span>
+<span id="cb2-6"><a href="#cb2-6"></a>    tau <span class="op">=</span> pm.HalfNormal(<span class="st">"tau"</span>, <span class="dv">10</span>)</span>
+<span id="cb2-7"><a href="#cb2-7"></a>    eta <span class="op">=</span> pm.Normal(<span class="st">"eta"</span>, <span class="dv">0</span>, <span class="dv">1</span>, shape<span class="op">=</span>J)</span>
+<span id="cb2-8"><a href="#cb2-8"></a>    theta <span class="op">=</span> pm.Deterministic(<span class="st">"theta"</span>, mu <span class="op">+</span> tau <span class="op">*</span> eta)</span>
+<span id="cb2-9"><a href="#cb2-9"></a>    pm.Normal(<span class="st">"y"</span>, theta, sigma, observed<span class="op">=</span>y)</span>
+<span id="cb2-10"><a href="#cb2-10"></a>    idata <span class="op">=</span> pm.sample(<span class="dv">2000</span>, tune<span class="op">=</span><span class="dv">1000</span>, random_seed<span class="op">=</span><span class="dv">133</span>)</span>
+<span id="cb2-11"><a href="#cb2-11"></a></span>
+<span id="cb2-12"><a href="#cb2-12"></a>mcmc_mu <span class="op">=</span> idata.posterior[<span class="st">"mu"</span>].values.mean()</span>
+<span id="cb2-13"><a href="#cb2-13"></a>mcmc_tau <span class="op">=</span> idata.posterior[<span class="st">"tau"</span>].values.mean()</span>
+<span id="cb2-14"><a href="#cb2-14"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">MCMC 비교:"</span>)</span>
+<span id="cb2-15"><a href="#cb2-15"></a><span class="bu">print</span>(<span class="ss">f"  mu: VI=</span><span class="sc">{</span>M_mu<span class="sc">:.2f}</span><span class="ss">, MCMC=</span><span class="sc">{</span>mcmc_mu<span class="sc">:.2f}</span><span class="ss">"</span>)</span>
+<span id="cb2-16"><a href="#cb2-16"></a><span class="bu">print</span>(<span class="ss">f"  tau: VI=</span><span class="sc">{</span>M_tau<span class="sc">:.2f}</span><span class="ss">, MCMC=</span><span class="sc">{</span>mcmc_tau<span class="sc">:.2f}</span><span class="ss">"</span>)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>기대 패턴:</p>
+<ul>
+<li>평균: VI ≈ MCMC.</li>
+<li>분산: VI &lt; MCMC (과소 추정).</li>
+<li><span class="math inline">\(\tau\)</span>: VI 가 특히 과소 (funnel 무시).</li>
+</ul>
+</section>
+</section>
+<section id="실전-체크리스트" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="실전-체크리스트"><span class="header-section-number">7</span> 실전 체크리스트</h2>
+<p>§ 13.7~13.8 의 교훈을 실무 절차로:</p>
+<ol type="1">
+<li><strong>MCMC 가능하면 MCMC</strong> — 근사는 최후.</li>
+<li><strong>VI 는 ADVI 로 자동화</strong> — Stan/PyMC 지원.</li>
+<li><strong>VI 분산 과소 주의</strong> — 의사결정 구간 확인.</li>
+<li><strong>다봉 사후는 VI 비추</strong> — 한 mode 에만 수렴.</li>
+<li><strong>EP 는 로지스틱·GP 에 강함</strong> — 지수족 likelihood.</li>
+<li><strong>ELBO 수렴 모니터</strong> — VI 디버깅.</li>
+<li><strong>Moment matching 수치 적분</strong> — EP 에서 quadrature 품질 확인.</li>
+<li><strong>MCMC 결과와 교차 검증</strong> — 소규모에서라도.</li>
+<li><strong>Normalizing flows 고려</strong> — 유연한 <span class="math inline">\(q\)</span> 필요 시.</li>
+<li><strong>Structured VI</strong> — 중요 상관 유지.</li>
+</ol>
+</section>
+<section id="관련-주제" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">8</span> 관련 주제</h2>
+<p><strong>선행 지식</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-13-0-modal-variational-approximations.html">Ch.13 Overview (02-13-0)</a> — 근사 지도</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-13-2-em-conditional-marginal-hierarchical.html">§ 13.4~13.6 (02-13-2)</a> — EM 의 variational 관점</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/00-5-0-hierarchical.html">Ch.5 Hierarchical Models</a> — 8 학교 원 모형</li>
+</ul>
+<p><strong>Ch.13 후속</strong></p>
+<ul>
+<li><code>02-13-4-*</code> — § 13.10~13.12 (unknown norms, 연습)</li>
+</ul>
+<p><strong>후속 주제</strong></p>
+<ul>
+<li>Ch.21 Gaussian Processes — EP 의 본격 응용</li>
+<li>Ch.22 Finite Mixtures — VI + latent</li>
+</ul>
+<p><strong>관련 개념</strong></p>
+<ul>
+<li>Jordan, Ghahramani, Jaakkola, Saul (1999) — VI 리뷰</li>
+<li>Blei, Ng, Jordan (2003) — LDA + VI</li>
+<li>Minka (2001) — EP 원저</li>
+<li>Rasmussen &amp; Williams (2006) — GP + EP</li>
+<li>Kucukelbir et al.&nbsp;(2017) — ADVI</li>
+<li>Rezende &amp; Mohamed (2015) — Normalizing Flows</li>
+<li>Kingma &amp; Welling (2014) — VAE</li>
+<li>Blei, Kucukelbir, McAuliffe (2017) — VI 현대 리뷰</li>
+<li>Hoffman et al.&nbsp;(2013) — Stochastic VI</li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>
