@@ -1,0 +1,524 @@
+---
+title: "Ch.10 Introduction to Bayesian Computation — Part III 의 출발점"
+subtitle: "Gelman BDA Ch.10 개관 — 수치 적분·분포 근사·직접 시뮬레이션·기각·중요도 샘플링·$S_{\\mathrm{eff}}$·디버깅·계산 환경"
+description: |
+  Part I·II 가 "어떤 모형을 세울 것인가, 그 사후가 무엇을 말하는가" 였다면,
+  Part III 부터는 "그 사후를 어떻게 실제로 계산할 것인가" 를 묻는다.
+  Ch.10 은 Part III 의 출발점 — 해석적 계산이 불가능한 모형을 어떻게
+  수치·시뮬레이션으로 근사할 것인가. 이 포스트는 Ch.10 의 전체 지도를
+  제공한다. 정규화 안 된 밀도 $q(\theta \mid y)$ 로 작업하는 철학, 수치
+  적분의 결정론적/시뮬레이션 분류, 정규 근사와 "조잡한 추정" 의 역할,
+  직접 시뮬레이션의 주변-조건부 분해, 기각 샘플링의 수용 확률 $p/Mg$
+  구조, 중요도 샘플링의 $w(\theta) = q/g$ 가중, 유효 표본 크기 $S_{\mathrm{eff}}$
+  식 (10.4) 와 이것이 무한 분산일 때 신뢰성 잃는 이유, SIR 과 Pareto-smoothed
+  importance sampling, 8 학교 예제에서 $S = 100, 200, 10{,}000$ draws 비교로
+  본 "얼마나 많은 시뮬레이션이 필요한가", 로그 스케일 작업의 overflow 방지,
+  Stan·PyMC·JAGS 생태계, 디버깅 전략 — 각 알고리즘 옆에 "언제 쓰고 언제
+  실패하는가" 를 붙여 전개한다.
+categories:
+  - Statistics
+  - Bayesian
+author: Kwangmin Kim
+date: 04/23/2026
+---
+
+## 개요 — Part III 의 관문
+
+Part II (Ch.6~9) 까지는 **"모형 → 사후 → 점검 → 비교 → 수집 → 결정"** 의 개념적 흐름이었다. 하지만 실제로 Ch.5 의 8 학교 계층 모형부터 이미 해석적 적분이 버거워졌다. Part III (Ch.10~13) 는 이 실무적 벽을 뚫는다.
+
+::: {.callout-note}
+## Bayesian Computation 의 두 축
+
+모든 베이즈 계산은 결국 두 수량의 근사.
+
+1. **사후 분포** $p(\theta \mid y)$ — 모수의 불확실성.
+2. **사후 예측 분포** $p(\tilde{y} \mid y) = \int p(\tilde{y} \mid \theta) p(\theta \mid y) d\theta$ — 미래 관측.
+
+두 수량 모두 **적분** 을 요구. 대부분의 현실 모형에서 닫힌 형태 불가능 → 수치·시뮬레이션.
+:::
+
+### Part III 의 구조
+
+| Chapter | 주제 |
+|---|---|
+| **10** | 개요 — 수치 적분, 직접·기각·중요도 샘플링 |
+| 11 | MCMC 기초 — Gibbs, Metropolis-Hastings, 수렴 진단 |
+| 12 | 효율적 MCMC — HMC, NUTS, Stan, 재매개변수화 |
+| 13 | 분포 근사 — EM, 변분 추론, 기대 전파 |
+
+Ch.10 은 **Ch.11~12 의 MCMC 없이 풀 수 있는 문제** 를 다룬다. 이 "없이" 가 의미 있는 이유: **독립 표본 + 단순 구조**의 문제가 실무에 많고, MCMC 의 수렴 진단 부담을 피할 수 있다.
+
+### 직관 — 왜 "계산" 이 별도 Part 로 분리되는가
+
+베이즈 추론의 수학은 한 줄: $p(\theta \mid y) \propto p(\theta) p(y \mid \theta)$. 그러나 **"비례" 의 정규화 상수**가 적분:
+
+$$
+p(\theta \mid y) = \frac{p(\theta) p(y \mid \theta)}{\int p(\theta) p(y \mid \theta) d\theta}
+$$
+
+분모의 $\int$ 가 **고차원 적분**. 이 적분은:
+
+- 공액 prior 에서만 닫힌 형태 → 매우 제한적.
+- $\theta$ 가 수십~수천 차원이면 격자 계산 불가 (차원의 저주).
+- Monte Carlo 계산이 유일한 범용 해법.
+
+**Part III 의 핵심 메시지**: "이론적 모형 = 계산 가능한 모형" 이 아니다. 두 요구를 분리하여 각각 전문 도구로 대응한다.
+
+## § 10.1 — 수치 적분 (Numerical Integration)
+
+### 두 갈래 — 결정론 vs 시뮬레이션
+
+수치 적분은 적분값 $\int h(\theta) p(\theta \mid y) d\theta$ 을 유한 개 점에서의 평가로 근사.
+
+#### 시뮬레이션 (확률적) 방법
+
+$\theta^s \sim p(\theta \mid y)$ 추출 후 표본 평균:
+
+$$
+\mathbb{E}[h(\theta) \mid y] \approx \frac{1}{S} \sum_{s=1}^S h(\theta^s) \tag{10.1}
+$$
+
+- 장점: 고차원에서 작동. 범용성.
+- 단점: $\sqrt{S}$ 속도 수렴. 적분값 정확도가 표본 수에 제한.
+
+#### 결정론 (deterministic) 방법
+
+선택된 격자점에서 가중 평균:
+
+$$
+\mathbb{E}[h(\theta) \mid y] \approx \sum_{s=1}^S w_s h(\theta^s) p(\theta^s \mid y)
+$$
+
+- 장점: 저차원에서 높은 정확도 (Simpson's rule, Gauss quadrature 등).
+- 단점: **차원의 저주** — 격자점 수가 $d$ 차원에서 $N^d$ 로 폭증.
+
+::: {.callout-tip}
+## 직관 — 언제 격자, 언제 시뮬레이션
+
+경험 법칙: **$d \le 3$ 이면 격자, $d \ge 5$ 이면 시뮬레이션**. 중간은 혼합.
+
+이유: Monte Carlo 오차는 차원 **독립** ($O(1/\sqrt{S})$). 격자는 차원에 **지수** 의존 ($O(1/N^{k/d})$, $k$ 는 정확도 차수). 교차점이 $d = 4 \sim 5$ 근처.
+
+Ch.5 의 8 학교 예제 ($\mu, \tau$ 의 2 차원 하이퍼파라미터) 는 격자, Ch.15~16 의 계층 회귀 (수십~수백 차원) 는 MCMC. Ch.10 의 자리가 이 경계에.
+:::
+
+### 정규화 안 된 밀도 $q(\theta \mid y)$
+
+실무 통일 원칙: **$p(\theta \mid y)$ 대신 $q(\theta \mid y) = p(\theta) p(y \mid \theta)$ 로 작업**.
+
+$q$ 는 $\theta$ 에 대한 비례 함수 — 정규화 상수 (marginal likelihood $p(y)$) 미지.
+
+이유: 정규화 상수를 구하려면 전체 적분이 필요한데, 그게 불가능해서 $q$ 로 일하는 것. 대부분의 알고리즘 (기각·중요도·MCMC) 이 $q/q'$ 비율만 쓰므로 정규화 불필요.
+
+### 로그 밀도로 작업
+
+**오버플로·언더플로 방지**를 위해 **$\log p(\theta \mid y)$** 또는 $\log q(\theta \mid y)$ 로 계산.
+
+고차원에서 우도 $\prod p(y_i \mid \theta)$ 가 **$10^{-300}$** 수준이 되면 부동소수점 0 으로 언더플로. 로그 스케일에서:
+
+$$
+\log q(\theta \mid y) = \log p(\theta) + \sum_{i=1}^n \log p(y_i \mid \theta)
+$$
+
+**합**으로 변환. 마지막에 필요할 때만 `exp()`.
+
+Metropolis 수용 확률 같은 비율 계산도 차이로:
+
+$$
+r = \exp(\log q(\theta^*) - \log q(\theta^{(t-1)}))
+$$
+
+## § 10.2 — 분포 근사 (Distributional Approximations)
+
+### 정규 근사의 복습
+
+Ch.4 의 결과: $n \to \infty$ 에서 사후가 **정규**에 수렴 (Bayesian CLT).
+
+$$
+p(\theta \mid y) \approx \mathrm{N}(\hat{\theta}, I(\hat{\theta})^{-1})
+$$
+
+$\hat{\theta}$ = MAP 또는 사후 최빈값, $I$ = 관측 Fisher 정보.
+
+### "조잡한 추정" 의 역할
+
+§ 10.2 의 실용 팁: **해석적 분석 전에 쉬운 근사**를 구하라.
+
+방법: 모형의 일부를 **무시**하고 단순 추정.
+
+- 계층 모형에서 hyperparameter 를 moment method 로 거칠게 추정, 그 다음 조건부.
+- 결측 데이터를 단순 imputation 후 시작.
+- 복잡한 prior 를 uniform 으로 바꿔 초기값.
+
+사용 목적 3 가지:
+
+1. **시작점** — MCMC 초기 위치, 기각/중요도 샘플링의 $g$.
+2. **디버깅 기준** — 정확 분석 결과가 이 근사와 크게 다르면 버그 의심.
+3. **위생 점검** — 모형이 "합리적 값 대역" 을 찾는지 확인.
+
+::: {.callout-tip}
+## 직관 — 조잡한 추정이 "더 정확한" 분석을 돕는 이유
+
+정밀 알고리즘 (MCMC) 은 **잘못된 위치에서 시작하면 수렴까지 오래**. 조잡한 추정이 근사적으로 옳은 영역을 미리 찾아 주면 burn-in 시간 단축.
+
+또 다른 역할: **정신 건강**. 복잡한 MCMC 코드에서 버그 찾기는 지옥. 조잡한 추정이 "이 모수는 대략 0.5 근처" 라 알려주면, MCMC 결과가 100 이 나왔을 때 즉시 의심 가능.
+
+이 원칙은 "**점진적 정교화**" — 단순 → 복잡, 항상 이전 단계와 비교하며 전진.
+:::
+
+## § 10.3 — 직접 시뮬레이션과 기각 샘플링
+
+### Direct Simulation
+
+공액 사전 또는 표준 분포에서 직접 추출. 계층 모형의 주변-조건부 분해가 대표 패턴.
+
+#### 주변-조건부 분해 예시 (8 학교)
+
+$$
+p(\mu, \tau, \theta_1, \ldots, \theta_8 \mid y) = p(\mu, \tau \mid y) \cdot \prod_{j=1}^8 p(\theta_j \mid \mu, \tau, y)
+$$
+
+- **Step 1**: $p(\mu, \tau \mid y)$ 에서 추출 (2 차원 격자).
+- **Step 2**: 각 $(\mu^s, \tau^s)$ 조건부로 $\theta_j^s \sim \mathrm{N}(\cdot)$ (정규 공액).
+
+이 2 단계가 **"해석적으로 적분 가능한 부분은 적분, 나머지는 시뮬레이션"** 의 혼합 전략.
+
+### Grid 기반 근사
+
+저차원 문제:
+
+1. $\theta$ 의 격자점 $\theta_1, \ldots, \theta_N$ 에서 $q(\theta_i \mid y)$ 평가.
+2. 정규화: $\tilde{p}_i = q(\theta_i \mid y) / \sum_j q(\theta_j \mid y)$.
+3. $U \sim \mathrm{Uniform}[0, 1]$, inverse CDF 로 추출.
+
+차원 2~3 까지 실용적. $N = 100 \times 100 = 10{,}000$ 점으로 2 차원 문제 해결.
+
+### Rejection Sampling — 수용-기각 원리
+
+목표: $p(\theta \mid y)$ 에서 직접 추출 불가, 보조 분포 $g(\theta)$ 에서 추출 가능.
+
+**조건**: 상수 $M$ 이 존재해 $\frac{p(\theta \mid y)}{g(\theta)} \le M$ for all $\theta$.
+
+**알고리즘**:
+
+1. $\theta \sim g$ 추출.
+2. 확률 $\frac{p(\theta \mid y)}{M g(\theta)}$ 로 수용. 기각 시 1 로 복귀.
+
+::: {.callout-note}
+## 왜 작동하는가
+
+수용된 $\theta$ 의 분포가 정확히 $p(\theta \mid y)$ 임을 증명.
+
+$$
+\Pr(\theta = t \mid \text{accept}) = \frac{\Pr(\text{accept} \mid \theta = t) g(t)}{\int \Pr(\text{accept} \mid \theta) g(\theta) d\theta} = \frac{\frac{p(t)}{M g(t)} g(t)}{\int \frac{p(\theta)}{M g(\theta)} g(\theta) d\theta} = \frac{p(t)/M}{1/M} = p(t)
+$$
+
+수용 확률 $1/M$ — $M$ 이 작을수록 효율적.
+:::
+
+**자기 진단**: 수용률이 낮으면 $g$ 가 부적절 — 개선 또는 다른 방법 전환.
+
+### Envelope 선택의 기술
+
+$g$ 를 선택하는 원칙: **$p$ 에 "비례에 가까우면서" 추출 가능**.
+
+예: $p(\theta \mid y)$ 가 정규 근사 가능 → $g$ 를 **조금 더 퍼진 $t$ 분포**로. 꼬리가 두꺼워서 $p/g$ 경계 유한.
+
+반대 실패 사례: $p$ 가 두꺼운 꼬리인데 $g$ 가 얇은 꼬리 → $p/g$ 가 꼬리에서 무한대 → $M$ 존재 안 함.
+
+::: {.callout-tip}
+## 직관 — 왜 $g$ 의 꼬리가 $p$ 보다 두꺼워야 하는가
+
+반사실적 시나리오: $g$ 가 얇다 → 꼬리 영역에서 "$g$ 가 거의 0" 인데 $p$ 는 유한. 비율 $p/g$ 가 무한대 → 경계 $M$ 설정 불가능 → 수용 확률 정의 안 됨.
+
+심지어 $p/g$ 가 유한해도 매우 크면, **꼬리에 있는 극소수의 $\theta$ 가 수용률을 지배**. 1000 번 중 1 번 수용되면 $S_{\mathrm{eff}}$ 가 사실상 1.
+
+원칙: **$g$ 는 $p$ 를 "덮어야"** 한다. 두꺼운 꼬리 안전, 얇은 꼬리 위험.
+:::
+
+## § 10.4 — 중요도 샘플링 (Importance Sampling)
+
+### 아이디어 — 기대값만 필요할 때
+
+관심이 $\mathbb{E}[h(\theta) \mid y]$ 뿐이고 $\theta$ 자체 추출이 필요 없다면, **중요도 가중** 으로 우회.
+
+$$
+\mathbb{E}[h(\theta) \mid y] = \frac{\int h(\theta) q(\theta \mid y) d\theta}{\int q(\theta \mid y) d\theta} = \frac{\int h(\theta) \frac{q(\theta \mid y)}{g(\theta)} g(\theta) d\theta}{\int \frac{q(\theta \mid y)}{g(\theta)} g(\theta) d\theta} \tag{10.2}
+$$
+
+$\theta^s \sim g(\theta)$ 추출 후 추정:
+
+$$
+\hat{\mathbb{E}}[h] = \frac{\frac{1}{S} \sum_s h(\theta^s) w(\theta^s)}{\frac{1}{S} \sum_s w(\theta^s)}, \quad w(\theta^s) = \frac{q(\theta^s \mid y)}{g(\theta^s)} \tag{10.3}
+$$
+
+$w$ 가 **중요도 가중치**. 분모가 정규화 상수 추정.
+
+**기각 샘플링과의 차이**: 기각은 $\theta$ 를 얻고 일부 버림. 중요도는 **모든 $\theta$ 유지**하되 **가중**. 계산 효율은 경우에 따라 다름.
+
+### 정확도 진단 — 유효 표본 크기 $S_{\mathrm{eff}}$
+
+중요도 샘플링 실패 시나리오: **소수의 $\theta^s$ 가 거대한 $w$** 를 가져 평균을 지배.
+
+진단 지표:
+
+$$
+S_{\mathrm{eff}} = \frac{1}{\sum_{s=1}^S \tilde{w}(\theta^s)^2} \tag{10.4}
+$$
+
+$\tilde{w} = w / \sum w$ 는 정규화 가중치.
+
+**해석**:
+
+- 모든 $w$ 가 같으면 $\tilde{w}_s = 1/S$, $S_{\mathrm{eff}} = S$. 이상적.
+- 한 개가 1 이고 나머지 0 이면 $S_{\mathrm{eff}} = 1$. 최악.
+
+::: {.callout-tip}
+## 직관 — "유효 표본" 이 왜 이 공식인가
+
+$S$ 개 독립 표본의 평균 분산은 $\sigma^2/S$. 가중 평균은 가중치 제곱합에 비례한 분산.
+
+공식 (10.4) 는 **"같은 정확도를 내려면 몇 개의 동일 가중 표본이 필요한가"** 의 등가.
+
+실무 기준: $S_{\mathrm{eff}} / S < 10\%$ 면 의심. $< 1\%$ 면 중요도 샘플링 포기.
+
+Vehtari, Gelman, Gabry (2017) 의 현대 개선 — **Pareto-smoothed importance sampling (PSIS)**. 극단값을 Pareto 분포로 근사해 안정화. Ch.7 의 PSIS-LOO 가 이 발전의 직접 응용.
+:::
+
+### 무한 분산의 위험
+
+$w$ 의 분산이 무한하면 (예: $g$ 꼬리가 $q$ 보다 얇음), 표본 평균이 **수렴 안 함**. $S \to \infty$ 여도 수렴 속도 $O(1/\sqrt{S})$ 보장 안 됨.
+
+진단: **$\log w$ 의 최대값 분포**. 평균보다 훨씬 크면 위험 신호.
+
+### SIR — Sampling-Importance Resampling
+
+$S$ 개의 가중 $\theta^s$ 에서 **등가중** $k < S$ 개 표본 얻기.
+
+1. 가중치 $\tilde{w}(\theta^s)$ 에 비례해 $\theta^s$ 중 하나 선택.
+2. 제거 (비복원) 후 반복 $k$ 회.
+
+왜 비복원? 복원이면 소수 큰 $w$ 가 반복 선택 — 중복. 비복원은 **중복 없이** 가중치 따라 분포 생성.
+
+(현대 권장: **PSIS-복원**.)
+
+## § 10.5 — 시뮬레이션 표본 수 결정
+
+### 표준 권고
+
+**$S = 100$ 독립 표본**이 대부분 목적에 충분.
+
+수식적 근거: 사후 평균의 Monte Carlo 표준오차.
+
+$$
+\mathrm{SE}_{\mathrm{MC}}[\hat{\mu}] = \frac{s_\theta}{\sqrt{S}}
+$$
+
+**전체 불확실성**:
+
+$$
+\mathrm{SD}_{\mathrm{total}} = s_\theta \sqrt{1 + \frac{1}{S}}
+$$
+
+$S = 100$: $\sqrt{1 + 0.01} = 1.005$ — Monte Carlo 오차가 전체에 **0.5%** 기여. 사실상 무시 가능.
+
+### 정확도가 더 필요한 경우
+
+확률 추정 (특히 꼬리):
+
+$$
+\mathrm{SE}[\hat{p}] = \sqrt{\frac{p(1-p)}{S}}
+$$
+
+- $p \approx 0.5$: $S = 100 \to$ SE 0.05. $S = 2{,}500 \to$ SE 0.01.
+- **희귀 사건** ($p \approx 0.001$): $S = 10{,}000$ 도 부족. 해석적 보조 필요.
+
+### 8 학교 예제의 수치
+
+Ch.5.5 의 8 학교 모형. $\theta_1$ (학교 A 효과) 추론:
+
+| $S$ | 중앙값 | 50% 구간 | 95% 구간 |
+|---|---|---|---|
+| 200 (1차) | 10 | [7, 16] | [−2, 31] |
+| 200 (2차) | 9 | [6, 14] | [−4, 32] |
+| 10,000 | 10 | [6, 15] | [−2, 31] |
+
+**요약**: 200 과 10,000 이 실질적 차이 없음. 모수 중앙값·중심 구간에는 적은 표본으로 충분.
+
+**희귀 확률** $\Pr(\theta_1 > 50 \mid y)$:
+
+- 200 표본: 0 건 → 추정 0 (정보 없음).
+- 10,000 표본: 3 건 → 추정 0.0003.
+- **반-해석적** (정규 근사 + 시뮬레이션): 200 표본으로 충분.
+
+::: {.callout-tip}
+## 직관 — 시뮬레이션 표본 수와 결정 위험
+
+"$S$ 크게" 가 항상 답이 아니다. 실용 우선순위:
+
+1. **중앙값·중심 구간** — $S = 100{-}200$ 충분.
+2. **극단 분위수** ($p < 0.05$) — $S = 1000$ 권장.
+3. **꼬리 확률** ($p < 0.01$) — 해석적 보조 + $S = 10{,}000$.
+4. **고차원 사후 전체** — MCMC effective sample size 기준.
+
+이 계층이 Ch.10~12 의 선택을 안내. 단순 문제는 Ch.10, 복잡은 Ch.11~12.
+:::
+
+## § 10.6 — 계산 환경
+
+### 왜 통합 패키지가 필요한가
+
+Gelman 이 제시하는 4 가지 이유:
+
+1. **접근성** — 통계 초보자·도메인 전문가가 베이즈 모형 적합 가능.
+2. **교육** — 구조에 집중, 계산은 나중.
+3. **시간 절약** — 매번 직접 프로그래밍 불필요.
+4. **버그 감소** — 검증된 라이브러리 사용.
+
+### 현대 도구 지형
+
+| 도구 | 언어 | 특징 |
+|---|---|---|
+| **Stan** | C++ 백엔드, R/Python/Julia 인터페이스 | HMC/NUTS, 자동 미분, 고속 |
+| **PyMC** | Python | NUTS, 변분 추론, PyTensor 백엔드 |
+| **NumPyro** | JAX | JIT 컴파일, 고속 HMC, GPU 지원 |
+| **JAGS** | C++ | Gibbs, 전통적 베이즈 사용자 |
+| **Turing.jl** | Julia | HMC, 임의 PPL |
+| **Edward/TensorFlow Probability** | Python | VI + 대규모 |
+| **Bambi** | Python | lme4 스타일 API (PyMC 위) |
+| **brms** | R | lme4 스타일 API (Stan 위) |
+
+Gelman 은 저서 집필 시점에 Stan 을 주로 사용. 현재 NumPyro·Stan 이 병존.
+
+### 블랙박스의 한계
+
+§ 10.6 의 주의: **"추론 엔진만 믿으면 안 된다"**. 이유:
+
+- 잘못된 모형을 fitting 해도 **수치 결과는 나옴**.
+- 수렴 진단 (R-hat, ESS) 에 책임은 여전히 사용자.
+- 이상 사후 (다봉, 얇은 꼬리) 에서 엔진 실패 가능성.
+
+원칙: **"이해 + 자동화"**. 수동으로 작은 문제 한 번은 풀어 본 뒤 대형 문제를 자동화.
+
+## § 10.7 — 디버깅 전략
+
+Gelman 이 제시하는 베이즈 디버깅 원칙.
+
+### 핵심 전략
+
+1. **조잡한 추정과 비교** — § 10.2 의 활용.
+2. **기지 답 문제 테스트** — 모수를 고정해 가상 데이터 생성 → fit → 추정치 비교.
+3. **작게 시작** — $n = 10$ 으로 시작, 문제 없으면 키움.
+4. **모수 개수 점진적 증가** — simple → hierarchical → full model.
+5. **사후 예측 시뮬레이션** — 적합 결과로 $y^{\mathrm{rep}}$ 생성해 실제 $y$ 와 비교 (Ch.6).
+
+### 흔한 버그 유형
+
+- **데이터-매개변수 매칭 오류** — 관측 벡터와 predictor 순서 불일치.
+- **로그 밀도 부호** — `-` 빠뜨림.
+- **초기값** — 경계값 (0, 1) 에서 시작 → nan.
+- **정규화** — Jacobian 빠진 변환.
+- **prior 범위 위반** — 음수 분산에 unconstrained prior.
+
+::: {.callout-tip}
+## 직관 — "디버깅" 이 베이즈 계산의 핵심 기술
+
+수학적으로 완벽한 모형도 **구현에 버그가 있으면 의미 없음**. Gelman 의 경험담: 복잡한 모형을 디버깅하는 데 **모형 설계보다 더 오래** 걸리는 경우가 흔함.
+
+베이즈 디버깅의 특수성: **"답" 이 없다**. 빈도주의의 closed-form 이 비교 기준 제공하는데, 베이즈는 그런 기준이 희박.
+
+실무 팁: **simulate → fit → recover** 사이클. 가상 데이터에서 참 모수 복원 가능하면 실제 데이터에 적용. 이 사이클을 빠르게 반복하는 것이 베이즈 프로그래머의 생산성.
+:::
+
+## § 10.8 — 문헌 좌표계
+
+Ch.10 참고문헌의 현대 지도.
+
+### 수치 적분
+
+- **Liu (2001), *Monte Carlo Strategies in Scientific Computing*** — 시뮬레이션 전반.
+- **Robert & Casella (2004), *Monte Carlo Statistical Methods*** — 통계학적 관점.
+
+### 기각·중요도 샘플링
+
+- **Geweke (1989)** — 중요도 샘플링의 베이즈 응용.
+- **Rubin (1987a)** — SIR 알고리즘.
+- **Vehtari, Gelman, Gabry (2017)** — PSIS 의 현대 개선.
+
+### 계산 환경
+
+- **Stan Development Team** — Stan 매뉴얼.
+- **Salvatier, Wiecki, Fonnesbeck (2016)** — PyMC 원 논문.
+- **Phan, Pradhan, Jankowiak (2019)** — NumPyro.
+
+## 통합 관점 — Ch.10 알고리즘의 선택 기준
+
+각 방법이 어떤 상황에 적합한가를 한 장 요약.
+
+| 방법 | 차원 | 사후 특성 | 장점 | 단점 |
+|---|---|---|---|---|
+| 해석적 공액 | 제한 | 표준 분포 | 완벽 | 매우 제한적 |
+| Grid | $\le 3$ | 매끄러움 | 시각화 | 차원 저주 |
+| Direct + 주변-조건부 | 저~중 | 계층 구조 | 8 학교 스타일 | 구조 필요 |
+| Rejection | 저~중 | envelope 존재 | 독립 표본 | 고차원 실패 |
+| Importance | 전체 | expectation 만 | 가중 샘플 유지 | 무한 분산 위험 |
+| SIR/PSIS | 전체 | IS 보완 | 등가중 변환 | IS 품질 의존 |
+| MCMC (Ch.11) | 고차원 | 거의 모든 경우 | 범용 | 수렴 확인 |
+| HMC (Ch.12) | 초고차원 | 매끄러움 | 고효율 | 기울기 필요 |
+| VI/EP (Ch.13) | 초대형 | 속도 우선 | 병렬화 | 근사 |
+
+**Ch.10 의 메시지**: MCMC 전에 **더 단순한 도구**를 먼저 시도하라. 많은 문제가 이 장의 기법으로 풀린다.
+
+## 응용 분야
+
+| 분야 | Ch.10 도구의 역할 |
+|---|---|
+| 임상 시험 | 공액 prior + 직접 시뮬레이션으로 적응적 설계 |
+| 마케팅 A/B | 간단한 이항 모형의 SIR |
+| 여론 조사 | 계층 이항의 주변-조건부 분해 |
+| 역학 | rate 추정의 중요도 샘플링 |
+| 보험 수리 | 희귀 사건 확률의 해석적 + 시뮬레이션 결합 |
+| 금융 리스크 | VaR 계산의 IS (희귀 손실 이벤트) |
+| 기계 학습 | 모델 앙상블의 SIR 기반 가중 |
+| 물리/공학 | MCMC 전 초기값 탐색 |
+
+## 실전 체크리스트
+
+Ch.10 을 실무에 녹이는 10 단계.
+
+1. **$q(\theta \mid y)$ 로 작업** — 정규화 상수 무시.
+2. **로그 스케일 습관** — overflow/underflow 방지.
+3. **조잡한 추정 먼저** — 계산 전 "답의 대역" 파악.
+4. **차원 확인** — $d \le 3$ 이면 격자, $\ge 5$ 면 시뮬레이션.
+5. **공액 구조 활용** — 해석적 적분 가능한 부분은 적분.
+6. **Envelope 선택** — 기각 샘플링 $g$ 의 꼬리가 $p$ 보다 두꺼워야.
+7. **IS 진단 필수** — $S_{\mathrm{eff}} / S$ 확인, 무한 분산 위험 점검.
+8. **PSIS 고려** — 현대 IS 실무 표준.
+9. **표본 수 맞춤** — 중심 추론 $S = 100$, 꼬리는 훨씬 더.
+10. **디버깅 사이클** — simulate → fit → recover 반복.
+
+## 관련 주제
+
+**선행 지식**
+
+- [Bayesian Part II 개관](./01-bayesian-part2-overview.qmd) — Part II 결말이 Part III 시작을 요구하는 이유
+- [Bayesian Part III 개관](./02-bayesian-part3-overview.qmd) — Ch.10~13 전체 지도
+- [Ch.4 Asymptotics](./00-4-0-asymptotics.qmd) — § 10.2 의 정규 근사 근거
+- [Ch.5 Hierarchical Models](./00-5-0-hierarchical.qmd) — § 10.3 의 주변-조건부 분해가 가장 잘 쓰이는 곳
+
+**후속 주제**
+
+- Ch.11 Basics of MCMC — Gibbs, Metropolis-Hastings, 수렴 진단
+- Ch.12 Efficient MCMC — HMC, NUTS, Stan, 재매개변수화
+- Ch.13 Modal·Distributional Approximations — EM, VI, EP
+- Ch.7 § 7.2 WAIC/LOO — PSIS 가 실제 응용되는 맥락
+
+**관련 개념**
+
+- Liu (2001), *Monte Carlo Strategies in Scientific Computing* — 시뮬레이션 표준서
+- Robert & Casella (2004), *Monte Carlo Statistical Methods* — 통계 Monte Carlo
+- Rubin (1987a) — SIR 원저
+- Geweke (1989) — 중요도 샘플링 베이즈 응용
+- Vehtari, Gelman, Gabry (2017), *Practical Bayesian model evaluation using loo* — PSIS-LOO
+- Carpenter et al. (2017) — Stan 논문
+- Phan, Pradhan, Jankowiak (2019) — NumPyro 논문
