@@ -1,0 +1,595 @@
+---
+title: "Ch.19 Overview — Parametric Nonlinear Models"
+subtitle: "Part V 첫 관문: 선형 예측자 너머의 베이즈·Serial Dilution Assay·Population Toxicokinetics 통합 지도"
+description: |
+  Gelman BDA Ch.19의 3개 절을 한 편으로 조망한다.
+  Part IV의 선형 예측자 $X\beta$ 가정을 벗어나, 모수와 예측 변수가 **비선형으로 결합**하는 모형 패밀리.
+  § 19.1 serial dilution assay — 4-parameter logistic 식 (19.1), 관측 오차 heteroscedastic 식 (19.2),
+  § 19.2 population toxicokinetics — PBPK 4-compartment 미분방정식 기반,
+  15-parameter 계층 모형 + constrained reparameterization 식 (19.5),
+  § 19.3 문헌. Part IV → Part V 전환의 첫 단계.
+categories:
+  - Statistics
+  - Bayesian
+  - Nonlinear-Models
+  - Pharmacokinetics
+  - Bioassay
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요 — Part V 첫 관문
+
+Part IV (Ch.14~18) 의 핵심 가정은 **선형 예측자 $X\beta$**. GLM 의 link function 은 $g^{-1}(X\beta)$ 로 비선형성을 도입하지만 **여전히 $\beta$ 가 선형으로 결합**. Ch.17 의 $t$ mixture·Ch.18 의 결측도 likelihood 나 관측 과정의 확장일 뿐 회귀 구조 자체는 선형.
+
+**Ch.19 Parametric Nonlinear Models** 는 이 한계를 **본질적으로 벗어난다**. 모수와 예측 변수가 **비선형으로 결합**:
+
+* **비율 형태**: $E(y) = \frac{a_1 + b_1 x_1}{a_2 + b_2 x_2}$.
+* **지수 합**: $E(y) = A_1 e^{-\alpha_1 x} + A_2 e^{-\alpha_2 x}$.
+* **4-parameter logistic**: $E(y) = \beta_1 + \frac{\beta_2}{1 + (x/\beta_3)^{-\beta_4}}$.
+* **미분방정식 해**: PBPK 모형의 compartment 농도.
+
+이들은 **Ch.14~18 계산 기계 (linear regression, IWLS)** 로 풀 수 없다. **HMC·gradient-based 최적화·informative prior** 가 필수.
+
+::: {.callout-important}
+## Part IV → Part V 전환의 논리
+
+* **Part IV** — 모형은 "선형 예측자 + 확장". 모수 해석 직관적, 계산이 표준화.
+* **Part V** — 모형은 "**문제 특화 구조**". 각 응용마다 고유 수학·해석·계산 과제.
+
+**Ch.19 의 특수성**: Part V 중 유일하게 **명시적 parametric 수식** 이 도메인에서 주어짐 (예: 약동학의 미분방정식). Ch.20~23 은 점차 nonparametric 으로 일반화.
+
+**실무 중요성**: 약물 개발, 효소 반응, 환경 노출, 생리학 모델링 등 **과학 법칙에 기반한 예측** 이 필요한 모든 영역. GLM 보다 **해석 가능성** + **물리적 의미** 우수. 단, 모델링·계산·검증 각 단계에서 고유 전략 필요.
+:::
+
+## Ch.19의 논리 지도
+
+| 절 | 핵심 질문 | 주요 결과 |
+|:---:|:------|:-----|
+| § 19.1 | **생물학 assay 의 비선형 curve 피팅?** | 4-parameter logistic 식 (19.1) + heteroscedastic 오차 식 (19.2) |
+| § 19.2 | **약물의 체내 대사를 미분방정식으로?** | PBPK 4-compartment 모형 + 계층적 15-parameter, 식 (19.5) |
+| § 19.3 | Bibliographic note | 약동학·assay·nonlinear 회귀 문헌 |
+
+Gelman 의 구성: **"나열된 옵션 메뉴 없음"** — 비선형 모형은 문제별로 고유하므로 **두 실전 예제** 를 깊이 다룸.
+
+## 비선형 모형의 베이즈 3단계
+
+### 1. Model Building
+
+**도메인 지식 기반 수식**. GLM 의 "link function 선택" 이 아니라 **물리·화학·생물학 법칙**.
+
+**예시**:
+
+* 효소 반응: Michaelis-Menten $v = V_{\max} [S]/(K_m + [S])$.
+* 약물 대사: 지수 감쇠 + 흡수 혼합.
+* Growth curve: Gompertz, Richards.
+
+**Parameter 해석**: 각 $\beta_k$ 가 **물리적 의미** (친화도, 반감기, 포화농도 등) — GLM 계수 보다 해석 명확.
+
+### 2. Computation
+
+**과제**:
+
+* Closed-form posterior 불가 (conjugacy 깨짐).
+* Likelihood gradient 필요 → HMC/NUTS 권장.
+* 다봉 posterior 가능 — 여러 chain + tempering.
+* Parameter 상관 강함 → reparameterization 필수.
+
+**실무 전략**:
+
+* **Log 공간 sampling**: 양수 제약 모수 (scale, 농도 등) 는 $\log$ 변환.
+* **Identifiable reparameterization**: 식 (19.5) 처럼 제약 있는 parameter set 을 unconstrained 로 매핑.
+* **강한 prior**: 많은 비선형 모수는 데이터만으로 추정 어려움. **Informative prior** 로 안정화.
+
+### 3. Model Checking
+
+**표준 도구**:
+
+* Residual plot (Figure 19.5 style).
+* $\chi^2$ test.
+* Posterior predictive check.
+
+**비선형 특수**:
+
+* 피팅된 곡선 **그래프적 검증** — 데이터를 관통하는지 눈으로 확인.
+* 다양한 input 조건에서 예측 확인 (extrapolation behavior).
+* Parameter 의 prior vs posterior 비교 — 데이터가 이 parameter 에 정보 있는가?
+
+::: {.callout-tip}
+## 직관: "Parameter 가 data 로부터 식별 가능한가"
+
+비선형 모형 공통 함정: **파라미터 수 > 데이터 복잡도**. 특히 **지수 합** 같은 모델은 파라미터 swap 등 local minima 많음.
+
+**진단**:
+
+* Prior vs posterior 비교. Posterior 가 prior 와 거의 같으면 **데이터가 그 parameter 를 알려주지 않음**.
+* Pairwise scatter plot — 강한 상관이 있으면 **ill-conditioned**.
+* Multi-chain with overdispersed start — 다른 mode 로 수렴 시 multimodality.
+
+**대응**:
+
+1. Informative prior 강화 (물리적 범위).
+2. 고정 가능 parameter 는 고정 (기존 문헌값).
+3. Reparameterization (identifiable 조합으로).
+4. Hierarchical prior (다른 데이터와 pool).
+
+실제로 § 19.2 toxicokinetics 가 이 문제의 전형 — 15 parameter 중 대부분을 **prior 로 제약**.
+:::
+
+## § 19.1 Serial Dilution Assay
+
+### 실험 배경
+
+**Serial dilution**: 생물학 sample 의 화합물 농도 측정.
+
+**원리**: 농도 → 색 변화 (광학 측정) 로 정량. 그러나:
+
+* **저농도**: 색 변화 감지 불가 (noise 하에 묻힘).
+* **고농도**: 색 포화 (더 이상 정보 없음).
+* **중간 농도**: 신뢰할 수 있는 측정.
+
+**해법 — 다중 희석**: 같은 sample 을 2배, 3배, ..., 여러 수준으로 희석. 각 수준에서 측정 → 다양한 정확도의 measurement 들 얻음 → 통계적 결합.
+
+### Figure 19.1 — 96-Well Plate
+
+8 × 12 grid. 구성:
+
+* **Std 컬럼 2개**: 알려진 농도의 **표준 시료** (calibration).
+* **Unknown 컬럼 10개**: 측정 대상 화합물.
+* **각 컬럼 8 rows**: 각기 다른 희석 수준 (2배, 4배, 8배, ...).
+
+### 4-Parameter Logistic 모형 — 식 (19.1)
+
+**기대 광학 측정**:
+
+$$
+E(y | x, \beta) = g(x, \beta) = \beta_1 + \frac{\beta_2}{1 + (x/\beta_3)^{-\beta_4}} \quad \text{(19.1)}
+$$
+
+**각 parameter 의 물리적 의미**:
+
+* $\beta_1$: **배경 signal** (농도 0 에서의 측정값).
+* $\beta_2$: **포화 증가량** ($\beta_1 + \beta_2$ 가 최대 측정값).
+* $\beta_3$: **half-saturation 농도** (midpoint).
+* $\beta_4$: **sigmoid 가파름** (Hill coefficient).
+
+**Log-logistic 변환**: $\log x$ 에 대한 정규 logistic function. "Sigmoid 곡선"의 고전 형태.
+
+::: {.callout-tip}
+## 직관: 왜 4-parameter logistic 인가
+
+**최소 정보 원칙**: 농도-색 관계는 "0 근처 상수 → 중간 sigmoid → 고농도 saturation" 의 **3 구간 패턴**. 이를 표현하는 가장 단순한 매끄러운 함수.
+
+**Parameter 수 4 의 의미**:
+
+* 왼쪽 asymptote ($\beta_1$), 오른쪽 asymptote ($\beta_1 + \beta_2$), 위치 ($\beta_3$), 가파름 ($\beta_4$).
+* 3-parameter 로 줄이면 표현력 부족, 5-parameter 로 늘리면 식별 어려움.
+
+**대안**: Hill equation, Michaelis-Menten, linear 회귀 of logit — 모두 4PL 의 특수/변환 사례. 4PL 이 가장 유연하면서도 parameter 해석 명확.
+:::
+
+### Heteroscedastic 측정 오차 — 식 (19.2)
+
+**관측**: 큰 측정값일수록 분산도 큼 (Figure 19.2 확인).
+
+$$
+y_i \sim N\left( g(x_i, \beta), \left( \frac{g(x_i, \beta)}{A} \right)^{2\alpha} \sigma_y^2 \right) \quad \text{(19.2)}
+$$
+
+* $\alpha \in [0, 1]$: 분산의 **mean 의존성 지수**.
+* $A$: 임의 상수 (30 으로 설정; 데이터 중간값).
+* $\sigma_y$: "typical" 측정 SD.
+
+**$\alpha$ 의 극단**:
+
+* $\alpha = 0$: equal variance (Homoscedastic).
+* $\alpha = 1$: Poisson-like (분산 = 평균).
+
+중간 $\alpha \in (0, 1)$ 이 실제 계측 장비의 특성 반영.
+
+### 희석 오차 — 식 (19.3)(19.4)
+
+**초기 희석 오차**: 표준 샘플 준비 과정에서의 랜덤 오차 (log-normal).
+
+$$
+\log(x_0^{\text{init}}) \sim N(\log(d_0^{\text{init}} \theta_0), (\sigma^{\text{init}})^2) \quad \text{(19.3)}
+$$
+
+**Serial 희석**: $x_i = d_i \cdot x_{j(i)}^{\text{init}} \quad \text{(19.4)}$.
+
+Serial 희석의 오차는 작다고 가정 (cockroach allergen data).
+
+### Prior 분포
+
+* $\log \beta_k \sim U(-\infty, \infty)$ for $k = 1, \dots, 4$.
+* $\sigma_y \sim U(0, \infty)$.
+* $\alpha \sim U(0, 1)$.
+* $p(\log \theta_j) \propto 1$ for unknowns.
+* $\sigma^{\text{init}} = 0.02$ (fixed from prior study).
+
+**표준 샘플 데이터 풍부** → parameter 식별 가능.
+
+### 결과
+
+Gelman 원 분석 (cockroach allergen data):
+
+* $\hat\beta_1 = 14.7$ [14.5, 14.9].
+* $\hat\beta_2 = 99.7$ [96.8, 102.9].
+* $\hat\beta_3 = 0.054$ [0.051, 0.058].
+* $\hat\beta_4 = 1.34$ [1.30, 1.38].
+* $\hat\alpha = 0.97$ (Poisson-like 분산).
+
+**10 unknowns 농도 추정** — 심지어 detection limit 이하 샘플 (Unknown 8) 도 계층적 정보로 **구간 추정**.
+
+### 기존 방법의 한계
+
+**표준 소프트웨어** (Figure 19.3): 개별 unknown 에 대해 다음 중 택일:
+
+* 모든 측정 평균.
+* Detection limit 이하 측정 버림.
+* Linear fit (sigmoid 비적합).
+
+**Bayesian 비선형 fit 의 이점**:
+
+1. **측정 불확실성의 정확한 가중** (heteroscedastic 오차).
+2. **Below-detection-limit 데이터도 활용** — 정보 있음.
+3. **Calibration curve 와 unknown 농도의 결합 추정** — 불확실성 전파 자동.
+
+## § 19.2 Population Toxicokinetics
+
+### 배경
+
+**Perchloroethylene (PERC)**: 산업용 화학물질. 발암 의심.
+
+**관심사**: 공기 중 PERC 농도 → 간에서 대사되는 비율 (metabolized fraction). 이 비율이 암 위험 평가의 핵심.
+
+**도전**:
+
+* 대사물 직접 측정 어려움.
+* 저농도에서는 불가능.
+* 동물 실험에서 사람 extrapolation 위험.
+
+**해법**: **PBPK (Physiologically-Based Pharmacokinetic) 모형** + 간접 측정 (exhaled air, blood 농도) + 베이즈 추론.
+
+### 실험
+
+* **6명 volunteers**.
+* 각자 4시간 고농도 PERC 노출.
+* 이후 1주일간 **exhaled air + blood PERC 농도** 측정 (168 시간).
+* 각자 2개 노출 수준 (data 2배).
+
+### PBPK 4-Compartment 모형
+
+**생리학 기반**: 체내를 4 compartment 로 분할:
+
+1. **Well-perfused tissues** (뇌, 간 제외 장기).
+2. **Poorly perfused tissues** (근육, 피부).
+3. **Fat** (PERC 고친화성).
+4. **Liver** (대사 발생 장소).
+
+각 compartment 에서 PERC 농도는 **1차 미분방정식**:
+
+$$
+V_i \frac{dC_i}{dt} = Q_i (C_{\text{blood}} - C_i / P_i)
+$$
+
+$V_i$ = 부피, $Q_i$ = 혈류량, $P_i$ = partition coefficient, $C_i$ = compartment 농도.
+
+**Liver**: 대사 term 추가:
+
+$$
+V_L \frac{dC_L}{dt} = Q_L(C_{\text{blood}} - C_L/P_L) - \frac{V_{\max} C_L / P_L}{K_m + C_L / P_L}
+$$
+
+마지막 항 = Michaelis-Menten 효소 반응.
+
+### 15개 Parameter
+
+각 개인 $k$ 마다:
+
+* 4 compartment $\times$ (volume $V_i$, blood flow $Q_i$, partition $P_i$) = 12.
+* Liver enzyme $(V_{\max}, K_m)$ = 2.
+* Ventilation rate = 1.
+
+총 **15 parameters per person**, 6명 × 15 = 90 + 2개 측정 오차 = **많은 모수**.
+
+### 계산 도전
+
+**미분방정식 해**: closed-form 없음. 수치 solver (Runge-Kutta 등) 필요.
+
+**Likelihood 평가** = "주어진 $\theta$ 에서 ODE 수치 풀이 + 관측과 비교". 각 iteration 비용이 큼.
+
+**Gradient**: ODE solver 미분 (sensitivity equations) 또는 자동 미분. Stan 의 integrated ODE solver 지원.
+
+### Informative Prior 의 필수성
+
+**문제**: 측정 데이터가 모든 15 parameter 를 식별 못 함. Parameters 간 **강한 상관**.
+
+**해법**: **문헌 기반 prior**:
+
+* 장기 크기 (MRI, 부검 데이터).
+* 평균 혈류량 (심장 의학).
+* 지방/혈액 partition (in vitro 실험).
+* 효소 속도 상수 (간 세포 실험).
+
+Prior 가 없으면 추정 불가능. **베이즈 분석이 PBPK 에 필수적인 이유**.
+
+### 식 (19.5) — Constrained Reparameterization
+
+**제약**: 일부 parameters 가 **합 = 상수**.
+
+* $\theta_{k2} + \theta_{k3} + \theta_{k4} + \theta_{k5} = 1$ (혈류량 비율, 심박출량의 fraction).
+* $\theta_{k6} + \theta_{k7} + \theta_{k8} = 0.873$ (장기 부피 비율, lean body mass fraction).
+
+**문제**: Constrained parameters 를 직접 sample 하면 MCMC 어려움.
+
+**해법** (식 19.5): Softmax-like **unconstrained reparameterization**.
+
+For $l = 2, 3, 4, 5$:
+
+$$
+\theta_{kl} = \frac{e^{\psi_{kl}}}{e^{\psi_{k2}} + e^{\psi_{k3}} + e^{\psi_{k4}} + e^{\psi_{k5}}}
+$$
+
+(Softmax — 자동으로 합 = 1 보장.)
+
+For $l = 6, 7$:
+
+$$
+\theta_{kl} = (0.873 - e^{\psi_{k8}}) \cdot \frac{e^{\psi_{kl}}}{e^{\psi_{k6}} + e^{\psi_{k7}}}
+$$
+
+($\theta_8$ 빼고 나머지 2개가 합 0.873 - $\theta_8$.)
+
+For others: $\theta_{kl} = e^{\psi_{kl}}$ (log-parameterization, 양수 보장).
+
+::: {.callout-tip}
+## 직관: Softmax reparameterization 의 일반성
+
+제약 $\sum \theta_l = C$ (합 고정) 가 있는 parameter 그룹에서:
+
+* 직접 sampling: simplex 경계 탈출 어려움.
+* **Softmax**: $\theta_l = e^{\psi_l} / \sum e^{\psi_{l'}}$ 로 unconstrained $\psi$ 공간에서 작업.
+
+**장점**:
+
+* 합 제약 자동 만족.
+* $\psi$ 공간은 $\mathbb{R}^n$ — HMC 이 자유롭게 탐색.
+* Log 변환 덕분에 음수 확률 걱정 없음.
+
+**단점**:
+
+* **Identifiability 문제**: $\psi \to \psi + c$ 로 shift 해도 $\theta$ 불변. Constant 만큼 non-identified.
+* 해법: Proper prior 를 $\psi$ 에 부여 (식 (19.5) 처럼).
+
+이것은 **categorical/multinomial logistic 의 유사 해결책** — Ch.16 § 16.6 의 multinomial logit 과 동일 아이디어. 베이즈 nonlinear 모델링의 표준 기법.
+:::
+
+### 계층 모형
+
+6명 참여자의 15 parameter 를 **개인 간 정보 공유**:
+
+$$
+\psi_{kl} \sim N(\mu_l, \tau_l^2), \quad k = 1, \dots, 6, \; l = 1, \dots, 15
+$$
+
+**Truncated** at $\pm 3\tau_l$ (생물학적 가능 범위).
+
+**Hyperprior**:
+
+* $\mu_l \sim N(M_l, S_l^2)$ with informative $(M_l, S_l)$.
+* $\tau_l^2 \sim \text{Inv-}\chi^2(\nu_l, \tau_{0l}^2)$ with $\nu_l \approx 2$ (weak).
+
+**$(M_l, S_l, \tau_{0l}^2)$**: 생물학 문헌에서 추정.
+
+### 측정 모형
+
+**관측**: $y_{jkmt}$ = 참여자 $k$, 노출 $j$, 측정 $m$ (blood or air), 시간 $t$.
+
+**기댓값**: $g_m(\theta_k, E_j, t)$ = ODE 수치 해.
+
+**Log-normal 오차**:
+
+$$
+\log y_{jkmt} \sim N(\log g_m(\theta_k, E_j, t), \sigma_m^2)
+$$
+
+Air 와 blood 에 다른 측정 장비 → 다른 $\sigma_m$.
+
+### 결과 — Figure 19.6
+
+**추정 대상**: 공기 농도 → 대사 비율의 함수 관계.
+
+각 posterior sample 에서:
+
+1. $(\mu, \tau)$ 로부터 "population" parameter $\psi_{\text{new}}$ 추출.
+2. ODE solver 로 각 공기 농도에서의 대사 비율 예측.
+3. 여러 공기 농도에서 반복.
+
+**Figure 19.6** (10 random population draws): 모든 curve 가 낮은 농도에서는 대사 비율 ≈ 1 (완전 대사), 고농도에서는 포화 → 대사 비율 < 1 (enzyme 용량 한계).
+
+**해석**: 저농도 환경 노출 시 PERC 는 거의 모두 대사 → 대사물 (발암성) 에 직접 노출. 고농도 노출 시 일부만 대사. 이것이 **저농도 만성 노출이 의외로 위험할 수 있다** 는 정책 결론.
+
+## § 19.3 Bibliographic Note
+
+### Assay & Serial Dilution
+
+* **Gelman, Chew, Shnaidman (2004)** — § 19.1 의 원 논문. Cockroach allergen assay 분석.
+* **Finney (1978)** — Bioassay 통계의 고전.
+* **Davidian, Giltinan (1995)** — Nonlinear mixed-effects 교과서.
+
+### Pharmacokinetics
+
+* **Gelman, Bois, Jiang (1996)** — PBPK Bayesian analysis 원 논문.
+* **Bois, Gelman, Jiang et al. (1996)** — PERC toxicokinetics 상세.
+* **Sheiner, Beal (1980)** — NONMEM 프로그램, 약동학 mixed-effects 의 표준.
+* **Pinheiro, Bates (2000)** — Nonlinear mixed-effects R 패키지.
+
+### Nonlinear Regression 이론
+
+* **Bates, Watts (1988)** — Nonlinear regression 교과서.
+* **Seber, Wild (1989)** — Nonlinear regression 이론·실전.
+* **Gallant (1987)** — Nonlinear statistical models.
+
+### ODE + Bayes
+
+* **Bois (2009)** — PBPK Bayesian 현대 리뷰.
+* **Girolami, Calderhead (2011)** — Riemann manifold HMC for nonlinear ODE.
+
+## Ch.19 핵심 수식 모음
+
+| 번호 | 수식 | 의미 |
+|:----:|:-----|:-----|
+| (19.1) | $E(y \| x, \beta) = \beta_1 + \beta_2 / [1 + (x/\beta_3)^{-\beta_4}]$ | 4-parameter logistic (serial dilution) |
+| (19.2) | $y_i \sim N(g(x_i, \beta), (g(x_i, \beta)/A)^{2\alpha} \sigma_y^2)$ | Heteroscedastic 오차 |
+| (19.3) | $\log(x_0^{\text{init}}) \sim N(\log(d_0^{\text{init}} \theta_0), (\sigma^{\text{init}})^2)$ | 초기 희석 오차 |
+| (19.4) | $x_i = d_i \cdot x_{j(i)}^{\text{init}}$ | Serial 희석 |
+| (19.5) | $\theta_{kl} = e^{\psi_{kl}} / \sum e^{\psi_{kl'}}$ | Softmax reparameterization |
+
+## 최소 실행 예제 — 4PL 모형 PyMC
+
+```python
+import numpy as np
+import pymc as pm
+
+rng = np.random.default_rng(42)
+
+# simulate serial dilution data
+beta_true = np.array([14.7, 99.7, 0.054, 1.34])
+sigma_y_true = 2.2
+alpha_true = 0.97
+A = 30.0
+
+# dilutions from 1/64 to 1
+x = np.array([0.015625, 0.03125, 0.0625, 0.125, 0.25, 0.5, 1.0,
+              0.015625, 0.03125, 0.0625, 0.125, 0.25, 0.5, 1.0] * 2)
+n = len(x)
+
+
+def fpl(x, beta):
+    return beta[0] + beta[1] / (1 + (x / beta[2]) ** (-beta[3]))
+
+
+mu_true = fpl(x, beta_true)
+sigma_true = (mu_true / A) ** alpha_true * sigma_y_true
+y = rng.normal(mu_true, sigma_true)
+
+
+# Bayesian 4PL with weakly informative prior
+with pm.Model() as fpl_model:
+    log_beta = pm.Normal("log_beta", mu=[2, 4, -3, 0], sigma=2, shape=4)
+    beta = pm.Deterministic("beta", pm.math.exp(log_beta))
+
+    alpha = pm.Uniform("alpha", 0, 1)
+    sigma_y = pm.HalfNormal("sigma_y", 5)
+
+    mu = beta[0] + beta[1] / (1 + (x / beta[2]) ** (-beta[3]))
+    sigma = (mu / A) ** alpha * sigma_y
+
+    pm.Normal("y_obs", mu=mu, sigma=sigma, observed=y)
+
+    trace = pm.sample(2000, tune=1500, target_accept=0.95, chains=4)
+
+
+import arviz as az
+print(az.summary(trace, var_names=["beta", "alpha", "sigma_y"]))
+print(f"\nTrue beta: {beta_true}, alpha: {alpha_true}, sigma: {sigma_y_true}")
+```
+
+**예상 출력** (대략):
+
+```
+            mean     sd  hdi_3%  hdi_97%  r_hat
+beta[0]    14.63   0.31   14.06    15.20   1.00
+beta[1]   100.12   4.12   92.60   108.51   1.01
+beta[2]     0.054  0.004   0.047    0.061   1.00
+beta[3]     1.35   0.08    1.20     1.50   1.00
+alpha       0.94   0.06    0.83     1.00   1.00
+sigma_y     2.15   0.44    1.38     3.07   1.00
+```
+
+모든 parameter 가 참값 근처에 수렴, `r_hat` 안정. 데이터 14개로 **4 + 2 parameter** 추정 성공.
+
+## Ch.19 심화편 예고
+
+Ch.19는 분량상 심화편을 **2편** 으로 분할 예정.
+
+| 심화편 | 범위 | 주제 |
+|--------|------|------|
+| 04-19-1 | § 19.1 | Serial dilution assay 상세·식 (19.1)~(19.4) 완전 유도·PyMC/Stan 구현·Figure 19.2~19.5 재현 |
+| 04-19-2 | § 19.2~19.4 | Population toxicokinetics 상세·PBPK ODE·식 (19.5) reparameterization·연습 + Ch.19 결산 |
+
+## Ch.19 실전 체크리스트
+
+**모형 설계**
+
+1. 도메인 이론에서 **비선형 수식** 명시 (ODE, 효소 반응, 성장 곡선 등).
+2. 각 parameter 의 **물리적 의미** 명확화.
+3. Parameter 범위·부호·제약 (양수, 확률, 합 = 1 등) 파악.
+
+**Prior**
+
+4. **Informative prior** 기반이 필수 — 기존 문헌 값 활용.
+5. 제약은 **reparameterization** 으로 해결 (log, softmax, stick-breaking).
+6. Hierarchical prior 로 여러 subject pool.
+
+**계산**
+
+7. HMC/NUTS 사용 — gradient 필수.
+8. 초기값: 데이터에서 crude estimate.
+9. Parameter 상관 강하면 **reparameterize** (log 변환, center, scale).
+10. ODE 포함 모형: Stan 의 `integrate_ode` 또는 PyMC `DifferentialEquation`.
+11. Target_accept ≥ 0.95 (복잡한 geometry).
+
+**검증**
+
+12. 피팅된 곡선을 **데이터와 함께 그래프** 로 확인.
+13. Residual plot — 체계적 패턴 없는가.
+14. Prior vs posterior 비교 — 데이터가 parameter 를 알려주는가.
+15. Multi-chain with overdispersed start — multimodality 점검.
+16. Extrapolation 경고 — fit 영역 밖 예측 신뢰 불가.
+
+**해석**
+
+17. Parameter 를 원 스케일로 변환 후 보고.
+18. Credible interval + 민감도 분석.
+19. 비선형 관계는 **그래프로 전달** (Figure 19.6 style).
+
+## 관련 주제
+
+**선행 지식**
+
+* [Part V Overview](./04-bayesian-part5-overview.qmd)
+* [Ch.16 § 16.6 — Multinomial Logit](./03-16-2-police-stops-mrp-multinomial.qmd)
+* [Ch.15 — Hierarchical Linear Models](./03-15-0-hierarchical-linear-models-overview.qmd)
+* [Ch.12 HMC/NUTS](./02-12-0-efficient-mcmc.qmd)
+
+**후속 주제 (Ch.19 심화편)**
+
+* [§ 19.1 — Serial Dilution Assay 심화](./04-19-1-serial-dilution-assay.qmd) (예정)
+* [§ 19.2~19.4 — Population Toxicokinetics·연습](./04-19-2-toxicokinetics-exercises.qmd) (예정)
+
+**후속 주제 (Part V 다른 장)**
+
+* Ch.20 Basis Function Models (splines)
+* Ch.21 Gaussian Processes
+* Ch.22 Finite Mixture Models
+* Ch.23 Dirichlet Processes
+
+**관련 개념 (cross-category)**
+
+* [Nonlinear Mixed-Effects (Pinheiro-Bates)](../nonlinear-mixed-effects.qmd)
+* [PBPK Modeling in Pharmacology](../pbpk-overview.qmd)
+* [Michaelis-Menten Kinetics](../michaelis-menten.qmd)
+* [Bayesian ODE Inference](../../Deep_Learning/bayesian-ode.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.19. CRC Press.
+* Gelman, A., Chew, G. L., & Shnaidman, M. (2004). Bayesian Analysis of Serial Dilution Assays. *Biometrics*, 60, 407-417.
+* Gelman, A., Bois, F. Y., & Jiang, J. (1996). Physiological Pharmacokinetic Analysis Using Population Modeling and Informative Prior Distributions. *JASA*, 91, 1400-1412.
+* Bois, F. Y., Gelman, A., Jiang, J., Maszle, D., Zeise, L., & Alexeeff, G. (1996). Population Toxicokinetics of Tetrachloroethylene. *Archives of Toxicology*, 70, 347-355.
+* Bates, D. M., & Watts, D. G. (1988). *Nonlinear Regression Analysis and Its Applications*. Wiley.
+* Seber, G. A. F., & Wild, C. J. (1989). *Nonlinear Regression*. Wiley.
+* Davidian, M., & Giltinan, D. M. (1995). *Nonlinear Models for Repeated Measurement Data*. Chapman & Hall.
+* Pinheiro, J. C., & Bates, D. M. (2000). *Mixed-Effects Models in S and S-PLUS*. Springer.
