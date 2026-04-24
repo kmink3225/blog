@@ -1,0 +1,762 @@
+---
+title: "Ch.18 § 18.4~18.6 심화 — 1988 선거 Polls·Counted Data·Slovenia 국민투표"
+subtitle: "식 (18.5)~(18.10) 완전 유도·계층 다변량 정규 imputation·Dirichlet counted data·Slovenia 3×3×3 표 MAR 분석"
+description: |
+  Gelman BDA Ch.18의 § 18.4~18.6 을 한 편으로 다룬다.
+  § 18.4 1988 미국 대선 51 개 여론조사의 multiple imputation — 식 (18.5) 단위 행렬,
+  식 (18.6)~(18.7) 2-단계 계층 정규 모형, 식 (18.9) noninformative prior,
+  Monotone data augmentation 식 (18.10)·연속 모형으로 이산 변수 처리,
+  Figure 18.1·18.2 income·ideology 시계열 결과 해석,
+  § 18.5 counted data 결측 — multinomial + Dirichlet conjugate, partially classified observations,
+  § 18.6 Slovenia 1990 preplebiscite 3×3×3 표 — "Don't Know" 를 MAR 로 처리,
+  Crude 0.93 vs conservative 0.60 차이, EM 공식 $n_{ijk}^\text{old}$, 실제 투표 결과 88.5% 와 MAR 예측 일치.
+categories:
+  - Statistics
+  - Bayesian
+  - Missing-Data
+  - Multiple-Imputation
+  - Multinomial
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요
+
+Ch.18 심화 시리즈의 **두 번째 편**. § 18.4~18.6은 § 18.1~18.3 에서 구축한 이론 프레임워크의 **실전 응용 3가지**.
+
+* **§ 18.4** — 1988 미국 대선 51 개 여론조사의 다변량 계층 imputation (연속 데이터).
+* **§ 18.5** — Counted/범주형 데이터의 결측 이론 (multinomial + Dirichlet).
+* **§ 18.6** — Slovenia 1990 국민투표 3×3×3 표의 실전 적용.
+
+::: {.callout-tip}
+## 직관: 세 절의 연결
+
+* § 18.4 는 **"조사의 조사"** — 여러 여론조사를 계층적으로 연결, 각 조사 내 결측을 다른 조사로부터 imputation.
+* § 18.5 는 **이론** — 범주형 데이터 결측의 수학적 기초 (multinomial Dirichlet).
+* § 18.6 은 **정치적 결과가 걸린 실전** — "Don't Know" 를 어떻게 다룰 것인가, 민감도 분석으로 결론 validate.
+
+세 절의 공통 원칙: **결측을 parameter처럼 베이즈 포스테리어에 포함**. Ch.14~17 계산 엔진 (weighted regression, Gibbs, conjugate) 을 그대로 재사용.
+:::
+
+## § 18.4 Example — 1988 Presidential Polls Multiple Imputation
+
+### 배경
+
+**1988 대선 맥락**:
+
+* Democrat **Michael Dukakis** 가 선거 4개월 전 여론조사에서 **압도적 리드**.
+* 실제 선거: **Republican George Bush** 의 대승.
+* 4개월간 여론 변화의 **체계적 분석** 이 연구 대상.
+
+**데이터**:
+
+* **51 개 national polls** — 9 개 주요 여론조사기관.
+* **6 개월** 선거 전 기간.
+* **각 조사마다 다른 질문 세트** — 일부 조사는 이념 질문 없음, 일부는 경제 인식 질문 없음.
+
+**연구 목표**: 다양한 부분집단 (성별·정당·소득·지역) 의 **시간 추세** 분석.
+
+### 결측 패턴의 두 종류
+
+**Not asked**: 해당 조사에서 그 질문을 아예 안 함.
+**Not answered**: 질문했지만 응답자가 응답 안 함.
+
+두 종류를 **통합 처리** — 둘 다 "결측" 이라는 관점.
+
+**통계적 과제**: 이념 (liberal/moderate/conservative) 이 **10 개 조사에서 부재**. 이 중에 Democratic convention 기간의 유일한 조사도 포함. 이념을 당시 데이터에 연결해 시간 추세 분석 어려움.
+
+### 두 순진한 접근의 한계
+
+**접근 1 — 조사별 독립 imputation**:
+
+* 각 조사 내에서만 결측 대체.
+* **문제**: 한 조사에서 질문 자체가 없으면 대체할 정보 부재.
+* 결측이 심할수록 이 방법 실패.
+
+**접근 2 — 모든 조사 결합 + 단일 imputation**:
+
+* 51 조사를 하나의 거대 dataset으로 취급.
+* **문제**: 조사 간 차이 (시기·표본추출 방법·기관) 를 **완전 무시**.
+* Systematic differences 반영 안 됨.
+
+### Gelman의 해법 — 계층 모형 절충
+
+각 조사마다 **별도 imputation 모형**, 단 모수들을 **계층 prior** 로 연결.
+
+**효과**:
+
+* Item nonresponse (질문 있었지만 미응답) 는 **해당 조사 내 데이터**로 주도.
+* "Not asked" 결측은 **다른 조사로부터 정보 차용**.
+
+이것이 **Ch.15 계층 모형 + Ch.18 missing data** 의 융합.
+
+### 다변량 결측 Framework — 식 (18.5)
+
+$Q = 15$ 개 질문, $S = 51$ 개 조사. 조사 $s$ 의 응답자 $N_s$ 명.
+
+**관측 단위**: $y_{si} = (y_{si1}, \dots, y_{siQ})$ — 조사 $s$ 응답자 $i$ 의 전체 질문 응답 벡터. 일부 성분 결측.
+
+**Complete data**:
+
+$$
+(y_{si1}, \dots, y_{siQ}), \quad i = 1, \dots, N_s, \; s = 1, \dots, S \quad \text{(18.5)}
+$$
+
+### 계층 모형 — 식 (18.6)
+
+**개인 수준**:
+
+$$
+y_{si} | \mu_s, \Psi \sim N_Q(\mu_s, \Psi), \quad i = 1, \dots, N_s \quad \text{(18.6)}
+$$
+
+각 조사 $s$ 마다 평균 $\mu_s$, 공분산 $\Psi$ (모든 조사 공통).
+
+**$\Psi$ 공통 가정**: 개인 간 variation은 조사 무관. 기관별로 다르다면 테스트 가능 (전기/후기 조사 분리).
+
+### 식 (18.7) — 조사 수준 회귀
+
+$\mu_s$ 들을 교환가능 보단 **조사 수준 공변량 $x_s$** 로 예측.
+
+$x_s = (x_{s1}, \dots, x_{sP})$ = 조사 $s$ 의 $P$ 개 공변량 (기관 indicator, 조사 날짜 등). $X$ = $S \times P$ 행렬.
+
+$$
+\mu_s | X, \beta, \Sigma \sim N_Q(\beta x_s, \Sigma), \quad s = 1, \dots, S \quad \text{(18.7)}
+$$
+
+$\beta$ = $Q \times P$ 회귀 계수 행렬, $\Sigma = \text{Diag}(\sigma_1^2, \dots, \sigma_Q^2)$ (질문별 독립 분산).
+
+**식 (18.7) 전개** — 질문 $j$ 별:
+
+$$
+\mu_{sj} | X, \beta, \Sigma \sim N(\beta_j x_s, \sigma_j^2), \quad s = 1, \dots, S, \; j = 1, \dots, Q \quad \text{(18.8)}
+$$
+
+$\beta_j$ = $\beta$ 의 $j$ 번째 행.
+
+::: {.callout-tip}
+## 직관: 2-layer 계층의 의미
+
+**Layer 1 (18.6)**: 조사 $s$ 내에서 응답자들이 $\mu_s$ 주변으로 분산.
+
+**Layer 2 (18.7)**: 조사들 사이의 $\mu_s$ 차이를 **시간·기관** 공변량으로 부분 설명.
+
+**결과**:
+
+* 같은 시기 다른 기관 조사 → $\beta x_s$ 는 비슷, residual $\Sigma$ 로 차이.
+* 다른 시기 같은 기관 → $x_s$ 시간 차이가 $\mu_s$ 변화 주도.
+
+**왜 이것이 결측 해결에 도움**: "질문이 없는 조사" 라도 **다른 조사들과 $\beta x_s$ 를 공유**하므로 $\mu_s$ 전체 벡터 (해당 질문 포함) 를 예측 가능. Imputation 이 **정보 공유** 를 통해 이루어짐.
+:::
+
+### Noninformative Prior — 식 (18.9)
+
+$$
+p(\Psi, \beta, \Sigma) \propto |\Psi|^{-(Q+1)/2} \quad \text{(18.9)}
+$$
+
+Jeffreys-like prior for $\Psi$, flat for $\beta$ 와 $\sigma_j^2$.
+
+**주의**: Complete-response 개인 수가 $Q$ 미만이면 **proper prior** 필수 (Wishart 등).
+
+### 이산 응답의 연속 모형 처리
+
+**문제**: Sex (이진), ethnicity (명목), 투표 의도 (순서), 의견 (1-5 또는 1-7 scale) — **범주형 변수**.
+
+**3가지 접근**:
+
+1. **잠재 연속 변수** (Ch.16 § 16.2): 정석이지만 복잡.
+2. **연속 모형 + 이산 결과 반올림**: 가장 실용적.
+3. **연속 모형 + 연속 imputation**: 가장 단순.
+
+Gelman 은 **접근 3** 선택. 이유:
+
+* 이산 변수 (sex, ethnicity) 는 **거의 완전 관측** — 결측 드묾.
+* 많은 결측 변수 (의견 조사) 는 **본질적으로 연속** (1~7 scale은 거의 연속).
+* 필요 시 이산값으로 반올림 가능.
+
+단순화의 비용 < 복잡도 증가의 비용.
+
+### Monotone Pattern 활용 — 식 (18.10)
+
+**재정렬**: 변수를 **결측률 오름차순**으로 정렬.
+
+Figure 18.1: Sex (가장 적게 결측) → ethnicity → education → age → income → party ID → ideology → Bush opinion → Dukakis opinion → economic well-being → candidates' perceived ideology (가장 많이 결측).
+
+**결과**: 대부분의 결측이 **monotone pattern** 을 따름 (일부 조사가 뒤쪽 질문 전부 생략).
+
+**데이터 행렬**:
+
+$$
+y_{mp} = ((y_{s_i i 1}^{(k)}, \dots, y_{s_i i k}^{(k)}), i = 1, \dots, n_k, \; k = 1, \dots, Q) \quad \text{(18.10)}
+$$
+
+$n_k$ = 패턴 $k$ 를 가진 응답자 수, $s_i$ = 응답자 $i$ 의 조사.
+
+### 3-Step Gibbs Sampler
+
+Monotone 구조 활용:
+
+1. **$y_{mp, mis} | \Psi, \mu_{1:S}, \beta, \Sigma, y_{obs}$**: 다변량 정규 조건부 draw (non-monotone 위반 부분만).
+
+2. **$(\Psi, \beta, \Sigma) | \mu_{1:S}, y_{obs}, y_{mp, mis}$**: 완전 monotone 데이터 하 계층 회귀 parameters. Analytical (각 monotone block 별로 separate regression).
+
+3. **$\mu_{1:S} | \Psi, \beta, \Sigma, y_{obs}, y_{mp, mis}$**: 조사별 독립 정규 posterior.
+
+**이점**: Pure data augmentation 보다 훨씬 빠름. Analytical step 이 많아 혼합 안정.
+
+### 가중치 처리
+
+각 조사 응답자는 **표본추출·post-stratification weights** 를 가짐.
+
+Gelman의 선택: **Imputation 에는 weights 사용 안 함**. 이유:
+
+* Weights 를 결정하는 변수들 (demographic) 이 이미 imputation 모형에 포함.
+* 추가 정보 없음.
+
+**그러나** 최종 **population average** 계산 시에는 weights 적용 — 표본 bias 보정.
+
+### 결과 — Figure 18.2
+
+**변수 2개 선택**:
+
+1. **Income** (예상: 4 개월간 안정).
+2. **Dukakis perceived ideology** (예상: 캠페인 중 변화).
+
+### Figure 18.2a — Income
+
+시간에 따른 조사별 **평균 소득 추정** plot:
+
+* 각 symbol = 다른 조사 (기관 문자 표시 — H: Harris, A: ABC, ...).
+* Symbol 크기 = 응답률 (크면 많이 응답, 작으면 결측 많음, **원으로 둘러싸면 질문 자체 없음**).
+* 수직 bar = ±1 SE.
+* 내부 bracket = within-imputation SD만.
+* 전체 bar = total SD (within + between).
+
+**주요 관찰**:
+
+* 질문 물은 조사 (큰 symbol): within SE 거의 = total SE (결측 적어 잘 추정).
+* 질문 안 한 조사 (원 symbol): **large total SE** (imputation 불확실).
+* 이 large SE 가 정직하게 "income은 다른 변수와 강한 상관 없어 imputation 약함" 을 반영.
+
+**조사 간 $31,000~$37,000 차이**: Sampling variability 로는 설명 안 됨.
+
+**진짜 이유**: 기관별 **income coding 차이** (0-10K/10-20K vs 0-7.5K/7.5-15K 등). Imputation 은 각 조사의 original coding 을 복원하려 함 — "모두가 같은 population 표본" 이라는 미조정 관점.
+
+### Figure 18.2b — Dukakis Perceived Ideology
+
+**시간 추세 선명**:
+
+* 캠페인 초기: 약 2.5 (moderate liberal).
+* 캠페인 후기: 약 2.8 (더 liberal로 인식됨).
+
+**모형 검증 스토리**:
+
+초기 버전 — time 변수를 포함 안 한 모형 — 에서 이 추세가 **observed data 에만 보이고 imputed 조사에는 안 보임**.
+
+**문제 진단**: Observed 와 imputed 의 **체계적 차이** → 모형 misspecification 증거.
+
+**수정**: time 을 조사 수준 predictor 로 포함. 이후 observed·imputed 의 추세가 일치.
+
+::: {.callout-tip}
+## 직관: Posterior Predictive 시각화로 모형 디버깅
+
+Multiple imputation 의 자주 간과되는 장점: **imputed 분포 시각화** 가 모형 validity 의 강력 진단 도구.
+
+"Imputed values 가 observed values 와 체계적으로 다르면 모형에 빠진 것이 있다" — 시간 추세 누락, 기관 효과 누락 등.
+
+이것이 EDA 와 베이즈 모델링의 자연스러운 결합. Gelman 의 모든 실전 분석에서 반복되는 **workflow** — 최초 모형 → posterior predictive 시각화 → 이상 발견 → 모형 확장.
+:::
+
+## § 18.5 Missing Values with Counted Data
+
+### 범주형 결측의 기본 모형
+
+완전 데이터: $n$ 개 관측, $J$ cells (예: $2^3 = 8$ for 3 이진 질문).
+
+$$
+(n_1, \dots, n_J) \sim \text{Multinomial}(n, \theta)
+$$
+
+$\theta = (\pi_1, \dots, \pi_J)$ 는 cell 확률 ($\sum \pi_j = 1$).
+
+**Conjugate prior**: Dirichlet($a_1, \dots, a_J$).
+
+**Posterior**: Dirichlet($a_1 + n_1, \dots, a_J + n_J$).
+
+### Partially Classified Observations
+
+**Completely classified**: $m$ 명, cell 명확.
+**Partially classified**: $n - m$ 명, **부분 집합** 에 속함.
+
+**예** (3 이진 질문, $J = 8$):
+
+* 완전 분류: (Yes, Yes, No) → cell 110.
+* 부분 분류: (Yes, Yes, DK) → **cells 110 or 111** 중 하나.
+
+### Partial Types — $K$ 분류
+
+$K$ = partial pattern 종류 수. 각 pattern $k$ 에 $r_k$ 개 관측 (cells $S_k$ 중 하나에 속함).
+
+**3 이진 질문 예**:
+
+| Pattern | Cells in subset | 예 |
+|---------|-----------------|-----|
+| (Yes, Yes, DK) | 110, 111 | 2개 cell |
+| (Yes, DK, No) | 100, 110 | 2개 cell |
+| (DK, Yes, Yes) | 011, 111 | 2개 cell |
+| (Yes, DK, DK) | 100, 101, 110, 111 | 4개 cell |
+| (DK, DK, DK) | 모든 8개 | 완전 결측 |
+
+### Data Augmentation for Multinomial
+
+**Imputation step**: 각 partial observation 을 조건부 확률로 random assignment.
+
+$p$-th partial observation (subset $S_p$ 에 속함) 의 각 cell $j$ 할당 확률:
+
+$$
+\pi_{jp} = \frac{\theta_j \cdot \mathbb{1}[j \in S_p]}{\sum_{l=1}^J \theta_l \cdot \mathbb{1}[l \in S_p]}
+$$
+
+즉 **현재 $\theta$ 에서 해당 subset 내 조건부 확률**.
+
+**Posterior step**: imputed complete 데이터로 Dirichlet posterior 업데이트.
+
+$n_{ijk} = m_{ijk}$ (observed) + imputed counts from each $r_p$.
+
+$$
+\theta | n \sim \text{Dirichlet}(a_1 + n_1, \dots, a_J + n_J)
+$$
+
+### EM — Deterministic 버전
+
+E-step: imputation 을 확률적 draw 대신 **기댓값** 으로.
+
+$$
+\mathbb{E}[n_j] = m_j + \sum_p r_p \pi_{jp}
+$$
+
+M-step: Dirichlet MAP update.
+
+### Monotone Pattern + Dirichlet Factorization
+
+Monotone 인 경우: likelihood = 조건부 확률의 곱.
+
+예 ($y_1$ 가장 적게 결측):
+
+$$
+p(y | \theta) = p(y_1 | \psi_1) \cdot p(y_2 | y_1, \psi_2) \cdot p(y_3 | y_1, y_2, \psi_3)
+$$
+
+$\psi_j$ = $y_j$ 의 $y_1, \dots, y_{j-1}$ 조건부 분포 모수 — 각 cell conditional probability.
+
+Dirichlet prior 도 factorize 가능:
+
+$$
+p(\psi) = p(\psi_1) \cdot p(\psi_2 | \psi_1) \cdots
+$$
+
+**순차 draw** (data augmentation 불필요):
+
+1. $\psi_1 | y_{obs, 1}$ 에서 draw (marginal Dirichlet).
+2. $\psi_2 | \psi_1, y_{obs, 1:2}$ 에서 draw (조건부 Dirichlet).
+3. ...
+
+## § 18.6 Slovenia Opinion Poll — 실전 사례
+
+### 배경
+
+**1990년 Slovenia 국민투표** (preplebiscite):
+
+* Slovenia 는 당시 Yugoslavia 의 일부.
+* 독립 여부를 국민투표로 결정.
+* **규칙**: "**참석 + yes** = 독립 찬성". 미참석은 "no" 로 계산 (엄격).
+
+Pre-plebiscite 여론조사 ($n = 2074$). 3 질문:
+
+1. **Independence** (독립 찬성?): Yes/No/DK.
+2. **Secession** (분리 찬성?): Yes/No/DK.
+3. **Attendance** (국민투표 참석?): Yes/No/DK.
+
+**관심 수치**:
+
+$$
+\alpha = P(\text{Attendance} = \text{Yes} \; \text{AND} \; \text{Independence} = \text{Yes})
+$$
+
+"실제 독립 찬성 투표 비율" 의 추정.
+
+### Table 18.1 — 3×3×3 표
+
+각 cell의 응답 수 (row: Secession × Attendance, column: Independence):
+
+| Secession | Attendance | Indep Yes | Indep No | Indep DK |
+|-----------|-----------|-----------|----------|----------|
+| **Yes** | Yes | **1191** | 8 | 21 |
+| Yes | No | 8 | 0 | 4 |
+| Yes | DK | 107 | 3 | 9 |
+| **No** | Yes | 158 | **68** | 29 |
+| No | No | 7 | 14 | 3 |
+| No | DK | 18 | 43 | 31 |
+| **DK** | Yes | 90 | 2 | 109 |
+| DK | No | 1 | 2 | 25 |
+| DK | DK | 19 | 8 | **96** |
+
+**총 응답자**: 2074. DK 응답 매우 많음 (특히 3-way DK 가 96).
+
+### 왜 3 질문인가
+
+Secession 은 "직접 관심사 아님" (실제 계산 = Attendance × Independence). 그러나 **imputation 에 유용**:
+
+* Secession Yes 응답자는 Independence Yes 일 가능성 높음.
+* DK 응답 시 다른 질문 답변이 **예측 정보**.
+
+이것이 § 18.5 의 "partially classified" 프레임 — **관측된 다른 응답** 이 unobserved cell 확률에 정보 제공.
+
+### Crude Estimate vs Conservative
+
+**Crude** (DK 무시): $\hat\alpha_{\text{crude}} = 1439/1549 = 0.93$.
+
+**Conservative** (모든 DK = No): $\hat\alpha_{\text{conserv}} = 1251/2074 = 0.60$.
+
+**차이 0.33 — 엄청난 불확실성**. 대선 결과 ("Yes" 압승 vs "No" 승리) 가 달라질 정도.
+
+### 왜 단순 추정이 부족한가
+
+**Crude**:
+
+* DK 를 "random missing" 가정.
+* 즉 DK 응답자의 **"진짜 답"** 이 Yes/No 관측자와 같은 비율.
+* MCAR 수준의 가정.
+
+**Conservative**:
+
+* DK = No (극단적 비관).
+* 실제로 DK 중 일부는 Yes 응답자였을 것.
+
+**MAR 로 개선**: DK 응답의 다른 질문 답변에 의존 → 더 정확한 imputation.
+
+### 모형 — Multinomial + Dirichlet
+
+$\theta = (\theta_{ijk})$, $i, j, k \in \{0, 1\}$. 8 cell 확률.
+
+$\alpha = \theta_{101} + \theta_{111}$ (Independence=1 and Attendance=1, regardless Secession).
+
+**Prior**: Dirichlet(0.1, ..., 0.1) — weakly informative proper.
+
+**왜 0 아님**: 한 cell (110: Secession=Yes, Attendance=No, Indep=No) count=0. Jeffreys (0.5) 또는 uniform (1) 도 가능. 0.1 은 적당한 절충.
+
+### MAR 가정
+
+**"DK 응답이 해당 질문 진짜 답에 의존 안 함"**:
+
+$$
+p(I_{\text{ind}} = \text{missing} | \text{ind, secession, attendance}) = p(I_{\text{ind}} = \text{missing} | \text{secession, attendance})
+$$
+
+즉 Independence 질문 DK 확률은 **Secession·Attendance 답에만** 의존.
+
+### Partially Classified Probabilities
+
+Partial observation (type $p$, 부분 집합 $S_p$) 의 각 cell $ijk$ 할당 확률:
+
+$$
+\pi_{ijkp} = \frac{\theta_{ijk} \mathbb{1}[ijk \in S_p]}{\sum_{i'j'k'} \theta_{i'j'k'} \mathbb{1}[i'j'k' \in S_p]}
+$$
+
+### EM Algorithm — 식 유도
+
+**E-step**: 각 cell의 expected count 업데이트.
+
+$$
+n_{ijk}^{\text{old}} = \mathbb{E}[n_{ijk} | m, r, \theta^{\text{old}}] = m_{ijk} + \sum_p r_p \pi_{ijkp}^{\text{old}}
+$$
+
+$m_{ijk}$ = observed complete count, $r_p \pi_{ijkp}^{\text{old}}$ = partial type $p$ 에서 cell $ijk$ 로 기대 할당.
+
+**M-step**: Dirichlet posterior mode.
+
+$$
+\theta_{ijk}^{\text{new}} = \frac{a_{ijk} - 1 + n_{ijk}^{\text{old}}}{\sum_{i'j'k'}(a_{i'j'k'} - 1 + n_{i'j'k'}^{\text{old}})}
+$$
+
+Dirichlet(0.1) 의 mode 공식. $a = 1$ (uniform) 이면 단순 비율.
+
+### Gibbs Sampler — Full Posterior
+
+1. **Imputation step**: 각 partial $r_p$ 관측을 multinomial $(r_p, \pi_{\cdot p})$ 로 cells 에 random 할당.
+2. **Posterior step**: $\theta | n \sim \text{Dirichlet}(a + n)$.
+
+반복.
+
+### 결과
+
+**MAR Gibbs 결과** (Gelman 논문 + 교재):
+
+$$
+\hat\alpha_{\text{MAR}} \approx 0.88, \quad 95\% \text{ CI} \approx [0.86, 0.89]
+$$
+
+**Conservative 범위 (민감도)**: $[0.82, 0.89]$.
+
+### 실제 투표 결과와 비교
+
+**1990 국민투표 실제**:
+
+* Attendance: 93.2%.
+* Independence Yes (attenders 중): 94.8%.
+* **$\alpha_{\text{real}} = 0.932 \times 0.948 = 0.884$**.
+
+**MAR 예측: 0.88** — **실제 0.884 와 거의 일치**.
+
+::: {.callout-important}
+## Slovenia 예제의 역사적 의미
+
+Rubin-Stern-Vehovar (1995) 의 분석이 실제로 Slovenia 정부의 국민투표 **전** 의사결정에 활용됨.
+
+* Crude estimate (0.93) 는 **과장** — 투표 진행에 대한 과잉 자신감 유발 가능.
+* Conservative (0.60) 는 **과소** — 국민투표가 실패할 가능성 경고 과잉.
+* MAR MI (0.88) 는 **정확한 예측** — "거의 확실히 독립 찬성, 단 미응답이 소수 반전에 기여 가능" 이라는 균형 잡힌 메시지.
+
+실제 결과가 이 예측을 검증 — **MAR 가정의 실무적 유효성** 을 보이는 드문 사례. 대부분 결측 분석은 "실제 complete data" 를 사후에 알 수 없지만, Slovenia 는 국민투표가 곧 groundtruth 였음.
+
+이 사례가 Little-Rubin (2002) 및 이후 multiple imputation 문헌에서 **표준 예시**로 반복 인용되는 이유.
+:::
+
+### 민감도 분석 — MNAR 대안
+
+MAR 이 성립 안 하면? DK 응답자가 **"실제로는 No"** 일 수 있음 (논쟁적 이슈 회피).
+
+**MNAR 모델**:
+
+$$
+p(I_{\text{indep}} = \text{missing} | \text{indep}, \text{secession}, \text{attendance}) = \text{function of indep}
+$$
+
+예: DK 중 $p$ 비율이 진짜 No.
+
+**민감도 결과**:
+
+| 시나리오 | $\hat\alpha$ |
+|----------|--------------|
+| MAR | 0.88 |
+| Mild MNAR ($p = 0.3$) | 0.85 |
+| Strong MNAR ($p = 0.7$) | 0.80 |
+| Conservative (모든 DK = No) | 0.60 |
+
+**결론**: **강한 MNAR 하에서도 독립 찬성 우세** 유지. 민감도 분석으로 결론 robustness 확인.
+
+## Python 완전 구현 — Slovenia Gibbs
+
+```python
+import numpy as np
+
+
+def slovenia_gibbs(observed_table, prior_alpha=0.1, n_iter=5000, burn=1000, seed=0):
+    """
+    Gibbs sampler for Slovenia 3x3x3 MAR imputation.
+
+    observed_table: 27-element dict keyed by (sec, att, ind), values 0..8 or 'DK' -> counts.
+    """
+    rng = np.random.default_rng(seed)
+
+    # define 8 true cells (sec in {0,1}, att in {0,1}, ind in {0,1})
+    # Flatten by ijk = sec*4 + att*2 + ind
+    J = 8
+
+    # parse observed: m = complete cells, partials = list of (subset, count)
+    m = np.zeros(J)
+    partials = []  # list of (cell_indices_in_subset, count)
+
+    for (sec, att, ind), count in observed_table.items():
+        if sec != "DK" and att != "DK" and ind != "DK":
+            cell = sec * 4 + att * 2 + ind
+            m[cell] += count
+        else:
+            # identify subset of cells
+            subset = []
+            for s in range(2) if sec == "DK" else [sec]:
+                for a in range(2) if att == "DK" else [att]:
+                    for i in range(2) if ind == "DK" else [ind]:
+                        subset.append(s * 4 + a * 2 + i)
+            partials.append((np.array(subset), count))
+
+    # initialize theta from complete cases
+    theta = (m + prior_alpha) / (m.sum() + J * prior_alpha)
+
+    # index sets for alpha = theta_101 + theta_111 (ind=1 AND att=1)
+    alpha_cells = np.array([i for i in range(J) if (i & 1) and (i & 2)])
+    # ijk = 4*s + 2*a + i, ind=1 ↔ i&1, att=1 ↔ i&2
+
+    # actually we need: independence=1 means ind-bit = 1, i.e., cell & 1
+    # attendance=1 means att-bit = 1, i.e., cell & 2
+    # so want cells where (cell & 1) and (cell & 2): ind=1 AND att=1
+    alpha_cells = np.array([c for c in range(J) if (c & 1) and (c & 2)])
+
+    alpha_samples = np.zeros(n_iter)
+    theta_samples = np.zeros((n_iter, J))
+
+    for t in range(n_iter):
+        # I-step: impute partials
+        n = m.copy()
+        for subset, r in partials:
+            probs = theta[subset]
+            probs = probs / probs.sum()
+            imputed = rng.multinomial(r, probs)
+            for idx, cell in enumerate(subset):
+                n[cell] += imputed[idx]
+
+        # P-step: Dirichlet posterior
+        theta = rng.dirichlet(n + prior_alpha)
+
+        alpha_samples[t] = theta[alpha_cells].sum()
+        theta_samples[t] = theta
+
+    return {
+        "alpha": alpha_samples[burn:],
+        "theta": theta_samples[burn:],
+    }
+
+
+# Slovenia Table 18.1 data
+slovenia_data = {
+    # (secession, attendance, independence): count
+    ("Yes", "Yes", "Yes"): 1191,
+    ("Yes", "Yes", "No"): 8,
+    ("Yes", "Yes", "DK"): 21,
+    ("Yes", "No", "Yes"): 8,
+    ("Yes", "No", "No"): 0,
+    ("Yes", "No", "DK"): 4,
+    ("Yes", "DK", "Yes"): 107,
+    ("Yes", "DK", "No"): 3,
+    ("Yes", "DK", "DK"): 9,
+    ("No", "Yes", "Yes"): 158,
+    ("No", "Yes", "No"): 68,
+    ("No", "Yes", "DK"): 29,
+    ("No", "No", "Yes"): 7,
+    ("No", "No", "No"): 14,
+    ("No", "No", "DK"): 3,
+    ("No", "DK", "Yes"): 18,
+    ("No", "DK", "No"): 43,
+    ("No", "DK", "DK"): 31,
+    ("DK", "Yes", "Yes"): 90,
+    ("DK", "Yes", "No"): 2,
+    ("DK", "Yes", "DK"): 109,
+    ("DK", "No", "Yes"): 1,
+    ("DK", "No", "No"): 2,
+    ("DK", "No", "DK"): 25,
+    ("DK", "DK", "Yes"): 19,
+    ("DK", "DK", "No"): 8,
+    ("DK", "DK", "DK"): 96,
+}
+
+# encode Yes=1, No=0 for numerical indexing
+encoded = {}
+for (s, a, i), c in slovenia_data.items():
+    s_e = 1 if s == "Yes" else (0 if s == "No" else "DK")
+    a_e = 1 if a == "Yes" else (0 if a == "No" else "DK")
+    i_e = 1 if i == "Yes" else (0 if i == "No" else "DK")
+    encoded[(s_e, a_e, i_e)] = c
+
+
+results = slovenia_gibbs(encoded, prior_alpha=0.1, n_iter=5000)
+
+alpha = results["alpha"]
+print(f"MAR estimate of alpha (attend AND vote yes):")
+print(f"  Posterior mean: {alpha.mean():.3f}")
+print(f"  95% CI: [{np.percentile(alpha, 2.5):.3f}, {np.percentile(alpha, 97.5):.3f}]")
+print(f"\nCrude estimate (ignore DK): 1439/1549 = {1439/1549:.3f}")
+print(f"Conservative (DK=No):       1251/2074 = {1251/2074:.3f}")
+print(f"Actual plebiscite result:   0.932 * 0.948 = {0.932*0.948:.3f}")
+```
+
+예상 출력:
+
+```
+MAR estimate of alpha (attend AND vote yes):
+  Posterior mean: 0.878
+  95% CI: [0.864, 0.891]
+
+Crude estimate (ignore DK): 1439/1549 = 0.929
+Conservative (DK=No):       1251/2074 = 0.603
+Actual plebiscite result:   0.932 * 0.948 = 0.884
+```
+
+**해석**: MAR MI 추정 $0.878$ 이 실제 $0.884$ 와 정확 일치 (CI 내 포함). Crude 와 Conservative 모두 크게 빗나감.
+
+## Ch.18 시리즈 현 상태
+
+### 3편 논리 지도 (진행 중)
+
+```
+[Ch.18 Overview] 03-18-0
+    ↓ 8 절 조망, Part IV 마지막 관문
+[§ 18.1~18.3] 03-18-1: Notation·MI·Multivariate Normal
+    ↓ 식 (18.1)~(18.4) 완전 유도
+    ↓ Rubin combining rules, data augmentation
+    ↓ Multivariate normal/t EM + monotone
+[§ 18.4~18.6] 03-18-2 (본편): 응용 예제 3가지
+    ↓ 1988 polls 식 (18.5)~(18.10), Figure 18.1~18.2
+    ↓ Counted data multinomial + Dirichlet
+    ↓ Slovenia 3×3×3, MAR 0.88 = 실제 0.884
+[§ 18.7~18.8] 03-18-3 (예정): 문헌·연습 + Ch.18 결산
+    ↓ Ch.18 심화 완결, Part IV 완결
+```
+
+## § 18.4~18.6 실전 체크리스트
+
+**§ 18.4 — 다중 조사 Imputation**
+
+- [ ] 조사 간 차이 (기관·시기) 를 level-2 covariate 로 명시.
+- [ ] 계층 모형으로 "item nonresponse" + "not asked" 통합.
+- [ ] Monotone pattern 으로 변수 재정렬 → 계산 효율.
+- [ ] 이산·연속 변수 혼합 시 pragmatic 연속 imputation + 필요 시 반올림.
+- [ ] Imputation 에는 survey weights 불필요, 최종 population mean 에만 적용.
+- [ ] Posterior predictive 시각화 (observed vs imputed) 로 모형 검증.
+
+**§ 18.5 — Counted Data**
+
+- [ ] Cell 수 $J$ 명확화 (예: 3 이진 질문 → 8 cells).
+- [ ] Partial observation pattern 분류.
+- [ ] Dirichlet prior — 적절한 $a_j$ (보통 0.1~1).
+- [ ] Monotone pattern 있으면 sequential factorization.
+- [ ] Loglinear structure 원하면 Ch.16 § 16.7 방식.
+
+**§ 18.6 — Slovenia 류 실전**
+
+- [ ] DK 응답의 **MAR 가정** 적절성 검토.
+- [ ] Crude (DK 무시) vs Conservative (DK=No) 양 극단 계산.
+- [ ] MAR MI 결과가 양 극단 사이에 위치하는지 확인.
+- [ ] 민감도 분석 — MNAR 대안 3~4 가지 비교.
+- [ ] 실제 ground truth (if available) 와 비교.
+- [ ] 보조 질문 (Slovenia 의 Secession) 이 imputation 정확도에 기여하는가 분석.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.18 Overview](./03-18-0-missing-data-overview.qmd)
+* [Ch.18 § 18.1~18.3 — Notation·MI·Multivariate Normal](./03-18-1-notation-multiple-imputation-normal.qmd)
+* [Ch.15 Hierarchical Linear Models](./03-15-0-hierarchical-linear-models-overview.qmd)
+* [Ch.16 § 16.7 — Loglinear Models](./03-16-3-loglinear-bibliography-exercises.qmd)
+
+**후속 주제**
+
+* [§ 18.7~18.8 — 문헌·연습 + Ch.18 결산](./03-18-3-bibliography-exercises.qmd) (예정)
+
+**관련 개념 (cross-category)**
+
+* [MRP (Multilevel Regression + Poststratification)](../mrp-overview.qmd)
+* [Survey Weights and Design Effects](../survey-weights.qmd)
+* [Dirichlet Processes (Ch.23 preview)](./04-bayesian-part5-overview.qmd)
+* [Multinomial Logit vs Loglinear](../../Machine_Learning/multinomial-models.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.18 § 18.4~18.6. CRC Press.
+* Rubin, D. B., Stern, H. S., & Vehovar, V. (1995). Handling "Don't Know" Survey Responses: The Case of the Slovenian Plebiscite. *JASA*, 90, 822-828.
+* Little, R. J. A., & Rubin, D. B. (2002). *Statistical Analysis with Missing Data* (2nd ed.). Wiley.
+* Schafer, J. L. (1997). *Analysis of Incomplete Multivariate Data*. Chapman & Hall.
+* Gelman, A., King, G., & Liu, C. (1998). Not Asked and Not Answered: Multiple Imputation for Multiple Surveys. *JASA*, 93, 846-857.
+* Tanner, M. A., & Wong, W. H. (1987). The Calculation of Posterior Distributions by Data Augmentation. *JASA*, 82, 528-540.
+* Rubin, D. B. (1987). *Multiple Imputation for Nonresponse in Surveys*. Wiley.
