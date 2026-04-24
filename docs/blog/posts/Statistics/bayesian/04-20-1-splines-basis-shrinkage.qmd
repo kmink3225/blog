@@ -1,0 +1,723 @@
+---
+title: "Ch.20 § 20.1~20.2 심화 — Splines·Basis Selection·Shrinkage Priors"
+subtitle: "식 (20.1)~(20.4) 완전 유도·B-spline 수학·chloride 예제 재현·spike-and-slab Gibbs·generalized double Pareto"
+description: |
+  Gelman BDA Ch.20의 § 20.1~20.2 를 한 편으로 다룬다.
+  § 20.1 basis expansion $\mu(x) = \sum \beta_h b_h(x)$, Gaussian RBF 식 (20.1)·cubic B-spline 식 (20.2) 완전 수학,
+  local basis 의 철학적 근거, chloride 예제에서 centered prior 의 ridge-form posterior 완전 유도,
+  § 20.2 spike-and-slab prior 식 (20.3)·model probability 식 (20.4) 완전 유도,
+  automatic multiplicity adjustment 증명, stochastic search Gibbs sampler,
+  median probability model, shrinkage priors ($t$, Laplace, horseshoe, generalized double Pareto) 비교,
+  gdP scale mixture representation 과 block Gibbs sampler 완전 유도까지.
+categories:
+  - Statistics
+  - Bayesian
+  - Basis-Functions
+  - Splines
+  - Variable-Selection
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요
+
+Ch.20 심화 시리즈의 **첫 번째 편**. § 20.1~20.2 는 Ch.20 의 **이론 + 계산 엔진**:
+
+* **§ 20.1** — Basis 표현의 수학, 설계, 실제 예제.
+* **§ 20.2** — "어느 basis 를 쓸 것인가"의 두 접근 — 이산 선택 (spike-and-slab) vs 연속 축소 (shrinkage).
+
+::: {.callout-tip}
+## 직관: 두 절의 연결
+
+§ 20.1 은 **"무엇을"** 을 다룬다 — 함수 $\mu(x)$ 를 어떤 basis 로 표현할지.
+
+§ 20.2 는 **"얼마나"** 를 다룬다 — 주어진 basis set 에서 **몇 개 / 어느 것을** 실제로 사용할지.
+
+두 절이 합쳐지면 **"충분히 많은 basis 시작 + 강한 prior 로 자동 선택"** 이라는 현대 nonparametric Bayesian 회귀의 표준 전략이 완성된다.
+:::
+
+## § 20.1 Splines and Weighted Sums of Basis Functions
+
+### 기본 식
+
+$$
+\mu(x) = \sum_{h=1}^H \beta_h b_h(x)
+$$
+
+$b_h(x)$ 는 **미리 정한 basis function**, $\beta_h$ 는 데이터에서 학습할 **계수**.
+
+**$w_i = (b_1(x_i), \dots, b_H(x_i))^T$** 로 "feature vector" 정의:
+
+$$
+y_i = \mu(x_i) + \epsilon_i = w_i^T \beta + \epsilon_i
+$$
+
+이는 **표준 선형 회귀 with transformed features**. Ch.14 의 기계를 그대로 재사용.
+
+**핵심 통찰**: **비선형성은 $b_h(x)$ 에 담긴다**. $\beta$ 는 선형. Conjugate normal-inverse-$\chi^2$ prior 면 closed-form posterior.
+
+### Taylor vs Local Basis
+
+**왜 polynomial 이 아닌가**:
+
+$$
+\mu(x) \approx \beta_0 + \beta_1 x + \beta_2 x^2 + \dots + \beta_p x^p
+$$
+
+**한계**:
+
+1. **글로벌 영향**: 중심에서의 $\beta_2$ 조정이 $x = \pm 10$ 에서도 크게 영향.
+2. **경계 폭발**: $x^p$ 가 데이터 범위 밖에서 급증 — Runge's phenomenon.
+3. **로컬 패턴 표현 제한**: spike, edge 같은 국소 변동 어려움.
+
+**해법**: **$b_h(x)$ 가 중심 $x_h$ 근처에서만 non-zero** — local basis.
+
+### 식 (20.1) Gaussian Radial Basis Function
+
+$$
+b_h(x) = \exp\left( -\frac{|x - x_h|^2}{\ell^2} \right) \quad \text{(20.1)}
+$$
+
+**수학적 특성**:
+
+* **정규화 없는 bell curve**: $b_h(x_h) = 1$ (center 최대), $b_h(x_h \pm 2\ell) \approx e^{-4} \approx 0.018$ (거의 0).
+* **$C^\infty$ smooth**: 무한히 미분 가능.
+* **Symmetric**: $b_h(x_h + d) = b_h(x_h - d)$.
+* **Support 전역**: 엄밀히는 0 이 아니지만 tail 은 무시할 정도로 작음.
+
+::: {.callout-tip}
+## 직관: $\ell$ 의 역할
+
+$\ell$ = **length scale** (characteristic scale).
+
+* $\ell$ 크면: 각 basis 가 넓은 영역 cover → smoother $\mu$.
+* $\ell$ 작으면: 각 basis 가 좁은 peak → wiggly $\mu$.
+
+**실무 선택**:
+
+* Basis 수 $H$ 와 함께 설계: $\ell \approx$ (data range) $/H$.
+* 너무 큰 $\ell$ → basis 가 겹쳐 비슷해짐, $\beta_h$ 식별 어려움.
+* 너무 작은 $\ell$ → basis 간 gap 발생, 그 사이에서 $\mu$ 예측 불안정.
+
+**실용 tip**: $\ell$ 을 hyperparameter 로 두고 prior 부여, 데이터로 추정. Cross-validation 또는 WAIC 최적화 대안.
+
+Gaussian RBF 는 **Ch.21 Gaussian Process의 시작점** — GP의 SE kernel = Gaussian RBF 에 infinite basis 를 더한 것.
+:::
+
+### 식 (20.2) Cubic B-Spline 수학
+
+**Knot sequence** $\{x_h, x_{h+1}, x_{h+2}, x_{h+3}, x_{h+4}\}$ ($\delta = x_{h+1} - x_h$ 균등 간격).
+
+Cubic B-spline $b_h(x)$:
+
+$$
+b_h(x) = \begin{cases}
+\frac{1}{6} u^3 & x \in [x_h, x_{h+1}), \; u = (x - x_h)/\delta \\
+\frac{1}{6}(1 + 3u + 3u^2 - 3u^3) & x \in [x_{h+1}, x_{h+2}), \; u = (x - x_{h+1})/\delta \\
+\frac{1}{6}(4 - 6u^2 + 3u^3) & x \in [x_{h+2}, x_{h+3}), \; u = (x - x_{h+2})/\delta \\
+\frac{1}{6}(1 - u)^3 & x \in [x_{h+3}, x_{h+4}), \; u = (x - x_{h+3})/\delta \\
+0 & \text{otherwise}
+\end{cases} \quad \text{(20.2)}
+$$
+
+**특성**:
+
+* **Compact support**: $[x_h, x_{h+4}]$ 밖은 정확히 0.
+* **Piecewise cubic**: 4-knot 구간에서 3차 다항식.
+* **$C^2$ continuity**: knot 에서 2차 도함수까지 연속.
+* **Partition of unity**: $\sum_h b_h(x) = 1$ (normalized), 모든 $x$ 에서.
+
+### B-spline 설계 유도
+
+**Cox-de Boor recursion**:
+
+$$
+b_h^{(0)}(x) = \mathbb{1}[x_h \leq x < x_{h+1}]
+$$
+
+$$
+b_h^{(k)}(x) = \frac{x - x_h}{x_{h+k} - x_h} b_h^{(k-1)}(x) + \frac{x_{h+k+1} - x}{x_{h+k+1} - x_{h+1}} b_{h+1}^{(k-1)}(x)
+$$
+
+$k = 3$ 이 cubic. 이 recursion 이 piecewise polynomial 의 smoothness 를 보장.
+
+### Gaussian RBF vs B-spline 계산적 비교
+
+| 특성 | Gaussian RBF | B-spline |
+|------|--------------|----------|
+| Support | 전역 (tail 있음) | 4-knot 구간 |
+| $W$ matrix | Dense ($n \times H$) | **Sparse** (한 행에 최대 4 non-zero) |
+| 미분 가능성 | $C^\infty$ | $C^2$ |
+| Knot 배치 | Centers (연속) | Knots (이산) |
+| 계산 비용 $W^T W$ | $O(n H^2)$ | $O(n H)$ (sparse 활용) |
+
+**실무**: 대규모 데이터 + 많은 basis 면 **B-spline 이 효율**. 작은 데이터 + smoothness 강조면 **Gaussian RBF**.
+
+### Figure 20.2 — B-spline Prior Samples
+
+(a) 21개 cubic B-spline 균등 knot 겹쳐 그림. 각 basis 가 좁은 "hill" 모양.
+
+(b) 위 basis + $\beta_h \sim N(0, 1)$ 독립 prior → 여러 smooth 함수 realizations.
+
+**직관**: Independent Gaussian weights on local basis = **smooth random function**. 이것이 Ch.21 Gaussian Process prior의 **유한 차원 근사**.
+
+### Chloride Concentration 예제
+
+**데이터**: 54 측정, 시간 vs chloride 농도 (생물 실험). 전반적 선형이지만 국소 deviation.
+
+**문제**: $H = 21$ B-splines 로 표현하면 **21 parameters vs 54 observations** — 과적합 위험.
+
+### Centered Nonparametric Prior
+
+**아이디어**: Prior mean 을 **선형 회귀 곡선** 으로 centering.
+
+$$
+\beta | \sigma \sim N(\beta_0, \sigma^2 \lambda^{-1} I_H), \quad \sigma^2 \sim \text{Inv-Gamma}(a_0, b_0)
+$$
+
+$\beta_0$ 설정:
+
+$$
+\mu_0(x) = \sum_h \beta_{0h} b_h(x) \approx \alpha + \psi x
+$$
+
+$(\alpha, \psi)$ = linear regression 결과. $\beta_0$ 는 least squares 로 "이 linear curve 를 basis 로 근사" 했을 때의 계수.
+
+**결과**: Prior 가 $\mu$ 를 **선형 baseline 주변** 으로 끌어당김. Nonparametric deviation 은 허용하지만 기본은 선형.
+
+### Ridge-Form Posterior 유도
+
+**Likelihood**:
+
+$$
+p(y | W, \beta, \sigma^2) = N(y | W\beta, \sigma^2 I_n)
+$$
+
+**Prior**:
+
+$$
+p(\beta | \sigma^2) = N(\beta | \beta_0, \sigma^2 \lambda^{-1} I_H)
+$$
+
+**결합 (conjugate)**:
+
+$$
+p(\beta | y, W, \sigma^2) \propto \exp\left\{ -\frac{1}{2\sigma^2} \left[ (y - W\beta)^T (y - W\beta) + \lambda (\beta - \beta_0)^T (\beta - \beta_0) \right] \right\}
+$$
+
+**Completing the square**:
+
+$$
+(y - W\beta)^T (y - W\beta) + \lambda (\beta - \beta_0)^T (\beta - \beta_0)
+$$
+
+$\beta$ 에 대한 quadratic. 최소화:
+
+$$
+\frac{d}{d\beta} = -2 W^T (y - W\beta) + 2\lambda (\beta - \beta_0) = 0
+$$
+
+$$
+(W^T W + \lambda I_H) \beta = W^T y + \lambda \beta_0
+$$
+
+$$
+\hat\beta = (W^T W + \lambda I_H)^{-1} (W^T y + \lambda \beta_0)
+$$
+
+### Posterior Mean Curve
+
+$$
+\hat\mu(x) = w^T \hat\beta = w^T (W^T W + \lambda I_H)^{-1} (W^T y + \lambda \hat\mu_0(x))
+$$
+
+**해석**:
+
+* $\lambda = 0$: $\hat\beta = (W^T W)^{-1} W^T y$ — **OLS**.
+* $\lambda \to \infty$: $\hat\beta = \beta_0$ — **prior 완전 지배**.
+* 중간: data 와 prior 의 **precision-weighted 평균**.
+
+**이것이 Ridge regression 의 베이즈 유도** — prior 평균이 0 이 아닌 linear curve 로 shift 된 버전.
+
+### P-splines (교재 미포함 — agent 지식)
+
+**Problem**: 일반 ridge prior 는 **모든 $\beta_h$ 를 0 근처**로 축소. 인접 basis 계수의 **smoothness** 는 고려 안 함.
+
+**Solution — Penalized splines (Eilers-Marx 1996)**:
+
+$$
+p(\beta) \propto \exp\left( -\frac{\lambda}{2} \beta^T D^T D \beta \right)
+$$
+
+$D$ = difference matrix (예: 2차 차분 $\beta_{h-1} - 2\beta_h + \beta_{h+1}$).
+
+**효과**: 인접 $\beta$ 가 비슷하도록 제약 → **smoother $\mu$**. First-order autoregressive prior 와 동등.
+
+### Python — Chloride B-spline 적합
+
+```python
+import numpy as np
+import pymc as pm
+from scipy.interpolate import BSpline
+from scipy.ndimage import gaussian_filter1d
+
+rng = np.random.default_rng(42)
+
+# simulate chloride-like data
+n = 54
+x = np.sort(rng.uniform(3.5, 6.5, n))
+y_true_linear = 10 + 3 * x  # linear baseline
+y_true_deviation = 1.5 * np.sin(3 * np.pi * (x - 3.5) / 3)  # local wiggle
+y = y_true_linear + y_true_deviation + rng.normal(0, 0.3, n)
+
+
+# build cubic B-spline basis (H = 21)
+H = 21
+knots_inner = np.linspace(x.min(), x.max(), H - 2)
+knots = np.concatenate([[x.min()] * 3, knots_inner, [x.max()] * 3])
+W = np.zeros((n, H))
+for h in range(H):
+    c = np.zeros(H)
+    c[h] = 1
+    spl = BSpline(knots, c, 3, extrapolate=False)
+    W[:, h] = np.nan_to_num(spl(x))
+
+# linear baseline for prior centering
+from numpy.polynomial import polynomial as P
+coef_lin = np.polyfit(x, y, 1)
+mu_0 = np.polyval(coef_lin, x)
+
+# solve for beta_0 in basis form (least squares)
+beta_0 = np.linalg.lstsq(W, mu_0, rcond=None)[0]
+
+
+with pm.Model() as chloride:
+    sigma = pm.HalfNormal("sigma", 1)
+    lam = pm.HalfNormal("lam", 1)  # ridge parameter
+
+    beta = pm.Normal("beta", mu=beta_0, sigma=sigma / pm.math.sqrt(lam), shape=H)
+    mu = pm.math.dot(W, beta)
+    pm.Normal("y", mu=mu, sigma=sigma, observed=y)
+
+    trace = pm.sample(1500, tune=1500, target_accept=0.95, chains=4)
+
+
+# posterior mean curve
+beta_post = trace.posterior["beta"].mean(dim=("chain", "draw")).values
+mu_hat = W @ beta_post
+
+import matplotlib.pyplot as plt
+plt.figure(figsize=(8, 4))
+plt.scatter(x, y, alpha=0.5, label="data")
+plt.plot(x, mu_0, '--', label="linear baseline")
+plt.plot(x, mu_hat, '-', label="B-spline posterior mean")
+plt.legend()
+plt.xlabel("x"); plt.ylabel("chloride")
+plt.title("Chloride B-spline regression")
+```
+
+**결과**: Posterior mean 이 linear baseline 주변으로 완만히 변동, local deviation 포착.
+
+## § 20.2 Basis Selection and Shrinkage — 완전 유도
+
+### 문제 재정리
+
+$H = 21$ basis 중 **모두 필요한가**? 몇 개만 써도 fit 되면 **parsimony** 이점.
+
+**두 접근**:
+
+1. **Spike-and-slab** (§ 20.2 전반): 일부 $\beta_h = 0$ 정확히.
+2. **Continuous shrinkage** (§ 20.2 후반): 0 근처로 축소, 정확히 0 은 아님.
+
+### 식 (20.3) Spike-and-Slab Prior
+
+$$
+\beta_h \sim \pi_h \delta_0 + (1 - \pi_h) N(0, \kappa_h^{-1} \sigma^2), \quad \sigma^2 \sim \text{Inv-Gamma}(a, b) \quad \text{(20.3)}
+$$
+
+**구성**:
+
+* $\delta_0$: Dirac delta at 0 (**spike**).
+* $N(0, \kappa_h^{-1} \sigma^2)$: 넓은 정규 (**slab**).
+* $\pi_h$: $\beta_h = 0$ 확률.
+
+**Latent indicator**:
+
+$$
+\gamma_h = \mathbb{1}[\beta_h \neq 0], \quad \gamma_h \sim \text{Bernoulli}(1 - \pi_h)
+$$
+
+Active set $\beta_\gamma = \{\beta_h : \gamma_h = 1\}$ 가 slab 에서 draw, 나머지는 0.
+
+### $\gamma$ 공간 $\Gamma$
+
+$$
+\Gamma = \{0, 1\}^H
+$$
+
+**$2^H$ 모델**. $H = 21$ 이면 $2^{21} \approx 2 \times 10^6$. $H = 50$ 이면 $10^{15}$.
+
+### $\pi_h$ 의 Hyperprior 선택
+
+**동일 $\pi$ 가정**: $\pi_h = \pi \sim \text{Beta}(a_\pi, b_\pi)$.
+
+**Conditional posterior**:
+
+$$
+\pi | \gamma \sim \text{Beta}\left( a_\pi + \sum_h (1 - \gamma_h), \; b_\pi + \sum_h \gamma_h \right)
+$$
+
+**자명한 관찰**: $\sum \gamma_h$ 가 작으면 (few basis included) $\pi$ 는 1 쪽으로, $\sum \gamma_h$ 가 크면 0 쪽으로.
+
+### Automatic Multiplicity Adjustment
+
+::: {.callout-important}
+## Gelman 의 핵심 통찰
+
+$H$ 가 커질수록 **우연히 유의 하게 나오는 basis** 가 늘어남 (multiple testing 문제).
+
+**Frequentist 대응**: Bonferroni, FDR 등 post-hoc 보정.
+
+**Bayesian 자동 보정**: $\pi \sim \text{Beta}(a_\pi, b_\pi)$ hyperprior.
+
+**수학적 기제**: $H$ 개 중 $k$ 개 active 일 때 marginal 가능도가
+
+$$
+p(y | \pi, k) = \binom{H}{k} \pi^{H-k}(1-\pi)^k \cdot (\text{Bayes factor for } k \text{ actives})
+$$
+
+**$H$ 증가 → inclusion probability 감소** (같은 증거를 요구해도). 이것이 **"more candidates, stronger threshold"** 의 베이즈 자동 구현.
+
+Scott-Berger (2006, 2010) 가 이 multiplicity 보정의 수학을 정립.
+:::
+
+### 식 (20.4) Model Probability
+
+$\kappa_h = \kappa$ 고정, $a, b \to 0$ 가정. $\gamma$ 의 posterior:
+
+$$
+\Pr(\gamma | y, X) = \frac{\pi^{H - p_\gamma} (1 - \pi)^{p_\gamma} \cdot p(y | X, \gamma)}{\sum_{\gamma^* \in \Gamma} \pi^{H - p_{\gamma^*}} (1 - \pi)^{p_{\gamma^*}} \cdot p(y | X, \gamma^*)} \quad \text{(20.4)}
+$$
+
+$p_\gamma = \sum_h \gamma_h$ = active basis 수.
+
+### Marginal Likelihood $p(y | X, \gamma)$
+
+Conjugate normal-inverse-gamma 구조에서 analytical:
+
+$$
+p(y | X, \gamma) = \int N(y | W_\gamma \beta_\gamma, \sigma^2 I) \cdot N(\beta_\gamma | 0, V_\gamma \sigma^2) \cdot \text{Inv-Gamma}(\sigma^2 | a, b) \, d\beta_\gamma \, d\sigma^2
+$$
+
+**$\beta_\gamma$ 적분** (Gaussian-Gaussian):
+
+$$
+\propto |V_\gamma|^{-1/2} |W_\gamma^T W_\gamma + V_\gamma^{-1}|^{-1/2} (y^T y - y^T W_\gamma (W_\gamma^T W_\gamma + V_\gamma^{-1})^{-1} W_\gamma^T y)^{-(n/2 + a)}
+$$
+
+**$\sigma^2$ 적분** (Inv-Gamma):
+
+$$
+\propto \Gamma(n/2 + a) \cdot [\text{expression}]^{-(n/2 + a)}
+$$
+
+최종 closed form — 구현 가능.
+
+### 계산 — Stochastic Search Gibbs
+
+$2^H$ 모델 full summation 불가 ($H = 50$ 이면 $10^{15}$). 대안: **Gibbs sampler**.
+
+**Update rule**:
+
+$$
+\Pr(\gamma_h = 1 | \gamma_{-h}, \pi, y) = \left( 1 + \frac{\pi}{1 - \pi} \cdot \frac{p(y | X, \gamma_h = 0, \gamma_{-h})}{p(y | X, \gamma_h = 1, \gamma_{-h})} \right)^{-1}
+$$
+
+**유도**:
+
+$$
+\frac{\Pr(\gamma_h = 1 | \cdot)}{\Pr(\gamma_h = 0 | \cdot)} = \frac{(1-\pi) \cdot p(y | X, \gamma_h = 1, \gamma_{-h})}{\pi \cdot p(y | X, \gamma_h = 0, \gamma_{-h})}
+$$
+
+$$
+\Pr(\gamma_h = 1 | \cdot) = \frac{1}{1 + [\Pr(\gamma_h = 0) / \Pr(\gamma_h = 1)]} = \text{(위 식)}
+$$
+
+**Bayes factor** $p(y | \gamma_h = 1) / p(y | \gamma_h = 0)$ 는 closed form. Gibbs sampler 효율적.
+
+### Model Selection vs Averaging
+
+**0-1 loss (MAP)**:
+
+$$
+\hat\gamma_{\text{MAP}} = \arg\max_\gamma \Pr(\gamma | y)
+$$
+
+**문제**: $H$ 크면 여러 $\gamma$ 가 비슷한 posterior. MAP 은 임의적.
+
+**Bayes Model Averaging (BMA)**:
+
+$$
+\hat\mu(x) = \sum_\gamma \Pr(\gamma | y) \cdot \mathbb{E}[\mu(x) | y, \gamma]
+$$
+
+모든 모델 가중 평균. 예측 성능 우수.
+
+### Median Probability Model (Barbieri-Berger 2004)
+
+**정의**: Marginal inclusion probability $> 0.5$ 인 basis 들만 포함.
+
+$$
+\gamma_h^{\text{median}} = \mathbb{1}[P(\gamma_h = 1 | y) > 0.5]
+$$
+
+**이점**:
+
+* 단일 interpretable 모델.
+* Orthogonal basis 에서 **BMA 의 best single-model approximation** (theorem 증명).
+* 해석 + 예측 균형.
+
+### Chloride 재분석
+
+**설정**: 21 B-splines, $\pi = 0.5$ (uniform), $\kappa = 1/4$ ($N(0, 4)$ slab), $\sigma^2 \sim \text{Inv-Gamma}(1, 1)$.
+
+**결과**:
+
+* **Posterior mean active basis**: 12.0 ([8.0, 16.0]).
+* **$\hat\sigma = 0.27$** ([0.23, 0.33]) — 노이즈 낮음.
+* **계산 시간**: 수 초 (R).
+
+**해석**: 21개 basis 중 평균 12개만 active. 나머지 9개는 posterior 에서 대부분 $\gamma_h = 0$.
+
+### Spike-and-Slab 의 한계
+
+1. **$2^H$ 공간 탐색**: $H$ 크면 효율 저하.
+2. **Mixing**: $\gamma_h$ Gibbs 가 인접 모델 간 이동만 — 멀리 떨어진 모델 간 switching 느림.
+3. **Non-conjugate 어려움**: GLM 등에서 closed-form marginal likelihood 불가.
+
+### 연속 Shrinkage Prior 대안
+
+**공통 구조** — Scale mixture of Gaussians:
+
+$$
+\beta_h | \sigma_h^2 \sim N(0, \sigma_h^2), \quad \sigma_h^2 \sim G
+$$
+
+$G$ 선택에 따라 prior 형태 다름.
+
+### $t$-분포 Prior
+
+$G = \text{Inv-Gamma}(\nu/2, \nu/2)$:
+
+$$
+\beta_h \sim t_\nu(0, 1)
+$$
+
+**특성**:
+
+* $\nu$ 작음 (1, 2, 3): heavy tail, 일부 $\beta_h$ 큰 값 허용.
+* $\nu \to \infty$: 정규 (no shrinkage).
+* **Cauchy ($\nu = 1$)**: 가장 관대한 tail — Ch.16 weakly informative prior.
+
+**한계** (교재 지적): $\nu \to 0$ 극한은 normal-Jeffreys — **improper posterior**. $\nu = 10^{-6}$ 같은 practical minimum 필요.
+
+### Laplace (LASSO) Prior
+
+$G = \text{Exponential}(\lambda^2 / 2)$:
+
+$$
+\beta_h \sim \text{Laplace}(0, 1/\lambda) \Leftrightarrow p(\beta_h) \propto \exp(-\lambda |\beta_h|)
+$$
+
+**특성**:
+
+* **Posterior mode = LASSO**: 일부 $\hat\beta_h = 0$ 정확히.
+* **Posterior samples 은 모두 non-zero**: sparsity 는 mode 에만.
+* **Unimodal posterior** (log-concave).
+
+**한계**: Tail 이 여전히 heavy 하지 않음 — 큰 신호도 과축소 가능.
+
+### Horseshoe Prior
+
+$$
+\beta_h | \lambda_h, \tau \sim N(0, \lambda_h^2 \tau^2), \quad \lambda_h \sim C^+(0, 1), \quad \tau \sim C^+(0, \tau_0)
+$$
+
+**특성**:
+
+* **Global-local shrinkage**: $\tau$ 는 전체 scale, $\lambda_h$ 는 개별 basis 에 대한 tail.
+* **Heavy tail**: 큰 신호 거의 unshrunk.
+* **Sparse posterior mean**: 작은 신호는 강하게 0 으로.
+
+(Ch.14 § 14.6 재방문.)
+
+### Generalized Double Pareto (Armagan-Dunson-Lee 2013)
+
+**Density**:
+
+$$
+\text{gdP}(\beta | \xi, \alpha) = \frac{1}{2\xi} \left( 1 + \frac{|\beta|}{\alpha \xi} \right)^{-(\alpha + 1)}
+$$
+
+* $\xi$: scale.
+* $\alpha$: tail heaviness ($\alpha = 1$ 이면 Cauchy-like tail).
+
+**특성**:
+
+* **Origin 근처**: Laplace 와 유사 (sharp peak) → sparsity 유도.
+* **Tail**: 임의로 heavy ($\alpha$ 작으면 더 heavy).
+* **Conjugate block Gibbs** 가능.
+
+### gdP Scale Mixture Representation
+
+$$
+\beta \sim N(0, \sigma^2 \tau), \quad \tau \sim \text{Exp}(\lambda^2 / 2), \quad \lambda \sim \text{Gamma}(\alpha, \eta)
+$$
+
+**3-layer**:
+
+1. $\lambda$ 는 Gamma (shape scale).
+2. $\tau$ 는 $\lambda$ 에 의해 parameter화된 Exponential — variance.
+3. $\beta$ 는 normal with variance $\sigma^2 \tau$.
+
+**주변화**:
+
+$$
+p(\beta | \sigma, \alpha, \eta) = \int \int N(\beta | 0, \sigma^2 \tau) \cdot \text{Exp}(\tau | \lambda^2/2) \cdot \text{Gamma}(\lambda | \alpha, \eta) \, d\tau \, d\lambda
+$$
+
+이 적분을 수행하면 gdP density 나옴.
+
+### gdP Block Gibbs Sampler
+
+**Conditional posteriors**:
+
+**1. $\beta | -$** (linear regression, $T = \text{diag}(\tau_h)$):
+
+$$
+\beta | - \sim N\left( (W^T W + T^{-1})^{-1} W^T y, \; \sigma^2 (W^T W + T^{-1})^{-1} \right)
+$$
+
+**Block update** — $H$ 차원 정규에서 한 번에 draw. Mixing 매우 우수.
+
+**2. $\lambda_h | -$** (Gamma):
+
+$$
+\lambda_h | - \sim \text{Gamma}(\alpha + 1, \; |\beta_h|/\sigma + \eta)
+$$
+
+**3. $\tau_h^{-1} | -$** (Inverse-Gaussian):
+
+$$
+\tau_h^{-1} | - \sim \text{Inverse-Gaussian}\left( \mu = \left| \lambda_h \sigma / \beta_h \right|, \; \rho = \lambda_h^2 \right)
+$$
+
+Inverse-Gaussian 샘플링은 conjugate — 빠르게 draw.
+
+**4. $\sigma^2 | -$** (Inv-Gamma):
+
+$$
+\sigma^2 | - \sim \text{Inv-Gamma}\left( (n + H)/2, \; \frac{(y - W\beta)^T(y - W\beta) + \beta^T T^{-1} \beta}{2} \right)
+$$
+
+### gdP 장점 — 종합
+
+1. **Conjugate structure**: 모든 조건부 분포가 표준 (Normal, Gamma, Inv-Gaussian, Inv-Gamma).
+2. **Block $\beta$**: $H$ 차원 동시 update → 효율적 mixing.
+3. **Heavy tail**: Laplace 보다 더 유연.
+4. **Sparsity-inducing**: Origin 근처 sharp → 작은 $\beta$ 약화.
+
+실무에서 gdP 는 **horseshoe 의 계산 효율적 대안** 으로 자리잡음.
+
+### Shrinkage Prior 선택 비교
+
+| Prior | Tail | Sparsity | 계산 | 언제 쓰나 |
+|-------|------|----------|------|-----------|
+| Normal | Light | No | Conjugate Ridge | Dense 모델 |
+| $t_\nu$ ($\nu$ small) | Heavy | Weak | Scale mixture Gibbs | 일반 robust |
+| Laplace | Medium | Mode only | LASSO / Park-Casella | 해석 중요 |
+| Horseshoe | Very heavy | Strong (soft) | MCMC slow | Sparse signal |
+| Generalized dP | Tunable | Strong | **Block Gibbs** | **Best of both** |
+
+### Spike-and-Slab vs Shrinkage — 최종 비교
+
+| 측면 | Spike-and-Slab | Shrinkage |
+|------|----------------|-----------|
+| Hard 0 | ✓ | ✗ |
+| Posterior uncertainty | Model averaging | Continuous |
+| Dimension | Discrete $2^H$ | Continuous $\mathbb{R}^H$ |
+| Mixing | Slow (combinatorial) | Fast (conjugate) |
+| 해석 | "Included yes/no" | "축소 정도" |
+| GLM 확장 | 어려움 | 상대적 쉬움 |
+
+**Gelman 의 실무 관점**: "Hard 0 은 거의 항상 거짓 가정. Shrinkage 가 philosophically 더 정직".
+
+## § 20.1~20.2 실전 체크리스트
+
+**Basis 설계**
+
+1. Data 의 smoothness 특성 (continuous? sharp edges?) 파악.
+2. Basis 유형 선택: Gaussian RBF (smooth), B-spline (piecewise + sparse), Fourier (주기), Wavelet (multi-scale).
+3. $H$ — "sufficient + strong prior" 원칙, over-parametrize 기본.
+4. Knot 배치: uniform vs quantile-based vs adaptive.
+
+**Prior**
+
+5. Centered on linear baseline (chloride 스타일).
+6. Ridge ($\lambda$) or Shrinkage (gdP, horseshoe).
+7. Variable selection 필요 시 spike-and-slab + automatic multiplicity adjustment.
+8. P-spline penalty 로 smoothness 유도.
+
+**계산**
+
+9. Conjugate: closed form 또는 Gibbs.
+10. gdP: block Gibbs with auxiliary Inverse-Gaussian.
+11. Spike-and-slab: $\gamma$ update + $\pi$ update + $\beta, \sigma$ Gibbs.
+12. $\hat R$, ESS 점검.
+
+**검증**
+
+13. Posterior mean curve 데이터와 비교 plot.
+14. Marginal inclusion $P(\gamma_h = 1 | y)$ — median probability model 도출.
+15. Cross-validation 또는 WAIC 로 $H$ 비교.
+16. Extrapolation 경고 — basis support 밖은 불신.
+
+**해석**
+
+17. 전체 curve 해석 중심 (개별 $\beta_h$ 보다).
+18. 어느 region 이 "active basis" 기여 많은지.
+19. Shrinkage prior 에서 posterior concentration 패턴 시각화.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.20 Overview](./04-20-0-basis-function-models-overview.qmd)
+* [Ch.14 § 14.6 — Regularization·Ridge·LASSO·Horseshoe](./03-14-2-goals-x-matrix-regularization.qmd)
+* [Ch.14 § 14.7~14.10 — Augmented Regression](./03-14-3-unequal-variance-prior-exercises.qmd)
+* [Ch.17 § 17.2 — Scale Mixture of Normals](./03-17-1-aspects-overdispersed-computation.qmd)
+
+**후속 주제**
+
+* [§ 20.3~20.5 심화 — Monotone·GAM·연습 + Ch.20 결산](./04-20-2-nonnormal-multivariate-exercises.qmd) (예정)
+* Ch.21 Gaussian Processes (예정)
+
+**관련 개념 (cross-category)**
+
+* [P-splines (Eilers-Marx)](../p-splines.qmd)
+* [Bayesian LASSO (Park-Casella)](../bayesian-lasso.qmd)
+* [Stochastic Search Variable Selection](../ssvs.qmd)
+* [Horseshoe Prior in Detail](../horseshoe.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.20 § 20.1~20.2. CRC Press.
+* De Boor, C. (1978). *A Practical Guide to Splines*. Springer.
+* Eilers, P. H. C., & Marx, B. D. (1996). Flexible Smoothing with B-splines and Penalties. *Statistical Science*, 11, 89-102.
+* George, E. I., & McCulloch, R. E. (1993). Variable Selection via Gibbs Sampling. *JASA*, 88, 881-889.
+* Scott, J. G., & Berger, J. O. (2006). An Exploration of Aspects of Bayesian Multiple Testing. *JSPI*, 136, 2144-2162.
+* Scott, J. G., & Berger, J. O. (2010). Bayes and Empirical-Bayes Multiplicity Adjustment in the Variable-Selection Problem. *Annals of Statistics*, 38, 2587-2619.
+* Barbieri, M. M., & Berger, J. O. (2004). Optimal Predictive Model Selection. *Annals of Statistics*, 32, 870-897.
+* Park, T., & Casella, G. (2008). The Bayesian Lasso. *JASA*, 103, 681-686.
+* Carvalho, C. M., Polson, N. G., & Scott, J. G. (2010). The Horseshoe Estimator. *Biometrika*, 97, 465-480.
+* Armagan, A., Dunson, D. B., & Lee, J. (2013). Generalized Double Pareto Shrinkage. *Statistica Sinica*, 23, 119-143.
