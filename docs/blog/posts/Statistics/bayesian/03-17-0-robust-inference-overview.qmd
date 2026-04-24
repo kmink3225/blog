@@ -1,0 +1,533 @@
+---
+title: "Ch.17 Overview — Models for Robust Inference"
+subtitle: "Part IV 네 번째 관문: 이상치 강건성·$t$ 분포·Negative binomial·Beta-binomial·robit·8 schools 재방문 통합 지도"
+description: |
+  Gelman BDA Ch.17의 7개 절을 한 편으로 조망한다.
+  § 17.1 robustness의 두 측면 (outlier 강건성·민감도 분석),
+  § 17.2 과분산 표준 모형 확장 ($t$ vs normal 식 (17.1) scale mixture·Negative binomial·Beta-binomial·robit 회귀),
+  § 17.3 mixture formulation 기반 Gibbs sampler·importance resampling sensitivity analysis,
+  § 17.4 8 schools 재방문 — $\nu$ 민감도 Figure 17.1·17.2,
+  § 17.5 $t$ 오차 robust 회귀,
+  Part IV의 "likelihood 확장 계단"에서 Ch.14 정규 → Ch.15 계층 → Ch.16 비정규 → Ch.17 heavy-tail 의 네 번째 관문.
+categories:
+  - Statistics
+  - Bayesian
+  - Robust-Inference
+  - t-distribution
+  - Scale-Mixture
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요 — Part IV 네 번째 관문
+
+Ch.14~16에서 다룬 모든 모형은 **정규·binomial·Poisson** 등 제한된 분포 family에 의존했다. 이들의 공통 특징:
+
+* **Thin tail**: 극단값 확률이 매우 작다.
+* **Single outlier**에 **과도한 민감성**: 하나의 비정상 관측이 모든 모수 추정을 흔듬.
+* **분산-평균 제약**: Poisson은 $\mathrm{Var} = \mu$, binomial은 $\mathrm{Var} = n\mu(1-\mu)$ 고정.
+
+**Ch.17 Models for Robust Inference** 는 이 한계를 **heavy-tail 분포 family** 로 극복한다. 핵심 도구:
+
+* $t$ 분포 ($t_\nu$).
+* Negative binomial.
+* Beta-binomial.
+* Robit 회귀 (logistic/probit의 robust 버전).
+
+모두 **scale mixture of normals (or Gammas)** 표현을 공유. 이 구조가 Gibbs sampler 기반 계산을 자연스럽게 한다.
+
+::: {.callout-important}
+## Ch.14 → 15 → 16 → 17 의 확장 계단
+
+* **Ch.14** — 정규 likelihood + 평균 회귀.
+* **Ch.15** — 정규 likelihood + **계층 구조**.
+* **Ch.16** — **비정규 likelihood** (Poisson, binomial, multinomial).
+* **Ch.17** — **Heavy-tail likelihood** ($t$, negative binomial, beta-binomial).
+
+각 장은 이전 장의 계산 엔진을 재사용하며 **likelihood 층만 변형**한다. Ch.17의 특수성: **scale mixture of normals** 로 표현하면 **Ch.14의 기계를 그대로 사용 가능**. 이것이 Gelman의 반복된 패턴 — "복잡한 분포를 단순한 분포의 조건부 mixture로 환원."
+:::
+
+## Ch.17의 논리 지도
+
+| 절 | 핵심 질문 | 주요 결과 |
+|:---:|:------|:-----|
+| § 17.1 | **Robustness란 무엇인가?** | Outlier 강건성과 민감도 분석 |
+| § 17.2 | **표준 모형 과분산 확장은?** | $t_\nu$·Neg-bin·Beta-bin·robit — 모두 mixture 표현 |
+| § 17.3 | **어떻게 계산하나?** | Mixture auxiliary variables + Gibbs·importance resampling |
+| § 17.4 | **8 schools 에 robust 적용하면?** | $\nu$ 민감도 분석 Figure 17.1·17.2 |
+| § 17.5 | **Robust 회귀는?** | $t$ 오차 선형 회귀·이상치 자동 downweight |
+| § 17.6 | Bibliographic note | Robust 베이즈 문헌 |
+| § 17.7 | Exercises | Federalist Papers·8 schools 민감도·robit 회귀 |
+
+## § 17.1 Aspects of Robustness — 두 측면
+
+### 1. Outlier Robustness
+
+**예시** (Gelman 원문): 8 schools 의 $y_8 = 12$ 를 **가상으로 100** 로 바꿨다고 하자. 정규 계층 모형의 결과:
+
+* $\tau$ (그룹 간 SD) 가 **매우 큰 값**으로 추정됨 (100이 "정상 변동"이 되려면).
+* 결과적으로 **모든 $\theta_j$ 에 대한 shrinkage 거의 사라짐** — 각 $\hat\theta_j \approx y_j$.
+* $\theta_8 \approx 100$ 으로 결론되지만, 나머지 7개 학교 추정도 덩달아 원래 값으로 돌아감.
+
+**진짜 문제**:
+
+* 이 100 이 **데이터 입력 오류**라면? $\tau$ 부풀림이 허상이고 7개 학교 추정이 잘못된 방향.
+* 8번째 학교가 **진짜 특이 케이스**라면? 나머지 7개 학교에 영향을 주면 안 됨.
+
+**Bayesian Robust 해법**: 교환 가능 prior $p(\theta_1, \dots, \theta_8)$ 을 **heavy-tail family** 로 교체:
+
+$$
+\theta_j \sim t_\nu(\mu, \tau^2) \quad \text{or} \quad \theta_j \sim \text{Mixture of two normals}
+$$
+
+효과: $\theta_8 = 100$ 이 "normal 분포의 extreme deviation" 이 아니라 **"t 분포의 heavy tail에서 자연스러운 관측"** 으로 해석. 나머지 7개의 shrinkage는 그대로 유지.
+
+### 2. Sensitivity Analysis
+
+Robust model 은 가정 민감도 진단에도 유용:
+
+* $\nu = \infty$: 정규 (thin tail).
+* $\nu = 7$: moderate tail.
+* $\nu = 4$: robit 기본.
+* $\nu = 1$: Cauchy (heavy tail).
+
+$\nu$ 를 바꾸면서 **관심 추정량이 얼마나 변하는지** 관찰 → 정규 가정이 결론에 얼마나 결정적인지 판단.
+
+::: {.callout-tip}
+## 직관: "Outlier 탐색" vs "Robust 추론"
+
+고전 통계학에서는 두 작업을 구분:
+
+1. **Outlier detection**: 이상 관측을 찾아 **제거**.
+2. **Robust estimation**: 이상 관측을 **허용**하되 추정이 덜 영향받도록.
+
+**Gelman의 Bayesian 관점**: 두 작업을 **통합**. Heavy-tail 모형이
+
+* 이상 관측을 "mixture의 high-variance component"로 자연 분류.
+* 동시에 평균 모수 추정의 영향을 **자동 축소**.
+
+**통계적 언어**: "$y_8 = 100$ 은 $\theta_8$ 에서 매우 큰 이탈" vs "$\theta_8$ 자체가 $t$ 분포의 극단값". 관측을 제거하지 않고도 해석 자연스러움.
+
+이 철학이 Ch.17의 핵심. **모든 관측은 모형 내에서 설명 가능**하되, 모형이 heavy-tail을 지원해야.
+:::
+
+## § 17.2 Overdispersed Versions of Standard Models
+
+### $t$ 분포 — 정규의 heavy-tail 대안
+
+$t_\nu(\mu, \sigma^2)$ 분포:
+
+* $\nu$ = degrees of freedom (자유도). 분포 형태 결정.
+* $\nu = 1$: Cauchy. 평균·분산 발산.
+* $\nu = 4$: Robit 기본. 적당히 heavy-tail.
+* $\nu = 7$: Moderate (Gelman-Jakulin weakly informative).
+* $\nu \to \infty$: Normal.
+
+### 식 (17.1) — $t$ 의 Scale Mixture 표현
+
+$y_i \sim t_\nu(\mu, \sigma^2)$ 는 다음과 **수학적으로 동등**:
+
+$$
+\begin{aligned}
+y_i | V_i &\sim N(\mu, V_i) \\
+V_i &\sim \text{Inv-}\chi^2(\nu, \sigma^2)
+\end{aligned} \quad \text{(17.1)}
+$$
+
+**해석**: 각 관측 $y_i$ 가 **고유한 분산 $V_i$** 를 가진 정규. $V_i$ 가 Inv-$\chi^2$ 에서 추출. Outlier = "큰 $V_i$ 를 가진 관측".
+
+::: {.callout-tip}
+## 직관: Scale Mixture가 heavy-tail을 만드는 기제
+
+$V_i$ 고정 시 $y_i$ 는 평범한 정규. 그러나 $V_i$ 자체가 **variable** — Inv-$\chi^2$ 에서 가끔 매우 큰 값을 뽑는다.
+
+큰 $V_i$ 를 뽑은 관측 → **변동성이 커서 극단값도 그럴듯함**.
+
+Marginalizing over $V_i$:
+
+$$
+p(y_i | \mu, \sigma^2) = \int N(y_i | \mu, V_i) \cdot \text{Inv-}\chi^2(V_i | \nu, \sigma^2) \, dV_i = t_\nu(y_i | \mu, \sigma^2)
+$$
+
+즉 **"정규들의 variance 혼합"** = $t$ 분포. 이것이 $t$ 의 heavy-tail의 구조적 이유.
+
+**계산 이점**: $V_i$ 를 **augmented variable** 로 다루면 각 단계가 **정규 계산**으로 환원. Gibbs sampler 자연. Ch.12 § 12.1 의 auxiliary variable 기법의 대표 사례.
+:::
+
+### Negative Binomial — Poisson의 heavy-tail
+
+$y_i \sim \text{NegBin}(\alpha, \beta)$ 는 **Gamma-Poisson** mixture:
+
+$$
+\begin{aligned}
+y_i | \lambda_i &\sim \text{Poisson}(\lambda_i) \\
+\lambda_i &\sim \text{Gamma}(\alpha, \beta)
+\end{aligned}
+$$
+
+**분산**: $\mathrm{Var}(y) = \frac{\alpha}{\beta} \cdot \frac{\beta + 1}{\beta} = \mu + \mu^2 / \beta$ — 평균보다 **항상 크다**. $\beta \to \infty$ 에서 Poisson 수렴.
+
+**응용**: 사고 건수, 질병 발생, 텍스트 단어 빈도 등 **고정 평균-분산 비율이 실제보다 큰** count 데이터.
+
+### Beta-Binomial — Binomial의 heavy-tail
+
+$y_i \sim \text{BetaBin}(m, \alpha, \beta)$ 는 **Beta-Binomial** mixture:
+
+$$
+\begin{aligned}
+y_i | \pi_i &\sim \text{Binomial}(m, \pi_i) \\
+\pi_i &\sim \text{Beta}(\alpha, \beta)
+\end{aligned}
+$$
+
+**분산 배율**: $\frac{\alpha + \beta + m}{\alpha + \beta + 1}$ 배 (binomial 대비). $m = 1$ 이면 binomial과 동일.
+
+**응용**: 교육 시험 데이터 (학생마다 "정답 확률" 다름), 소비자 설문 (응답자마다 "지지 확률" 다름).
+
+### Robit — Logistic/Probit의 Robust 버전
+
+**Robit regression** (Liu 2004): 잠재 변수 formulation (Ch.16 § 16.2 식 (16.3)) 에서 정규를 **$t_\nu$로 교체**:
+
+$$
+\begin{aligned}
+u_i &\sim t_\nu(X_i \beta, 1) \\
+y_i &= \mathbb{1}[u_i > 0]
+\end{aligned}
+$$
+
+**특성**:
+
+* $\nu \to \infty$: probit.
+* $\nu = 4$: logistic 에 매우 가까움 (기본값).
+* $\nu = 1$: Cauchy — 매우 heavy-tail.
+
+**Robustness 의미**: $y$ 는 binary라 outlier 없지만, **$X$ 에 대한 robustness** — $X_i\beta$ 가 매우 큰 값이어도 **occasional misprediction 허용**. 완벽 분리 (separation, Ch.16 § 16.3) 와 유사 상황에서 안정화.
+
+### 비교 요약 표
+
+| 원 모형 | Robust 대안 | Mixture 표현 | Extra 모수 |
+|---------|------------|--------------|------------|
+| Normal | $t_\nu$ | $N(\mu, V_i), V_i \sim \text{Inv-}\chi^2$ | $\nu$ |
+| Poisson | Neg-bin | $\text{Poisson}(\lambda_i), \lambda_i \sim \text{Gamma}$ | $\beta$ |
+| Binomial | Beta-bin | $\text{Bin}(m, \pi_i), \pi_i \sim \text{Beta}$ | $\alpha, \beta$ |
+| Logistic/Probit | Robit | $\mathbb{1}[u_i > 0], u_i \sim t_\nu$ | $\nu$ |
+
+### Underdispersion 경고
+
+모든 overdispersed 모형의 **공통 제약**: 원 모형보다 **분산이 항상 크거나 같음**. 데이터가 원 모형보다 **덜 흩어져** 있으면 (underdispersed) 이들 확장으로 포착 불가.
+
+Underdispersion은 드물지만 발생 — 예: strongly correlated counts (이미 계층 모형 필요), censored data (Ch.8).
+
+## § 17.3 Posterior Inference and Computation
+
+### Mixture Formulation + Gibbs Sampler
+
+모든 robust 모형은 scale mixture 형태:
+
+$$
+p(y | \theta) = \int p(y | \theta, V) p(V | \phi) \, dV
+$$
+
+$V$ 를 auxiliary variable로 도입하면 각 조건부가 conjugate:
+
+1. $\theta | V, y$: 정규 회귀 (정규 likelihood $N(\cdot, V)$).
+2. $V | \theta, y$: Inv-$\chi^2$ (또는 해당 conjugate).
+3. $\phi | V$: 해당 hyperparameter 사후.
+
+이 3-단계 Gibbs로 robust 모형 전체를 돌릴 수 있다. Ch.12 parameter expansion 과 같은 원리.
+
+### Importance Resampling for Sensitivity Analysis
+
+$\nu$ 여러 값에 대해 사후를 계산하려면 **처음부터 다시** 샘플링하는 것은 비효율. Gelman의 제안:
+
+1. **원 정규 모형** ($\nu = \infty$) 사후 $p_0(\theta | y)$ 에서 샘플 획득.
+2. **Importance weights**:
+
+$$
+w_s = \frac{p(\theta^s | \nu, y)}{p_0(\theta^s | y)}
+$$
+
+3. Importance resampling 으로 $p(\theta | \nu, y)$ 근사.
+
+**장점**: $\nu$ 여러 값에 대해 **한 번의 MCMC**로 민감도 분석 완료. Ch.10 § 10.4 기법.
+
+**한계**: $\nu$ 가 $\infty$ 에서 크게 멀어지면 weights 분산이 폭발. 극단 robust 모형은 직접 MCMC 필요.
+
+### Marginal Posterior of $\phi$
+
+$p(\phi | y)$ 가 sensitivity parameter의 marginal 사후:
+
+$$
+p(\phi | y) \propto p(\phi) \cdot p(y | \phi) = p(\phi) \cdot \int p(y | \theta, \phi) p(\theta | \phi) \, d\theta
+$$
+
+$p(y | \phi)$ (marginal likelihood) 는 importance sampling 또는 bridge sampling (Ch.13 § 13.10) 으로 계산.
+
+**해석**: $p(\nu | y)$ 가 날카로우면 "$\nu$ 를 확실히 말할 수 있음" (데이터가 tail 형태를 강하게 가리킴). 평평하면 "$\nu$ 에 대한 정보 부족" → 민감도 낮음.
+
+## § 17.4 Robust Inference for the Eight Schools — 재방문
+
+### Setup
+
+Ch.5.5 정규 계층 모형:
+
+$$
+\begin{aligned}
+y_j &\sim N(\theta_j, \sigma_j^2) \\
+\theta_j &\sim N(\mu, \tau^2)
+\end{aligned}
+$$
+
+**Robust 확장**: 모집단 분포를 $t_\nu$ 로 교체:
+
+$$
+\theta_j \sim t_\nu(\mu, \tau^2)
+$$
+
+### $\nu$ 의 처리
+
+**옵션 1 — 고정 $\nu$**: $\nu = 4$ (기본 robust choice). 데이터로부터 추정 안 함.
+
+**옵션 2 — $\nu$ 도 추정**: $\nu$ 에 prior 부여, 데이터로부터 estimate. 그러나 $J = 8$ 로 작아 $\nu$ 가 매우 부정확하게 추정됨.
+
+**옵션 3 — Sensitivity analysis**: 여러 $\nu$ 값에 대해 결과 비교 (Gelman 권장).
+
+### Table 17.1 — Robust 결과
+
+2500 posterior simulations summary. 정규 모델과 robust 모델 결과 비교:
+
+* 각 학교 $\theta_j$ 의 posterior 평균·SD·quantile.
+* 정규 대비 robust 에서 **$\tau$ 가 약간 작게** 추정됨 (이상치로부터 덜 영향).
+* 각 $\theta_j$ 의 credible interval 이 약간 변함.
+
+### Figure 17.1 — $\nu$ 민감도 Plot
+
+**$1/\nu$ 축**으로 각 학교 $\theta_j$ 의 **posterior 평균·SD**.
+
+* $1/\nu = 0$: 정규 (Ch.5.5 원래).
+* $1/\nu = 1$: Cauchy.
+
+**주요 관찰**:
+
+* $\nu$ 가 변해도 posterior 평균 **거의 안 변함** — 원 데이터가 이상치 없음.
+* SD 도 안정적.
+
+**결론**: 8 schools 데이터에서는 **robustness 가 크게 중요하지 않다**. 그러나 이 안정성을 **정량적으로 확인** 한 것이 의미.
+
+### Figure 17.2 — $1/\nu$ 의 Posterior
+
+$\nu$ 를 unknown으로 두고 추정한 경우의 $1/\nu$ 사후 히스토그램.
+
+* 0 근처에 mass 집중 → "$\nu$ 가 크다 (정규에 가깝다)" 는 증거.
+* 데이터가 정규 가정을 대체로 지지.
+
+이 결과가 Ch.5 원 분석의 **robustness를 강화**.
+
+### 가상 Outlier Scenario
+
+$y_8 = 100$ 로 조작한 경우:
+
+* 정규 모형: $\tau$ 폭발, 모든 $\theta_j \approx y_j$.
+* Robust ($\nu = 4$): $\tau$ 유지, 7개 학교 여전히 shrinkage, $\theta_8$ 만 크게.
+* $1/\nu$ posterior: 0에서 멀어져 heavy-tail 증거.
+
+이것이 Gelman이 제시하는 **robust model의 실질적 가치**.
+
+## § 17.5 Robust Regression — $t$ 오차
+
+### 모형
+
+Ch.14 정규 선형 회귀의 오차를 $t$ 로 교체:
+
+$$
+y_i = X_i \beta + \epsilon_i, \quad \epsilon_i \sim t_\nu(0, \sigma^2)
+$$
+
+또는 scale mixture:
+
+$$
+y_i | V_i \sim N(X_i \beta, V_i), \quad V_i \sim \text{Inv-}\chi^2(\nu, \sigma^2)
+$$
+
+### Outlier Downweighting
+
+$V_i$ 가 크면 해당 관측의 **precision이 작음** → 회귀에 적은 영향.
+
+**Posterior $V_i$**: outlier 관측 ($y_i - X_i\hat\beta$ 큰) 은 **큰 $V_i$** 가 뽑힘 → 자동 downweight.
+
+이것이 "robust regression" 의 본질: **outlier 검출 없이도 outlier 영향 자동 축소**.
+
+### 계산 — Gibbs
+
+1. $\beta | V, \sigma^2, y$: 가중 회귀 (weight $1/V_i$).
+2. $\sigma^2 | \beta, V$: 해당 conjugate.
+3. $V_i | \beta, \sigma^2, y_i$: Inv-$\chi^2$ 업데이트.
+
+Ch.14 § 14.7 GLS 의 특수 사례.
+
+### 응용 예시
+
+* **금융 수익률**: Return 데이터는 정규보다 heavy-tail — $t_{3-5}$ 가 적합.
+* **측정 오차**: 기기 오류로 occasional 극단값.
+* **이상치 포함 임상 시험**: 일부 환자의 극단적 반응.
+
+## Ch.17 핵심 수식 모음
+
+| 번호 | 수식 | 의미 |
+|:----:|:-----|:-----|
+| (17.1) | $y_i \| V_i \sim N(\mu, V_i), V_i \sim \text{Inv-}\chi^2(\nu, \sigma^2)$ | $t$ 의 scale mixture |
+| - | $y_i \| \lambda_i \sim \text{Poisson}(\lambda_i), \lambda_i \sim \text{Gamma}$ | Neg-bin의 Gamma mixture |
+| - | $y_i \| \pi_i \sim \text{Bin}(m, \pi_i), \pi_i \sim \text{Beta}$ | Beta-binomial의 Beta mixture |
+| (17.2) | $p(\theta \| \phi, y) \propto p(\theta \| \phi) p(y \| \theta, \phi)$ | Robust 확장 모형 일반 |
+| - | $u_i \sim t_\nu(X_i\beta, 1), y_i = \mathbb{1}[u_i > 0]$ | Robit 회귀 |
+
+## 최소 실행 예제 — Robust 계층 모형
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+rng = np.random.default_rng(42)
+
+# 8 schools data with hypothetical outlier
+y_orig = np.array([28, 8, -3, 7, -1, 1, 18, 12])
+sigma = np.array([15, 10, 16, 11, 9, 11, 10, 18])
+
+# replace y[7] with outlier 100
+y = y_orig.copy()
+y[7] = 100
+
+
+def fit_hierarchical(y, sigma, tail="normal", nu=4):
+    with pm.Model():
+        mu = pm.Normal("mu", 0, 10)
+        tau = pm.HalfNormal("tau", 10)
+
+        if tail == "normal":
+            theta_raw = pm.Normal("theta_raw", 0, 1, shape=8)
+        elif tail == "t":
+            theta_raw = pm.StudentT("theta_raw", nu=nu, mu=0, sigma=1, shape=8)
+
+        theta = pm.Deterministic("theta", mu + tau * theta_raw)
+        pm.Normal("y_obs", mu=theta, sigma=sigma, observed=y)
+
+        trace = pm.sample(2000, tune=1000, target_accept=0.95, chains=4)
+    return trace
+
+
+print("=== Normal hierarchical with outlier y[7]=100 ===")
+tr_normal = fit_hierarchical(y, sigma, tail="normal")
+print(az.summary(tr_normal, var_names=["mu", "tau", "theta"])
+      [["mean", "sd", "hdi_3%", "hdi_97%"]])
+
+print("\n=== Robust t (nu=4) hierarchical with outlier ===")
+tr_robust = fit_hierarchical(y, sigma, tail="t", nu=4)
+print(az.summary(tr_robust, var_names=["mu", "tau", "theta"])
+      [["mean", "sd", "hdi_3%", "hdi_97%"]])
+```
+
+예상 출력 (개념):
+
+```
+=== Normal: tau explodes ===
+tau: mean ~ 30+, so all theta close to y
+theta[0]: ~27 (originally shrunk to ~10 in Ch.5)
+theta[7]: ~95 (close to 100)
+
+=== Robust t: tau stabilized ===
+tau: mean ~ 6-10 (reasonable)
+theta[0-6]: proper shrinkage toward overall mean
+theta[7]: ~60-70 (pulled somewhat toward others but still distant)
+```
+
+Robust가 **outlier만 부분 허용**하고 **나머지 추정 구조 보존**.
+
+## Ch.17 심화편 예고
+
+Ch.17은 분량상 심화편을 **2편** 으로 분할 예정.
+
+| 심화편 | 범위 | 주제 |
+|--------|------|------|
+| 03-17-1 | § 17.1~17.3 | Aspects·Overdispersed models·식 (17.1) scale mixture·Gibbs·importance resampling 심화 |
+| 03-17-2 | § 17.4~17.7 | 8 schools 재방문·$t$ 오차 회귀·문헌·연습 + Ch.17 결산 |
+
+## Ch.17 실전 체크리스트
+
+**Robust 필요성 진단**
+
+1. Posterior predictive check 에서 **tail 불일치** (관측이 모형 tail보다 극단) 발견?
+2. 모형을 여러 번 fit 할 때 **이상치에 따른 큰 변화**?
+3. 이상치를 제거하면 **결론이 크게 달라짐**?
+
+위 셋 중 하나면 robust 고려.
+
+**분포 선택**
+
+4. 연속 $y$ → $t_\nu$.
+5. Count $y$ → Negative binomial.
+6. Binomial $y$ → Beta-binomial.
+7. Binary $y$ (분리 위험) → Robit.
+
+**$\nu$ 선택**
+
+8. 자유도 고정: $\nu = 4$ (기본), $7$ (moderate), $1$ (Cauchy, 극단).
+9. 자유도 추정: $J$ 또는 $n$ 이 **충분히 크면** 가능 (보통 > 50).
+10. Sensitivity: 여러 $\nu$ 로 결과 비교.
+
+**계산**
+
+11. Scale mixture parameterization 사용 ($V_i$ auxiliary).
+12. Gibbs sampler: 정규/Gamma/Beta 단계 교대.
+13. HMC 에서는 non-centered + $t$ prior 직접 사용 가능.
+14. Importance resampling 으로 sensitivity analysis 효율화.
+
+**검증**
+
+15. $V_i$ posterior 추출 — outlier 관측이 큰 $V_i$ 갖는지 확인.
+16. 관측별 **weight $1/V_i$** 시각화.
+17. Posterior predictive check 로 tail fit 재검증.
+
+**해석**
+
+18. "Outlier를 제거했다" 가 아니라 "heavy-tail 모형에서 자연스러운 관측" 로 해석.
+19. 민감도 분석 결과를 **결론에 포함** (어떤 범위의 $\nu$ 에서 결론이 안정한가).
+20. Robust inference가 원 결론과 유사하면 **원 가정의 강건성** 의 positive 증거.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Part IV Overview](./03-bayesian-part4-overview.qmd)
+* [Ch.14 Regression Models](./03-14-0-regression-overview.qmd)
+* [Ch.15 Hierarchical Linear Models](./03-15-0-hierarchical-linear-models-overview.qmd)
+* [Ch.16 Generalized Linear Models](./03-16-0-generalized-linear-models-overview.qmd)
+* [Ch.5 — 8 Schools](./00-5-2-normal-eight-schools-meta.qmd)
+* [Ch.12 § 12.1 — Parameter Expansion, Scale Mixture](./02-12-1-reparameterization-metropolis-tuning-slice.qmd)
+* [Ch.6 — Model Checking (Sensitivity)](./01-6-0-model-checking.qmd)
+
+**후속 주제 (Ch.17 심화편)**
+
+* [§ 17.1~17.3 — Aspects·Overdispersed·Computation](./03-17-1-aspects-overdispersed-computation.qmd) (예정)
+* [§ 17.4~17.7 — 8 Schools·Robust Regression·연습](./03-17-2-eight-schools-regression-exercises.qmd) (예정)
+
+**후속 주제 (Part IV 다른 장)**
+
+* Ch.18 Missing Data — multiple imputation, loglinear imputation
+
+**관련 개념 (cross-category)**
+
+* [Robust Statistics (Huber)](../robust-statistics.qmd)
+* [Heavy-tailed Distributions in Finance](../../Data_Science/heavy-tail-finance.qmd)
+* [Outlier Detection Methods](../../Machine_Learning/outlier-detection.qmd)
+* [Mixture Models](../mixture-models.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.17. CRC Press.
+* Liu, C. (2004). Robit Regression: A Simple Robust Alternative to Logistic and Probit Regression. In *Applied Bayesian Modeling and Causal Inference*.
+* Lange, K. L., Little, R. J. A., & Taylor, J. M. G. (1989). Robust Statistical Modeling Using the t Distribution. *JASA*, 84, 881-896.
+* West, M. (1984). Outlier Models and Prior Distributions in Bayesian Linear Regression. *JRSS B*, 46, 431-439.
+* Pettitt, A. N., & Smith, A. F. M. (1985). Outliers and Influential Observations in Linear Models. In *Bayesian Statistics 2*.
+* Albert, J. H., & Chib, S. (1993). Bayesian Analysis of Binary and Polychotomous Response Data. *JASA*, 88, 669-679.
+* Mosteller, F., & Wallace, D. L. (1964). *Inference and Disputed Authorship: The Federalist*. Addison-Wesley.
