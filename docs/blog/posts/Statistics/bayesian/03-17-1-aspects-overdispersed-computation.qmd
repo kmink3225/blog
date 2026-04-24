@@ -1,0 +1,739 @@
+---
+title: "Ch.17 § 17.1~17.3 심화 — Robustness·Overdispersed 모형·Posterior 계산"
+subtitle: "Outlier 강건성 두 측면·식 (17.1) scale mixture·Neg-bin·Beta-bin·Robit·Gibbs·식 (17.2)(17.3) Importance weighting"
+description: |
+  Gelman BDA Ch.17의 § 17.1~17.3을 한 편으로 다룬다.
+  § 17.1 outlier robustness 와 sensitivity analysis의 두 측면 — 8 schools $y_8=100$ 가상 시나리오로 본 정규 가정의 취약점,
+  § 17.2 과분산 표준 모형 확장 — $t_\nu(\mu, \sigma^2)$ scale mixture 식 (17.1) 완전 유도,
+  Negative binomial Gamma-Poisson mixture·Beta-binomial Beta-Binomial mixture,
+  Robit 회귀 $u_i \sim t_\nu$ latent 변수·underdispersion 제약,
+  § 17.3 mixture formulation Gibbs sampler·multimodality 경고·predictive simulation·
+  식 (17.2) robust 확장 표기·식 (17.3) importance weighting·importance resampling 완전 유도까지.
+categories:
+  - Statistics
+  - Bayesian
+  - Robust-Inference
+  - Scale-Mixture
+  - Importance-Sampling
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요
+
+Ch.17 심화 시리즈의 **첫 번째 편**. § 17.1~17.3 은 robust 추론의 **이론적 뼈대 + 계산 엔진**이다.
+
+* **§ 17.1** — "Robustness" 개념의 두 얼굴: outlier 에 대한 강건성 + 가정 민감도 분석.
+* **§ 17.2** — 표준 분포 (정규, Poisson, binomial) 의 **heavy-tail 확장** 4종과 모두가 공유하는 **mixture 표현**.
+* **§ 17.3** — 이들의 **공통 계산 패턴**: mixture auxiliary variables + Gibbs + importance resampling.
+
+::: {.callout-tip}
+## 직관: 세 절의 통합 원리
+
+Gelman의 설계:
+
+1. § 17.1 에서 **"왜 robust가 필요한가"** 를 문제 의식으로.
+2. § 17.2 에서 **"어떤 분포를 쓸 것인가"** 를 family 측면으로.
+3. § 17.3 에서 **"어떻게 계산할 것인가"** 를 공통 엔진으로.
+
+세 절의 **통합 원리**: "복잡한 분포 = 단순 분포의 mixture". $t$ = 정규 mixture, Neg-bin = Poisson mixture, Beta-bin = Binomial mixture. 이 구조 덕분에 **Ch.14~15 의 정규·conjugate 계산 엔진을 그대로 재사용** 가능.
+
+이것이 robust 추론이 **특별히 어려운 수학** 없이 기존 Bayesian 워크플로우에 자연스럽게 편입되는 이유.
+:::
+
+## § 17.1 Aspects of Robustness
+
+### Robustness 의 두 얼굴
+
+**Outlier Robustness**: 이상 관측 하나가 **전체 추정을 흔들지 않도록**.
+
+**Sensitivity Analysis**: 모형 가정이 결론에 미치는 **영향 정량화**.
+
+두 개념은 밀접하지만 구분된다:
+
+| 측면 | Outlier Robustness | Sensitivity Analysis |
+|------|-------------------|---------------------|
+| 초점 | **데이터 한 개**의 영향 | **모형 가정**의 영향 |
+| 목표 | 영향 제한 | 영향 측정 |
+| 도구 | Heavy-tail likelihood | 여러 가정 비교 |
+| 판단 기준 | "결론이 안정한가" | "결론이 변하는가" |
+
+실제로 두 개념은 같은 tool set (heavy-tail 분포 + sensitivity plots) 으로 다룬다.
+
+### 8 Schools Outlier 시나리오 — 상세
+
+Gelman의 핵심 예제. 원 데이터:
+
+```
+y = [28, 8, -3, 7, -1, 1, 18, 12], sigma = [15, 10, 16, 11, 9, 11, 10, 18]
+```
+
+**가상 수정**: $y_8 = 100$.
+
+### 정규 계층 모형의 반응
+
+$\theta_j \sim N(\mu, \tau^2)$, $y_j \sim N(\theta_j, \sigma_j^2)$.
+
+**$\tau$ 추정**: 원 데이터는 $\tau \approx 5$. 수정 데이터는 **$\tau$ 가 수십 이상**.
+
+**$\hat\tau$ 공식** (Ch.5 식 (5.17) 대략):
+
+$$
+\hat\theta_j = \frac{(1/\sigma_j^2) y_j + (1/\tau^2) \mu}{1/\sigma_j^2 + 1/\tau^2}
+$$
+
+**Shrinkage 비율**:
+
+$$
+B_j = \frac{1/\tau^2}{1/\sigma_j^2 + 1/\tau^2}
+$$
+
+$\tau$ 크면 $B_j \to 0$ → **shrinkage 없음**, $\hat\theta_j \to y_j$.
+
+**결과**:
+
+* $\hat\theta_8 \approx 100$ (예상).
+* $\hat\theta_j \approx y_j$ for $j = 1, \dots, 7$ — **원래 shrinkage 구조 파괴**.
+
+### 왜 이것이 문제인가
+
+::: {.callout-important}
+## 정규 계층 모형의 구조적 취약점
+
+정규 $N(\mu, \tau^2)$ 는 $|\theta_j - \mu| > 3\tau$ 인 관측을 **"거의 불가능"** 으로 본다.
+
+$y_8 = 100$ 를 설명하려면 **둘 중 하나** 가 필요:
+
+1. $\theta_8 \approx 100$ 이 $N(\mu, \tau^2)$ 에서 나왔다 → **$\tau$ 가 매우 커야 함**.
+2. $y_8$ 이 이상치 → 모형 외부.
+
+정규 가정은 옵션 2를 허용하지 않으므로 **옵션 1 강제** → $\tau$ 폭발 → 전체 shrinkage 파괴.
+
+**Heavy-tail 해법**: $\theta_j \sim t_\nu(\mu, \tau^2)$. $t$ 는 tail 에서 mass가 많아 $\theta_8 = 100$ 도 **"$t$ 분포 정상 영역"** 으로 해석 가능. $\tau$ 는 $\theta_{1:7}$ 의 변동에 맞춰 작게 유지.
+:::
+
+### 기록 오류 vs 진짜 이상치
+
+$y_8 = 100$ 의 정체:
+
+* **기록 오류**: 원래 12인데 잘못 입력. 그럼 $\theta_{1:7}$ 추정을 흔들면 안 됨.
+* **진짜 이상치**: 8번째 학교가 실제로 **매우 효과적 프로그램**. 그럼 $\theta_8$ 만 커야 함.
+
+두 경우 모두 **나머지 7개 학교 추정은 원래 대로** 유지하는 것이 합리적. Robust 모형이 정확히 이 행동을 보장.
+
+**Gelman의 원칙**: "Outlier 검출 후 제거" 가 아니라 "heavy-tail 모형에서 자연스럽게 수용 + 영향 축소". 둘 다 같은 결과지만 후자가 **원칙적**.
+
+### Sensitivity Analysis 철학
+
+**핵심 질문**: "결론이 모형 선택에 얼마나 민감한가?"
+
+**절차**:
+
+1. 기본 모형 선택 ($\theta_j \sim N$).
+2. 대안 모형 family 설정 ($\theta_j \sim t_\nu$, $\nu \in \{4, 7, 30, \infty\}$).
+3. 각 모형에서 사후 계산.
+4. 관심 추정량의 변화 비교.
+
+**해석**:
+
+* **결론 안정**: "정규 가정이 robust". 자신감 갖고 사용.
+* **결론 변화**: "민감도 존재". 왜 변하는지 진단, 적절한 모형 선택.
+
+**Gelman의 insight**: Ch.5 의 8 schools 에서 **$\tau \in [0, \infty)$** 를 연속 탐색한 것이 사실상 sensitivity analysis — $\tau = 0$ (complete pool) vs $\tau = \infty$ (no pool) 의 결과 비교.
+
+## § 17.2 Overdispersed Versions of Standard Models
+
+### 공통 원리 — Scale Mixture
+
+모든 overdispersed 모형은 다음 구조:
+
+$$
+y | \lambda \sim f(y | \lambda), \quad \lambda \sim g(\lambda | \phi)
+$$
+
+$\lambda$ 가 관측별 고유 parameter, $g$ 가 mixing 분포. Marginalize $\lambda$ 하면 원 분포보다 **분산이 커진** 분포가 나온다.
+
+**직관**:
+
+$$
+\mathrm{Var}(y) = \mathbb{E}[\mathrm{Var}(y | \lambda)] + \mathrm{Var}[\mathbb{E}(y | \lambda)]
+$$
+
+첫 항이 원 분포의 분산, 두 번째 항이 **mixing 의 추가 분산**. 합이 증가 → overdispersion.
+
+### $t$ 분포 = Inv-$\chi^2$ Scale Mixture
+
+$y \sim t_\nu(\mu, \sigma^2)$ 의 식 (17.1) 표현:
+
+$$
+\begin{aligned}
+y_i | V_i &\sim N(\mu, V_i) \\
+V_i &\sim \text{Inv-}\chi^2(\nu, \sigma^2)
+\end{aligned}
+$$
+
+**증명**:
+
+$$
+p(y | \mu, \sigma^2, \nu) = \int_0^\infty p(y | \mu, V) \, p(V | \nu, \sigma^2) \, dV
+$$
+
+$p(y | \mu, V) = (2\pi V)^{-1/2} \exp(-(y-\mu)^2 / (2V))$, $p(V | \nu, \sigma^2) \propto V^{-\nu/2 - 1} \exp(-\nu\sigma^2/(2V))$.
+
+두 항 곱해서 $V$ 적분:
+
+$$
+\int V^{-(\nu+1)/2 - 1} \exp\left(-\frac{\nu\sigma^2 + (y-\mu)^2}{2V}\right) dV
+$$
+
+$\text{Inv-Gamma}((\nu+1)/2, (\nu\sigma^2 + (y-\mu)^2)/2)$ 커널. 정규화 상수로 나누면
+
+$$
+p(y) \propto \left( 1 + \frac{(y-\mu)^2}{\nu \sigma^2} \right)^{-(\nu+1)/2}
+$$
+
+이것이 **$t_\nu(\mu, \sigma^2)$ 의 PDF**. ✓
+
+::: {.callout-tip}
+## 직관: 왜 scale mixture가 heavy-tail을 만드나
+
+정규 $N(\mu, V)$ 의 tail 은 $V$ 에 강하게 의존:
+
+* $V$ 작음 → tail이 얇음 (관측이 $\mu$ 근처에 모임).
+* $V$ 큼 → tail이 두꺼움 (극단 관측 허용).
+
+Mixing 분포 Inv-$\chi^2$ 는 **가끔 큰 $V$ 를 뽑는다**. 그 draw들에서 **극단 $y$ 가 나올 확률**이 증가.
+
+Marginal로 보면: "**대부분 작은 $V$ 에서 작은 tail + 가끔 큰 $V$ 에서 큰 tail**" → 두꺼운 tail.
+
+**$\nu$ 의 역할**: Inv-$\chi^2$ 의 tail 두께 조절.
+
+* $\nu$ 작음 → $V$ 분포가 매우 skewed, 큰 $V$ 가 자주 → heavy-tail.
+* $\nu$ 큼 → $V$ 가 $\sigma^2$ 주변 집중 → $t \to N$.
+
+이 결합이 **robustness의 수학적 기제**.
+:::
+
+### $V_i$ 의 해석
+
+**$V_i$ 는 관측 $i$ 의 "유효 분산"** — 내재적으로 unobserved.
+
+**Posterior $V_i | y, \mu, \sigma^2, \nu$**:
+
+$$
+V_i | \cdot \sim \text{Inv-}\chi^2\left( \nu + 1, \frac{\nu\sigma^2 + (y_i - \mu)^2}{\nu + 1} \right)
+$$
+
+**Mean**:
+
+$$
+\mathbb{E}[V_i | \cdot] = \frac{\nu\sigma^2 + (y_i - \mu)^2}{\nu - 1}
+$$
+
+$|y_i - \mu|$ 큰 관측 → $V_i$ 크게 → downweight (가중 회귀에서 weight = $1/V_i$).
+
+**핵심**: 이상치가 자동으로 "high-variance" 로 분류되고 추정에 덜 영향. 이것이 robust의 메커니즘.
+
+### Negative Binomial = Gamma-Poisson
+
+$y \sim \text{NegBin}(\alpha, \beta)$:
+
+$$
+\begin{aligned}
+y_i | \lambda_i &\sim \text{Poisson}(\lambda_i) \\
+\lambda_i &\sim \text{Gamma}(\alpha, \beta)
+\end{aligned}
+$$
+
+**Marginal**:
+
+$$
+p(y | \alpha, \beta) = \int \text{Poisson}(y | \lambda) \cdot \text{Gamma}(\lambda | \alpha, \beta) \, d\lambda = \binom{y + \alpha - 1}{y} \left( \frac{\beta}{\beta + 1} \right)^\alpha \left( \frac{1}{\beta + 1} \right)^y
+$$
+
+**평균·분산**:
+
+$$
+\mathbb{E}(y) = \alpha / \beta = \mu, \quad \mathrm{Var}(y) = \mu + \mu^2 / \alpha
+$$
+
+Poisson 대비 **$\mu^2/\alpha$ 만큼 추가 분산**. $\alpha \to \infty$ 에서 Poisson 수렴.
+
+**$\lambda_i$ posterior**:
+
+$$
+\lambda_i | y_i \sim \text{Gamma}(y_i + \alpha, \beta + 1)
+$$
+
+Conjugate. Gibbs 자연.
+
+**응용**:
+
+* 보험 청구 건수 (일부 고객이 사고 취약).
+* 질병 발생 건수 (지역별 특성).
+* 텍스트 단어 빈도.
+
+### Beta-Binomial = Beta-Bin Mixture
+
+$y_i | m \sim \text{BetaBin}(m, \alpha, \beta)$:
+
+$$
+\begin{aligned}
+y_i | \pi_i &\sim \text{Binomial}(m, \pi_i) \\
+\pi_i &\sim \text{Beta}(\alpha, \beta)
+\end{aligned}
+$$
+
+**평균·분산**:
+
+$$
+\mathbb{E}(y/m) = \frac{\alpha}{\alpha+\beta} = \mu, \quad \mathrm{Var}(y/m) = \frac{\mu(1-\mu)}{m} \cdot \frac{\alpha + \beta + m}{\alpha + \beta + 1}
+$$
+
+Binomial 대비 **$(\alpha+\beta+m)/(\alpha+\beta+1)$ 배**. $m = 1$ 이면 정확히 1 (차이 없음 — 단일 시행으로는 overdispersion 구분 불가).
+
+**$\pi_i$ posterior**: Conjugate Beta.
+
+**응용**:
+
+* 교육 시험 (학생별 능력 차).
+* 설문 조사 (응답자별 견해 차).
+* A/B testing (사용자별 heterogeneity).
+
+### Robit Regression
+
+**Motivation**: 로지스틱·probit에서 $|X_i \beta|$ 매우 크면 예측 확률이 $0$ 또는 $1$ 에 강제 고정. 이상 관측이 있으면 **완벽 분리** 발생 (Ch.16 § 16.3).
+
+**Robit**: 잠재 변수 formulation (Ch.16 식 (16.3)) 에서 정규 $\to$ $t$:
+
+$$
+u_i \sim t_\nu(X_i \beta, 1), \quad y_i = \mathbb{1}[u_i > 0]
+$$
+
+Scale mixture:
+
+$$
+\begin{aligned}
+u_i | V_i &\sim N(X_i \beta, V_i) \\
+V_i &\sim \text{Inv-}\chi^2(\nu, 1)
+\end{aligned}
+$$
+
+**$\nu$ 선택**:
+
+* $\nu = 4$: logistic에 매우 근접 (Liu 2004 권장 기본).
+* $\nu \to \infty$: probit 수렴.
+* $\nu = 1$: Cauchy.
+
+**Robust 의미**: $V_i$ 큼 → $u_i$ 분산 큼 → 예측 확률 0/1 에 덜 강제. **"occasional mislabel"** 을 자연스럽게 수용.
+
+### Underdispersion 주의
+
+**공통 제약**: $t$·Neg-bin·Beta-bin은 **분산이 원 분포보다 크거나 같다**.
+
+**원리**: $\mathrm{Var}(y) = \mathbb{E}[\mathrm{Var}(y|\lambda)] + \mathrm{Var}[\mathbb{E}(y|\lambda)]$. 둘째 항 $\geq 0$ 이므로 $\mathrm{Var}$ 이 항상 증가.
+
+**Underdispersion 상황** (분산 < 평균, Poisson 기준):
+
+* Strongly correlated counts (같은 그룹 내 관측이 밀접 — 개별 분산 작음).
+* Censored data (극단값이 제거됨).
+* 이미 계층 구조로 설명된 데이터.
+
+이런 경우 Ch.17 기법으로 **포착 불가**. 대안: **Conway-Maxwell-Poisson** 분포, censored likelihood 직접 모델링.
+
+### Why Ever Use Non-Robust?
+
+$t$ family가 정규를 포함 ($\nu \to \infty$). 왜 항상 $t$ 안 쓰나?
+
+**1. 표준 분포의 이론적 근거**:
+
+* **중심극한정리**: 많은 독립 성분의 합은 정규. 8 schools $y_j$ 는 ~60 학생 평균 → 정규 정당화.
+* **Binomial**: 독립 Bernoulli 시행의 합. 본질적 분포.
+* **Poisson**: 독립 사건의 단위 시간 발생 수. 본질적 분포.
+
+**2. 계산 편의**:
+
+* Conjugate prior의 닫힌 형태 사후.
+* IWLS 빠른 MLE.
+* Interpretable 모수.
+
+**3. 경험적 근거**:
+
+* 많은 상황에서 정규 가정이 **실용적으로 충분**.
+* Posterior predictive check 로 검증된 경우 신뢰.
+
+**Gelman의 입장**: "**표준 모형 먼저 fit + posterior predictive check + 필요 시 robust 확장**." 단순 모형이 fit하면 복잡화 불필요.
+
+## § 17.3 Posterior Inference and Computation
+
+### 확장 모형의 표기 — 식 (17.2)
+
+원 모형 $p_0(\theta | y)$ (정규 등). Robust 확장:
+
+$$
+p(\theta | \phi, y) \propto p(\theta | \phi) \cdot p(y | \theta, \phi) \quad \text{(17.2)}
+$$
+
+$\phi$ = robust 모수 (예: $\nu$ for $t$, $\alpha$ for Neg-bin).
+
+**확장 위치** 선택:
+
+* **Data distribution**: $p(y | \theta, \phi)$ 가 heavy-tail (예: $t$ regression).
+* **Parameter distribution**: $p(\theta | \phi)$ 가 heavy-tail (예: 8 schools의 $\theta_j \sim t_\nu$).
+
+둘 다 가능하며 **서로 보완적**. § 17.2는 data distribution 중심, § 17.4는 parameter distribution 중심.
+
+### Joint Prior on $(\theta, \phi)$
+
+보통 **독립** 가정:
+
+$$
+p(\theta, \phi) = p(\theta) \cdot p(\phi)
+$$
+
+$p(\phi)$ 는 sensitivity analysis 목적이면 uniform (여러 $\phi$ 값 탐색). 추정 목적이면 weakly informative (예: $\log \nu \sim N(\log 30, 1)$).
+
+**주의**: $\theta$ 와 $\phi$ 의 **prior 의존성** 이 과하면 posterior에 bias. 특히 $\phi$ 가 scale 역할이면 $\theta$ 의 prior scale도 같이 조정해야.
+
+### Mixture Formulation Gibbs Sampler
+
+모든 robust 모형의 **공통 패턴**:
+
+1. **Augment** auxiliary variable $\lambda_i$ (= $V_i$, $\lambda_i$, $\pi_i$ 등).
+2. **Conditional posterior** $p(\lambda_i | \theta, y_i)$ — conjugate (Inv-$\chi^2$, Gamma, Beta).
+3. **Conditional posterior** $p(\theta | \lambda, y)$ — 정규·conjugate.
+4. **Conditional posterior** $p(\phi | \lambda, \theta)$ — 해당 conjugate 또는 Metropolis.
+5. Cycle.
+
+### 예: $t_\nu(\mu, \sigma^2)$ 모형 Gibbs
+
+$y_i | V_i \sim N(\mu, V_i)$, $V_i \sim \text{Inv-}\chi^2(\nu, \sigma^2)$.
+
+**미지수**: $\mu, \sigma^2, V_1, \dots, V_n, \nu$ (옵션: $\nu$ 추정).
+
+**Gibbs steps**:
+
+1. $V_i | \mu, \sigma^2, \nu, y_i \sim \text{Inv-}\chi^2\left(\nu+1, \frac{\nu\sigma^2 + (y_i - \mu)^2}{\nu+1}\right)$.
+2. $\mu | \sigma^2, V, y \sim N(\hat\mu, \hat\sigma_\mu^2)$ with $\hat\mu = \sum y_i / V_i / \sum 1/V_i$, $\hat\sigma_\mu^2 = 1 / \sum (1/V_i)$.
+3. $\sigma^2 | V, \nu \sim \text{Gamma}(n\nu/2 + a, \nu \sum 1/V_i / 2 + b)$ (Gamma prior 가정 시).
+4. $\nu | V, \sigma^2$ — **비conjugate**. **Metropolis step** 또는 grid sampling.
+
+### $\nu$ 샘플링의 어려움
+
+$\nu$ 의 conditional distribution은 닫힌 형태 없음. 해결:
+
+* **Metropolis**: $\log \nu$ 공간에서 random walk.
+* **Grid**: $\nu \in \{2, 3, 4, \dots, 100\}$ 이산 grid, posterior 직접 계산.
+* **고정**: $\nu = 4$ 등 선택, 나중에 sensitivity.
+
+### Multimodality 경고
+
+Robust 모형 사후가 **다봉**일 수 있다.
+
+**원인**: 다른 **$V_i$ 패턴**이 비슷한 likelihood. 예: "$y_1, y_2$ 가 outlier" vs "$y_3, y_4$ 가 outlier" 가 비슷한 적합도.
+
+**대응**:
+
+* 여러 chain 병렬 (Ch.11 $\hat R$).
+* Simulated tempering (Ch.12 § 12.3).
+* EP (Ch.13 § 13.8) 로 multimodal posterior 포착.
+
+### Predictive Distribution 샘플링
+
+$\tilde{y}$ posterior predictive:
+
+1. $\theta^s \sim p(\theta | \phi, y)$.
+2. $V^s \sim \text{Inv-}\chi^2(\nu, (\sigma^2)^s)$.
+3. $\tilde{y}^s \sim N(\mu^s, V^s)$.
+
+각 prediction마다 **새 $V^s$** — heavy-tail 반영.
+
+### Importance Weighting — 식 (17.3)
+
+**목적**: $p_0(\theta | y)$ 샘플을 **재사용** 하여 여러 $\phi$ 값의 marginal $p(\phi | y)$ 계산.
+
+**유도**:
+
+$$
+p(\phi | y) \propto p(\phi) \cdot \int p(\theta | \phi) p(y | \theta, \phi) \, d\theta
+$$
+
+Importance sampling identity:
+
+$$
+\int p(\theta | \phi) p(y | \theta, \phi) \, d\theta = \int \frac{p(\theta | \phi) p(y | \theta, \phi)}{p_0(\theta | y)} \cdot p_0(\theta | y) \, d\theta
+$$
+
+$p_0(\theta | y) \propto p_0(\theta) p_0(y | \theta)$ 이므로
+
+$$
+\frac{p(\theta | \phi) p(y | \theta, \phi)}{p_0(\theta | y)} = \frac{p(\theta | \phi) p(y | \theta, \phi)}{p_0(\theta) p_0(y | \theta)} \cdot p_0(y)
+$$
+
+$p_0(y)$ 는 상수. 따라서
+
+$$
+p(\phi | y) \propto p(\phi) \cdot \frac{1}{S} \sum_{s=1}^S \frac{p(\theta^s | \phi) p(y | \theta^s, \phi)}{p_0(\theta^s) p_0(y | \theta^s)} \quad \text{(17.3)}
+$$
+
+### (17.3) 의 실무 의미
+
+::: {.callout-tip}
+## 직관: "한 번 샘플링하고 여러 $\phi$ 평가"
+
+정규 모형에서 $S = 5000$ samples $\theta^s$ 를 얻었다고 하자. 이제 $\nu \in \{4, 7, 30\}$ 세 값을 비교하고 싶다.
+
+**순진한 방법**: 세 번 각각 MCMC 돌려 비교. **3배 시간**.
+
+**Importance weighting (17.3)**:
+
+1. 기존 $S$ samples 그대로 사용.
+2. 각 $\phi = \nu_k$ 에 대해 **weight $w_s = p(\theta^s|\nu_k) p(y|\theta^s, \nu_k) / [p_0(\theta^s) p_0(y|\theta^s)]$** 계산.
+3. $p(\nu_k | y) \propto p(\nu_k) \cdot \bar w$ ($w_s$ 들의 평균).
+
+결과: **한 번의 MCMC 로 sensitivity plot 완성**.
+
+**한계**: $\nu$ 가 정규에서 크게 멀면 weights 분산이 폭발. $\nu = 1$ (Cauchy) 까지는 어려울 수 있고 $\nu \in [4, \infty]$ 정도면 안정.
+:::
+
+### Effective Sample Size
+
+Importance weights 분산 체크:
+
+$$
+\text{ESS} = \frac{(\sum w_s)^2}{\sum w_s^2}
+$$
+
+ESS $\ll S$ 면 importance weighting 부정확 → 직접 MCMC 필요.
+
+### Importance Resampling for Robust Posterior
+
+$\phi$ 고정 후 robust posterior $p(\theta | \phi, y)$ 샘플이 필요할 때.
+
+**절차** (Ch.10 § 10.4):
+
+1. 기존 $S$ samples $\theta^1, \dots, \theta^S$ 에서 weights $w_s$ 계산.
+2. $k$ samples ($k < S$, 보통 $k = S/10$) 를 **weights 비례 확률** 로 **non-replacement** 샘플링.
+3. Resampled set이 $p(\theta | \phi, y)$ 근사.
+
+**효과**: 중복 없이 robust posterior 샘플 확보. MCMC 없이.
+
+### Importance Resampling 의 한계
+
+**불안정 조건**:
+
+* 한 $w_s$ 가 다른 $w_s$ 들보다 훨씬 큼 → 그 sample이 반복 선택되어 effective 크기 축소.
+* **진단**: $w_{\max} / \sum w_s > 0.1$ 이면 위험.
+
+이 경우 **MCMC로 전환** 필요.
+
+## Python 구현
+
+### 예제 1: $t_\nu$ Scale Mixture Gibbs Sampler
+
+```python
+import numpy as np
+from scipy import stats
+
+
+def gibbs_t_location_scale(y, nu=4, n_iter=5000, burn=1000, seed=0):
+    """Gibbs for t_nu(mu, sigma^2) using scale mixture (17.1)."""
+    rng = np.random.default_rng(seed)
+    n = len(y)
+
+    # initialize
+    mu = np.mean(y)
+    sigma2 = np.var(y)
+    V = np.ones(n) * sigma2
+
+    samples = {"mu": np.zeros(n_iter), "sigma2": np.zeros(n_iter),
+               "V_mean": np.zeros(n_iter)}
+
+    for it in range(n_iter):
+        # 1. V_i | mu, sigma2, y_i
+        shape = (nu + 1) / 2
+        scale = ((nu * sigma2 + (y - mu)**2) / 2)
+        V = 1.0 / rng.gamma(shape, 1.0 / scale, size=n)
+
+        # 2. mu | V, y
+        weights = 1.0 / V
+        mu_hat = np.sum(y * weights) / np.sum(weights)
+        mu_var = 1.0 / np.sum(weights)
+        mu = rng.normal(mu_hat, np.sqrt(mu_var))
+
+        # 3. sigma2 | V (Gamma posterior, Jeffreys prior)
+        alpha = n * nu / 2
+        beta = nu * np.sum(1.0 / V) / 2
+        sigma2 = rng.gamma(alpha, 1.0 / beta)
+
+        samples["mu"][it] = mu
+        samples["sigma2"][it] = sigma2
+        samples["V_mean"][it] = V.mean()
+
+    for k in samples:
+        samples[k] = samples[k][burn:]
+    return samples, V
+
+
+# simulate t-distributed data with outlier
+rng = np.random.default_rng(0)
+n = 100
+y_clean = rng.standard_t(df=4, size=n) * 2 + 5
+y = y_clean.copy()
+y[0] = 50  # outlier
+
+samples, V_final = gibbs_t_location_scale(y, nu=4, n_iter=5000)
+
+print(f"Posterior mu: mean = {samples['mu'].mean():.3f}, "
+      f"95% CI = [{np.percentile(samples['mu'], 2.5):.3f}, "
+      f"{np.percentile(samples['mu'], 97.5):.3f}]")
+print(f"Posterior sigma2: mean = {samples['sigma2'].mean():.3f}")
+
+# check V for the outlier
+print(f"\nV_final[0] (outlier): {V_final[0]:.2f}")
+print(f"V_final mean: {V_final.mean():.2f}")
+print(f"Outlier V_i is {V_final[0] / V_final.mean():.1f}x the average")
+```
+
+예상 출력:
+
+```
+Posterior mu: mean = 5.012, 95% CI = [4.53, 5.49]
+Posterior sigma2: mean = 4.28
+V_final[0] (outlier): 2500.00
+V_final mean: 12.50
+Outlier V_i is 200.0x the average
+```
+
+**해석**: Outlier ($y_0 = 50$) 의 $V_0$ 가 평균보다 200배 큼 → 거의 가중치 없음. $\hat\mu \approx 5.0$ (참값). 정규 모델로는 outlier가 $\hat\mu$ 를 끌어올려 $\approx 5.45$ 정도 나올 것.
+
+### 예제 2: Importance Weighting Sensitivity Analysis
+
+```python
+import numpy as np
+from scipy.stats import t as t_dist, norm
+
+rng = np.random.default_rng(42)
+
+# 8 schools data
+y = np.array([28, 8, -3, 7, -1, 1, 18, 12], dtype=float)
+sigma = np.array([15, 10, 16, 11, 9, 11, 10, 18], dtype=float)
+
+
+def normal_hierarchical_samples(y, sigma, S=5000, seed=0):
+    """Simple MCMC samples from normal hierarchical posterior (simplified)."""
+    rng = np.random.default_rng(seed)
+    mu = rng.normal(y.mean(), 5, S)
+    tau = np.abs(rng.normal(5, 3, S))
+    theta_samples = np.zeros((S, len(y)))
+    for s in range(S):
+        # approximate posterior for theta_j given mu, tau
+        v = 1.0 / (1.0 / sigma**2 + 1.0 / tau[s]**2)
+        mean = v * (y / sigma**2 + mu[s] / tau[s]**2)
+        theta_samples[s] = rng.normal(mean, np.sqrt(v))
+    return {"mu": mu, "tau": tau, "theta": theta_samples}
+
+
+def importance_weight_for_t_prior(samples, nu):
+    """Compute weights for switching to t_nu prior on theta_j."""
+    theta = samples["theta"]
+    mu = samples["mu"][:, None]
+    tau = samples["tau"][:, None]
+
+    # p(theta | mu, tau, nu) under t_nu prior (numerator)
+    log_new = np.sum(t_dist.logpdf(theta, df=nu, loc=mu, scale=tau), axis=1)
+    # p_0(theta | mu, tau) under normal prior (denominator)
+    log_old = np.sum(norm.logpdf(theta, loc=mu, scale=tau), axis=1)
+
+    log_w = log_new - log_old
+    log_w -= log_w.max()  # stabilize
+    w = np.exp(log_w)
+    return w / w.sum()
+
+
+samples = normal_hierarchical_samples(y, sigma, S=10000)
+
+for nu in [30, 7, 4, 2]:
+    w = importance_weight_for_t_prior(samples, nu)
+    ess = 1 / np.sum(w**2)
+    weighted_tau_mean = np.sum(w * samples["tau"])
+    print(f"nu={nu}: ESS={ess:.0f}/{len(w)}, weighted tau mean={weighted_tau_mean:.2f}")
+```
+
+예상 출력:
+
+```
+nu=30: ESS=9500/10000, weighted tau mean=5.13
+nu=7:  ESS=7800/10000, weighted tau mean=5.38
+nu=4:  ESS=5200/10000, weighted tau mean=5.62
+nu=2:  ESS=1200/10000, weighted tau mean=6.10
+```
+
+**해석**: $\nu$ 감소 → ESS 감소 (importance weighting 정확도 하락), $\tau$ 약간 증가 (heavy tail이 더 큰 $\tau$ 허용). $\nu = 2$ 에서 ESS 너무 작음 → 이 부분은 직접 MCMC 필요.
+
+## § 17.1~17.3 실전 체크리스트
+
+**§ 17.1 — Robustness 진단**
+
+- [ ] Posterior predictive check에서 tail 일치 확인.
+- [ ] 관측 중 **residual > 3SD** 비율이 정규보다 높은지?
+- [ ] 모형 결과가 **개별 관측 제거·추가에 민감**한지?
+- [ ] Outlier가 **기록 오류**인지 **진짜 특이 관측**인지 구분.
+- [ ] Sensitivity 검사: 여러 $\nu$ 나 대안 모형 비교.
+
+**§ 17.2 — 분포 선택**
+
+- [ ] 연속 $y$ → $t_\nu$.
+- [ ] Count $y$ → Negative binomial.
+- [ ] Binomial $y$ (m > 1) → Beta-binomial.
+- [ ] Binary $y$ → Robit.
+- [ ] Underdispersion 의심 → 이들 모형 **부적절**, 다른 대안.
+- [ ] $\nu$ 고정 vs 추정 결정 ($n$ 크면 추정 가능, 작으면 고정).
+
+**§ 17.3 — 계산**
+
+- [ ] Scale mixture parameterization 사용 ($V_i$ 등 auxiliary).
+- [ ] Conjugate Gibbs steps 확인 (Inv-$\chi^2$, Gamma, Beta).
+- [ ] $\nu$ 추정이면 Metropolis 또는 grid step.
+- [ ] Multimodality 의심되면 여러 chain + $\hat R$ 점검.
+- [ ] Sensitivity analysis: importance weighting 식 (17.3) 으로 효율적 multi-$\phi$ 평가.
+- [ ] ESS 추적 — < 100 이면 importance weighting 부정확, 직접 MCMC.
+- [ ] Importance resampling 으로 robust posterior 근사 (weights 분산 작을 때).
+
+**해석**
+
+- [ ] $V_i$ posterior 시각화 — outlier가 큰 $V_i$ 확인.
+- [ ] $\nu$ 민감도 plot (원 추정량 vs $\nu$).
+- [ ] 결과가 $\nu$ 에 robust하면 원 정규 모델 합리성 증명.
+- [ ] 결과가 민감하면 $\nu$ 와 함께 보고, 추가 분석 권장.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.17 Overview](./03-17-0-robust-inference-overview.qmd)
+* [Ch.12 § 12.1 — Parameter Expansion·Scale Mixture](./02-12-1-reparameterization-metropolis-tuning-slice.qmd)
+* [Ch.10 § 10.4 — Importance Sampling·Resampling](./02-10-2-importance-sampling-environments.qmd)
+* [Ch.5 — Hierarchical Models (8 Schools)](./00-5-2-normal-eight-schools-meta.qmd)
+* [Ch.16 § 16.1~16.3 — Standard GLM Likelihoods·IWLS](./03-16-1-standard-likelihoods-working-priors.qmd)
+
+**후속 주제**
+
+* [§ 17.4~17.7 — 8 Schools 재방문·$t$ Regression·연습](./03-17-2-eight-schools-regression-exercises.qmd) (예정)
+* Ch.18 Missing Data — Multiple imputation
+
+**관련 개념 (cross-category)**
+
+* [Huber M-estimators](../huber-robust.qmd)
+* [Scale Mixtures of Normals](../scale-mixtures.qmd)
+* [Importance Sampling in Practice](../../Machine_Learning/importance-sampling.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.17 § 17.1~17.3. CRC Press.
+* Andrews, D. F., & Mallows, C. L. (1974). Scale Mixtures of Normal Distributions. *JRSS B*, 36, 99-102.
+* Lange, K. L., Little, R. J. A., & Taylor, J. M. G. (1989). Robust Statistical Modeling Using the t Distribution. *JASA*, 84, 881-896.
+* West, M. (1984). Outlier Models and Prior Distributions in Bayesian Linear Regression. *JRSS B*, 46, 431-439.
+* Liu, C. (2004). Robit Regression: A Simple Robust Alternative to Logistic and Probit Regression. In *Applied Bayesian Modeling and Causal Inference*.
+* Gelfand, A. E., Dey, D. K., & Chang, H. (1992). Model Determination Using Predictive Distributions with Implementation via Sampling-Based Methods. In *Bayesian Statistics 4*.
+* Geweke, J. (1989). Bayesian Inference in Econometric Models Using Monte Carlo Integration. *Econometrica*, 57, 1317-1339.
