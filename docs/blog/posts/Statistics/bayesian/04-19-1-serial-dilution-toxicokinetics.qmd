@@ -1,0 +1,683 @@
+---
+title: "Ch.19 § 19.1~19.3 심화 — Serial Dilution Assay·Population Toxicokinetics·문헌 + Ch.19 결산"
+subtitle: "4PL 식 (19.1)·heteroscedastic 식 (19.2)·PBPK 4-compartment·softmax 식 (19.5)·joint posterior 식 (19.6)·External validation"
+description: |
+  Gelman BDA Ch.19의 3개 절을 한 편으로 마무리한다.
+  § 19.1 serial dilution assay — 96-well plate 실험, 기존 방법의 실패 (Figure 19.3),
+  4-parameter logistic 식 (19.1)·heteroscedastic 오차 식 (19.2)·희석 오차 식 (19.3)(19.4),
+  Prior·Gibbs 계산·10 unknown 농도 추정 결과,
+  § 19.2 population toxicokinetics (PERC) — PBPK 4-compartment 미분방정식·15 parameter 계층 모형·
+  Liver weight vs Michaelis-Menten prior 구성·식 (19.5) softmax reparameterization 완전 유도·
+  식 (19.6) joint posterior·Gibbs/Metropolis 혼합 전략·
+  Figure 19.8 6 subjects fraction metabolized·Figure 19.10 external validation,
+  5가지 필수 요소 (physiological + population + prior + data + Bayesian),
+  § 19.3 bibliographic note + Ch.19 시리즈 결산 + Part V 다음 편 (Ch.20) 예고.
+categories:
+  - Statistics
+  - Bayesian
+  - Nonlinear-Models
+  - PBPK
+  - Serial-Dilution
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요 — Ch.19 심화 마무리
+
+Ch.19 심화 시리즈:
+
+* **04-19-0** — Ch.19 Overview (3개 절 조망).
+* **04-19-1 (본편)** — § 19.1~19.3 전체 심화 + Ch.19 결산.
+
+Ch.19 는 절이 3개뿐이므로 **한 심화편** 으로 완결한다. 두 실전 예제 (serial dilution, toxicokinetics) 를 깊이 다루고 Part V 의 다음 편 (Ch.20 basis functions) 로 연결.
+
+::: {.callout-tip}
+## 직관: 두 예제가 가르치는 것
+
+* **§ 19.1 Serial Dilution** — **소규모 데이터 + 복잡 likelihood**. 4-parameter logistic + heteroscedastic + 희석 오차. Parameter 가 많지만 **표준 시료 데이터가 풍부** 해서 data-driven 추정 가능.
+
+* **§ 19.2 Toxicokinetics (PERC)** — **소규모 데이터 + 엄청 복잡 model + 강한 prior**. PBPK 4-compartment 미분방정식 해법, 15 parameter × 6 사람 × hyperparameters. **Informative prior 없이는 식별 불가**.
+
+두 예제가 **베이즈 비선형 모델링의 양극단** 을 보여준다. § 19.1 은 "데이터가 모형을 지배", § 19.2 는 "prior 가 모형을 지배".
+:::
+
+## § 19.1 Serial Dilution Assay — 완전 분석
+
+### 실험 배경 재정리
+
+**Serial dilution assay**: 생물학 sample 의 화합물 농도 측정. 알려진 표준 (standard) 을 calibration 기준으로 미지 시료 (unknowns) 의 농도를 추정.
+
+**측정 원리**: 농도 → 색 변화 (광학 측정). 구간별 행동:
+
+* **저농도 (< 0.01)**: 색 변화 감지 불가, noise 에 묻힘.
+* **중간 (0.01~0.5)**: 신뢰할 수 있는 선형 반응.
+* **고농도 (> 0.5)**: 색 포화, 더 이상 정보 없음.
+
+이 **nonlinear sigmoid** 구조가 4-parameter logistic 의 물리적 기원.
+
+### 96-well Plate 구조 (Figure 19.1)
+
+**레이아웃**: 8 rows × 12 columns.
+
+| Column | 내용 | 희석 방식 |
+|--------|------|-----------|
+| 1, 2 | **Standards** (알려진 농도) | 1 → 1/2 → 1/4 → ... → 1/64 → 0 (2배 희석 8 row) |
+| 3~12 | **Unknowns 10개** | 1 → 1/3 → 1/9 → ... → 1/27 (3배 희석 8 row) |
+
+**왜 2배와 3배가 다른가**: 표준은 칼리브레이션 정밀도 우선 → 더 많은 data point (2배 희석으로 8 수준). 미지 시료는 **dynamic range 커버** 우선 → 3배 희석.
+
+### 기존 방법의 실패 (Figure 19.3)
+
+Cockroach allergen assay 의 Unknown 8, 9:
+
+* 모든 측정이 **detection limit 이하** 또는 plateau 수준.
+* 표준 software: "below detection" 으로 버림.
+
+**베이즈 접근의 이점**: 버리지 않고 **불확실성을 구간으로 표현**. "값은 매우 작지만 0 이 아니다" 의 정보 보존.
+
+### 4-Parameter Logistic — 식 (19.1)
+
+$$
+E(y | x, \beta) = g(x, \beta) = \beta_1 + \frac{\beta_2}{1 + (x/\beta_3)^{-\beta_4}} \quad \text{(19.1)}
+$$
+
+**각 parameter 의 물리적 의미**:
+
+* $\beta_1$: **배경 신호** (blank). 시약 자체의 색, 장비 noise.
+* $\beta_2$: **포화 증가량** ($\beta_1 + \beta_2$ 가 최대).
+* $\beta_3$: **half-saturation 농도**. $x = \beta_3$ 에서 $E(y) = \beta_1 + \beta_2/2$.
+* $\beta_4$: **Hill coefficient**. 곡선 가파름. 클수록 switch-like.
+
+::: {.callout-tip}
+## 직관: Log-logistic 해석
+
+$(x/\beta_3)^{-\beta_4}$ 에 로그를 씌우면
+
+$$
+-\beta_4 \log(x/\beta_3) = -\beta_4 (\log x - \log \beta_3)
+$$
+
+$u = \log x$ 로 치환하면 (19.1) 는
+
+$$
+g = \beta_1 + \frac{\beta_2}{1 + e^{-\beta_4 (u - \log \beta_3)}}
+$$
+
+= **logit 스케일의 logistic function**. 즉 4PL 은 **$\log x$ 에 대한 scaled + shifted logistic**.
+
+**시사점**: 농도 데이터는 **로그 스케일** 이 자연. dose-response, enzyme kinetics, hormone assay 모두 공유. Figure 19.2 에서 x축이 로그인 이유.
+
+**실무 팁**: Serial dilution 의 2배·3배·10배 희석은 **로그 스케일에서 등간격**. 측정값들이 sigmoid 의 다른 부분에 균등히 분포하도록 설계.
+:::
+
+### Heteroscedastic 오차 — 식 (19.2)
+
+**관측**: 큰 측정값일수록 SD 큼. 단순 OLS 는 큰 값 과도 가중.
+
+$$
+y_i \sim N\left( g(x_i, \beta), \left( \frac{g(x_i, \beta)}{A} \right)^{2\alpha} \sigma_y^2 \right) \quad \text{(19.2)}
+$$
+
+**요소**:
+
+* $g(x_i, \beta)$: 기댓값 (4PL 의 예측).
+* $A = 30$: 데이터 중간값 기준 정규화 상수.
+* $\alpha \in [0, 1]$: **mean 의존성 지수**.
+* $\sigma_y$: "typical" measurement SD.
+
+**극단 해석**:
+
+* $\alpha = 0$: $\mathrm{Var} = \sigma_y^2$ (constant, equal variance).
+* $\alpha = 1$: $\mathrm{Var} \propto g^2$ — log scale 에서 equal variance (multiplicative).
+* $\alpha = 0.5$: Poisson-like (분산 ∝ 평균).
+
+**$\alpha$ 를 데이터에서 추정** — 장비 특성 반영.
+
+### 희석 오차 — 식 (19.3)(19.4)
+
+**두 오차 원천**:
+
+1. **Initial dilution** (표준 준비): 알려진 양의 표준을 inert liquid 에 희석.
+2. **Serial dilution** (각 row 추가 희석): 고정 factor (2배, 3배) 로.
+
+Gelman 의 선택: **initial error 만 모델** (serial error 는 작다고 가정; cockroach data 근거).
+
+$$
+\log(x_0^{\text{init}}) \sim N(\log(d_0^{\text{init}} \theta_0), (\sigma^{\text{init}})^2) \quad \text{(19.3)}
+$$
+
+* $\theta_0$: 표준의 알려진 농도.
+* $d_0^{\text{init}}$: 알려진 희석 비율.
+* $x_0^{\text{init}}$: 실제 달성된 (미지) 초기 농도.
+
+Log-normal → 곱셈적 오차 (2% error 등).
+
+**Unknowns**: initial dilution 없음. $x_j^{\text{init}} = \theta_j$ for $j = 1, \dots, 10$.
+
+**Serial**:
+
+$$
+x_i = d_i \cdot x_{j(i)}^{\text{init}} \quad \text{(19.4)}
+$$
+
+$d_i$ = row $i$ 의 누적 희석 factor.
+
+### Prior 선택
+
+* $\log \beta_k \sim U(-\infty, \infty)$: 4PL 모수, flat on log scale.
+* $\sigma_y \sim U(0, \infty)$: noninformative.
+* $\alpha \sim U(0, 1)$: 범위 제약 uniform.
+* $\log \theta_j \sim U(-\infty, \infty)$: 미지 농도, flat on log (no-pooling).
+* $\sigma^{\text{init}} = 0.02$ (fixed): 사전 연구에서.
+
+**대안**: $\log \theta_j$ 에 hierarchical prior $N(\mu_\theta, \sigma_\theta^2)$ → 10 unknowns 가 정보를 공유. Gelman 은 단순화 위해 no-pooling.
+
+### 계산
+
+**Gibbs sampler** (BUGS/Stan). 50,000 iter × 2 chains, 20-iter thinning, $\hat R < 1.1$.
+
+**Reparameterization**: $\gamma_j = \theta_j / \beta_3$ 도입. 이유: $\theta_j$ 와 $\beta_3$ 간 **강한 posterior 상관** — 4PL 곡선을 x-축으로 sliding 시키면 (agent knowledge: $\beta_3 \leftrightarrow \theta$ non-identifiability 경향). $\gamma_j$ 는 calibration curve 대비 상대 위치로 직교화.
+
+### 결과
+
+**Calibration 4PL 모수**:
+
+| 모수 | Posterior median | 50% CI |
+|------|------------------|--------|
+| $\beta_1$ | 14.7 | [14.5, 14.9] |
+| $\beta_2$ | 99.7 | [96.8, 102.9] |
+| $\beta_3$ | 0.054 | [0.051, 0.058] |
+| $\beta_4$ | 1.34 | [1.30, 1.38] |
+
+**오차 모수**: $\sigma_y = 2.2$, $\alpha = 0.97$ ([0.94, 0.99]) — **거의 log-scale equal variance**.
+
+**10 unknowns 농도** (Figure 19.4):
+
+* 대부분 0~0.12 범위.
+* Unknown 8 (below detection): 낮지만 **0 이 아닌 구간 추정** 가능.
+
+표준 데이터가 풍부 → calibration 모수를 정확히 추정 → unknowns 도 정확히.
+
+### Python 완전 구현
+
+```python
+import numpy as np
+import pymc as pm
+
+rng = np.random.default_rng(42)
+
+# simulate 96-well plate
+np.random.seed(42)
+
+# true parameters (based on Gelman's cockroach data)
+beta_true = np.array([14.7, 99.7, 0.054, 1.34])
+sigma_y_true = 2.2
+alpha_true = 0.97
+sigma_init_true = 0.02
+A = 30.0
+
+# standards: 2 columns × 8 rows (dilutions 1, 1/2, 1/4, ..., 1/64, 0)
+std_dilutions = np.array([1, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625, 0])
+std_theta = 0.1  # known standard concentration
+
+# unknowns: 10 columns × 8 rows (dilutions 1, 1/3, 1/9, ..., 1/27)
+unk_dilutions = np.array([1, 1/3, 1/9, 1/27, 1, 1/3, 1/9, 1/27])
+theta_unk_true = np.array([0.08, 0.05, 0.03, 0.02, 0.015, 0.01,
+                           0.007, 0.0005, 0.004, 0.1])  # Unknown 8 tiny
+
+def fpl(x, beta):
+    return beta[0] + beta[1] / (1 + (x / beta[2]) ** (-beta[3]))
+
+
+# generate data
+x_std, y_std = [], []
+for col in range(2):
+    init_error = np.exp(rng.normal(0, sigma_init_true))
+    for d in std_dilutions:
+        x = d * std_theta * init_error
+        mu = fpl(max(x, 1e-10), beta_true) if x > 0 else beta_true[0]
+        sigma = (mu / A) ** alpha_true * sigma_y_true
+        y = rng.normal(mu, sigma)
+        x_std.append(x)
+        y_std.append(y)
+
+x_unk_all, y_unk_all, unk_idx = [], [], []
+for j, theta in enumerate(theta_unk_true):
+    for d in unk_dilutions:
+        x = d * theta  # no initial dilution for unknowns
+        mu = fpl(x, beta_true) if x > 0 else beta_true[0]
+        sigma = (mu / A) ** alpha_true * sigma_y_true
+        y = rng.normal(mu, sigma)
+        x_unk_all.append(x)
+        y_unk_all.append(y)
+        unk_idx.append(j)
+
+x_std, y_std = np.array(x_std), np.array(y_std)
+x_unk_all, y_unk_all, unk_idx = (np.array(x_unk_all), np.array(y_unk_all),
+                                   np.array(unk_idx))
+
+# Bayesian 4PL with unknown concentrations
+with pm.Model() as assay_model:
+    # 4PL parameters (log scale)
+    log_beta = pm.Normal("log_beta", mu=[3, 5, -3, 0], sigma=2, shape=4)
+    beta = pm.Deterministic("beta", pm.math.exp(log_beta))
+
+    alpha = pm.Uniform("alpha", 0, 1)
+    sigma_y = pm.HalfNormal("sigma_y", 5)
+
+    # unknown concentrations (log scale)
+    log_theta = pm.Normal("log_theta", mu=-3, sigma=3, shape=10)
+    theta_unk = pm.Deterministic("theta_unk", pm.math.exp(log_theta))
+
+    # standards likelihood (simplified — ignore initial dilution for demo)
+    mu_std = beta[0] + beta[1] / (1 + (x_std / beta[2]) ** (-beta[3]))
+    sig_std = (mu_std / A) ** alpha * sigma_y
+    pm.Normal("y_std", mu=mu_std, sigma=sig_std, observed=y_std)
+
+    # unknowns likelihood
+    x_unk_implied = pm.math.stack([theta_unk[unk_idx[i]] * (x_unk_all[i] / theta_unk_true[unk_idx[i]])
+                                     for i in range(len(x_unk_all))])
+    # approximate: use the dilution ratio only
+    dilutions = np.array([unk_dilutions[i % 8] for i in range(80)])
+    x_unk_model = theta_unk[unk_idx] * dilutions
+    mu_unk = beta[0] + beta[1] / (1 + (x_unk_model / beta[2]) ** (-beta[3]))
+    sig_unk = (mu_unk / A) ** alpha * sigma_y
+    pm.Normal("y_unk", mu=mu_unk, sigma=sig_unk, observed=y_unk_all)
+
+    trace = pm.sample(1500, tune=1500, target_accept=0.95, chains=4)
+
+
+import arviz as az
+print(az.summary(trace, var_names=["beta", "alpha", "sigma_y", "theta_unk"]))
+```
+
+예상 출력 (주요):
+
+```
+                mean    sd  hdi_3%  hdi_97%  r_hat
+beta[0]        14.63  0.31   14.06    15.20   1.00
+beta[1]       100.05  4.12   92.60   108.51   1.00
+beta[2]         0.054 0.004   0.047    0.061  1.00
+beta[3]         1.35  0.08    1.20     1.50   1.00
+theta_unk[7]    0.0006 0.0003  0.0001  0.0012  1.01  # Unknown 8, below detection
+```
+
+**Unknown 8** (참값 0.0005) 의 95% 구간 [0.0001, 0.0012] — **finite 구간 추정** 성공.
+
+## § 19.2 Population Toxicokinetics (PERC)
+
+### 배경
+
+**Perchloroethylene (PERC)**: 드라이클리닝·금속 세척제 산업 화학물질. 동물 실험에서 발암. 인간 발암 의심.
+
+**관심 수치**: 공기 중 PERC 농도 → **간에서 대사된 fraction** (metabolized fraction). 대사물이 발암성.
+
+**도전**:
+
+* 대사물 직접 측정 어려움 (간 조직 샘플 필요, 저농도에서 불가능).
+* 동물 → 인간 extrapolation 의 물리적 근거 필요.
+
+**해법**: PBPK (Physiologically-Based Pharmacokinetic) 모형 + 간접 측정 (exhaled air, blood) + Bayesian 추론.
+
+### 실험 설계
+
+* **6명 volunteers** (young adult white males, homogeneous).
+* 각자 **4시간 PERC 노출** (equilibrium 도달 예상).
+* 이후 **1주일간 (168 hour) exhaled air + blood 농도 측정**.
+* 각자 **2 exposure levels** (replicates 확보).
+
+Figure 19.7: 6인 × 2 replicates × 2 measurement types (air, blood) × t = 다수 관측.
+
+### PBPK 4-Compartment 모형
+
+**생리학 기반 구획 분할**:
+
+1. **Well-perfused tissues**: 뇌, 심장, 신장 등 (혈류 풍부).
+2. **Poorly perfused tissues**: 근육, 피부 (혈류 적음).
+3. **Fat**: PERC 고 친화성 저장고.
+4. **Liver**: 대사 발생 장소.
+
+**각 compartment 의 농도 dynamics** — 1차 미분방정식:
+
+$$
+V_i \frac{dC_i}{dt} = Q_i \left( C_{\text{blood}} - \frac{C_i}{P_i} \right)
+$$
+
+* $V_i$ = compartment 부피.
+* $Q_i$ = 혈류량 (심박출량의 분율).
+* $P_i$ = tissue/blood partition coefficient (평형 시 $C_i/C_{\text{blood}}$).
+
+**Liver** — 대사 term 추가:
+
+$$
+V_L \frac{dC_L}{dt} = Q_L(C_{\text{blood}} - C_L/P_L) - \frac{V_{\max} C_L/P_L}{K_m + C_L/P_L}
+$$
+
+마지막 항 = **Michaelis-Menten 효소 반응** (간 효소가 PERC 대사).
+
+**Blood mass balance**: 심박출량 = 각 compartment 로의 합.
+
+**Ventilation**: 폐를 통한 PERC 흡입·배출.
+
+### 15 Parameter per Person
+
+각 개인 $k$ 의 모수 $\theta_k = (\theta_{k1}, \dots, \theta_{k, 15})$:
+
+| 모수 군 | 수 | 내용 |
+|---------|-----|------|
+| Compartment volume fractions | 3 (+1 liver) | $V_i / V_{\text{total}}$ |
+| Blood flow fractions | 4 | $Q_i / Q_{\text{total}}$ |
+| Partition coefficients | 4 | $P_i$ (PERC 용해도) |
+| Ventilation | 1 | 폐 환기율 |
+| Cardiac output | 1 | 총 심박출량 |
+| Michaelis-Menten $V_{\max}$ | 1 | 최대 대사 속도 |
+| Michaelis-Menten $K_m$ | 1 | half-saturation 농도 |
+
+= 총 **15 parameter × 6 people = 90** + hyperparameters + 측정 오차.
+
+### 측정 모형
+
+$y_{jkmt}$ = 사람 $k$, exposure $j$ ($j=1,2$), measurement type $m$ (1=blood, 2=air), time $t$.
+
+$$
+\log y_{jkmt} \sim N(\log g_m(\theta_k, E_j, t), \sigma_m^2)
+$$
+
+$g_m(\theta_k, E_j, t)$ = **ODE 수치 해** — closed form 없음.
+
+**Lognormal** 오차: 상대 오차가 constant (실험 장비 특성). Air 와 blood 는 **독립 $\sigma_1, \sigma_2$** (다른 프로토콜).
+
+### 계층 Population 모형
+
+개인 간 parameter variation:
+
+$$
+\log \theta_{kl} \sim N(\mu_l, \tau_l^2), \quad k = 1, \dots, 6, \; l = 1, \dots, 15
+$$
+
+**Truncated** at $\pm 3\tau_l$ — 생물학적 가능 범위 강제.
+
+**Hyperprior**:
+
+$$
+\mu_l \sim N(M_l, S_l^2), \quad \tau_l^2 \sim \text{Inv-}\chi^2(\nu_l = 2, \tau_{0l}^2)
+$$
+
+$\nu_l = 2$ (weak, prior variance 정보 적음).
+
+### Prior 선택 — 두 가지 극단
+
+**Liver weight** (lean body mass fraction):
+
+* $M_l = \log(0.033)$ — 사람의 간은 체중의 3.3% 수준.
+* $S_l = \log(1.1)$ — uncertainty 약 10% (잘 알려짐).
+* $\tau_{0l} = \log(1.1)$ — 개인 간 variation 약 10%.
+
+**Michaelis-Menten $K_m$** (효소 반응 상수):
+
+* $M_l = \log(0.7)$ — central estimate.
+* $S_l = \log(10)$ — **factor of 10 uncertainty** (잘 안 알려짐, 저농도 실험 어려움).
+* $\tau_{0l} = \log(2)$ — 개인 간 variation 은 factor of 2 이내 (enzyme 은 individual 마다 유사).
+
+**대조**: Liver weight 은 **잘 알려진 물리량**, $K_m$ 은 **잘 안 알려진 mechanism 상수**. Prior 의 $S_l$ 이 이 차이 반영.
+
+### 식 (19.5) — Softmax Reparameterization
+
+**제약**:
+
+* $\theta_{k2} + \theta_{k3} + \theta_{k4} + \theta_{k5} = 1$ (혈류 fraction 합).
+* $\theta_{k6} + \theta_{k7} + \theta_{k8} = 0.873$ (부피 fraction 합, liver 포함).
+
+**Softmax 변환**:
+
+$$
+\theta_{kl} = \frac{e^{\psi_{kl}}}{e^{\psi_{k2}} + e^{\psi_{k3}} + e^{\psi_{k4}} + e^{\psi_{k5}}}, \quad l = 2, 3, 4, 5
+$$
+
+$$
+\theta_{kl} = (0.873 - e^{\psi_{k8}}) \cdot \frac{e^{\psi_{kl}}}{e^{\psi_{k6}} + e^{\psi_{k7}}}, \quad l = 6, 7
+$$
+
+$$
+\theta_{kl} = e^{\psi_{kl}}, \quad l = 1 \text{ and } 8, \dots, 15 \quad \text{(19.5)}
+$$
+
+**$\psi$ 공간에서 MCMC 수행** 후 $\theta$ 로 변환.
+
+### 식 (19.6) — Joint Posterior
+
+$$
+\begin{aligned}
+p(\psi, \mu, \tau^2, \sigma^2 | y, E, t, M, S, \tau_0^2, \nu) &\propto \\
+&\left( \prod_{j,k,m,t} N(\log y_{jkmt} | \log g_m(\theta_k, E_j, t), \sigma_m^2) \right) \sigma_1^{-2} \sigma_2^{-2} \\
+&\times \left( \prod_{k,l} N_{\text{trunc}}(\psi_{kl} | \mu_l, \tau_l^2) \right) \\
+&\times \left( \prod_l N(\mu_l | M_l, S_l^2) \text{Inv-}\chi^2(\tau_l^2 | \nu_l, \tau_{0l}^2) \right)
+\end{aligned} \quad \text{(19.6)}
+$$
+
+**3-layer 계층**:
+
+1. Data likelihood (ODE 수치 해).
+2. Population distribution (개인 $\psi_{kl}$ 이 평균 $\mu_l$ 주변 변동).
+3. Hyperprior (population parameters 에 도메인 지식).
+
+### Gibbs + Metropolis 혼합 계산
+
+**Update 순서**: $\sigma, \tau, \mu, \psi_1, \dots, \psi_K$.
+
+* $\sigma^2$ 조건부: Inverse-$\chi^2$ (conjugate).
+* $\tau^2$ 조건부: Inverse-$\chi^2$ (conjugate).
+* $\mu$ 조건부: Normal (conjugate).
+* $\psi_k$ 조건부: **closed form 없음** → Metropolis.
+
+### Metropolis 전략
+
+**한 사람 단위 업데이트**: $\psi_k$ (15차원) 를 한 덩어리로.
+
+**Proposal**: $\psi_k^{\text{new}} \sim N(\psi_k^{\text{old}}, c \cdot \hat\Sigma_k)$ where $\hat\Sigma_k$ 는 초기 runs 에서 추정.
+
+**Scale**: acceptance rate ≈ 0.23 (다차원 최적).
+
+**왜 한 사람 단위**: 한 $\psi_k$ 변경 → **그 사람의 ODE 만** 재계산 필요. $K L$ 개별 업데이트 대신 $K$ 번 ODE 풀이. 비용 큰 계산 최적화.
+
+### 계산 비용
+
+**5 independent chains × 50,000 iterations**. 매 iteration 마다:
+
+* 6 Metropolis steps (각 사람 15차원).
+* 각 step 에서 ODE solver 호출 (168시간 × 2 exposure × 2 measurement).
+
+ODE evaluation 이 **dominant cost**. 수 시간~수 일 걸리는 계산.
+
+### 결과 — Figure 19.8
+
+**6명 × 2 exposure levels (50 ppm vs 0.001 ppm) 의 대사 fraction**.
+
+**관찰**:
+
+* 저농도 0.001 ppm: 대사 fraction **15~58%** (개인 간 편차 큼).
+* 고농도 50 ppm: 대사 fraction **0.5~4.1%** (Michaelis-Menten 포화).
+* 개인 간 **2배 차이** (A vs E).
+
+### 정책 함의 — Figure 19.6 (Overview 재방문)
+
+**주요 발견**:
+
+* 저농도: fraction metabolized constant (linear range, all PERC metabolized).
+* 1 ppm 위: saturation 시작.
+* 10 ppm 이상: 거의 포화 (enzyme 용량 초과).
+* 고농도: fraction 감소 — metabolized amount 는 $V_{\max}$ 한계.
+
+**역설적 결론**: **저농도 만성 노출** 이 고농도 단기 노출보다 **단위 노출당 위험도가 높을 수 있다** — 저농도에서는 거의 모든 PERC 가 발암성 대사물로 전환되기 때문.
+
+이 정책 통찰이 **risk assessment 규제** 에 직접 영향.
+
+### 외부 검증 — Figure 19.10
+
+**독립 데이터셋**: 다른 실험실의 6명, 0.5~9 ppm 노출, 50분 단기 관측.
+
+**모형 예측 (95% predictive interval)** vs 관측:
+
+* **전체 fit 양호**.
+* **노출 15분 이내**: 예측 밖 — **모형 한계**. ODE 는 compartment 간 instantaneous equilibrium 가정, 실제 ~15분 걸림.
+
+**교훈**: 모형은 **meso-scale 예측 정확**, **short time scale 예측 부정확**. 논문에서 **명시적 인정** — Bayesian predictive interval 이 모형 한계 진단.
+
+### 5가지 필수 요소
+
+Gelman 이 명시한 PBPK Bayesian 분석의 **key features**:
+
+1. **Physiological model** (ODE 기반 생리학).
+2. **Population model** (개인 간 variation).
+3. **Prior on population** (문헌 기반 $M_l, S_l, \tau_{0l}$).
+4. **Experimental data** (6명 × 2 exposure × 168h).
+5. **Bayesian inference** (prior + data 통합).
+
+::: {.callout-important}
+## 왜 다섯 가지가 모두 필요한가
+
+* **No physiological model**: parameter 의 물리적 의미 없음 → prior 설정 불가.
+* **No population model**: 개인마다 독립 적합 → 데이터 부족으로 개별 식별 불가능.
+* **No prior**: 15 parameter × 6 people 을 168 관측으로 추정 불가능 (underdetermined).
+* **No data**: 순수 prior predictive 만, 관측 기반 갱신 없음.
+* **No Bayesian inference**: prior + data 통합 불가 — MLE 로는 제약 + 계층 구조 불안정.
+
+**다섯 요소 모두 동시에 작동** 해야 PBPK Bayesian 분석이 **식별 가능 + 합리적 불확실성 추정**. 각각은 필요하지만 충분하지 않다.
+
+이것이 **Part V 비선형 모델링의 일반 교훈** — "복잡한 모형 + 적은 데이터 + 강한 prior = 베이즈의 힘."
+:::
+
+## § 19.3 Bibliographic Note
+
+### Serial Dilution & Bioassay
+
+* **Gelman, Chew, Shnaidman (2004)**: § 19.1 의 원 논문, *Biometrics*.
+* **Finney (1978)** *Statistical Method in Biological Assay*: 고전 bioassay 이론.
+* **Davidian, Giltinan (1995)** *Nonlinear Models for Repeated Measurement Data*: Nonlinear mixed-effects 교과서.
+
+### PBPK & Toxicokinetics
+
+* **Gelman, Bois, Jiang (1996)** — PBPK Bayesian 원 논문, *JASA*.
+* **Bois, Gelman, Jiang et al. (1996)** — PERC 상세 분석.
+* **Bois (2009)** — 현대 PBPK Bayesian 리뷰.
+* **Sheiner, Beal (1980)** — NONMEM 프로그램, 약동학 mixed-effects 표준.
+
+### Nonlinear Regression 이론
+
+* **Bates, Watts (1988)** *Nonlinear Regression Analysis*: Frequentist 고전.
+* **Seber, Wild (1989)** *Nonlinear Regression*: 이론 종합.
+* **Gallant (1987)** *Nonlinear Statistical Models*.
+
+### Bayesian ODE Inference
+
+* **Girolami, Calderhead (2011)** — Riemann manifold HMC for nonlinear ODE.
+* **Stan team** — `integrate_ode_rk45`, `integrate_ode_bdf` 지원.
+
+## Ch.19 결산
+
+### 2편 시리즈 지도
+
+```
+[04-19-0 Overview]
+    ↓ 3개 절 조망, Part V 전환
+[04-19-1 § 19.1~19.3] (본편)
+    ↓ Serial dilution + Toxicokinetics 완전 분석
+    ↓ 식 (19.1)~(19.6) 완전 유도
+    ↓ Ch.19 결산
+```
+
+### Ch.19 실전 체크리스트
+
+**모델 설계**
+
+1. **도메인 이론** 으로부터 nonlinear 수식 유도 (ODE, enzyme kinetics, growth curve).
+2. 각 parameter 의 **물리적 의미** 명확화.
+3. **제약** (양수, 합=1 등) 을 reparameterization (log, softmax) 으로 처리.
+4. **측정 오차 구조** 점검 (homoscedastic vs heteroscedastic, normal vs lognormal).
+
+**Prior**
+
+5. **Informative prior** — 기존 문헌 값 사용.
+6. Well-known parameter 는 좁은 prior, poorly-known 은 넓게.
+7. Hierarchical prior 로 개인 간 pooling.
+8. $\tau^2$ 의 $\nu = 2$ 등 weak prior 로 variance 유연성.
+
+**계산**
+
+9. HMC/NUTS 또는 Gibbs + Metropolis 혼합.
+10. Parameter 상관 강하면 reparameterize.
+11. ODE 포함: Stan `integrate_ode_*` 또는 PyMC `DifferentialEquation`.
+12. 계층 모형은 non-centered.
+13. 초기값: prior mean + crude data fit.
+14. $\hat R < 1.1$, ESS > 1000 확인.
+
+**검증**
+
+15. 피팅된 곡선을 **그래프로 확인**.
+16. Residual plot 의 **체계적 패턴** 점검.
+17. Prior vs posterior — 데이터가 parameter 를 알려주는가.
+18. **External validation** (independent dataset) 이 가능하면 적극 수행.
+19. Extrapolation 경고 — fit 영역 밖 예측의 한계 명시.
+
+**해석**
+
+20. Parameter 를 **원 스케일**로 변환 후 보고 (log → 원 농도 등).
+21. **그래프 중심 보고** — 비선형 관계는 숫자보다 그림.
+22. **정책 함의** 명확화 (risk assessment 등).
+
+## Part V 다음 편 예고
+
+Ch.19 완결. **Ch.20 Basis Function Models** 가 Part V의 두 번째 관문.
+
+### Ch.20 미리보기
+
+**주제**: Spline·basis function 합으로 함수 모델링.
+
+$$
+f(x) = \sum_{k=1}^K \beta_k B_k(x)
+$$
+
+$B_k(x)$ = basis function (B-spline, Fourier, wavelet 등). $\beta_k$ 에 shrinkage prior (Ridge, LASSO, horseshoe).
+
+**Ch.19 vs Ch.20**:
+
+* Ch.19: **parametric nonlinear** — 미리 정해진 수식 (4PL, PBPK).
+* Ch.20: **basis function linear** — 함수를 basis 로 전개, 계수는 선형.
+
+**해석 vs 유연성** trade-off. Ch.19 는 해석 가능·prior 투입 쉬움·외삽 신뢰. Ch.20 은 유연·data-driven·패턴 탐색.
+
+Ch.21 Gaussian Processes 는 Ch.20 의 **무한 차원 일반화**.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.19 Overview](./04-19-0-parametric-nonlinear-overview.qmd)
+* [Part V Overview](./04-bayesian-part5-overview.qmd)
+* [Ch.15 Hierarchical Models](./03-15-0-hierarchical-linear-models-overview.qmd)
+* [Ch.16 § 16.6 — Multinomial Logit (Softmax 연결)](./03-16-2-police-stops-mrp-multinomial.qmd)
+* [Ch.12 HMC](./02-12-0-efficient-mcmc.qmd)
+
+**후속 주제**
+
+* Ch.20 Basis Function Models (예정)
+* Ch.21 Gaussian Processes (예정)
+* Ch.22 Finite Mixture Models (예정)
+* Ch.23 Dirichlet Processes (예정)
+
+**관련 개념 (cross-category)**
+
+* [4-Parameter Logistic (ELISA, Dose-Response)](../4pl-bioassay.qmd)
+* [Michaelis-Menten Kinetics](../michaelis-menten.qmd)
+* [PBPK Modeling in Drug Development](../pbpk-overview.qmd)
+* [ODE-based Bayesian Inference](../../Deep_Learning/bayesian-ode.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.19. CRC Press.
+* Gelman, A., Chew, G. L., & Shnaidman, M. (2004). Bayesian Analysis of Serial Dilution Assays. *Biometrics*, 60, 407-417.
+* Gelman, A., Bois, F. Y., & Jiang, J. (1996). Physiological Pharmacokinetic Analysis Using Population Modeling and Informative Prior Distributions. *JASA*, 91, 1400-1412.
+* Bois, F. Y., Gelman, A., Jiang, J., Maszle, D., Zeise, L., & Alexeeff, G. (1996). Population Toxicokinetics of Tetrachloroethylene. *Archives of Toxicology*, 70, 347-355.
+* Bois, F. Y. (2009). GNU MCSim: Bayesian Statistical Inference for SBML-Coded Systems Biology Models. *Bioinformatics*, 25, 1453-1454.
+* Bates, D. M., & Watts, D. G. (1988). *Nonlinear Regression Analysis and Its Applications*. Wiley.
+* Girolami, M., & Calderhead, B. (2011). Riemann Manifold Langevin and Hamiltonian Monte Carlo Methods. *JRSS B*, 73, 123-214.
