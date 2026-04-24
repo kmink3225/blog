@@ -1,0 +1,633 @@
+---
+title: "Ch.20 § 20.3~20.5 심화 — Non-normal Models·다변량 Regression·연습 + Ch.20 결산"
+subtitle: "$t$ residuals·Additive 식 (20.5)·DDE monotone regression·Tensor product·Gay Attitude·Pollster·Ch.20 시리즈 총결산"
+description: |
+  Gelman BDA Ch.20의 § 20.3~20.5 를 한 편으로 마무리한다.
+  § 20.3 non-normal 확장 — $t$ residuals scale mixture·chloride outlier contamination 실험,
+  GLM basis function (probit latent + data augmentation)·additive model 식 (20.5)·
+  DDE preterm birth monotone regression with latent threshold prior·tensor product multivariate,
+  § 20.4 Bibliographic note, § 20.5 Exercises (age-based gay attitude basis fit, golf putting basis,
+  Pollster 시계열 hierarchical spline),
+  마지막으로 Ch.20 심화 3편 시리즈 총결산과 Part V 다음 편 (Ch.21 Gaussian Processes) 예고.
+categories:
+  - Statistics
+  - Bayesian
+  - Basis-Functions
+  - Additive-Models
+  - Monotone-Regression
+author: Kwangmin Kim
+date: 04/24/2026
+---
+
+## 개요 — Ch.20 심화 마무리
+
+Ch.20 심화 시리즈 구성:
+
+* **04-20-0** — Ch.20 Overview (4개 절 조망).
+* **04-20-1** — § 20.1~20.2 (Splines·Basis Selection·Shrinkage Priors).
+* **04-20-2 (본편)** — § 20.3~20.5 + Ch.20 총결산.
+
+§ 20.1~20.2 가 **이론과 핵심 알고리즘**이었다면 § 20.3~20.5 는 **응용 확장**이다.
+
+* **§ 20.3** — 정규 오차를 넘어 (heavy-tail, GLM, 다변량).
+* **§ 20.4** — 문헌 지도.
+* **§ 20.5** — 연습문제 (실전 데이터 적합).
+
+::: {.callout-tip}
+## 직관: 세 절의 관계
+
+§ 20.1~20.2 는 **"1차원 정규 기본"** 에 집중. 실무 데이터는 종종 이 가정을 깨뜨린다:
+
+* 이상치 있음 → $t$ 오차 (§ 20.3 첫 부분).
+* Binary/count 반응 → GLM (§ 20.3 중간).
+* 다변량 예측변수 → additive model 또는 tensor product (§ 20.3 끝).
+
+§ 20.3 이 **"베이스 모형의 3가지 확장 방향"** 을 정리. § 20.5 연습은 각 확장의 실전 적용 예.
+:::
+
+## § 20.3 Non-normal Models and Regression Surfaces
+
+### 확장 1 — Heavy-tail Residuals ($t$ 분포)
+
+기본 모형:
+
+$$
+y_i \sim N(\mu(x_i), \sigma^2)
+$$
+
+**문제**: 이상치 있으면 $\sigma^2$ 과대 추정, $\mu$ 추정이 outlier 쪽으로 끌림.
+
+**해결** — Scale mixture of normals (Ch.17 재방문):
+
+$$
+y_i \sim N(\mu(x_i), \phi_i \sigma^2), \quad \phi_i \sim \text{Inv-Gamma}(\nu/2, \nu/2)
+$$
+
+Marginal 하면 $y_i - \mu(x_i) \sim t_\nu(0, \sigma)$.
+
+### 계산
+
+Gibbs sampler 에 **$\phi_i$ step 추가**:
+
+$$
+\phi_i | - \sim \text{Inv-Gamma}\left( (\nu + 1)/2, \; \nu/2 + (y_i - \mu(x_i))^2 / (2\sigma^2) \right)
+$$
+
+다른 step (shrinkage prior, spike-and-slab 등) 은 $\sigma^2 \to \phi_i \sigma^2$ 로 가중치만 바꾸면 그대로.
+
+**$\nu$**: 보통 고정 ($\nu = 4$). 데이터에서 추정하려면 Metropolis step.
+
+::: {.callout-tip}
+## 직관: $t$ 오차 + basis function = 강건 + 유연
+
+**장점 조합**:
+
+* **유연함** (basis expansion): 함수 형태 자유.
+* **강건함** ($t$ oraclesore): 이상치 자동 downweight.
+
+**자동 weighting 의 수학**:
+
+$$
+\mathbb{E}[1/\phi_i | y_i, \mu(x_i), \nu, \sigma] = \frac{\nu + 1}{\nu + (y_i - \mu(x_i))^2 / \sigma^2}
+$$
+
+잔차 제곱 $(y_i - \mu(x_i))^2$ 크면 $1/\phi_i$ 작아서 해당 관측 weight 감소. **Outlier 자동 격리**.
+
+Gaussian 에서는 모든 관측이 동등 weight — outlier 가 inference 를 지배. $t_4$ 에서는 **잔차 큰 관측의 영향 제한**.
+:::
+
+### Chloride Outlier Contamination 실험
+
+Gelman 의 진단:
+
+**Baseline**: 원 chloride 데이터 + spike-and-slab + Gaussian 오차. $\hat\sigma = 0.27$.
+
+**Contamination 1** ($y_{47}$ 에 $+10\sigma$):
+
+* $y_{47}^{\text{new}} = 32.4$ (원래 $\sim$linear baseline 위).
+* Gaussian 재적합: $\hat\sigma = 0.61$ (2배 증가).
+* Curve 는 **약간만 pulled up** — 강건성 유지.
+
+**Contamination 2** ($y_{40}$ 에 $+100\sigma$):
+
+* $y_{40}^{\text{new}} = 46.3$ (극단).
+* Gaussian 재적합: **$\hat\sigma = 22.4$** (80배 증가!) + **curve 가 0 쪽으로 pulled away from data**.
+* **심각한 misfit**: outlier 하나가 모든 inference 를 파괴.
+
+**$t_4$ 복구**:
+
+* 동일 contamination 2 데이터 + $t_4$ 오차.
+* $\hat\sigma \approx 0.3$ (거의 baseline), curve 도 거의 동일.
+* **Outlier 를 격리** 하여 영향 제거.
+
+이것이 **basis function + $t$ 오차** 의 힘 — 유연 함수 적합 + outlier robustness 동시 확보.
+
+### 확장 2 — GLM (Non-Gaussian 반응)
+
+$y_i$ 가 binary, count, 또는 non-Gaussian 이면 **GLM + basis function**:
+
+$$
+g(E(y_i)) = w_i^T \beta, \quad w_i = (b_1(x_i), \dots, b_H(x_i))
+$$
+
+**Probit case** (Albert-Chib 1993): Latent Gaussian 표현.
+
+$$
+z_i \sim N(w_i^T \beta, 1), \quad y_i = \mathbb{1}[z_i > 0]
+$$
+
+$z_i$ 를 augmented data 로 다루면 **$\beta$ 의 conditional posterior 가 Gaussian** — Ch.20 § 20.2 의 spike-and-slab·shrinkage 를 그대로 적용.
+
+**Logistic case**: Pólya-Gamma augmentation (Polson-Scott-Windle 2013) — Ch.16 § 16.2 재방문.
+
+### 비정규에서의 Marginal Likelihood
+
+**Gaussian** 에서는 식 (20.4) marginal likelihood analytical (conjugate).
+
+**Non-Gaussian** 에서는 일반적으로 **closed form 없음**. 실무 대안:
+
+1. **Laplace approximation**: posterior mode 주변 Gaussian 근사.
+2. **Variational Bayes**: ELBO 최대화.
+3. **MCMC with auxiliary data augmentation** (probit, Pólya-Gamma).
+4. **Integrated Nested Laplace Approximation (INLA)**: Rue 등.
+
+### 확장 3 — Multivariate Regression Surfaces
+
+$\mu(x)$ with $x \in \mathbb{R}^p$, $p \geq 2$.
+
+**Curse of dimensionality** 2가지:
+
+1. **계산**: Basis 수 $H^p$ → $p = 5, H = 10$ 이면 $10^5$ 계수.
+2. **통계**: $x$ 공간 밀도 희박 → 많은 영역에서 관측 부족.
+
+**해결 1 — Additive Model** 식 (20.5):
+
+$$
+\mu(x) = \mu_0 + \sum_{j=1}^p \beta_j(x_j), \quad \beta_j(x_j) = \sum_{h=1}^{H_j} \theta_{jh} b_{jh}(x_j) \quad \text{(20.5)}
+$$
+
+각 $x_j$ 에 **독립 1차원 함수** 적합. 상호작용 무시.
+
+**계수 수**: $\sum H_j$ — $p \cdot H$ 정도. 관리 가능.
+
+**Gibbs**: 각 $\beta_j$ 는 **residual $y_i - \sum_{l \neq j} \beta_l(x_{il})$** 에 대한 1차원 회귀로 환원 (divide-and-conquer).
+
+**해결 2 — Tensor Product**:
+
+$$
+\mu(x) = \sum_{h_1=1}^H \cdots \sum_{h_p=1}^H \theta_{h_1 \cdots h_p} \prod_{j=1}^p b_{jh_j}(x_j)
+$$
+
+**모든 상호작용** 포함. 계수 수 $H^p$ — 고차원 폭발. Spike-and-slab 이나 shrinkage 로 sparsity 유도.
+
+**타협**: p = 2, 3 에서는 tensor product, 4+ 에서는 additive.
+
+### DDE Preterm Birth — 상세 재방문
+
+**문제**: DDE (DDT 대사물) → 조산 위험. Covariates (나이, BMI, 콜레스테롤 등) 통제.
+
+**Semi-parametric probit additive model**:
+
+$$
+P(y_i = 1 | x_i, z_i) = \Phi\left( z_i^T \alpha + f(x_i) \right)
+$$
+
+* $y_i$: 조산 여부.
+* $z_i$: 공변량 5개 (상수 포함).
+* $x_i$: DDE 수준.
+* $f(\cdot)$: **비선형 nondecreasing 함수**.
+* $\Phi$: 표준 정규 CDF (probit link).
+
+### Nondecreasing Constraint
+
+**도메인 지식**: DDE 노출 → 조산 위험 **단조 증가** 가 자연.
+
+**표현**: $f$ 를 piecewise linear with dense knots. 각 interval 의 slope $\beta_j \geq 0$ 제약.
+
+**기본 아이디어**: $\beta_j$ 를 non-negative 로 제한 + neighboring slopes 의 smoothness.
+
+### Latent Threshold Prior — 교재 핵심
+
+**목적**: Nondecreasing 유지 + **flat region 허용** (slope = 0 구간).
+
+**구조**:
+
+$$
+\beta_j^* \sim N(\beta_{j-1}^*, \sigma_\beta^2) \quad (\text{autoregressive latent slopes})
+$$
+
+$$
+\beta_j = \mathbb{1}[\beta_j^* \geq \delta] \cdot \beta_j^*
+$$
+
+**해석**:
+
+* $\beta_j^*$: **latent slope** — AR(1) smooth prior.
+* $\delta > 0$: **threshold** — $\beta_j^*$ 가 이보다 크면 active.
+* $\beta_j$: 실제 slope. $\beta_j^* < \delta$ 이면 **정확히 0** (flat region).
+
+**Hyperpriors**:
+
+$$
+\sigma_\beta^2 \sim \text{Inv-Gamma}, \quad \delta \sim \text{Gamma}
+$$
+
+$\delta$ 클수록 flat region 더 허용.
+
+### Latent Threshold의 이점
+
+1. **Sparse + smooth**: AR(1) 이 smoothness 유도, threshold 가 flat region 허용.
+2. **Dose threshold 추정**: "첫 increasing 지점 $\hat\tau$" 의 posterior 자연스럽게 도출.
+3. **Null hypothesis test**: $P(f(x) \equiv 0 | y)$ posterior probability 계산 가능.
+
+### DDE 결과 (Figure 20.4)
+
+**Posterior curve**:
+
+* DDE $[0, 20]$: 거의 평평 ($\beta_j \approx 0$).
+* DDE $[20, 100]$: 완만히 증가.
+* DDE $> 100$: 더 빠르게 증가 (dose-response).
+
+**수치 요약**:
+
+* **Global null hypothesis** $P(f \equiv 0 | y) < 0.01$ — DDE 효과 **강한 증거**.
+* **Threshold dose** $\hat\tau = 7$, 95% CI [3, 21] mg/L.
+* **대조 비교**: 제약 없는 classical GAM 은 $p = 0.23$ (not significant) — shape constraint 가 **통계적 검출력 향상**.
+
+### Tensor Product 예시 — 2D Surface
+
+$\mu(x_1, x_2)$ with $H = 10$ per dimension. Tensor product:
+
+$$
+\mu(x_1, x_2) = \sum_{h_1=1}^{10} \sum_{h_2=1}^{10} \theta_{h_1 h_2} b_{h_1}(x_1) b_{h_2}(x_2)
+$$
+
+**$10^2 = 100$ coefficients**. Spike-and-slab 또는 shrinkage 로 상당수 0 으로.
+
+**Python 스케치** (간단 B-spline tensor):
+
+```python
+import numpy as np
+from scipy.interpolate import BSpline
+
+def build_tensor_basis(x1, x2, H=10):
+    """Build tensor product B-spline basis matrix."""
+    # 1D basis for each dim
+    def bspline_basis(x, H):
+        knots = np.linspace(x.min(), x.max(), H - 2)
+        knots = np.concatenate([[x.min()]*3, knots, [x.max()]*3])
+        W = np.zeros((len(x), H))
+        for h in range(H):
+            c = np.zeros(H); c[h] = 1
+            W[:, h] = np.nan_to_num(BSpline(knots, c, 3, extrapolate=False)(x))
+        return W
+
+    W1 = bspline_basis(x1, H)  # (n, H)
+    W2 = bspline_basis(x2, H)  # (n, H)
+    # Khatri-Rao product (row-wise tensor)
+    W_tensor = np.einsum('ih,ik->ihk', W1, W2).reshape(len(x1), H * H)
+    return W_tensor
+```
+
+## § 20.4 Bibliographic Note
+
+### 기본 교과서
+
+* **Bishop (2006)** *PRML* Ch.3, Ch.7 — basis function 리뷰.
+* **Denison et al. (2002)** *Bayesian Methods for Nonlinear Classification and Regression* — 베이즈 nonparametric regression 종합.
+
+### Reversible Jump MCMC for Basis
+
+* **Biller (2000)** — B-spline 수 자체를 추정하는 RJMCMC.
+* **DiMatteo, Genovese, Kass (2001)** — Bayesian curve-fitting with free knots.
+
+### Bayesian Variable Selection
+
+* **Smith, Kohn (1996)** — nonparametric regression 변수 선택 제안.
+* **George, McCulloch (1993, 1997)** — SSVS.
+* **Barbieri, Berger (2004)** — median probability model 이론.
+
+### Shrinkage Priors
+
+* **Park, Casella (2008)** — Bayesian LASSO.
+* **Seeger (2008)** — EP for LASSO.
+* **Armagan, Dunson, Lee (2013)** — generalized double Pareto.
+
+### Monotone Bayesian Nonparametric Regression
+
+* **Ramsay, Silverman (2005)** *Functional Data Analysis* — 제약 있는 함수 적합.
+* **Neelon, Dunson (2004)** — **DDE 논문 원전**.
+* **Dunson (2005)** — Bayesian monotone regression.
+* **Hazelton, Turlach (2011)** — monotone semiparametric.
+* **Hannah, Dunson (2011)** — multivariate convex regression.
+* **Pati, Dunson (2011)** — tensor product surface.
+
+### 교재 예제 출처
+
+* **Bates, Watts (1988)** *Nonlinear Regression* — chloride 데이터 원전.
+* **Neelon, Dunson (2004)** — DDE 원 논문.
+
+## § 20.5 Exercises — 핵심 풀이
+
+### Exercise 20.1 — Gay Attitude by Age
+
+**데이터**: NAES 2004, "Do you know someone gay?" 설문. Age 별 Yes 비율.
+
+**모형** (normal approximation):
+
+$$
+\hat p_a \sim N(\mu(a), \sigma_a^2 = \hat p_a (1 - \hat p_a) / n_a)
+$$
+
+$a$ = age, $\hat p_a$ = 각 나이별 Yes 비율 (sample).
+
+**$\mu(a)$ 를 basis function 으로**:
+
+$$
+\mu(a) = \sum_{h=1}^H \beta_h b_h(a)
+$$
+
+Cubic B-splines with $H = 15$ knots uniform in [18, 90].
+
+**Prior**:
+
+$$
+\beta \sim N(0, \tau^2 I), \quad \tau \sim \text{HalfCauchy}(0, 5)
+$$
+
+**Posterior 추론**:
+
+$$
+\beta | y, \tau, \sigma \sim N((W^T \Sigma^{-1} W + I/\tau^2)^{-1} W^T \Sigma^{-1} y, (W^T \Sigma^{-1} W + I/\tau^2)^{-1})
+$$
+
+$\Sigma = \text{diag}(\sigma_a^2)$. 공식을 Ch.14 weighted regression 으로 환원.
+
+**결과**: 나이에 따른 smooth curve — 젊은층이 더 높은 비율, 60 대 이상에서 하락.
+
+### Exercise 20.2 — Binomial Version
+
+Same data, binomial likelihood 직접 사용:
+
+$$
+y_a \sim \text{Binomial}(n_a, \mu(a)), \quad \text{logit}(\mu(a)) = \sum_h \beta_h b_h(a)
+$$
+
+**차이**:
+
+* Conjugate 구조 깨짐.
+* HMC 또는 Pólya-Gamma augmentation.
+* Normal approximation 결과와 거의 같지만 극단 나이 (20 대 젊거나 80 대 많음) 에서 약간 다름.
+
+**비교 결과**: 대부분의 나이에서 $\hat p_a \in (0.3, 0.9)$ 범위 — normal approx 가 **충분히 정확**. Binomial 이 이론적으로 더 정확하지만 실용적 차이 작음.
+
+### Exercise 20.4 — Golf Putting Basis Function
+
+Ch.19 Ex.2 에서 물리적 모형:
+
+$$
+p(d) = 2\Phi\left(\frac{\arctan((R-r)/d)}{\sigma}\right) - 1
+$$
+
+**Basis function 대안**:
+
+$$
+\text{logit}(p(d)) = \sum_h \beta_h b_h(d)
+$$
+
+Cubic B-splines in [2, 20] ft.
+
+**비교**:
+
+| 측면 | Physical (Ch.19 Ex.2) | Basis function (Ch.20) |
+|------|----------------------|------------------------|
+| Parameter | 1 ($\sigma$) | $H = 10$~$15$ |
+| 외삽 (1 ft, 30 ft) | 물리 기반 안정 | 위험 |
+| 해석 | $\sigma$ = 각도 정밀도 | 계수 해석 어려움 |
+| Fit at 15~20 ft | 1.5° 로 약간 underestimate | 더 유연하게 fit |
+| Overfitting 위험 | 없음 | 있음 (shrinkage 필수) |
+
+**교훈**: **Basis function 이 항상 better 가 아님**. 도메인 물리가 있으면 parametric 우수. 물리 없고 데이터만 있으면 basis function.
+
+### Exercise 20.5 — Pollster Time Series (Obama 2012)
+
+**데이터**: 2012 미국 대선 여론조사 시리즈. 각 poll 에는:
+
+* Date $t$.
+* Poll organization $o$.
+* Sample size $n$.
+* Obama 지지율 $\hat p$.
+
+**모형**:
+
+$$
+\hat p_{o, t} \sim N(\mu(t) + \alpha_o, \sigma^2 / n_{o, t})
+$$
+
+* $\mu(t)$: 시계열 trend, B-spline.
+* $\alpha_o$: poll organization house effect (house bias).
+* $\sigma^2$: poll-to-poll variation 초과 분산.
+
+**Priors**:
+
+* $\mu(t)$ basis: $\beta_h \sim N(0, \tau^2 I)$.
+* $\alpha_o \sim N(0, \kappa^2)$ (hierarchical, $\kappa$ hyper).
+* $\tau, \kappa, \sigma$: HalfNormal or HalfCauchy.
+
+**이점**:
+
+* **Smooth trend** (spline).
+* **House effect 추정** — 특정 pollster 가 체계적으로 Democrat/Republican 편향.
+* **불확실성 reflect** — 각 poll 의 $n$ 고려한 weighted regression.
+
+**결과**: Raw average 보다 **매끄러운 curve**. 특정 poll 의 outlier 는 downweight.
+
+### Python 스케치 (Pollster)
+
+```python
+import numpy as np
+import pymc as pm
+
+# simulated pollster data
+n_polls = 200
+pollsters = ['A', 'B', 'C', 'D', 'E']
+p_true_curve = lambda t: 0.48 + 0.05 * np.sin(2 * np.pi * t / 100)
+
+rng = np.random.default_rng(42)
+poll_date = rng.integers(0, 200, n_polls)
+poll_org = rng.integers(0, 5, n_polls)
+n_sample = rng.integers(500, 2000, n_polls)
+house_effect = np.array([0.02, -0.01, 0, 0.015, -0.005])
+
+p_noisy = p_true_curve(poll_date) + house_effect[poll_org] \
+        + rng.normal(0, 0.015, n_polls)
+y = rng.binomial(n_sample, p_noisy) / n_sample
+
+# B-spline basis for time
+from scipy.interpolate import BSpline
+H = 12
+knots = np.linspace(0, 200, H - 2)
+knots_ext = np.concatenate([[0]*3, knots, [200]*3])
+W = np.zeros((n_polls, H))
+for h in range(H):
+    c = np.zeros(H); c[h] = 1
+    W[:, h] = np.nan_to_num(BSpline(knots_ext, c, 3, extrapolate=False)(poll_date))
+
+
+with pm.Model() as pollster_model:
+    tau = pm.HalfCauchy("tau", 0.1)
+    beta = pm.Normal("beta", 0, tau, shape=H)
+
+    kappa = pm.HalfNormal("kappa", 0.05)
+    alpha = pm.Normal("alpha", 0, kappa, shape=5)
+
+    mu_t = pm.math.dot(W, beta)
+    mu = mu_t + alpha[poll_org]
+
+    sigma = pm.HalfNormal("sigma", 0.02)
+    obs_sigma = sigma / pm.math.sqrt(n_sample)
+    pm.Normal("y", mu=mu, sigma=obs_sigma, observed=y)
+
+    trace = pm.sample(1500, tune=1500, target_accept=0.95, chains=4)
+```
+
+### Exercise 20.6 — Nonparametric Regression with Boundary
+
+$y_i = \mu(x_i) + \epsilon_i$, $x_i \in [0, 1]$, $\mu$ 알 수 없음.
+
+**일반 접근**: B-spline with boundary-aware knots.
+
+**Knot 배치**:
+
+* 균등: 경계 근처 oversmooth 위험.
+* Data-adaptive: $x$ 의 quantile 기반 knot.
+* **Boundary knot**: $x = 0, 1$ 에 추가 knot — 경계에서 basis 가 잘 작동.
+
+**Prior**:
+
+* P-spline (2차 차분 penalty) 로 smoothness.
+* 또는 spike-and-slab for adaptive complexity.
+
+**검증**: 경계 근처 prediction 과 bulk region 의 posterior SD 비교. Bulk 가 SD 작아야 정상.
+
+## Ch.20 심화 시리즈 총결산
+
+### 3편 시리즈 지도
+
+```
+[04-20-0 Overview]
+    ↓ 4개 절 조망 + 3장 비교
+[04-20-1 § 20.1~20.2 심화]
+    ↓ B-spline Cox-de Boor + spike-and-slab Gibbs + gdP
+[04-20-2 § 20.3~20.5] (본편)
+    ↓ t 오차 + Additive + Monotone DDE
+    ↓ 연습 (NAES, Pollster)
+    ↓ Ch.20 시리즈 완결
+```
+
+### Ch.20 핵심 교훈 — 6 원칙
+
+**비선형 함수 모델링의 베이즈 원칙**:
+
+1. **Local basis** 선호 (Taylor polynomial 아닌 B-spline/RBF) — 경계 안정성.
+2. **충분히 많이 + 강한 prior** — over-parameterize + shrinkage.
+3. **Ridge 보다 sparse prior**: horseshoe, gdP, spike-and-slab 로 자동 basis 선택.
+4. **Multiplicity adjustment**: $\pi \sim \text{Beta}$ hyperprior 가 자동 보정.
+5. **제약 활용**: 단조·볼록 등 shape constraint 로 추정 안정화 + 추론 향상.
+6. **외삽 불신**: Basis support 밖에서 함수 불정의. 도메인 지식 (Ch.19) 와 결합 유리.
+
+### Ch.20 통합 체크리스트
+
+**모형 설계**
+
+1. Basis 유형 (B-spline, Gaussian RBF, wavelet, Fourier).
+2. $H$ 와 knot 배치.
+3. 다차원이면 additive vs tensor 결정.
+4. Monotone, convex 등 shape constraint.
+5. 오차 모형 (Gaussian, $t$, GLM).
+
+**Prior**
+
+6. Ridge·Laplace·Horseshoe·gdP 중 선택.
+7. Spike-and-slab 대안.
+8. P-spline smoothness penalty.
+9. Shape constraint 는 sign constraint or threshold.
+
+**계산**
+
+10. Conjugate 이면 closed-form 또는 Gibbs.
+11. gdP: block Gibbs with Inverse-Gaussian.
+12. Spike-and-slab: $\gamma_h$ Bernoulli update + $\beta$ conditional.
+13. Non-Gaussian: Pólya-Gamma (logistic) or latent Gaussian (probit).
+14. Large $p$: Laplace approximation or VI.
+
+**검증**
+
+15. Posterior mean curve + 95% band 시각화.
+16. Marginal inclusion probabilities.
+17. Posterior predictive check (tail, extreme residuals).
+18. Cross-validation / WAIC 로 $H$ 선택.
+19. Outlier robustness: $t$ 오차 재적합 비교.
+
+**해석**
+
+20. 전체 curve 해석 중심.
+21. Shape constraint 의 구체 함의 (threshold dose 등).
+22. Extrapolation 경고.
+
+## Part V 다음 편 예고 — Ch.21 Gaussian Processes
+
+**Ch.20 vs Ch.21**:
+
+| 측면 | Ch.20 Basis | Ch.21 GP |
+|------|-------------|----------|
+| Parameter | $H$ 유한 개 $\beta$ | 무한 차원 함수 자체 |
+| Prior | $\beta$ 공간 | 함수 공간 (kernel 기반) |
+| 계산 | 선형 회귀 | $O(n^3)$ covariance matrix |
+| 해석 | 계수 해석 | kernel 파라미터 (length scale) |
+| 외삽 | Basis support 내 | Kernel smoothness 에 따름 |
+
+**Ch.21 의 특수성**: Basis 수 $H \to \infty$ 극한. Kernel function $k(x, x')$ 이 무한 basis의 **암묵적 inner product** 역할.
+
+**RBF 와 Squared Exponential kernel**:
+
+$$
+k(x, x') = \exp\left( -\frac{|x - x'|^2}{2\ell^2} \right)
+$$
+
+이것은 Ch.20 의 Gaussian RBF basis **무한 개** 를 모두 쓴 것과 수학적으로 동등 (Mercer 정리).
+
+**따라서 Ch.21 은 Ch.20 의 "자연스러운 극한"** — parametric 에서 완전 nonparametric 으로의 마지막 단계.
+
+## 관련 주제
+
+**Ch.20 시리즈 전체**
+
+* [Ch.20 Overview](./04-20-0-basis-function-models-overview.qmd)
+* [§ 20.1~20.2 심화](./04-20-1-splines-basis-shrinkage.qmd)
+
+**Part V 다음**
+
+* Ch.21 Gaussian Processes (예정)
+* Ch.22 Finite Mixture Models (예정)
+* Ch.23 Dirichlet Processes (예정)
+
+**관련 개념 (cross-category)**
+
+* [Generalized Additive Models (GAM)](../../Machine_Learning/gam-overview.qmd)
+* [Monotone Regression](../monotone-regression.qmd)
+* [Kernel Smoothing](../kernel-smoothing.qmd)
+* [Pólya-Gamma Augmentation for Logistic](../polya-gamma.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.20 § 20.3~20.5. CRC Press.
+* Bishop, C. M. (2006). *Pattern Recognition and Machine Learning*. Springer.
+* Denison, D. G. T., Holmes, C. C., Mallick, B. K., & Smith, A. F. M. (2002). *Bayesian Methods for Nonlinear Classification and Regression*. Wiley.
+* Neelon, B., & Dunson, D. B. (2004). Bayesian Isotonic Regression and Trend Analysis. *Biometrics*, 60, 398-406.
+* Ramsay, J. O., & Silverman, B. W. (2005). *Functional Data Analysis* (2nd ed.). Springer.
+* DiMatteo, I., Genovese, C. R., & Kass, R. E. (2001). Bayesian Curve-Fitting with Free-Knot Splines. *Biometrika*, 88, 1055-1071.
+* Smith, M., & Kohn, R. (1996). Nonparametric Regression Using Bayesian Variable Selection. *Journal of Econometrics*, 75, 317-343.
+* Albert, J. H., & Chib, S. (1993). Bayesian Analysis of Binary and Polychotomous Response Data. *JASA*, 88, 669-679.
+* Polson, N. G., Scott, J. G., & Windle, J. (2013). Bayesian Inference for Logistic Models Using Pólya-Gamma Latent Variables. *JASA*, 108, 1339-1349.
+* Hannah, L. A., & Dunson, D. B. (2011). Bayesian Nonparametric Multivariate Convex Regression. *JMLR*, 12, 3017-3051.
