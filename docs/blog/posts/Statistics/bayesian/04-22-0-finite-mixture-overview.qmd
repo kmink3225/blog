@@ -1,0 +1,728 @@
+---
+title: "Ch.22 Overview — Finite Mixture Models"
+subtitle: "Part V 다섯 번째 관문: 식 (22.1) 가중합·식 (22.2) latent indicator·label switching·식 (22.10) exchangeable prior·식 (22.11)~(22.12) Gibbs·schizophrenia reaction time·galaxy/acidity/iris 밀도 추정·classification 응용"
+description: |
+  Gelman BDA Ch.22 의 5개 절을 한 편으로 조망한다.
+  Ch.21 의 함수 사전분포 (GP) 에서 한 단계 더 — 데이터가 **여러 하위 모집단** 에서 생성된다고 가정하고 그 mixing weights·components 자체를 추론한다.
+  § 22.1 식 (22.1) 가중합 정의·식 (22.2) latent indicator 도입·연속 혼합 ($t$, negative binomial, beta-binomial)·label ambiguity·Dirichlet prior·$H$ 결정 문제·"진짜 부분모집단" 학파 vs "유연한 근사" 학파,
+  § 22.2 17 명 (정상 11 + 조현병 6) 반응시간 데이터의 두 성분 정규 혼합 모델·ECM 알고리즘 식 (22.5)~(22.7)·Gibbs sampler·사후 예측 검정 ($T_{\min}, T_{\max}$)·확장 모델 ($\omega$, $\sigma_{y2}^2$),
+  § 22.3 식 (22.10) exchangeable prior·식 (22.11)~(22.12) conjugate Gibbs·label switching 문제와 postprocessing/constraint 두 해법,
+  § 22.4 알려지지 않은 $H$ 의 처리 — truncated upper bound + $a = n_0/H$ Dirichlet hyperparameter, galaxy/acidity/iris 예제,
+  § 22.5 mixture 를 분류·회귀로 사용 — Bayesian discriminant analysis 식 + mixture 가 비모수 $f_c$ 로 작동.
+  Ch.22 → Ch.23 (Dirichlet Process) 의 사다리 마지막 관문.
+categories:
+  - Statistics
+  - Bayesian
+  - Mixture-Models
+  - EM-Algorithm
+  - Latent-Variable
+  - Nonparametric-Bayes
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 개요 — Part V 다섯 번째 관문
+
+Part V 의 사다리 마지막 두 단계:
+
+* **Ch.19 Parametric Nonlinear** — 도메인 이론으로 수식이 정해진 비선형.
+* **Ch.20 Basis Function** — 미리 정한 $H$ 개 basis 가중합으로 함수 표현.
+* **Ch.21 Gaussian Process** — 함수 자체에 무한 차원 사전분포.
+* **Ch.22 Finite Mixture (본편)** — 데이터를 **여러 하위 모집단** 의 가중합으로 표현. 분포 자체에 사전분포 (유한 차원).
+* **Ch.23 Dirichlet Process** — Ch.22 의 무한 차원 일반화.
+
+::: {.callout-important}
+## Ch.22 의 한 줄 요약
+
+**"모집단이 단일 분포가 아니라 $H$ 개 하위 모집단의 가중합 $p(y) = \sum_h \lambda_h f(y \mid \theta_h)$ 일 때, 각 관측치가 어느 성분에서 왔는지 모르는 상태에서 모수 $(\theta_h, \lambda_h)$ 와 latent indicator $z_{ih}$ 를 동시에 추론한다."**
+
+회귀 함수 $\mu(x)$ 가 아니라 **분포 $p(y)$ 또는 $p(y \mid x)$ 자체** 가 추론 대상이라는 점에서 Ch.21 와 다르고, 무한 성분이 아닌 유한 $H$ 라는 점에서 Ch.23 와 다르다.
+:::
+
+### Ch.21 vs Ch.22 vs Ch.23
+
+| 측면 | Ch.21 GP | Ch.22 Mixture | Ch.23 DP |
+|------|-------|-------|-------|
+| 사전분포 대상 | 함수 $\mu(x)$ | 분포 $p(y)$ 또는 $p(y\mid x)$ | 분포 $p(y)$ |
+| Components | 무한 (kernel) | 유한 $H$ | 무한 (DP) |
+| Latent 구조 | 없음 (직접 $\mu$) | Indicator $z_i$ | Indicator $z_i$ + stick-breaking |
+| 해석 | smooth surface | $H$ 개 cluster | 무한 cluster, 자동 결정 |
+| 적용 | regression, FDA | density, classification, clustering | 위 + nonparametric clustering |
+| 계산 | $O(n^3)$ Cholesky | Gibbs/EM/ECM | Gibbs + truncation |
+
+::: {.callout-tip}
+## 직관 — 어느 모델이 무엇을 잡는가
+
+* **Ch.21 GP**: "데이터의 평균이 $x$ 에 따라 부드럽게 변한다" — **smooth function** 에 강함.
+* **Ch.22 Mixture**: "데이터가 여러 다른 메커니즘에서 동시에 온다" — **multimodal/heterogeneous distribution** 에 강함.
+* **Ch.23 DP**: "메커니즘 수가 미리 알려지지 않는다" — **clustering with unknown $H$** 에 강함.
+
+예시:
+
+* 키 분포 (남녀 혼합) → Ch.22.
+* 시간에 따른 평균 키 변화 → Ch.21.
+* 신원 모르는 sample 의 자동 군집 → Ch.23.
+:::
+
+## Ch.22 의 논리 지도
+
+| 절 | 핵심 질문 | 주요 결과 |
+|:---:|:------|:-----|
+| § 22.1 | **혼합 모델을 어떻게 정의하나?** | 식 (22.1) 가중합·식 (22.2) latent indicator·continuous mixture·Dirichlet prior·label ambiguity·$H$ 결정 |
+| § 22.2 | **혼합 모델을 어떻게 적합하나?** | 17 명 reaction time, 식 (22.5)~(22.7) ECM, Gibbs sampler, posterior predictive checks |
+| § 22.3 | **Label switching 을 어떻게 다루나?** | 식 (22.10) exchangeable prior·식 (22.11)~(22.12) conjugate Gibbs·postprocessing vs constraint |
+| § 22.4 | **$H$ 가 미지일 때?** | Upper bound + $a = n_0/H$ Dirichlet, galaxy/acidity/iris 예제 |
+| § 22.5 | **Mixture 를 분류·회귀에?** | Bayesian discriminant analysis, mixture 가 nonparametric $f_c$ |
+
+## § 22.1 Setting Up and Interpreting Mixture Models
+
+### 식 (22.1) 가중합 형태
+
+데이터 $y_i$ 가 $H$ 개 하위 모집단 중 하나에서 추출:
+
+$$
+p(y_i \mid \theta, \lambda) = \lambda_1 f(y_i \mid \theta_1) + \lambda_2 f(y_i \mid \theta_2) + \cdots + \lambda_H f(y_i \mid \theta_H) \quad (22.1)
+$$
+
+* $\lambda_h$ = $h$ 번째 성분의 비율, $\sum_h \lambda_h = 1$.
+* $\theta_h$ = $h$ 번째 성분 파라미터.
+* $f$ = 공통 분포 가족 (예: 정규).
+
+::: {.callout-tip}
+## 직관 — Mixture 가 단일 분포로 안 되는 이유
+
+성인 키 분포를 예로 들면:
+
+* 단일 정규: 평균 1 개, 분산 1 개. 남녀 차이를 평균에 묻혀 표현.
+* 두 성분 정규 mixture: 남자 평균·여자 평균이 별도, 각 그룹 분산도 별도.
+
+**핵심**: 데이터 생성 메커니즘이 두 가지 이상이면, 단일 분포의 "평균 + 분산" 으로 압축하지 말고 **각 메커니즘을 별도 component 로 보존**.
+
+성별이 관측되면 mixture 가 아니라 conditional model ($y \mid \text{sex}$). 성별 미관측이면 mixture.
+:::
+
+### 식 (22.2) Latent Indicator
+
+각 관측치 $i$ 에 대해 어느 성분에서 왔는지 indicator $z_i = (z_{i1}, \ldots, z_{iH})$ 도입. 정확히 하나만 1, 나머지 0.
+
+$$
+p(y, z \mid \theta, \lambda) = p(z \mid \lambda) p(y \mid z, \theta) = \prod_{i=1}^n \prod_{h=1}^H \bigl(\lambda_h f(y_i \mid \theta_h)\bigr)^{z_{ih}} \quad (22.2)
+$$
+
+$z_i \mid \lambda \sim \text{Multinomial}(1; \lambda_1, \ldots, \lambda_H)$.
+
+::: {.callout-note}
+## 직관 — Latent indicator 가 하는 일
+
+식 (22.1) 의 합 형태는 **likelihood 표현**, 식 (22.2) 의 곱 형태는 **사후 계산 친화 표현**.
+
+* 적분 측면: $z$ 를 marginalize 하면 식 (22.1) 로 복원 (Gibbs 사후 평균이 결국 $\lambda_h f(y_i \mid \theta_h)$ 합).
+* 계산 측면: $z$ 를 도입하면 **conditional 분포가 표준 형태로 단순화** (Gibbs 의 $z$ 단계 → indicator multinomial, $\theta$ 단계 → 같은 $z$ 의 데이터끼리만 모은 표준 추정).
+
+EM/ECM/Gibbs 모두 latent indicator 를 명시적으로 다루어 closed-form conditional 활용.
+:::
+
+### Continuous Mixtures — 일반화
+
+Mixture 를 **연속 혼합** 으로 확장:
+
+$$
+p(y_i) = \int p(y_i \mid \theta) \lambda(\theta) d\theta
+$$
+
+* **Hierarchical model** (Ch.5) = continuous mixture: 각 $y_i$ 가 개별 $\theta_i$ 에서 생성, $\theta_i$ 가 mixing distribution $\lambda$ 에서 추출.
+* **$t$ 분포** = scale parameter 의 정규 mixture: $y_i \mid z_i \sim N(\mu, \sigma^2 z_i)$, $z_i \sim \text{Inv-}\chi^2(\nu, 1)$ → marginal $y_i \sim t_\nu(\mu, \sigma^2)$.
+* **음이항 분포** = Poisson 의 gamma mixture: $y_i \mid \lambda_i \sim \text{Poisson}(\lambda_i)$, $\lambda_i \sim \text{Gamma}$.
+* **Beta-binomial** = binomial 의 beta mixture.
+
+::: {.callout-tip}
+## 직관 — Robust 통계학과 mixture
+
+heavy-tail 분포 ($t$, Cauchy) 가 outlier 에 강한 이유: **분산이 큰 component 가 mixture 에 포함** 되어 있기 때문. Outlier 가 와도 "이건 큰 분산 component 야" 로 자연 처리.
+
+따라서 Ch.17 (robust inference) 의 핵심 아이디어 = mixture. **Outlier handling = data augmentation 으로 mixture 형태로 본 후 indicator 추출**.
+:::
+
+### Identifiability — Label Ambiguity
+
+**문제**: $(\lambda_1, \theta_1, \lambda_2, \theta_2)$ 와 $(\lambda_2, \theta_2, \lambda_1, \theta_1)$ 의 우도가 동일.
+
+→ 사후 분포가 **$H!$ 개 동등한 mode**. Posterior mean of $\theta_h$ 는 모든 $h$ 가 같은 값 (의미 없음).
+
+**해결**:
+
+1. **Constraint**: $\mu_1 < \mu_2 < \cdots < \mu_H$ 또는 $\lambda_1 \leq \cdots \leq \lambda_H$ 로 순서 고정.
+2. **Postprocessing**: 식별 무시하고 sampling, 사후에 KL loss 등으로 라벨 정렬.
+3. **Informative prior**: 도메인 지식으로 각 component 와 특정 부분모집단을 묶음.
+
+상세는 § 22.3 에서.
+
+### Dirichlet Prior
+
+$\lambda \sim \text{Dirichlet}(\alpha_1, \ldots, \alpha_H)$ 가 conjugate.
+
+* $\alpha_h$ 의 비율 = prior mean of $\lambda_h$.
+* $\sum \alpha_h$ = "prior sample size" (강도).
+
+기본값:
+
+* $\alpha_h = 1$ → uniform on simplex (default).
+* $\alpha_h = n_0/H$ — 다음 절의 unspecified $H$ 처리에 핵심.
+
+### Posterior Properness 주의
+
+$\alpha_h = 0$ (improper Dirichlet) 또는 component variance 의 improper prior 는 **degenerate mode** ($\sigma_h \to 0$, single observation cluster) 로 인한 improper posterior 위험.
+
+::: {.callout-important}
+## 정규 혼합 prior 주의사항
+
+$\sigma_1, \sigma_2$ 의 joint uniform on $(\log \sigma_1, \log \sigma_2)$ 는 **두 정규 혼합** 에서 improper posterior. 한 component 가 single observation 으로 수축하며 우도가 발산.
+
+해결: variance 비율 $\sigma_2/\sigma_1$ 을 고정하거나 proper prior (Inverse Gamma) 부여.
+:::
+
+### $H$ 의 결정
+
+| 접근 | 방법 |
+|:---|:------|
+| **고정** | 도메인 지식 (남녀 → $H = 2$) |
+| **여러 $H$ 비교** | $H = 1, 2, \ldots$ 각각 적합 후 WAIC, LOO-CV |
+| **계층적** | $H$ 를 random variable, reversible jump MCMC |
+| **Truncated upper bound** | $H_{\max}$ 큰 값 + Dirichlet $a = n_0/H$ → 자동으로 빈 component 형성 (§ 22.4) |
+
+WAIC, LOO 가 정당하고 — DIC 는 mixture 에서 이론적 근거 약하므로 권장 안 함.
+
+### 두 학파 — 진짜 모집단 vs 유연한 근사
+
+::: {.callout-tip}
+## 학파 1 — Mixture component = 진짜 부분모집단
+
+남녀, 환자/정상, 이항/정상 — 도메인적으로 정당화되는 cluster 가 있다고 보고 mixture 로 분리. **Latent class analysis, model-based clustering** 의 영역.
+
+학파 2 — Mixture = 유연한 분포 근사
+
+**부분모집단의 존재 자체가 의미 없을 수 있다**. 단순히 mixture 가 정규보다 유연한 분포 가족이므로 density estimation·classification·robust regression 도구로 사용. **Gelman 등 BDA 저자의 입장**.
+
+이유: Cluster 결과가 (1) parametric kernel 선택에 민감하고, (2) 다변량에서는 covariance 가정에 민감하다. 따라서 cluster 해석을 신뢰하기 어렵다.
+
+선택 가이드:
+
+* 과학적 부분모집단 가설이 명확 → 학파 1, $H$ 작은 값 고정.
+* 단순 density estimation → 학파 2, $H$ 큰 upper bound + sparsity prior.
+:::
+
+## § 22.2 Schizophrenia Reaction Times — 핵심 적용 사례
+
+### 데이터
+
+* 17 명 (정상 11 명 + 조현병 6 명) × 30 trials → 510 점.
+* $y_{ij}$ = 개인 $j$ 의 $i$ 번째 시도 반응시간 (ms, log 변환).
+
+### 과학적 가설
+
+심리학 이론:
+
+* **Motor reflex retardation**: 조현병 환자는 평균적으로 반응시간이 길다 (모든 trial).
+* **Attentional deficit**: 일부 trial 에서만 추가로 지연 (mixture component).
+
+→ 정상은 단일 정규, 조현병은 **두 성분 정규 mixture**.
+
+### 모델 — 식 표현
+
+$$
+\begin{aligned}
+y_{ij} \mid \alpha_j, z_{ij}, \phi &\sim N(\alpha_j + \tau z_{ij}, \sigma_y^2) \\
+\alpha_j \mid z, \phi &\sim N(\mu + \beta S_j, \sigma_\alpha^2) \\
+z_{ij} \mid \phi &\sim \text{Bernoulli}(\lambda S_j)
+\end{aligned}
+$$
+
+* $S_j$ = 조현병 indicator (관측).
+* $z_{ij}$ = attentional delay indicator (latent).
+* $\beta$ = motor retardation, $\tau$ = delay 크기, $\lambda$ = delay 빈도.
+
+::: {.callout-note}
+## 직관 — 모델의 3-층 구조
+
+| 층 | 변수 | 역할 |
+|:---|:---|:------|
+| Observation | $y_{ij}$ | 측정값 |
+| Subject | $\alpha_j$ | 개인별 평균 (random effect) |
+| Population | $\mu, \beta, \tau, \lambda, \sigma_y, \sigma_\alpha$ | 그룹 차이·mixture |
+
+Latent $z_{ij}$ 는 observation 층의 mixture, $\alpha_j$ 는 subject 층의 hierarchy. **두 hierarchy 가 동시에** 작동.
+:::
+
+### Hyperprior — 식별성 보장
+
+* $\tau > 0$ 제약 (delay 가 양수임을 보장).
+* $\lambda \in [0.001, 0.999]$ (boundary 회피).
+* 분산 모두 양수 제약, uniform on $\log$ scale (Ch.5 추천).
+
+### ECM 알고리즘 — 식 (22.5)~(22.7)
+
+#### E-step — Indicator 의 expectation
+
+$$
+\zeta_{ij} = E_{\text{old}}(z_{ij}) = \Pr(z_{ij} = 1 \mid \theta^{\text{old}}, y) = \frac{\lambda^{\text{old}} N(y_{ij} \mid \alpha_j^{\text{old}} + \tau^{\text{old}}, (\sigma_y^{\text{old}})^2)}{(1 - \lambda^{\text{old}}) N(y_{ij} \mid \alpha_j^{\text{old}}, (\sigma_y^{\text{old}})^2) + \lambda^{\text{old}} N(y_{ij} \mid \alpha_j^{\text{old}} + \tau^{\text{old}}, (\sigma_y^{\text{old}})^2)} \quad (22.5)
+$$
+
+::: {.callout-tip}
+## 직관 — 식 (22.5) 의 의미
+
+분자 = "delay 일 때의 likelihood × prior".
+분모 = "delay or not" 의 합 likelihood.
+비율 = **이 trial 이 delay 였을 사후 확률**.
+
+베이즈 룰의 직접 적용:
+
+$$
+P(\text{delay} \mid y_{ij}) = \frac{P(y_{ij} \mid \text{delay}) P(\text{delay})}{P(y_{ij})}
+$$
+
+$\zeta_{ij}$ 가 0 또는 1 에 가까울수록 그 trial 의 component 식별이 명확. 0.5 근처면 어느 component 인지 모호.
+:::
+
+#### M-step — 조건부 mode
+
+$\lambda$ 는 평균 $\zeta$:
+
+$$
+\lambda^{\text{new}} = \frac{1}{6 \cdot 30} \sum_{j=12}^{17} \sum_{i=1}^{30} \zeta_{ij}
+$$
+
+$\alpha_j$ 는 가중 평균 (식 22.6):
+
+$$
+\alpha_j^{\text{new}} = \frac{\frac{1}{\sigma_\alpha^2}(\mu + \beta S_j) + \sum_i \frac{1}{\sigma_y^2}(y_{ij} - \zeta_{ij} \tau)}{\frac{1}{\sigma_\alpha^2} + \sum_i \frac{1}{\sigma_y^2}} \quad (22.6)
+$$
+
+$\tau, \sigma_y^2$ 등도 표준 conditional mode 식.
+
+::: {.callout-tip}
+## 직관 — ECM 의 분해
+
+EM 의 일반 단계:
+
+1. **E-step**: latent variable 의 expectation 계산.
+2. **M-step**: complete-data log-posterior 의 mode 찾기.
+
+**ECM** (Expectation Conditional Maximization, Meng & Rubin 1993): M-step 을 한 번에 하지 않고 **block 별 conditional max** 로 분해. Mixed model 처럼 closed-form conditional 가 있는 모형에서 매우 단순.
+
+각 block 이 conditional max 이므로 **monotone convergence 보장**.
+:::
+
+### Gibbs Sampler
+
+ECM 의 mode 대신 **stochastic conditional sampling**. 단계는 동일하지만 closed form 에서 mode 가 아닌 표본:
+
+| 단계 | ECM | Gibbs |
+|:---:|:------|:------|
+| $z_{ij}$ | $\zeta_{ij}$ 계산 | $\text{Bernoulli}(\zeta_{ij})$ 추출 |
+| $\alpha_j$ | 식 (22.6) 점 추정 | $N(\alpha_j^{\text{new}}, \text{Var})$ 추출 |
+| $\sigma^2$ | 점 추정 | Inv-$\chi^2$ 추출 |
+| $\lambda$ | 평균 | $\text{Beta}(h+1, 180-h+1)$ |
+
+::: {.callout-tip}
+## 직관 — ECM 으로 시작하고 Gibbs 로 마무리
+
+실무 권장 순서:
+
+1. **Crude estimate** (개인 평균, 분산 기준) 로 시작점 설정.
+2. **ECM 100 회** 돌려 mode 찾기 (multiple starting points 로 multimodality 점검).
+3. Mode 에서 $t_4$ 근사 → importance resampling 으로 Gibbs starting points.
+4. **Gibbs sampler** 로 사후 표본 추출.
+
+Mode 찾기 → 근사 → MCMC 의 3 단계가 mixture·hierarchical 모델의 표준 워크플로우.
+:::
+
+### Posterior Predictive Checks — 모델 점검
+
+**Test quantity**:
+
+* $T_{\min}$ = 6 명 조현병 환자의 within-person sd 의 **최솟값**.
+* $T_{\max}$ = 6 명 조현병 환자의 within-person sd 의 **최댓값**.
+
+**원래 모델 결과** (Figure 22.2): $T_{\min}$ p-value = 0.000, $T_{\max}$ p-value = 1.000. **명백한 lack of fit** — 환자별 variability 가 모델보다 훨씬 다양.
+
+::: {.callout-tip}
+## 직관 — 좋은 test quantity 와 나쁜 test quantity
+
+**나쁜**: 평균 $s_j$ — $\sigma_y^2$ 의 sufficient statistic 와 직결, 모델이 자동 적합 → 점검 의미 없음.
+
+**좋은**: $T_{\min}, T_{\max}$ — 분포의 **모양** 에 민감, 모델이 잡지 못한 구조를 노출.
+
+원리: **모델 적합 시 사용된 statistic 과 직교하는 quantity 를 선택**. Sufficient statistic 의 함수는 검정 의미가 없다.
+:::
+
+### 확장 모델 — $\omega$ 와 $\sigma_{y2}^2$
+
+원래 모델 한계: 모든 조현병 환자가 동일 $\lambda, \tau, \sigma_y$ 가정.
+
+**확장**:
+
+* $\omega$ = 조현병 환자 중 attentional delay 에 취약한 비율.
+* $\sigma_{y2}^2$ = delay 측정의 분산 (별도).
+* $W_j$ = 환자 $j$ 가 vulnerable 한지 indicator.
+
+새 모델 결과 (Table 22.1):
+
+* $\omega \approx 0.56$ — 조현병 환자의 약 절반만 delay-prone.
+* $\lambda \approx 0.64$ (이전 0.12 보다 큼) — vulnerable 환자에서는 더 자주 delay.
+* $\tau \approx 0.42$ (이전 0.85 보다 작음) — delay 크기는 더 작음.
+
+**의미**: 하나의 평균 효과가 아니라 **두 부분모집단** (delay-prone vs not) 으로 환자를 분리.
+
+Posterior predictive checks (Figure 22.3) 에서도 lack of fit 크게 감소.
+
+## § 22.3 Label Switching — 식별과 후처리
+
+### Label Ambiguity 다시
+
+식 (22.10) — exchangeable prior:
+
+$$
+(\pi_1, \ldots, \pi_H) \sim \text{Dirichlet}(a, \ldots, a), \qquad \theta_h \sim P_0 \text{ independently} \quad (22.10)
+$$
+
+이 prior 하에서 사후 분포의 $\theta_h$ marginal 은 모든 $h$ 가 동일 (exchangeable).
+
+::: {.callout-important}
+## 핵심 함의
+
+Mixture component-specific parameter $(\theta_h)$ 의 posterior summary 가 **의미 없다** (모든 $h$ 가 같다는 결과).
+
+해결: (1) Postprocessing, (2) Constraint, (3) **density 만 추정** (component-specific 무시).
+:::
+
+### Conjugate Gibbs — 식 (22.11)~(22.12)
+
+일변량 location-scale mixture:
+
+$$
+y_i \mid z_i \sim N(\mu_{z_i}, \tau_{z_i}^2), \quad \Pr(z_i = h) = \pi_h \quad (22.11)
+$$
+
+$$
+\mu_h, \tau_h^2 \sim N(\mu_h \mid \mu_0, \kappa \tau^2) \cdot \text{Inv-Gamma}(\tau^2 \mid a_\tau, b_\tau) \quad (22.12)
+$$
+
+**3 단계 Gibbs**:
+
+1. $z_i$: multinomial 사후
+$$
+\Pr(z_i = h \mid \cdots) = \frac{\pi_h N(y_i \mid \mu_h, \tau_h^{-1})}{\sum_l \pi_l N(y_i \mid \mu_l, \tau_l^{-1})}
+$$
+
+2. $(\mu_h, \tau_h^2)$: 같은 component 에 속한 데이터의 정규-역감마 conjugate 사후.
+
+3. $\pi$: $\text{Dir}(a + n_1, \ldots, a + n_H)$, $n_h$ = component $h$ 의 원소 수.
+
+::: {.callout-tip}
+## 직관 — Gibbs 의 conditional 은 항상 단순
+
+조건부로 보면:
+
+* $z$ 가 알려지면 → 각 component 가 별도 정규 추정 (표준 conjugate).
+* $(\mu_h, \tau_h)$ 가 알려지면 → 각 $z_i$ 가 multinomial.
+* $z$ 가 알려지면 → $\pi$ 는 Dirichlet conjugate.
+
+Mixture 의 어려움 = **이 세 가지를 동시에** 해야 하는 것. Gibbs 가 **순환 conditional** 로 분해해 단순화.
+:::
+
+### Label Switching 의 두 처리
+
+**방식 1 — Postprocessing**:
+
+1. Label 무시하고 Gibbs 돌림 → samples $s = 1, \ldots, S$.
+2. Permutation $\sigma_s \in S_H$ 를 골라 loss $L(\hat\theta, \theta)$ 최소화.
+3. KL loss 가 표준.
+
+**방식 2 — Order constraint**:
+
+* $\mu_1 < \mu_2 < \cdots < \mu_H$ 강제.
+* 단점: 다변량은 어떤 순서? 분산만 다른 component 는?
+* 단점: 평균이 가까우면 여전히 switching, 거리 부풀림 bias.
+
+::: {.callout-tip}
+## 실무 권장
+
+**Density estimation** 만 목적이면 — label switching 무시. 사후 평균 density $\hat g(y) = \frac{1}{S}\sum_s \sum_h \pi_h^{(s)} N(y \mid \mu_h^{(s)}, \tau_h^{(s)2})$ 는 **switching 에 불변**.
+
+**Cluster-specific 해석** 이 필요하면 — postprocessing (KL loss). Constraint 는 다변량에서 권장하지 않음.
+:::
+
+## § 22.4 Unspecified Number of Mixture Components
+
+### 핵심 아이디어 — Truncated Upper Bound
+
+$H$ 를 작게 잡지 말고 **upper bound** ($H = 20$ 또는 큰 값) 로 잡는다. **빈 component 를 자연스럽게 형성** 하는 prior 사용.
+
+### Dirichlet $a = n_0/H$ 의 마법
+
+$\pi \sim \text{Dirichlet}(a, \ldots, a)$ 에서 $a = n_0/H$:
+
+* $a = 1$ ($n_0 = H$): 모든 weight 가 균일 — $H$ 클수록 데이터를 많은 component 에 분산.
+* $a = n_0/H$ ($n_0$ 고정): $H$ 가 크면 $a$ 작음 → **sparse weights** (대부분 0 근처, 일부만 큼).
+
+::: {.callout-tip}
+## 직관 — Stick-breaking 의 예고
+
+$\pi_h = \lambda_h / \sum_l \lambda_l$, $\lambda_h \sim \text{Gamma}(a, 1)$ 로 동등 표현. $a = n_0/H$ 작으면 $\lambda_h$ 대부분 0 근처, 소수만 right tail.
+
+이는 Ch.23 Dirichlet Process 의 stick-breaking 과 정확히 같은 정신 — **few large + many tiny**. Ch.22 의 truncated 버전이 사실상 **finite-$H$ approximation of DP**.
+:::
+
+### $H_n$ — 사용 중인 component 수
+
+$H_n = \sum_h 1_{n_h > 0}$ — 데이터가 실제 점유한 component 수.
+
+$a = n_0/H$ 하에서 $H_n$ 의 사후가 $H$ (upper bound) 에 거의 무관해진다. 즉 **data-driven** 으로 $H_n$ 결정.
+
+추정:
+
+1. $H = 20$ (또는 큰 값) 으로 Gibbs 돌림.
+2. 각 iteration 의 $H_n$ 기록.
+3. $\widehat H_n$ = 사후 mode of $H_n$.
+
+### Galaxy / Acidity / Iris 예제
+
+| 데이터 | $n$ | 차원 | upper $H$ | $\widehat H_n$ |
+|:----|:---:|:-----:|:----:|:----:|
+| Galaxy | 82 | 1 | 5 | ~3 |
+| Acidity | 155 | 1 | 5 | 2 or 3 |
+| Iris | 150 | 4 | 6 | ~3 (실제 종 수와 일치) |
+
+Iris 결과 (Table 22.4): 6 component 중 weight 큰 3 개가 setosa, versicolor, virginica 와 거의 일치. 작은 weight 의 추가 component 는 정규 가정의 한계 (실제 cluster 가 정확히 정규가 아님).
+
+::: {.callout-note}
+## 직관 — Cluster 수가 항상 species 수와 일치하진 않음
+
+데이터 cluster 가 **정확히 정규** 가 아니면, 한 species 가 여러 component 로 쪼개진다.
+
+예: 한 종의 분포가 약간 skewed 면 정규 mixture 가 두 component 로 근사 → 종 수 (3) 보다 cluster 수 (4~5) 가 더 많이 나오는 현상.
+
+해결: parametric kernel ($f$) 의 유연성을 늘림 ($t$ 분포 사용 등) 또는 cluster 해석을 자제하고 density estimation 만 함.
+:::
+
+## § 22.5 Mixture for Classification and Regression
+
+### Bayesian Discriminant Analysis
+
+분류 ($y \in \{1, \ldots, C\}$) 에서 Bayes' rule:
+
+$$
+\Pr(y_i = c \mid x_i) = \frac{\Pr(y_i = c) f(x_i \mid y_i = c)}{\sum_{c'} \Pr(y_i = c') f(x_i \mid y_i = c')}
+$$
+
+* $\psi_c = \Pr(y_i = c)$ — marginal class probability.
+* $f_c(x_i) = f(x_i \mid y_i = c)$ — class-conditional density.
+
+**Prior**: $\psi \sim \text{Dirichlet}(a\psi_{01}, \ldots, a\psi_{0C})$.
+
+**사후** (fully supervised):
+
+$$
+\psi \mid y, X \sim \text{Dirichlet}\Bigl(a\psi_{01} + \sum_i \mathbb{1}_{y_i = 1}, \ldots, a\psi_{0C} + \sum_i \mathbb{1}_{y_i = C}\Bigr)
+$$
+
+### Mixture 가 비모수 $f_c$ 로
+
+각 class 의 conditional density $f_c$ 자체를 mixture 로:
+
+$$
+f_c(x_i) = \sum_{h=1}^H \pi_{ch} N_p(x_i \mid \mu_{ch}^*, \Sigma_{ch}^*), \qquad (\mu_{ch}^*, \Sigma_{ch}^*) \sim P_0
+$$
+
+::: {.callout-tip}
+## 직관 — 두 단계 mixture
+
+* **외부**: 각 class 가 자기만의 mixture distribution.
+* **내부**: 각 mixture 가 $H$ 개 정규 component.
+
+장점: 단일 정규로 표현 못 하는 복잡한 class-conditional 분포 (multimodal·skewed) 표현 가능.
+
+응용: speech recognition 에서 음소별 acoustic feature 분포, 영상에서 객체별 색·질감 분포.
+:::
+
+### Semi-Supervised Classification
+
+Training 의 일부만 labeled 일 때:
+
+* Labeled $i$: $y_i$ 와 $x_i$ 모두 사용.
+* Unlabeled $i$: $x_i$ 의 marginal $\sum_c \psi_c f_c(x_i)$ 가 우도에 기여.
+
+Unlabeled data 가 mixture 로부터 cluster structure 학습 → labeled data 와 결합해 분류 성능 향상.
+
+## § 22.6 Bibliographic Note (요지)
+
+* **McLachlan & Peel (2000)** — *Finite Mixture Models* — mixture 의 전통적 정전.
+* **Fruhwirth-Schnatter (2006)** — *Finite Mixture and Markov Switching Models* — 베이즈 관점.
+* **Stephens (2000)** — Label switching 의 KL loss postprocessing.
+* **Richardson & Green (1997)** — Reversible jump for unknown $H$.
+* **Roeder & Wasserman (1997)** — Galaxy 데이터 mixture 분석 원전.
+* **Diebolt & Robert (1994)** — Gibbs sampler for mixture 원전.
+* **Biernacki, Celeux, Govaert (2000)** — ICL 기준 (cluster 수 결정).
+
+## Ch.22 핵심 수식 모음
+
+| 번호 | 수식 | 의미 |
+|:----:|:-----|:-----|
+| (22.1) | $p(y_i \mid \theta, \lambda) = \sum_h \lambda_h f(y_i \mid \theta_h)$ | Finite mixture |
+| (22.2) | $p(y, z \mid \theta, \lambda) = \prod_i \prod_h (\lambda_h f(y_i \mid \theta_h))^{z_{ih}}$ | Latent indicator joint |
+| - | $y_i \mid \mu, \sigma^2, z_i \sim N(\mu, \sigma^2 z_i),\ z_i \sim \text{Inv-}\chi^2(\nu, 1)$ | Continuous mixture ($t$) |
+| (22.5) | $\zeta_{ij} = \frac{\lambda N(y_{ij} \mid \alpha_j + \tau, \sigma_y^2)}{(1-\lambda) N(\cdots) + \lambda N(\cdots)}$ | E-step indicator |
+| (22.6) | $\alpha_j^{\text{new}} = \frac{\sigma_\alpha^{-2}(\mu + \beta S_j) + \sigma_y^{-2} \sum_i (y_{ij} - \zeta_{ij}\tau)}{\sigma_\alpha^{-2} + n_j \sigma_y^{-2}}$ | M-step random effect |
+| (22.10) | $\pi \sim \text{Dir}(a, \ldots, a),\ \theta_h \sim P_0$ | Exchangeable prior |
+| (22.11) | $y_i \mid z_i \sim N(\mu_{z_i}, \tau_{z_i}^2)$ | Location-scale mixture |
+| (22.12) | $\mu_h, \tau_h^2 \sim N \cdot \text{Inv-Gamma}$ | Conjugate prior |
+| - | $a = n_0/H$ | Sparse Dirichlet for unknown $H$ |
+
+## 최소 실행 예제 — 1D 정규 혼합 (PyMC)
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+rng = np.random.default_rng(0)
+
+# simulate data: two-component mixture
+n = 300
+true_pi = [0.4, 0.6]
+true_mu = [-1.5, 1.0]
+true_sigma = [0.5, 0.8]
+
+z_true = rng.choice(2, size=n, p=true_pi)
+y = rng.normal(np.array(true_mu)[z_true], np.array(true_sigma)[z_true])
+
+# fit two-component mixture with PyMC
+H = 2
+
+with pm.Model() as mix_model:
+    # Dirichlet prior on weights
+    pi = pm.Dirichlet("pi", a=np.ones(H))
+
+    # ordered means for label identifiability
+    mu = pm.Normal("mu", 0, 5, shape=H, transform=pm.distributions.transforms.ordered,
+                   initval=np.array([-1.0, 1.0]))
+    sigma = pm.HalfNormal("sigma", 1, shape=H)
+
+    # mixture likelihood
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(H)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+
+    trace = pm.sample(1500, tune=1500, target_accept=0.95, chains=4)
+
+print(az.summary(trace, var_names=["pi", "mu", "sigma"]))
+
+# truncated mixture with H=10 + sparse Dirichlet (a = 1/H)
+H_max = 10
+
+with pm.Model() as sparse_mix:
+    pi = pm.Dirichlet("pi", a=np.ones(H_max) / H_max)
+    mu = pm.Normal("mu", 0, 5, shape=H_max,
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-2, 2, H_max))
+    sigma = pm.HalfNormal("sigma", 1, shape=H_max)
+
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(H_max)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+
+    trace_sparse = pm.sample(1500, tune=1500, target_accept=0.95, chains=4)
+
+# count occupied components (weight > 0.01)
+weights = trace_sparse.posterior["pi"].mean(dim=("chain", "draw")).values
+print(f"weights: {weights.round(3)}")
+print(f"effective number of components: {(weights > 0.01).sum()}")
+```
+
+::: {.callout-tip}
+## 코드 가이드
+
+* **Step 1**: 명시적 $H = 2$ + ordered constraint on $\mu$ — label identifiability.
+* **Step 2**: Truncated $H_{\max} = 10$ + $a = 1/H$ sparse Dirichlet — § 22.4 의 unspecified $H$.
+* PyMC 의 `pm.Mixture` 가 latent indicator 를 자동 처리 (적분 소거).
+* `transform=ordered` 가 $\mu_1 < \mu_2 < \cdots$ 강제.
+:::
+
+## Ch.22 심화편 예고
+
+| 심화편 | 범위 | 주제 |
+|--------|------|------|
+| 04-22-1 | § 22.1~22.2 | Mixture 정의·식 (22.1)~(22.2)·continuous mixture·Schizophrenia 예제 ECM/Gibbs 식 (22.5)~(22.7) 완전 유도·posterior predictive checks |
+| 04-22-2 | § 22.3~22.6 | Label switching·식 (22.10)~(22.12) Gibbs·식 unspecified $H$·galaxy/acidity/iris·classification·연습 |
+
+## Ch.22 실전 체크리스트
+
+**모델 결정**
+
+1. **부분모집단 가설**: 도메인적 이유 → $H$ 작은 값 고정. 단순 density estimation → upper bound + sparse.
+2. **Component 가족**: 정규 default, $t$ 는 outlier robust, multivariate 는 $\Sigma$ 형태 결정.
+3. **공통/분리 parameter**: variance 공통? 평균 분리? 도메인에 따라.
+4. **Hierarchical 구조**: 그룹 random effect + mixture indicator 동시 가능.
+
+**Prior**
+
+5. $\lambda$: Dirichlet, $a = 1$ (default) 또는 $a = n_0/H$ (sparse).
+6. $\theta_h$: weakly informative, **proper 필수** (improper 는 degenerate posterior 위험).
+7. Order constraint or postprocessing 결정 (label switching 처리).
+8. Boundary 회피: $\lambda \in [0.001, 0.999]$, $\sigma > 0.001$ 등.
+
+**계산**
+
+9. **시작점**: crude estimate 100 개 + ECM mode finding.
+10. **Multimodality**: 여러 starting point 결과 비교. Minor mode 무시 가능 여부 판단.
+11. **Gibbs**: closed-form conditional 가 있으면 conjugate 활용.
+12. **수렴**: $\widehat R < 1.1$, label switching 시 density 기준 점검.
+
+**검증**
+
+13. **Posterior predictive checks**: sufficient statistic 외의 quantity 사용.
+14. **Robustness**: kernel ($f$) 변경에 따른 cluster 안정성.
+15. **Cross-validation**: WAIC, LOO-CV — DIC 는 mixture 에서 권장 안 함.
+16. **$H_n$ 사후**: occupied component 수의 분포.
+
+**해석**
+
+17. **Density estimation**: label switching 무시, $\hat g(y)$ 의 사후 평균만.
+18. **Cluster assignment**: postprocessing (KL loss) 필수.
+19. **외삽**: cluster 가정이 데이터 외부에서도 유효한가 검토.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Part V Overview](./04-bayesian-part5-overview.qmd)
+* [Ch.21 Gaussian Process Models Overview](./04-21-0-gaussian-process-overview.qmd)
+* [Ch.5 Hierarchical Models](./00-5-0-hierarchical.qmd) — Continuous mixture 의 일반화
+* [Ch.13 § 13.4 — EM Algorithm](./02-13-2-em-conditional-marginal-hierarchical.qmd) — ECM 이론
+* [Ch.17 Robust Inference](./03-17-0-robust-inference-overview.qmd) — $t$ 분포 = continuous mixture
+* [Ch.4 § 4.3 — Aliasing](./00-4-2-frequency-bayesian-interp.qmd) — Label ambiguity 의 일반론
+
+**후속 주제**
+
+* [Ch.22 § 22.1~22.2 — Setting Up·Schizophrenia (예정)](./04-22-1-mixture-setup-schizophrenia.qmd)
+* [Ch.22 § 22.3~22.6 — Label Switching·Unknown H·Classification (예정)](./04-22-2-label-switching-classification.qmd)
+* [Ch.23 Dirichlet Process Models Overview (예정)](./04-23-0-dirichlet-process-overview.qmd)
+
+**관련 개념 (cross-category)**
+
+* [EM Algorithm (Dempster-Laird-Rubin)](../../Machine_Learning/em-algorithm.qmd)
+* [Gaussian Mixture Models](../../Machine_Learning/gaussian-mixture-model.qmd)
+* [Latent Class Analysis](../latent-class-analysis.qmd)
+* [Model-Based Clustering (mclust)](../../Machine_Learning/model-based-clustering.qmd)
+* [LGP Density Estimation](./04-21-2-fda-density-exercises.qmd) — Ch.21 의 비교 대안
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.22. CRC Press.
+* McLachlan, G. J., & Peel, D. (2000). *Finite Mixture Models*. Wiley.
+* Fruhwirth-Schnatter, S. (2006). *Finite Mixture and Markov Switching Models*. Springer.
+* Stephens, M. (2000). Dealing with Label Switching in Mixture Models. *JRSS B*, 62(4), 795-809.
+* Richardson, S., & Green, P. J. (1997). On Bayesian Analysis of Mixtures with an Unknown Number of Components. *JRSS B*, 59(4), 731-792.
+* Roeder, K., & Wasserman, L. (1997). Practical Bayesian Density Estimation Using Mixtures of Normals. *JASA*, 92(439), 894-902.
+* Diebolt, J., & Robert, C. P. (1994). Estimation of Finite Mixture Distributions through Bayesian Sampling. *JRSS B*, 56(2), 363-375.
+* Biernacki, C., Celeux, G., & Govaert, G. (2000). Assessing a Mixture Model for Clustering with the Integrated Completed Likelihood. *IEEE PAMI*, 22(7), 719-725.
+* Meng, X.-L., & Rubin, D. B. (1993). Maximum Likelihood Estimation via the ECM Algorithm. *Biometrika*, 80(2), 267-278.
+* Belin, T. R., & Rubin, D. B. (1990). Analysis of a Finite Mixture Model with Variance Components. *Proceedings of the Social Statistics Section, ASA*. (Schizophrenia 데이터 출처)
