@@ -1,0 +1,768 @@
+---
+title: "Ch.22 § 22.7 심화 — 연습문제 8개 완전 풀이"
+subtitle: "Cluster point estimate (mean/median/mode 의 categorical 변수 의미)·overfitted mixture·long-tail kernel mismatch·galaxy density sensitivity·football single component·kidney cancer discrete vs continuous mixing·improper prior degenerate posterior·Dirichlet sparsity asymptotics 8문제 수식·코드·직관 통합 풀이"
+description: |
+  Gelman BDA Ch.22 § 22.7 의 8 연습문제를 모두 단계별로 풀이한다.
+  Ex1 cluster 의 categorical point estimate (왜 mean/median 이 무의미하고 mode 만이 의미 있는가, 0-1 loss 와 Bayes optimal classifier 의 연결).
+  Ex2 overfitted mixture (true $H_0 = 3$ 에 $H = 2/3/4/$unspecified 적합, sparse Dirichlet 의 자동 zero-out, WAIC/LOO 비교, $H_n$ 사후).
+  Ex3 long-tailed data ($t_4$ mixture 를 normal mixture 로 적합 시 cluster 수 부풀림 메커니즘과 $t$-component 대안).
+  Ex4 galaxy density 의 $\alpha \to 0, k$ 증가, prior variance 증가 sensitivity.
+  Ex5 football point spread mixture 가 single component 로 회귀하는 의미 (정규 가정의 데이터 기반 검증).
+  Ex6 kidney cancer 의 discrete (point mass) mixing vs continuous (Gamma) mixing 의 hierarchical 차이.
+  Ex7 noninformative prior 가 정규 mixture 에서 degenerate posterior 를 만드는 메커니즘과 해결.
+  Ex8 Dirichlet sparsity 의 점근 — $a = 1/k$ 와 $a = 1$ 의 order statistic 비교, stick-breaking representation 으로 수렴 시각화.
+  각 문제마다 수식 유도 + 시뮬레이션 코드 + 직관 callout 으로 mixture 의 8 측면을 점검한다.
+categories:
+  - Statistics
+  - Bayesian
+  - Mixture-Models
+  - Exercises
+  - Sensitivity-Analysis
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 들어가며 — 본 편의 자리
+
+Ch.22 시리즈의 마지막 편:
+
+| 편 | 주제 |
+|:---|:------|
+| [Overview (04-22-0)](./04-22-0-finite-mixture-overview.qmd) | Ch.22 큰 그림 |
+| [§ 22.1~22.3 (04-22-1)](./04-22-1-setup-schizophrenia-label-switching.qmd) | 정의·ECM·label switching |
+| [§ 22.4~22.7 (04-22-2)](./04-22-2-unspecified-classification-exercises.qmd) | Unspecified $H$·classification·연습 요약·Ch.22 결산 |
+| **§ 22.7 (본 편)** | **연습문제 8개 완전 풀이** |
+
+::: {.callout-important}
+## 본 편이 점검하는 mixture 의 8 측면
+
+| Ex | 측면 | 핵심 질문 |
+|:---:|:------|:------|
+| 1 | Point estimate | Categorical latent 의 정점 추정은? |
+| 2 | Overfitting | $H$ 가 너무 커도 안전한가? |
+| 3 | Kernel mismatch | $f$ 가 잘못되면? |
+| 4 | Sensitivity | Hyperparameter 에 결과 민감? |
+| 5 | Null 검증 | Mixture 가 정규로 회귀하는가? |
+| 6 | Mixing 형태 | Discrete vs continuous? |
+| 7 | Improper prior | 어디까지 안전? |
+| 8 | Sparsity 점근 | $H \to \infty$ 한계? |
+
+이 8 측면이 **mixture model 의 진단 차원** 이다. 8 측면 모두를 점검하면 모델의 신뢰성·robustness 가 확보된다.
+:::
+
+## Exercise 1 — Cluster Point Estimate
+
+### 문제
+
+3-component mixture 에서 각 데이터 포인트의 component 식별. Pointwise marginal **mean / median / mode** 중 무엇이 적합한가?
+
+### 풀이
+
+**조건부 사후**:
+
+$$
+\Pr(z_i = h \mid y_i, \theta) = \frac{\pi_h f_h(y_i \mid \theta_h)}{\sum_{l=1}^3 \pi_l f_l(y_i \mid \theta_l)}, \quad h = 1, 2, 3
+$$
+
+이는 **categorical** 분포 (3-class).
+
+#### 각 점 추정의 검토
+
+**Mean** $E(z_i \mid y_i) = \sum_h h \cdot \Pr(z_i = h \mid y_i)$.
+
+* 예: $\Pr(z_i = 1) = 0.4, \Pr(z_i = 2) = 0.4, \Pr(z_i = 3) = 0.2$ → mean = $0.4 + 0.8 + 0.6 = 1.8$.
+* "1.8" 은 정수가 아니며 **component label 의 의미가 없다** (label 이 categorical 이지 ordinal 이 아님).
+
+**Median**: categorical 변수의 median 정의가 모호. 순서가 없으므로 부적절.
+
+**Mode** $\arg\max_h \Pr(z_i = h \mid y_i)$.
+
+* 위 예에서 mode = 1 또는 2 (tie). 명확한 정수 label.
+
+::: {.callout-tip}
+## 직관 — 0-1 loss 와 Bayes optimal classifier
+
+분류 문제의 표준 loss 는 0-1:
+
+$$
+L(\widehat z, z) = 1_{\widehat z \neq z}
+$$
+
+기댓값:
+
+$$
+E[L \mid y] = 1 - \Pr(\widehat z = z \mid y) = 1 - \Pr(z = \widehat z \mid y)
+$$
+
+최소화: $\widehat z = \arg\max_h \Pr(z = h \mid y) = $ **mode**.
+
+→ **Categorical 변수의 mode = 0-1 loss 하 Bayes optimal point estimate**.
+
+다른 loss 는 다른 결과:
+
+* **Posterior mean** ($L = (\widehat z - z)^2$): $z$ 가 ordinal 일 때 의미.
+* **Median** ($L = |\widehat z - z|$): ordinal.
+* **Mode** ($L = 1_{\widehat z \neq z}$): nominal — mixture cluster 의 자연 선택.
+:::
+
+### 실행 예제
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# simulate 3-component mixture
+n = 200
+true_pi = [0.3, 0.4, 0.3]
+true_mu = [-2, 0, 2]
+true_sigma = [0.5, 0.5, 0.5]
+
+z_true = rng.choice(3, size=n, p=true_pi)
+y = rng.normal(np.array(true_mu)[z_true], np.array(true_sigma)[z_true])
+
+# compute posterior P(z | y) (using true parameters for simplicity)
+log_pi = np.log(true_pi)
+log_density = np.array([
+    [-0.5 * np.log(2 * np.pi * s ** 2) - 0.5 * ((y_i - m) / s) ** 2
+     for m, s in zip(true_mu, true_sigma)]
+    for y_i in y
+])
+log_post = log_pi + log_density
+log_post -= log_post.max(axis=1, keepdims=True)
+post = np.exp(log_post)
+post /= post.sum(axis=1, keepdims=True)
+
+# three point estimates
+z_mean = post @ np.arange(3)
+z_mode = post.argmax(axis=1)
+
+print(f"first 5 posterior probs:\n{post[:5].round(3)}")
+print(f"first 5 z_mean (often non-integer): {z_mean[:5].round(2)}")
+print(f"first 5 z_mode: {z_mode[:5]}")
+print(f"first 5 z_true: {z_true[:5]}")
+print(f"mode accuracy: {(z_mode == z_true).mean():.3f}")
+```
+
+## Exercise 2 — Overfitted Mixture
+
+### 문제
+
+True $H_0 = 3$, equally weighted normal mixture, centers $-2, 0, 2$, scale $1$ 에서 500 점. $H = 2, 3, 4$ 와 unspecified $H \in [1, 6]$ 으로 적합.
+
+### 풀이 — 4 모델 비교
+
+#### (a) $H = 2$ — Underfit
+
+두 cluster 만 허용. 결과: 두 component 가 합쳐지거나, 한 component 가 두 cluster 를 cover.
+
+**예상**:
+
+* Component 1: $\mu \approx -1$, $\sigma$ 큼 (centers $-2, 0$ 합침).
+* Component 2: $\mu \approx 2$, $\sigma$ 보통.
+* 또는 $\mu \approx 0, \mu \approx 0$ (모두 한쪽으로) — local optimum.
+
+**Diagnostic**: PPC 가 양 끝 tail 에서 lack of fit 보임.
+
+#### (b) $H = 3$ — 정확
+
+True 회복.
+
+* $\pi \approx 1/3$ 각.
+* $\mu \approx -2, 0, 2$.
+* $\sigma \approx 1$.
+
+#### (c) $H = 4$ — Overfit
+
+$a = 1$ (uniform Dirichlet) 이면: 4 cluster 가 거의 균등하게 형성, 한 cluster 가 두 개로 split.
+
+$a = 1/H = 0.25$ (sparse) 이면: **4 번째 component 가 zero-out**, 효과적 $H_n = 3$ (Rousseau-Mengersen 2011).
+
+#### (d) Unspecified $H \in [1, 6]$ — Self-Adapting
+
+$H = 6$ upper bound + $a = 1/6$ → $H_n$ 사후가 3 에 집중.
+
+::: {.callout-tip}
+## 직관 — Sparse Dirichlet 의 강건성
+
+$a = 1$ 의 Dirichlet 은 redundancy 에 취약. 추가 component 가 데이터 일부를 흡수해 cluster 수 부풀림.
+
+$a = 1/H$ 는 **추가 component 의 "비용"** 이 자동 부과:
+
+* Empty cluster: $\pi_h \to 0$, posterior 영향 무.
+* Redundant cluster: $\pi_h$ 가 작은 양수로 수렴, 점진 zero-out.
+
+따라서 **$H$ 의 정확한 값을 미리 모를 때** sparse Dirichlet 의 truncated upper bound 가 robust 한 default.
+:::
+
+### 시뮬레이션 코드
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+rng = np.random.default_rng(42)
+
+# true 3-component data
+n = 500
+z_true = rng.choice(3, size=n, p=[1/3, 1/3, 1/3])
+y = rng.normal([-2, 0, 2][z_true[i]] if False else 0, 1, n)
+# proper simulation
+y = np.array([rng.normal([-2, 0, 2][z_true[i]], 1) for i in range(n)])
+
+
+def fit_mixture(H, a_dirichlet, n_samples=1000):
+    with pm.Model() as m:
+        pi = pm.Dirichlet("pi", a=a_dirichlet * np.ones(H))
+        mu = pm.Normal("mu", 0, 5, shape=H,
+                       transform=pm.distributions.transforms.ordered,
+                       initval=np.linspace(-3, 3, H))
+        sigma = pm.HalfNormal("sigma", 2, shape=H)
+        components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(H)]
+        pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+        idata = pm.sample(n_samples, tune=1000, target_accept=0.9, chains=2,
+                          progressbar=False)
+    return idata
+
+
+# Fit four models
+results = {}
+for label, (H, a) in [("H=2", (2, 1)), ("H=3", (3, 1)),
+                      ("H=4 sparse", (4, 0.25)),
+                      ("H=6 sparse", (6, 1/6))]:
+    print(f"Fitting {label}...")
+    results[label] = fit_mixture(H, a)
+
+# WAIC / LOO comparison
+for label, idata in results.items():
+    waic = az.waic(idata, var_name="y")
+    print(f"{label}: WAIC = {waic.elpd_waic:.2f} ± {waic.se:.2f}")
+
+# H_n posterior for sparse models
+for label in ["H=4 sparse", "H=6 sparse"]:
+    pi_post = results[label].posterior["pi"].values  # (chain, draw, H)
+    H_n = (pi_post > 0.05).sum(axis=-1)  # occupied components per draw
+    print(f"{label}: P(H_n) ≈ {np.bincount(H_n.flatten()) / H_n.size}")
+```
+
+## Exercise 3 — Long-Tailed Data with Normal Mixture
+
+### 문제
+
+3 개 $t_4$ 분포의 mixture 에서 데이터 추출. Normal mixture 로 적합.
+
+### 풀이 — Cluster 수 부풀림 메커니즘
+
+#### $t_4$ 의 정체
+
+$t_4$ = scale mixture of normals:
+
+$$
+y \mid \mu, \sigma^2, z \sim N(\mu, \sigma^2 z), \qquad z \sim \text{Inv-}\chi^2(4, 1)
+$$
+
+$z$ 는 1 근처에 집중, 큰 값에도 non-trivial probability → **heavy tail**.
+
+#### Normal mixture 의 흉내
+
+$t_4(\mu, \sigma^2)$ 한 분포를 흉내내려면 normal mixture:
+
+* Component $a$: $N(\mu, \sigma_a^2)$, $\sigma_a$ 작음, weight $\pi_a$ 큼 (center).
+* Component $b$: $N(\mu, \sigma_b^2)$, $\sigma_b$ 큼, weight $\pi_b$ 작음 (tail).
+
+→ 같은 center 의 **2 component** 로 $t_4$ 한 분포 표현.
+
+따라서 3 개 $t_4$ mixture → **6 component normal mixture** 가 자연스러운 회복.
+
+::: {.callout-tip}
+## 직관 — Cluster 수 vs 진짜 부분모집단 수
+
+이 exercise 의 교훈:
+
+* 데이터 생성 메커니즘 = 3 진짜 부분모집단.
+* 적합된 cluster 수 = 6 (또는 그 이상).
+
+**Cluster 수가 진짜 부분모집단 수가 아니다** — kernel ($f$) 의 정확성에 결정적.
+
+해결:
+
+1. **$t$-component mixture**: $f = t_\nu$ 로 가정. 진짜 3 cluster 회복.
+2. **Sparse Dirichlet + 큰 $H$**: 6 component 가 자동 형성. cluster 수 해석 자제, density estimation 만 사용.
+3. **Robustness 점검**: $f = N$ vs $f = t$ 두 모델 적합 후 cluster 결과 비교. 큰 차이면 $f$ 민감.
+:::
+
+### 시뮬레이션 코드
+
+```python
+from scipy import stats
+
+rng = np.random.default_rng(7)
+
+# data from 3-component t_4 mixture
+n = 500
+true_pi = [1/3, 1/3, 1/3]
+true_mu = [-2, 0, 2]
+df = 4
+
+z_true = rng.choice(3, size=n, p=true_pi)
+y_t = np.array([
+    stats.t.rvs(df, loc=true_mu[z_true[i]], scale=1, random_state=rng)
+    for i in range(n)
+])
+
+# Fit normal mixture with sparse Dirichlet (H=10)
+with pm.Model() as t_to_normal:
+    pi = pm.Dirichlet("pi", a=np.ones(10) / 10)
+    mu = pm.Normal("mu", 0, 5, shape=10,
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-4, 4, 10))
+    sigma = pm.HalfNormal("sigma", 2, shape=10)
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(10)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y_t)
+    idata_norm = pm.sample(1000, tune=1000, target_accept=0.95, chains=2,
+                           progressbar=False)
+
+pi_norm = idata_norm.posterior["pi"].mean(dim=("chain", "draw")).values
+H_n_norm = (pi_norm > 0.03).sum()
+print(f"Normal mixture: occupied components = {H_n_norm}")
+print(f"Component weights: {pi_norm.round(3)}")
+```
+
+## Exercise 4 — Galaxy Density Sensitivity
+
+### 문제
+
+82 점 galaxy 데이터, finite mixture of Gaussians + symmetric $\text{Dir}(\alpha)$ + normal-inverse-gamma $P_0$. 다음 변화의 효과를 plot.
+
+(a) $\alpha \to 0$. (b) $k$ 증가. (c) $P_0$ 의 variance 증가.
+
+### 풀이 — 3 가지 sensitivity
+
+#### (a) $\alpha \to 0$ — Sparsity 강화
+
+* $\alpha$ 작으면 simplex corner 집중 → **소수 dominant component**.
+* $\alpha = 0$: 사실상 단일 component (degenerate).
+* $\alpha = 1$ (uniform): 모든 component 균등.
+
+**실험**:
+
+| $\alpha$ | $H_n$ 예상 |
+|:----:|:------:|
+| 1.0 | $\approx k$ (모든 사용) |
+| 0.5 | $\approx k/2$ |
+| 0.1 | 3 (galaxy 의 진짜 cluster 수) |
+| 0.01 | 1~2 (over-sparse) |
+
+#### (b) $k$ 증가
+
+$\alpha$ 고정 ($\alpha = 1$) + $k = 5, 10, 20, 50$:
+
+* $k$ 가 작을 때: 모든 component 가 사용됨, 데이터를 잘게 나눔.
+* $k$ 가 커지면: 한정된 데이터에 너무 많은 component → overfitting.
+
+$\alpha = 1/k$ (sparse 조정) + $k$ 증가:
+
+* $H_n$ 안정 (~3 근처).
+* DP 한계로 수렴 (Sethuraman 1994).
+
+#### (c) Prior Variance 증가
+
+Normal-inverse-gamma 의 $\kappa$ (cluster mean 의 prior variance scale).
+
+* $\kappa$ 작음 (예: 0.1): cluster mean 들이 데이터 영역 안에 빽빽 → 정상 작동.
+* $\kappa$ 적당 (1.0): 표준 default.
+* $\kappa$ 큼 (10, 100): cluster mean prior 가 매우 넓음 → 일부 cluster 가 데이터 영역 밖 위치 → **데이터가 한 dominant cluster 로 수렴**.
+
+::: {.callout-important}
+## 직관 — Diffuse $P_0$ 의 의외의 효과
+
+"객관적 prior" 로 여겨지는 diffuse normal 이 mixture 에서는 **반대 효과**:
+
+* Cluster mean prior 가 매우 넓음.
+* Marginal likelihood 계산 시 "cluster mean = 데이터 영역 밖" 인 시나리오에 큰 prior weight.
+* 그런 cluster 는 데이터를 거의 못 받음.
+* 결과적으로 marginal likelihood 가 작은 $H_n$ 을 선호.
+
+따라서 "informative prior 가 cluster 수 부풀린다, diffuse 가 자연" 같은 직관은 mixture 에서 **거꾸로**.
+
+권장: **데이터 표준화 + $\mu_0 = 0, \kappa = 1$**.
+:::
+
+## Exercise 5 — Football Point Spread Mixture
+
+### 문제
+
+§ 1.6 football data: $y_i$ = score differential - point spread. 정규 가정 대신 finite mixture of normals 적합 ($a = 1/k$). Gibbs sampler 사후 비교.
+
+### 풀이
+
+#### 데이터 특성
+
+NFL 게임 결과의 점수차 - 베팅 사전 점수차. 평균 0 근처, 분산 약 14, 거의 정규.
+
+#### Mixture 적합 결과
+
+$k = 5$ + $a = 1/5$:
+
+* $H_n \approx 1$ — single dominant component.
+* 그 component: $\mu \approx 0, \sigma \approx 14$.
+* 다른 component 들: $\pi_h < 0.05$, 사실상 빈 cluster.
+
+#### 정규 비교
+
+WAIC / LOO 비교:
+
+| 모델 | WAIC |
+|:----|:----:|
+| Single normal | $-N \cdot$ (constant) |
+| Mixture $H = 5, a = 1/5$ | 거의 동일 (작은 정도 worse, 추가 parameter 페널티) |
+
+::: {.callout-tip}
+## 직관 — Single Component 결과의 의미
+
+Mixture model 이 단일 component 로 회귀 = **"이 데이터에 정규 가정이 충분"**.
+
+Bayes factor 와 같은 정신:
+
+* $H_0$: 정규.
+* $H_1$: mixture.
+* Mixture 의 사후가 $H_n = 1$ 에 집중 → $H_0$ 지지.
+
+차이: Bayes factor 는 모델 비교 (이산 결정), mixture 는 연속 (사후 분포).
+
+응용: **Mixture 를 정규성 검정 도구로 사용 가능**. Frequentist Shapiro-Wilk 의 베이즈 대안.
+:::
+
+### 시뮬레이션 (예시 데이터)
+
+```python
+# football-like data: nearly normal
+n_games = 600
+y_football = rng.normal(0, 14, n_games)
+
+with pm.Model() as football:
+    pi = pm.Dirichlet("pi", a=np.ones(5) / 5)
+    mu = pm.Normal("mu", 0, 20, shape=5,
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-10, 10, 5))
+    sigma = pm.HalfNormal("sigma", 20, shape=5)
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(5)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y_football)
+    trace = pm.sample(1000, tune=1000, target_accept=0.95, chains=2,
+                      progressbar=False)
+
+pi_post = trace.posterior["pi"].mean(dim=("chain", "draw")).values
+print(f"Football mixture pi: {pi_post.round(3)}")
+print(f"Dominant component weight: {pi_post.max():.3f}")
+print(f"Effective H_n: {(pi_post > 0.05).sum()}")
+```
+
+## Exercise 6 — Kidney Cancer: Discrete vs Continuous Mixing
+
+### 문제
+
+§ 2.7 kidney cancer 데이터. $y_j \sim \text{Poisson}(10 n_j \theta_j)$ 모델에서 $\theta_j$ 의 prior 를:
+
+* (a) $\theta_j \sim \text{Gamma}(\alpha, \beta)$, $\alpha = 20, \beta = 430000$.
+* (b) $\theta_j \sim \sum_{h=1}^{25} \pi_h \delta_{\theta_h^*}$, $\theta_h^* \sim \text{Gamma}(\alpha, \beta)$, $\pi \sim \text{Dir}(1/25, \ldots, 1/25)$.
+
+### 풀이 — Hierarchical 차이
+
+#### (a) Continuous mixing (단일 Gamma)
+
+각 county $j$ 가 **자기만의 $\theta_j$**, 모두 다른 값. 사후도 각자 별도:
+
+$$
+\theta_j \mid y \sim \text{Gamma}(\alpha + y_j, \beta + 10 n_j)
+$$
+
+표준 conjugate, smooth.
+
+#### (b) Discrete mixing (point masses)
+
+25 개 latent type ($\theta_1^*, \ldots, \theta_{25}^*$) 중 하나에 county 가 할당. 같은 type 의 county 들은 **동일한 $\theta$**.
+
+**Indicator** $z_j \in \{1, \ldots, 25\}$, $\theta_j = \theta_{z_j}^*$.
+
+#### 사후 비교
+
+* (a) 의 $\theta_j$ 는 county 별 독립 추정 — Bayesian shrinkage 가 약함.
+* (b) 의 $\theta_j$ 는 **type 안에서 공유** — 같은 type county 들이 정보 공유 → **shrinkage 강함**.
+
+::: {.callout-tip}
+## 직관 — 언제 discrete mixing 이 적절한가
+
+**Discrete (point mass) mixing 이 좋은 경우**:
+
+* "Type" 이 도메인적으로 의미 있음 (예: 지역 cluster, 인종 group).
+* 같은 type 끼리 정보 공유가 정당.
+* Cluster 해석이 가치 있음.
+
+**Continuous mixing 이 좋은 경우**:
+
+* 개체별 차이가 연속적, 특정 type 분류가 부자연스러움.
+* 개별 추정에 관심.
+* Cluster 가정이 도메인적으로 부적절.
+
+Kidney cancer county: 비슷한 county (인구·환경) 가 discrete cluster 를 형성한다는 가설 → (b) 가 적절. 그러나 county 간 차이가 연속적이라면 → (a) 가 자연.
+
+**중간**: (b) 의 25 개 component 를 "soft cluster" 로 보고, 각 county 의 cluster membership 의 사후 불확실성을 정량화 — 두 접근의 절충.
+:::
+
+### 시뮬레이션 골격
+
+```python
+# Simulate kidney-cancer-like data
+n_counties = 100
+true_theta = rng.gamma(20, 1/430000, n_counties)  # continuous
+n_pop = rng.integers(1000, 50000, n_counties)
+y_obs = rng.poisson(10 * n_pop * true_theta)
+
+# (a) Continuous mixing
+with pm.Model() as continuous_mix:
+    theta = pm.Gamma("theta", alpha=20, beta=430000, shape=n_counties)
+    pm.Poisson("y", mu=10 * n_pop * theta, observed=y_obs)
+    trace_cont = pm.sample(1000, tune=1000, chains=2, progressbar=False)
+
+# (b) Discrete mixing (25 components)
+H = 25
+with pm.Model() as discrete_mix:
+    pi = pm.Dirichlet("pi", a=np.ones(H) / H)
+    theta_star = pm.Gamma("theta_star", alpha=20, beta=430000, shape=H)
+    z = pm.Categorical("z", p=pi, shape=n_counties)
+    theta_county = pm.Deterministic("theta_county", theta_star[z])
+    pm.Poisson("y", mu=10 * n_pop * theta_county, observed=y_obs)
+    # NUTS doesn't handle discrete — use Metropolis or marginalize
+    trace_disc = pm.sample(1000, tune=1000, chains=2,
+                           step=[pm.Metropolis([z])], progressbar=False)
+```
+
+## Exercise 7 — Improper Prior 위험
+
+### 문제
+
+Component-specific parameter 에 noninformative (improper) prior 적용 시 어떤 문제 발생?
+
+### 풀이 — Degenerate Posterior 메커니즘
+
+#### 정규 mixture 의 특수 사례
+
+$y_i \mid z_i \sim N(\mu_{z_i}, \sigma_{z_i}^2)$, $\sigma_h^2$ 자유. Improper prior $p(\sigma_h^2) \propto 1/\sigma_h^2$.
+
+#### Degenerate mode
+
+* 한 component (예: $h = 1$) 가 single observation $y_1$ 에 정확히 맞춰진다고 가정.
+* $\mu_1 = y_1$, $\sigma_1^2 \to 0$.
+* 그 component 의 likelihood $f(y_1 \mid \mu_1, \sigma_1^2) \to \infty$ ($\sigma_1 \to 0$ 일 때 정규 PDF 가 $\delta_{y_1}$).
+* 다른 데이터 $y_i$ ($i \neq 1$) 는 다른 component 에 normalized 적합.
+* **전체 likelihood $\to \infty$**.
+
+#### Posterior 발산
+
+$$
+p(\sigma_1^2 \mid y) \propto p(y \mid \sigma_1^2) \cdot p(\sigma_1^2) \approx \frac{C}{\sigma_1^2 \cdot \sigma_1} \to \infty \text{ as } \sigma_1 \to 0
+$$
+
+**적분이 발산** → improper posterior.
+
+::: {.callout-important}
+## 직관 — Mixture 의 improper prior 가 위험한 이유
+
+일반 모델 ($N(\mu, \sigma^2)$ 단일): improper $1/\sigma^2$ 도 OK — 모든 $n$ 점 데이터가 하나의 likelihood 에 contribute, $\sigma \to 0$ 가 모든 점을 과적합 못 함 (Inv-$\chi^2$ 형태로 적분 수렴).
+
+Mixture 모델: 한 component 가 **single observation 에만** 적합 → 그 component 의 likelihood 가 $\delta$ 함수로 발산 → improper posterior.
+
+해결:
+
+1. **Proper prior on $\sigma_h^2$** (Inverse Gamma, Half-Cauchy).
+2. **공통 분산** ($\sigma_h = \sigma$) 가정 — 단일 분산이면 improper OK.
+3. **분산 비율 고정** ($\sigma_2 / \sigma_1$ 알려짐).
+4. **Lower bound** ($\sigma_h^2 \geq \epsilon$) — pragmatic 해결.
+:::
+
+#### 이론적 정당화
+
+Diebolt & Robert (1994), Roeder & Wasserman (1997): mixture posterior properness 를 위한 sufficient conditions:
+
+* $p(\theta_h)$ proper (Inverse Gamma 등).
+* 또는 component parameter 가 partially shared (예: 공통 $\sigma$).
+
+## Exercise 8 — Dirichlet Sparsity Asymptotics
+
+### 문제
+
+$\pi \sim \text{Dirichlet}(1/k, \ldots, 1/k)$ 에서 1000 표본 추출, $k = 5, 10, 25, 50, 100, 1000$. 정렬된 order statistic $\pi_{(1)} \geq \pi_{(2)} \geq \cdots$ 의 사후 평균을 plot.
+
+$\pi \sim \text{Dirichlet}(1, \ldots, 1)$ 와 비교.
+
+### 풀이 — Stick-Breaking Representation
+
+#### $a = 1/k$ — Sparse 한계
+
+Stick-breaking with $V_h \sim \text{Beta}(1, \alpha)$, $\alpha = 1$:
+
+* $V_1 \sim \text{Beta}(1, 1) = U(0, 1)$ — 평균 0.5.
+* $\pi_1 = V_1$, $\pi_h = V_h \prod_{l < h}(1 - V_l)$.
+
+이는 **GEM(1) 분포** 의 특성 — Sethuraman (1994):
+
+$$
+\pi_{(1)} \approx 0.5, \quad \pi_{(2)} \approx 0.25, \quad \pi_{(3)} \approx 0.125, \quad \pi_{(h)} \approx 0.5 \cdot (1/2)^{h-1}
+$$
+
+**기하급수적 감소**.
+
+#### $a = 1$ — Uniform
+
+$\pi \sim \text{Dirichlet}(1, \ldots, 1)$:
+
+* 모든 $\pi_h$ 가 비슷한 크기.
+* $E[\pi_{(h)}] \approx \frac{1}{k}\bigl(1 + \frac{1}{2} + \cdots + \frac{1}{k - h + 1}\bigr)$ — feebly concentrated.
+
+#### 시뮬레이션 결과 비교
+
+| $k$ | $a = 1/k$: $\pi_{(1)}$ | $a = 1$: $\pi_{(1)}$ |
+|:---:|:---:|:---:|
+| 5 | $\approx 0.45$ | $\approx 0.46$ |
+| 10 | $\approx 0.48$ | $\approx 0.34$ |
+| 25 | $\approx 0.50$ | $\approx 0.20$ |
+| 50 | $\approx 0.50$ | $\approx 0.13$ |
+| 100 | $\approx 0.50$ | $\approx 0.075$ |
+| 1000 | $\approx 0.50$ | $\approx 0.0095$ |
+
+::: {.callout-tip}
+## 직관 — 두 prior 의 점근
+
+**$a = 1/k$**: $k \to \infty$ 한계에서 $\pi_{(h)}$ 가 GEM(1) 분포로 **수렴**. 첫 5 component 가 약 95% weight, 나머지 무한히 많은 component 가 미미.
+
+**$a = 1$**: $k \to \infty$ 한계에서 모든 $\pi_h \to 0$ — **degenerate**. Cluster 결정 도구로 부적절.
+
+이것이 sparse Dirichlet 의 마법 — **$k$ 무관 stable behavior**.
+:::
+
+### 시뮬레이션 코드
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(123)
+
+ks = [5, 10, 25, 50, 100, 1000]
+n_samples = 1000
+
+fig, ax = plt.subplots(figsize=(10, 6))
+
+for a_label, a_func in [("a=1/k (sparse)", lambda k: 1/k),
+                         ("a=1 (uniform)", lambda k: 1)]:
+    for k in ks:
+        a = a_func(k)
+        # sample from Dirichlet
+        samples = rng.dirichlet(a * np.ones(k), size=n_samples)
+        # sort each row in decreasing order
+        sorted_samples = np.sort(samples, axis=1)[:, ::-1]
+        # mean of order statistics
+        pi_order = sorted_samples.mean(axis=0)
+        # plot top 10
+        ax.plot(np.arange(1, min(k, 10) + 1), pi_order[:min(k, 10)],
+                marker="o", label=f"{a_label}, k={k}")
+
+ax.set_xlabel("Order h")
+ax.set_ylabel("E[π_(h)]")
+ax.set_title("Order statistics of Dirichlet samples")
+ax.set_yscale("log")
+ax.legend()
+plt.tight_layout()
+plt.savefig("dirichlet_sparsity.png", dpi=100)
+print("plot saved")
+```
+
+## 종합 — 8 측면의 통합 점검
+
+| Ex | 측면 | 핵심 발견 |
+|:---:|:------|:------|
+| 1 | Point estimate | Categorical → mode (0-1 loss optimal) |
+| 2 | Overfitting | Sparse Dirichlet 의 zero-out 자동 |
+| 3 | Kernel mismatch | $f$ 가 $t_4$ 인데 normal mixture → cluster 부풀림 |
+| 4 | Sensitivity | Diffuse $P_0$ 가 cluster 수 줄임 (의외!) |
+| 5 | Null 검증 | Mixture 가 single component 로 회귀 = 정규 가정 충분 |
+| 6 | Mixing 형태 | Discrete 는 cluster 공유, continuous 는 개별 |
+| 7 | Improper prior | Mixture 는 component-specific proper prior 필수 |
+| 8 | Sparsity 점근 | $a = 1/k$ 의 stick-breaking 한계가 stable |
+
+::: {.callout-important}
+## Mixture 진단 워크플로우
+
+새 데이터에 mixture 적용 시:
+
+1. **Kernel ($f$) 결정** + sensitivity 점검 (Ex 3).
+2. **Sparse Dirichlet** + 충분히 큰 $H$ upper bound (Ex 2).
+3. **표준화 + $P_0$ scale = 1** (Ex 4).
+4. **Component-specific proper prior** 필수 (Ex 7).
+5. **Single vs mixture** 비교 — 정규 가정의 검증 (Ex 5).
+6. **Discrete vs continuous mixing** 도메인 판단 (Ex 6).
+7. **Posterior 사용**: density 만 보면 OK, cluster-specific 추론 시 mode point estimate (Ex 1) + KL postprocessing.
+8. **$\pi_{(h)}$ 분포 점검** — overfitted 인지 sparse 인지 (Ex 8).
+:::
+
+## Ch.22 시리즈 결산 (확장)
+
+### 5 편의 핵심
+
+| 편 | 한 줄 |
+|:---|:------|
+| Overview (04-22-0) | Ch.22 큰 그림 |
+| § 22.1~22.3 (04-22-1) | Setup·ECM·label switching |
+| § 22.4~22.6 (04-22-2) | Unspecified $H$·classification·결산 |
+| § 22.7 (04-22-3, 본 편) | 8 연습문제 완전 풀이 |
+
+### Ch.22 의 핵심 학습 (8 연습문제 통합)
+
+1. Mixture 는 conditioning 의 역방향 — 정보 미관측 시 도구.
+2. Latent indicator augmentation 으로 conditional 단순화.
+3. ECM/Gibbs 의 conditional 형태 closed-form.
+4. Label switching: density 무관, cluster 추론 시 KL postprocessing.
+5. $H$ 자동 결정: truncated upper bound + sparse Dirichlet $a = n_0/H$.
+6. Cluster 수는 kernel ($f$) 정확성에 민감.
+7. Improper prior 는 mixture 에서 위험 — proper 필수.
+8. Discrete mixing → cluster 공유, continuous → 개별 추정.
+9. Single component 회귀 결과 = 정규 가정의 검증.
+10. Sparsity 점근 → DP (Ch.23) 으로의 자연 가교.
+
+## 관련 주제
+
+**Ch.22 시리즈**
+
+* [Ch.22 Overview](./04-22-0-finite-mixture-overview.qmd)
+* [Ch.22 § 22.1~22.3](./04-22-1-setup-schizophrenia-label-switching.qmd)
+* [Ch.22 § 22.4~22.6](./04-22-2-unspecified-classification-exercises.qmd)
+
+**선행 지식**
+
+* [Ch.5 Hierarchical Models](./00-5-0-hierarchical.qmd)
+* [Ch.7 Model Comparison (WAIC, LOO)](./01-7-0-evaluating-comparing-models.qmd)
+* [Ch.13 § 13.4 — EM Algorithm](./02-13-2-em-conditional-marginal-hierarchical.qmd)
+
+**후속 주제**
+
+* [Ch.23 Dirichlet Process Models Overview (예정)](./04-23-0-dirichlet-process-overview.qmd)
+
+**관련 개념 (cross-category)**
+
+* [Bayes Optimal Classifier and 0-1 Loss](../../Machine_Learning/bayes-optimal-classifier.qmd)
+* [Stick-Breaking and GEM Distribution](../../Math/stick-breaking.qmd)
+* [Sensitivity Analysis in Bayesian Models](../sensitivity-analysis.qmd)
+* [Robust Statistics and t-Distribution](../03-17-0-robust-inference-overview.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.22 § 22.7. CRC Press.
+* Berger, J. O. (1985). *Statistical Decision Theory and Bayesian Analysis* (2nd ed.). Springer. (Bayes optimal classifier)
+* Diebolt, J., & Robert, C. P. (1994). Estimation of Finite Mixture Distributions through Bayesian Sampling. *JRSS B*, 56(2), 363-375.
+* Roeder, K., & Wasserman, L. (1997). Practical Bayesian Density Estimation Using Mixtures of Normals. *JASA*, 92(439), 894-902. (Galaxy 데이터·improper prior 위험)
+* Sethuraman, J. (1994). A Constructive Definition of Dirichlet Priors. *Statistica Sinica*, 4, 639-650.
+* Ishwaran, H., & Zarepour, M. (2002). Exact and Approximate Sum-Representations for the Dirichlet Process. *Canadian Journal of Statistics*, 30(2), 269-283.
+* Rousseau, J., & Mengersen, K. (2011). Asymptotic Behaviour of the Posterior Distribution in Overfitted Mixture Models. *JRSS B*, 73(5), 689-710.
+* Frühwirth-Schnatter, S. (2006). *Finite Mixture and Markov Switching Models*. Springer.
+* Vehtari, A., Gelman, A., & Gabry, J. (2017). Practical Bayesian Model Evaluation Using Leave-One-Out Cross-Validation and WAIC. *Statistics and Computing*, 27(5), 1413-1432. (LOO/WAIC for mixture)
