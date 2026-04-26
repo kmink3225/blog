@@ -1,0 +1,679 @@
+---
+title: "Ch.21 Overview — Gaussian Process Models"
+subtitle: "Part V 네 번째 관문: 함수 자체에 사전분포·squared exponential kernel·식 (21.1) marginal likelihood·생일 데이터 5-component 분해·latent GP·LGP density"
+description: |
+  Gelman BDA Ch.21 의 5개 절을 한 편으로 조망한다.
+  Ch.20 의 basis function 가중합 ($\mu(x) = \sum \beta_h b_h(x)$, $H$ 유한) 을 무한 차원으로 일반화 — 함수 $\mu(x)$ 자체에 사전분포 $\mu \sim \text{GP}(m, k)$ 부여.
+  § 21.1 GP regression 의 squared exponential kernel·basis 동치·식 (21.1) 주변 가능도·$O(n^3)$ 한계·근사 기법,
+  § 21.2 미국 생일 데이터 5-component 가법 분해 (장기 추세·단기 변동·주간·계절·특별일),
+  § 21.3 Latent GP 와 비가우시안 우도 (Leukemia 생존 분석),
+  § 21.4 함수형 데이터 분석,
+  § 21.5 LGP 밀도 추정·밀도 회귀,
+  § 21.6 문헌·§ 21.7 연습. Ch.20 → Ch.21 → Ch.22~23 비모수 베이즈 사다리의 중심.
+categories:
+  - Statistics
+  - Bayesian
+  - Gaussian-Process
+  - Kernel-Methods
+  - Nonparametric-Bayes
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 개요 — Part V 네 번째 관문
+
+Part V 의 사다리:
+
+* **Ch.19 Parametric Nonlinear** — 도메인 이론으로 **수식이 정해진** 비선형 (PBPK, 4PL).
+* **Ch.20 Basis Function** — 미리 정한 $H$ 개 basis 의 **유한 가중합** $\mu(x) = \sum \beta_h b_h(x)$.
+* **Ch.21 Gaussian Process (본편)** — basis 자체를 **무한 차원** 으로 보내고, 함수 $\mu(x)$ **자체에 사전분포** 부여.
+* **Ch.22~23 Mixture / Dirichlet Process** — 함수 대신 **분포 자체** 에 사전분포.
+
+::: {.callout-important}
+## Ch.21 의 한 줄 요약
+
+**"함수 $\mu(\cdot)$ 를 확률변수로 본다. 임의의 유한 입력 $x_1, \ldots, x_n$ 을 평가하면 $n$-변량 정규분포에서 뽑은 한 점이 되도록 사전분포를 정의한다 — 그것이 Gaussian Process 이다."**
+
+기저 함수를 고를 필요가 없고, 다변량 입력·암묵적 상호작용·smooth surface 를 모두 자연스럽게 표현한다. 대신 $O(n^3)$ 의 행렬 역연산이 본질적 비용이다.
+:::
+
+### Ch.19 vs Ch.20 vs Ch.21 — 함수 표현의 세 단계
+
+| 측면 | Ch.19 | Ch.20 | Ch.21 |
+|------|-------|-------|-------|
+| 함수 형태 | 미리 정한 수식 $\mu(x, \phi)$ | $\sum_{h=1}^H \beta_h b_h(x)$ | $\mu \sim \text{GP}(m, k)$ |
+| 차원 | 유한·소수 $\phi$ | 유한 $H$ 계수 | 사실상 무한 |
+| 추론 대상 | 물리 parameter | basis 계수 $\beta_h$ | **함수 값** $\mu(x_i)$ 자체 |
+| Hyperparameter | 거의 없음 | $H$, knot, prior scale | $\tau$, $\ell$ (kernel) |
+| 외삽 | 물리 법칙 | 위험 (basis support 밖 0) | 위험 (mean 함수로 회귀) |
+| 계산 | HMC + ODE | Gibbs/conjugate $O(H^3)$ | $O(n^3)$ 행렬 역산 |
+| 도메인 | 약물·반응 | 1~3D smooth | 1~3D smooth + 다변량 surface |
+
+::: {.callout-tip}
+## 직관 — "함수의 정규분포"
+
+다변량 정규분포 $\mathbf{x} \sim N(\boldsymbol{\mu}, \Sigma)$ 는 **유한 개** 의 변수 $(x_1, \ldots, x_n)$ 에 분포를 부여한다. GP 는 이 아이디어를 **무한 개** 의 변수 — 즉, 모든 입력 $x \in \mathcal{X}$ 에 대한 함수 값 $\mu(x)$ — 에 확장한다.
+
+"무한 개에 확률분포를 어떻게?" 라는 질문에 대한 GP 의 영리한 답은 다음이다.
+
+> **모든 유한 부분집합 $\{x_1, \ldots, x_n\}$ 에 대해 $(\mu(x_1), \ldots, \mu(x_n))$ 의 결합분포가 다변량 정규**.
+
+전체 함수 공간의 분포를 직접 정의하지 않고, **유한 차원 marginal 로 뒷받침** 한다. 데이터에서 평가가 필요한 점은 어차피 유한 개이므로, 실무에서는 이 정의로 충분하다.
+:::
+
+## Ch.21 의 논리 지도
+
+| 절 | 핵심 질문 | 주요 결과 |
+|:---:|:------|:-----|
+| § 21.1 | **함수 자체에 어떻게 사전분포?** | $\mu \sim \text{GP}(m, k)$·squared exponential·basis 동치·식 (21.1) marginal likelihood·$O(n^3)$ |
+| § 21.2 | **GP 는 큰 모델의 부품이 될 수 있나?** | 미국 출생 데이터 5 component 가법 분해 (장기·단기·주간·계절·특별일) |
+| § 21.3 | **비가우시안 우도?** | Latent GP·Laplace 식 (21.3)·Leukemia 생존 분석 |
+| § 21.4 | **각 개체가 함수 그 자체라면?** | 함수형 데이터 분석 (FDA) — 시간·예측변수 동시 입력 |
+| § 21.5 | **함수의 분포 자체가 모르는 경우?** | Logistic GP density estimation·density regression·식 (21.4)·식 (21.5) |
+| § 21.6 | Bibliographic note | Rasmussen-Williams·O'Hagan·Neal |
+| § 21.7 | Exercises | GP prior 표본·NAES 04 attitude·Golf binomial |
+
+## § 21.1 Gaussian Process Regression
+
+### Ch.20 → Ch.21 의 동기
+
+Ch.20 의 basis 모델 $\mu(x) = \sum \beta_h b_h(x)$ 는 **knot 격자에 민감** 하다. 격자가 좁으면 $H$ 가 커서 계산 부담, 넓으면 유연성 부족. 격자 자체에도 임의성이 남는다. 이 임의성을 해소하는 한 가지 방법이 GP — basis 의 수와 위치 선택 문제를 **kernel 의 hyperparameter** 로 흡수한다.
+
+### 정의 — 식 정의
+
+$$
+\mu \sim \text{GP}(m, k)
+$$
+
+는 다음을 의미한다 — 임의의 $n$ 점 $x_1, \ldots, x_n \in \mathcal{X}$ 에 대해,
+
+$$
+\bigl(\mu(x_1), \ldots, \mu(x_n)\bigr) \sim N\bigl((m(x_1), \ldots, m(x_n)),\ K(x_1, \ldots, x_n)\bigr)
+$$
+
+* $m(x)$ = **mean function** — 사전 추측 곡선 (예: $m(x) = X\beta$ 선형 베이스).
+* $K$ = $n \times n$ 공분산 행렬, $(p, q)$ 원소 $K_{pq} = k(x_p, x_q)$.
+* $k(x, x')$ = **covariance function (kernel)** — 두 입력 점에서의 함수 값 상관 구조.
+
+::: {.callout-note}
+## 직관 — mean 과 covariance 의 역할
+
+* **Mean $m(x)$**: 데이터 없을 때의 사전 곡선. **선형 모델 $X\beta$ 를 mean 으로** 두면 GP 는 "선형에서 출발하되 데이터가 허락하는 만큼 이탈" 한다 — 회귀의 차원 저주를 완화한다.
+* **Covariance $k(x, x')$**: $x$ 와 $x'$ 가 **얼마나 닮은지** 정의한다. 가까운 두 점은 함수 값도 비슷하다는 사전 신념. 이 "거리 기반 닮음" 이 함수의 **smoothness** 를 결정한다.
+
+즉, GP 는 **"가까운 점은 비슷한 값을 가진다"** 라는 명시적 가정을 sampling 분포로 옮긴 것이다.
+:::
+
+### Squared Exponential Kernel
+
+가장 흔한 선택:
+
+$$
+k(x, x') = \tau^2 \exp\left( -\frac{|x - x'|^2}{2 \ell^2} \right)
+$$
+
+* $\tau$ = **amplitude** — 함수의 진폭 (값의 분산).
+* $\ell$ = **length scale** — 두 점이 "가깝다" 고 보는 거리 (smoothness 제어).
+
+::: {.callout-tip}
+## 직관 — $\tau$ 와 $\ell$ 의 시각적 의미
+
+* $\tau$ 가 크면 함수가 **수직으로 크게 출렁** 인다 (진폭 큼).
+* $\ell$ 이 작으면 함수가 **수평으로 빠르게 변동** 한다 (wiggly).
+* $\ell$ 이 크면 함수가 **부드럽게** 변한다 (slowly varying).
+
+Figure 21.1 의 세 가지 ($\tau, \ell$) 조합 비교: $(\tau{=}0.5, \ell{=}2)$ 는 큰 진폭의 매끄러운 곡선, $(\tau{=}0.25, \ell{=}0.5)$ 는 작은 진폭의 빠른 진동, $(\tau{=}0.5, \ell{=}0.5)$ 는 중간.
+
+실무 팁: $\ell$ 의 단위는 입력 $x$ 의 단위. 따라서 입력을 표준화 (mean 0, sd 1) 하면 $\ell \approx 1$ 근처가 자연스러운 출발점.
+:::
+
+### Basis Expansion 과의 동치
+
+$\mu(x) = \sum_{h=1}^H \beta_h b_h(x)$ 에서 $\beta \sim N(\beta_0, \Sigma_\beta)$ 라 하자. 그러면
+
+$$
+m(x) = b(x)^T \beta_0, \qquad k(x, x') = b(x)^T \Sigma_\beta\, b(x')
+$$
+
+로 **유도된 GP** 가 나온다. $b(x) = (b_1(x), \ldots, b_H(x))$.
+
+::: {.callout-note}
+## 직관 — basis 와 GP 는 같은 동전의 양면
+
+Ch.20 의 basis 가중합은 $H$ 개 basis 로 함수를 펼쳤다. **GP 는 이 $H$ 를 $\infty$ 로 보낸 결과** 와 동치다. Squared exponential kernel 같은 표준 GP 는 무한히 많은 (Mercer 분해의) basis 합으로 표현된다.
+
+이 동치 관계는 두 가지 실무적 함의를 가진다:
+
+1. **계산 가속** — 무한 basis GP 를 $m \ll n$ 개로 truncate 하면 reduced-rank 근사가 된다.
+2. **해석 다리** — Ch.20 에서 spike-and-slab 으로 했던 변수 선택을 Ch.21 에서는 **kernel 의 anisotropic length scale** 로 한다 (아래).
+:::
+
+### Anisotropic Kernel 과 비모수적 변수 선택
+
+다변량 입력 $x = (x_1, \ldots, x_p)$ 에서 모든 방향에 같은 $\ell$ 을 쓰면 (isotropic), 어떤 변수가 더 빠르게 변하는 표면을 표현하지 못한다. 변수별 length scale $\ell_j$ 를 도입한다.
+
+$$
+k(x, x') = \tau^2 \exp\left( -\sum_{j=1}^p \frac{(x_j - x_j')^2}{2 \ell_j^2} \right)
+$$
+
+::: {.callout-tip}
+## 직관 — length scale 이 변수 선택을 한다
+
+$\ell_j \to \infty$ 면 $j$ 번째 변수의 차이는 kernel 에 영향이 거의 없다 → 그 변수는 **모형에서 자동 탈락**. 데이터가 $\ell_j$ 에 큰 사전 hyperprior 를 부여하면 — 예를 들어 half-Cauchy — 불필요한 변수는 length scale 이 커지면서 자연스럽게 빠진다. **Spike-and-slab 의 연속 대안**.
+
+이를 **Automatic Relevance Determination (ARD)** 이라 부른다 (Neal, 1998).
+:::
+
+### 추론 — 가우시안 우도 하의 해석적 사후
+
+데이터 $y_i \sim N(\mu_i, \sigma^2)$ 일 때, $\tau, \ell, \sigma$ 가 주어지면 $\mu$ 의 조건부 사후도 GP 다 (조건부 켤레성). 새 입력 $\widetilde{x}$ 에서의 사후 평균과 분산은 다변량 정규의 조건부 공식으로 닫힌 형태:
+
+$$
+\widetilde{\mu} \mid x, y, \tau, \ell, \sigma \sim N\bigl(E(\widetilde{\mu}), \text{cov}(\widetilde{\mu})\bigr)
+$$
+
+$$
+E(\widetilde{\mu}) = K(\widetilde{x}, x) \bigl(K(x, x) + \sigma^2 I\bigr)^{-1} y
+$$
+
+$$
+\text{cov}(\widetilde{\mu}) = K(\widetilde{x}, \widetilde{x}) - K(\widetilde{x}, x) \bigl(K(x, x) + \sigma^2 I\bigr)^{-1} K(x, \widetilde{x})
+$$
+
+::: {.callout-tip}
+## 직관 — 사후가 무엇을 하는가
+
+* **Prior**: "내 사전 함수는 0 주위로 진폭 $\tau$, 길이 척도 $\ell$ 의 매끄러운 곡선이다." Figure 21.1 의 random draws.
+* **Posterior**: "관측된 $n$ 점은 정확히 통과 (또는 노이즈 $\sigma$ 만큼 근처). 사이는 매끄럽게 보간하고, 데이터 멀리는 prior 평균 (= 0) 으로 회귀한다." Figure 21.2.
+* **Posterior 분산**: 데이터 점 근처에서 작아지고, 멀어질수록 prior 분산 $\tau^2$ 으로 복귀.
+
+즉, **GP 사후는 자동 보간기** + **자동 불확실성 정량기**. Cross-validation 없이 모든 점에서 신뢰 구간을 준다.
+:::
+
+### 식 (21.1) — Marginal Likelihood
+
+가우시안 우도면 $\mu$ 를 해석적으로 적분 소거할 수 있다. Hyperparameter $\tau, \ell, \sigma$ 의 log marginal likelihood:
+
+$$
+\log p(y \mid \tau, \ell, \sigma^2) = -\frac{n}{2}\log(2\pi) - \frac{1}{2} \log |K(x, x) + \sigma^2 I| - \frac{1}{2} y^T \bigl(K(x, x) + \sigma^2 I\bigr)^{-1} y \quad (21.1)
+$$
+
+::: {.callout-tip}
+## 직관 — 세 항의 trade-off
+
+* **첫 항** ($-\frac{n}{2}\log 2\pi$): 정규화 상수.
+* **둘째 항** ($-\frac{1}{2} \log|K + \sigma^2 I|$): 모형 복잡도 패널티 — $K$ 의 eigenvalue 가 클수록 (= 함수가 큰 진폭 영역을 커버할수록) 페널티 증가. **Occam's razor**.
+* **셋째 항** ($-\frac{1}{2} y^T (K + \sigma^2 I)^{-1} y$): 데이터 적합도 — 데이터가 모형의 covariance 구조와 잘 맞을수록 작아진다.
+
+따라서 marginal likelihood 를 최대화하면 **자동으로 hyperparameter 를 데이터에 맞게 조절** — over-smooth ($\ell$ 큼) 와 over-fit ($\ell$ 작음) 사이 균형. Ch.7 의 사후 예측 점검과 같은 정신.
+:::
+
+### 계산 비용 — $O(n^3)$ 의 본질
+
+식 (21.1) 의 핵심 비용은 $K(x, x) + \sigma^2 I$ 의 **역산** 또는 Cholesky 분해 — $O(n^3)$. MCMC 의 매 step 에서 hyperparameter 가 바뀌면 매번 재계산.
+
+* $n \approx 1000$: 일반 노트북에서 가능.
+* $n \approx 5000$: 메모리·시간 모두 빠듯.
+* $n \gtrsim 10000$: 풀 GP 는 비현실적, **근사 필수**.
+
+### 공분산 함수 근사
+
+| 근사 | 핵심 아이디어 | 적용 영역 |
+|:-----|:----|:------|
+| **Markov Random Field** | 조건부 독립 → sparse precision | 1-3D 공간 데이터 |
+| **Reduced rank** ($m \ll n$ basis) | $O(m n^2)$ 로 축소 | smooth, low-frequency |
+| **Compact support kernel** | 짧은 length scale → sparse covariance | rapid local change |
+| **Additive decomposition** | 고차원을 1-2D 합으로 분해 | $p$ 큼 |
+| **Inducing points (Sparse GP)** | $m$ 개 가상 점으로 함수 표현 | 일반 |
+
+GUIDE 매핑: § 20.3 의 sparse grid·tensor product 는 Ch.20 측 대안, Ch.21 측 대안은 위 표.
+
+## § 21.2 Birthday Data — 가법 분해의 모범 사례
+
+### 데이터
+
+미국 1969~1988 의 일별 출생 수 (약 7300 일). 발렌타인 데이 과다, 할로윈 부족 같은 패턴을 잡아내는 것이 목표.
+
+### 다섯 component 가법 모델
+
+$$
+y_t = f_1(t) + f_2(t) + f_3(t) + f_4(t) + f_5(t) + \epsilon_t
+$$
+
+| component | 의미 | Kernel |
+|:----:|:------|:-----|
+| $f_1(t)$ | **장기 추세** | 큰 $\ell$ squared exponential |
+| $f_2(t)$ | **단기 비주기 변동** | 중간 $\ell$ squared exponential |
+| $f_3(t)$ | **주간 (week-of-day) 패턴** | period 7 periodic × 큰 $\ell$ squared exponential |
+| $f_4(t)$ | **연간 계절** | period 365.25 periodic × 큰 $\ell$ squared exponential |
+| $f_5(t)$ | **특별일 효과** | indicator × $\beta$ |
+
+::: {.callout-tip}
+## 직관 — kernel 의 합 = GP 의 합
+
+GP 들의 합도 GP — 합한 GP 의 covariance 는 각 covariance 의 합이다.
+
+$$
+k(t, t') = k_1(t, t') + k_2(t, t') + k_3(t, t') + k_4(t, t') + k_5(t, t')
+$$
+
+따라서 **각 kernel 이 잡는 시간 척도가 분리** 된다. 학습 후 식 (21.2) 처럼 한 component 의 covariance 만 떼어 그 부분의 사후 평균을 계산할 수 있다 — **신호 분해 (signal decomposition)**.
+:::
+
+### Periodic Kernel — 주기성 표현
+
+$$
+k_{\text{periodic}}(t, t') = \sigma^2 \exp\left( -\frac{2 \sin^2\bigl(\pi(t - t')/p\bigr)}{\ell^2} \right)
+$$
+
+$p$ = 주기 (예: 7 일, 365.25 일).
+
+::: {.callout-tip}
+## 직관 — 왜 sin 을 넣는가
+
+$\sin(\pi(t - t')/p)$ 는 $t - t' = 0, p, 2p, \ldots$ 에서 0. 즉, **$p$ 의 정수배 떨어진 두 시점은 거리 0** 으로 간주된다 → 함수 값이 같아야 한다 (주기성).
+
+$\ell$ 은 한 주기 안에서의 smoothness — 작으면 sharp 한 패턴 (계단), 크면 매끄러운 sinusoid.
+:::
+
+### Quasi-periodic — 주기 패턴이 시간에 따라 변할 때
+
+주간·계절 패턴이 1969 와 1988 에서 다르다면 (시간에 따라 요일별 차이가 강해진다), periodic kernel × squared exponential kernel 곱:
+
+$$
+k_3(t, t') = \sigma_3^2 \exp\left( -\frac{2 \sin^2(\pi(t - t')/7)}{\ell_{3,1}^2} \right) \exp\left( -\frac{|t - t'|^2}{2 \ell_{3,2}^2} \right)
+$$
+
+* 첫 항: "같은 요일 패턴" — 주간 주기.
+* 둘째 항: "시점이 가까울수록 더 비슷" — 시간에 따른 패턴 변화 허용.
+
+::: {.callout-tip}
+## 직관 — kernel 곱 = "AND"
+
+$k_a \cdot k_b$ 는 **두 조건이 모두 가까운 점만 비슷** 하다는 뜻. periodic kernel 만 쓰면 "같은 요일은 영원히 같은 효과", periodic × squared exponential 쓰면 "같은 요일 + 시점이 가까운 경우만 비슷" → **주간 패턴이 천천히 진화**.
+:::
+
+### Improved Model 의 교훈
+
+저자들은 5-component 모델로 출발 → 잔차에 자기상관 발견 → **8 component 로 확장** (개별 day-of-year 효과·짧은 비주기 component 추가). LOO-CV lppd 가 2074 → 2477 로 큰 개선.
+
+**교훈**: GP 가법 모델은 **"부품을 더 추가" 하면 자연스럽게 표현력이 늘어난다**. Spline 모델처럼 knot 재배치를 고민할 필요가 없다.
+
+## § 21.3 Latent Gaussian Process Models — 비가우시안 우도
+
+### 동기
+
+이항·푸아송·생존 시간 등 **비가우시안 우도** 에서는 $\mu$ 를 해석적으로 적분 소거할 수 없다. GP 는 **잠재 함수 $f$** 의 사전분포로 들어가고, 우도는 link 함수를 통해 결정:
+
+$$
+y \mid f, \phi \sim p(y \mid f, \phi)
+$$
+
+GLM (Ch.16) 의 link 구조 + GP (Ch.21) 의 비모수 함수.
+
+### Laplace 근사 — 식 (21.3)
+
+잠재 $f$ 의 조건부 사후 $p(f \mid x, y, \theta, \phi) \propto p(y \mid f, \phi) p(f \mid x, \theta)$ 를 mode 중심 정규로 근사.
+
+$$
+\log p(y \mid x, \theta, \phi) \approx \log p(y \mid \widehat{f}, \phi) - \frac{1}{2} \widehat{f}^T K(x, x)^{-1} \widehat{f} - \frac{1}{2} \log |B| \quad (21.3)
+$$
+
+* $\widehat{f}$ = 사후 mode.
+* $|B| = |I + W^{1/2} K(x, x) W^{1/2}|$, $W$ = Hessian의 음수.
+
+::: {.callout-tip}
+## 직관 — Laplace 의 본 모습
+
+세 항은 (21.1) 의 가우시안 marginal likelihood 와 평행하다.
+
+* 적합도: $\log p(y \mid \widehat{f})$ vs $-\frac{1}{2} y^T (K + \sigma^2 I)^{-1} y$.
+* 사전 페널티: $-\frac{1}{2} \widehat{f}^T K^{-1} \widehat{f}$ vs $K(\cdot)$ 안에 흡수.
+* 복잡도 보정: $-\frac{1}{2} \log |B|$ vs $-\frac{1}{2} \log |K + \sigma^2 I|$.
+
+Laplace 가 안 되는 비대칭 우도 (logistic 의 작은 $n$ 등) 에서는 **Expectation Propagation** 또는 **Variational Inference**. 모두 hyperparameter 의 marginal posterior 를 해석적으로 근사하는 도구.
+:::
+
+### Leukemia 생존 분석 — 비선형 + 암묵적 상호작용
+
+1043 명 AML 환자, $r$-shape log-logistic 우도 + GP latent.
+
+$$
+f(X_i) = \alpha + X_i \beta + \mu(X_i), \qquad \mu \sim \text{GP}(0, k)
+$$
+
+* $\alpha + X_i \beta$ = 선형 베이스 (mean 함수).
+* $\mu(X_i)$ = GP 가 잡는 비선형·상호작용.
+* Predictor 4 개: age, sex, log WBC, Townsend deprivation index (TDI).
+
+**결과**:
+
+* 선형만: lppd $= -1662$.
+* + 비선형 GP: lppd $= -1629$ (개선).
+* WBC × TDI 의 **암묵적 상호작용** 발견 (interaction term 명시 없이).
+* Age 와 WBC 의 비선형 패턴 — 매우 작은 WBC 에서도 위험 증가 (이전 연구는 못 잡음).
+
+::: {.callout-note}
+## 직관 — GP 의 자유도가 발견을 만든다
+
+전통 Cox 모델은 (1) 비선형성을 spline 으로 명시, (2) 상호작용을 항으로 명시 해야 한다. GP latent 는 **두 가지 모두 자동** 으로 잡는다 — 데이터가 그렇게 말하면. "사용자가 모델 형식을 결정" 하던 부담이 "kernel 과 hyperprior 를 결정" 하는 부담으로 옮겨가지만, 후자가 일반적으로 더 가벼운 결정이다.
+:::
+
+## § 21.4 Functional Data Analysis — 각 개체가 함수
+
+### 동기
+
+각 개체 $i$ 의 데이터가 **함수** $f_i: \mathcal{T} \to \mathbb{R}$ 로 표현되는 경우 (예: 환자별 시간 경과 혈압, 학생별 성장 곡선).
+
+$$
+y_{ij} \sim N(f_i(t_{ij}), \sigma^2)
+$$
+
+**FDA 의 질문**: $\{f_i\}_{i=1}^n$ 을 어떻게 동시에 모델링하면서 (1) 개체별 유연성 + (2) 정보 공유 를 동시에 달성할 것인가.
+
+### GP 솔루션 — 시간을 추가 차원으로
+
+$$
+y_{ij} \sim N(f(x_i, t_{ij}), \sigma^2), \qquad f \sim \text{GP}(m, k)
+$$
+
+$x_i$ = 개체 특성, $t_{ij}$ = 측정 시점. Squared exponential kernel 에 $t$ 차원을 더한다.
+
+$$
+k\bigl((x, t), (x', t')\bigr) = \tau^2 \exp\left( -\sum_j \frac{(x_j - x_j')^2}{2\ell_j^2} - \frac{(t - t')^2}{2\ell_{p+1}^2} \right)
+$$
+
+::: {.callout-tip}
+## 직관 — FDA 의 "함수 분포" 가 GP 안에 자연 내재
+
+전통 FDA (Ch.20 의 spline 또는 PCA 기반 functional 분석) 는 함수를 basis 분해하고 계수에 분포를 부여했다. GP 는 **시간 차원을 단순히 입력에 추가** 하면 끝 — 같은 kernel 이 (1) 개체 간 닮음 ($x$ 차원) 과 (2) 시간 내 매끄러움 ($t$ 차원) 을 동시에 표현.
+
+별도의 functional 머신을 만들 필요가 없다. **FDA 가 GP 의 특수 사례** 가 된다.
+:::
+
+## § 21.5 Density Estimation — Logistic Gaussian Process
+
+### 동기
+
+지금까지 GP 는 **regression function** ($E[y \mid x]$) 의 사전분포였다. § 21.5 는 한 단계 더 나아가 **분포 자체** 의 사전분포로 GP 를 사용한다.
+
+### LGP — 식 정의
+
+$$
+p(y \mid f) = \frac{e^{f(y)}}{\int e^{f(y')} dy'}, \qquad f \sim \text{GP}(m, k)
+$$
+
+* GP 표본 $f$ 는 임의의 실수 함수.
+* **Continuous logistic transformation** 으로 $\geq 0$ + 적분 1 이 보장됨 → 확률밀도.
+
+::: {.callout-tip}
+## 직관 — softmax 의 연속 버전
+
+이산 분류에서 $p_k = e^{f_k} / \sum_j e^{f_j}$ 는 softmax. LGP 는 이를 **연속 $y$** 로 일반화 — 합 대신 적분.
+
+$m(y)$ 를 어떤 parametric 분포의 log density (예: $t_4$) 로 잡으면, 데이터가 적을 때 LGP 사후가 그 parametric 분포로 회귀 → "데이터가 부족하면 표준 분포, 풍부하면 nonparametric".
+:::
+
+### Density Regression — 식 (21.4)
+
+조건부 밀도 $p(y \mid x)$ 도 같은 방식.
+
+$$
+p(y \mid x) = \frac{e^{f(x, y)}}{\int e^{f(x, y')} dy'}, \qquad f \sim \text{GP}(m, k)
+$$
+
+Kernel 을 $(x, y)$ 결합 입력으로:
+
+$$
+k\bigl((x, y), (x', y')\bigr) = \tau^2 \exp\left( -\sum_j \frac{(x_j - x_j')^2}{2 \ell_j} - \frac{(y - y')^2}{2 \ell_{p+1}} \right) \quad (21.4)
+$$
+
+각 $\ell_j$ 의 hyperprior 로 **불필요 predictor 자동 탈락** (ARD 의 density 버전).
+
+### Latent-Variable Regression — 식 (21.5)
+
+대안 표현 (Kundu and Dunson, 2014):
+
+$$
+y_i \sim N(\mu(u_i), \sigma^2), \qquad u_i \sim U(0, 1) \quad (21.5)
+$$
+
+$u_i$ = 잠재 균등 변수, $\mu: [0,1] \to \mathbb{R}$ = GP.
+
+::: {.callout-tip}
+## 직관 — 분위수 함수의 GP
+
+임의의 분포는 균등 분포의 **분위수 함수 (inverse CDF) 변환** 으로 만들 수 있다 ($y = F^{-1}(u)$). LV-regression 은 이 분위수 함수를 GP 로 모델링하는 셈. LGP 의 적분 정규화 부담이 없어 계산이 단순.
+:::
+
+## § 21.6 Bibliographic Note
+
+### 핵심 문헌
+
+* **O'Hagan (1978)** — GP 회귀의 베이즈 원전.
+* **Neal (1998)** — GP 와 신경망의 무한 폭 한계 동치성, ARD 도입.
+* **Rasmussen & Williams (2006)** *Gaussian Processes for Machine Learning* — GP 의 정전.
+* **Vanhatalo et al. (2013)** — 대규모 데이터 GP 종합 리뷰.
+
+### 효율 계산
+
+* **Hensman, Fusi, Lawrence (2013)** — Big data 를 위한 stochastic variational GP.
+* **Lindgren, Rue, Lindstrom (2011)** — SPDE 기반 Markov 근사 (INLA).
+* **Sarkka, Solin, Hartikainen (2013)** — State-space GP (선형 시간).
+
+### 응용
+
+* **Riihimaki & Vehtari (2010)** — Monotonic GP regression.
+* **Tolvanen, Jylanki, Vehtari (2014)** — Heteroscedastic GP.
+* **Vehtari et al. (2016)** — GP 의 LOO-CV.
+
+### 데이터 출처
+
+* **Birthday**: Robert Kern, Google BigQuery, [http://www.mechanicalkern.com/static/birthdates-1968-1988.csv](http://www.mechanicalkern.com/static/birthdates-1968-1988.csv).
+* **Leukemia**: Henderson, Shimakura, Gorst (2002).
+
+## § 21.7 Exercises (요지)
+
+1. Squared exponential GP prior 표본 추출 (Figure 21.1 재현).
+2. NAES 04 attitude — 정규 근사 GP regression.
+3. NAES 04 — binomial likelihood GP (latent GP 식 (21.3) 적용).
+4. NAES 04 — 다변량 (age, sex, race) anisotropic GP.
+5. Golf putting binomial GP (Ch.19 와 비교).
+6. Birthday 분석 재현 (component 단계별 추가).
+7. Pollster 시계열을 spline (Ch.20) → GP (Ch.21) 로 교체.
+8. Basis $\sum \beta_h \exp(\psi(x - \tau_h)^2)$ 가 유도하는 GP 의 mean·covariance.
+9. 선형 모형 $\beta_1 + \beta_2 x$ 의 GP 표현과 비선형 표현력 한계.
+
+## Ch.21 핵심 수식 모음
+
+| 번호 | 수식 | 의미 |
+|:----:|:-----|:-----|
+| - | $\mu \sim \text{GP}(m, k)$ | GP 정의 |
+| - | $k(x, x') = \tau^2 \exp(-\|x - x'\|^2 / (2\ell^2))$ | Squared exponential kernel |
+| - | $k(x, x') = \tau^2 \exp\bigl(-\sum_j (x_j - x_j')^2 / (2\ell_j^2)\bigr)$ | Anisotropic kernel (ARD) |
+| - | $E(\widetilde{\mu}) = K(\widetilde{x}, x)(K + \sigma^2 I)^{-1} y$ | 사후 평균 (가우시안 우도) |
+| (21.1) | $\log p(y \mid \tau, \ell, \sigma^2) = \dots$ | Marginal likelihood |
+| - | $k_{\text{periodic}}(t, t') = \sigma^2 \exp\bigl(-2 \sin^2(\pi(t-t')/p)/\ell^2\bigr)$ | Periodic kernel |
+| (21.3) | $\log p(y \mid \theta, \phi) \approx \log p(y \mid \widehat{f}) - \frac{1}{2}\widehat{f}^T K^{-1} \widehat{f} - \frac{1}{2}\log|B|$ | Latent GP Laplace |
+| - | $p(y \mid f) = e^{f(y)} / \int e^{f(y')} dy'$ | LGP density |
+| (21.4) | $k((x,y),(x',y'))$ = squared exponential on joint $(x,y)$ | Density regression kernel |
+| (21.5) | $y_i \sim N(\mu(u_i), \sigma^2),\ u_i \sim U(0,1)$ | Latent-variable density |
+
+## 최소 실행 예제 — 1D Gaussian Process Regression
+
+순수 NumPy 로 GP 회귀의 핵심 식을 직접 구현하고, 동일 데이터를 sklearn 으로 재현한다.
+
+### Step 1: 순수 NumPy — 사후 평균·분산 직접 계산
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(42)
+
+
+def squared_exp_kernel(x1, x2, tau=1.0, ell=1.0):
+    """k(x, x') = tau^2 exp(-|x-x'|^2 / (2 ell^2))."""
+    d2 = (x1[:, None] - x2[None, :]) ** 2
+    return tau ** 2 * np.exp(-d2 / (2 * ell ** 2))
+
+
+# simulate 10 noisy points from a smooth function
+n = 10
+x = rng.uniform(-3, 3, n)
+y_true = np.sin(x) + 0.5 * np.cos(2 * x)
+sigma = 0.1
+y = y_true + rng.normal(0, sigma, n)
+
+# prediction grid
+x_test = np.linspace(-4, 4, 100)
+
+# kernel matrices
+tau, ell = 1.0, 1.0
+K = squared_exp_kernel(x, x, tau, ell)
+K_s = squared_exp_kernel(x_test, x, tau, ell)
+K_ss = squared_exp_kernel(x_test, x_test, tau, ell)
+
+# solve via Cholesky for numerical stability
+L = np.linalg.cholesky(K + sigma ** 2 * np.eye(n))
+alpha = np.linalg.solve(L.T, np.linalg.solve(L, y))
+
+# posterior mean and variance
+mu_post = K_s @ alpha
+v = np.linalg.solve(L, K_s.T)
+cov_post = K_ss - v.T @ v
+std_post = np.sqrt(np.diag(cov_post))
+
+# log marginal likelihood (eq. 21.1)
+log_ml = -0.5 * y @ alpha - np.sum(np.log(np.diag(L))) - 0.5 * n * np.log(2 * np.pi)
+
+print(f"first 5 posterior means: {mu_post[:5].round(3)}")
+print(f"first 5 posterior std:   {std_post[:5].round(3)}")
+print(f"log marginal likelihood: {log_ml:.3f}")
+```
+
+### Step 2: scikit-learn — 실무 코드
+
+```python
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C, WhiteKernel
+
+kernel = C(1.0, (1e-2, 1e2)) * RBF(1.0, (1e-2, 1e2)) + WhiteKernel(1e-2, (1e-5, 1e1))
+gp = GaussianProcessRegressor(kernel=kernel, normalize_y=False, n_restarts_optimizer=5)
+gp.fit(x.reshape(-1, 1), y)
+
+mu_sk, std_sk = gp.predict(x_test.reshape(-1, 1), return_std=True)
+print(f"sklearn posterior mean[:5]: {mu_sk[:5].round(3)}")
+print(f"sklearn posterior std[:5]:  {std_sk[:5].round(3)}")
+print(f"learned kernel: {gp.kernel_}")
+```
+
+### Step 3: PyMC — Bayesian hyperparameter inference
+
+```python
+import pymc as pm
+
+with pm.Model() as gp_model:
+    tau = pm.HalfNormal("tau", 1.0)
+    ell = pm.HalfNormal("ell", 1.0)
+    sigma_obs = pm.HalfNormal("sigma", 0.5)
+
+    cov_func = tau ** 2 * pm.gp.cov.ExpQuad(input_dim=1, ls=ell)
+    gp = pm.gp.Marginal(cov_func=cov_func)
+    _ = gp.marginal_likelihood("y_obs", X=x.reshape(-1, 1), y=y, sigma=sigma_obs)
+
+    trace = pm.sample(1000, tune=1000, target_accept=0.95, chains=4)
+
+print(trace.posterior[["tau", "ell", "sigma"]].mean(dim=("chain", "draw")))
+```
+
+::: {.callout-tip}
+## 코드 해설
+
+* **Step 1**: Cholesky 분해로 $(K + \sigma^2 I)^{-1}$ 을 안정적으로 푼다 — 직접 역산은 수치적으로 위험. 식 (21.1) 의 log marginal likelihood 도 같은 Cholesky factor 로 계산.
+* **Step 2**: sklearn 의 `GaussianProcessRegressor` 는 marginal likelihood 를 최대화하는 hyperparameter 점 추정 (Type-II MLE). `WhiteKernel` 이 noise variance $\sigma^2$ 역할.
+* **Step 3**: PyMC 는 hyperparameter 의 **사후 분포** 를 MCMC 로 샘플링 — Type-II MLE 가 점 추정인 데 비해 hyperparameter 불확실성까지 정량화.
+:::
+
+## Ch.21 심화편 예고
+
+Ch.21 심화편 **2편** 분할 예정:
+
+| 심화편 | 범위 | 주제 |
+|--------|------|------|
+| 04-21-1 | § 21.1~21.2 | GP regression 수식 완전 유도·squared exponential 전개·Birthday 5-component 완전 분석·식 (21.1) Cholesky 구현 |
+| 04-21-2 | § 21.3~21.7 | Latent GP·Laplace 식 (21.3)·Leukemia 생존 분석·LGP density 식 (21.4)~(21.5)·연습문제 풀이 |
+
+## Ch.21 실전 체크리스트
+
+**모델 설계**
+
+1. **Mean function** 결정 — 0 vs 선형 vs parametric. 데이터 외삽 영역에서 prior 가 회귀할 곳.
+2. **Kernel 종류** — squared exponential (smooth), Matern (rougher), periodic (주기), product/sum (조합).
+3. **Anisotropic 여부** — 다변량이면 ARD 권장.
+4. **데이터 normalization** — 입력·출력 모두 표준화하면 hyperprior 가 단순.
+
+**Hyperprior**
+
+5. $\tau$ — half-Cauchy/half-Normal, 출력 sd 의 1~2 배.
+6. $\ell_j$ — half-$t_4$ 또는 inverse-Gamma, 입력 sd 의 0.1~1 배.
+7. $\sigma$ — half-Normal, 측정 노이즈 추정.
+
+**계산**
+
+8. $n < 1000$: 풀 GP + MCMC (PyMC, Stan).
+9. $1000 \leq n < 10000$: marginal likelihood 최적화 (Type-II MLE), MCMC 는 일부 hyperparameter 만.
+10. $n \geq 10000$: sparse GP (inducing points), reduced-rank, GPyTorch.
+11. **Cholesky** 사용, 직접 역산 회피.
+12. **Jitter** ($10^{-6} I$) 를 $K$ 대각에 더해 수치 안정성 확보.
+
+**추론·검증**
+
+13. **사후 평균 + pointwise 90% bands** 시각화.
+14. **LOO-CV lppd** 로 모델 비교.
+15. Posterior predictive draws 로 함수 진폭·smoothness 점검.
+16. ARD 의 경우 $\ell_j$ 사후가 매우 큰 변수는 **자동 탈락** 으로 해석.
+
+**해석**
+
+17. **외삽 영역** 에서 사후가 mean function 으로 회귀 — 외삽 결과 신뢰 금지.
+18. Component 합 모델 (Birthday 식) 의 경우 식 (21.2) 로 **개별 component 사후** 를 분리해 시각화.
+19. 비선형·상호작용 발견은 GP 의 강점 — Cox·logistic 과 비교.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Part V Overview](./04-bayesian-part5-overview.qmd)
+* [Ch.19 Parametric Nonlinear Overview](./04-19-0-parametric-nonlinear-overview.qmd)
+* [Ch.20 Basis Function Models Overview](./04-20-0-basis-function-models-overview.qmd)
+* [Ch.20 § 20.1~20.2 — Splines·Basis Selection·Shrinkage](./04-20-1-splines-basis-shrinkage.qmd)
+* [Ch.16 § 16.1~16.4 — Generalized Linear Models](./03-16-0-generalized-linear-models-overview.qmd)
+* [Ch.13 § 13.7~13.8 — Variational Inference·Expectation Propagation](./02-13-3-variational-inference-expectation-propagation.qmd)
+
+**후속 주제**
+
+* [Ch.21 § 21.1~21.2 심화](./04-21-1-gp-regression-birthdays.qmd) (예정)
+* [Ch.21 § 21.3~21.7 심화](./04-21-2-latent-gp-density-exercises.qmd) (예정)
+* [Ch.22 Finite Mixture Models Overview](./04-22-0-finite-mixture-overview.qmd) (예정)
+* [Ch.23 Dirichlet Process Models Overview](./04-23-0-dirichlet-process-overview.qmd) (예정)
+
+**관련 개념 (cross-category)**
+
+* [Kernel Methods and RKHS](../../Math/kernel-methods-rkhs.qmd)
+* [Functional Data Analysis (Ramsay-Silverman)](../fda/fda-overview.qmd)
+* [Bayesian Optimization with GP](../../Machine_Learning/bayesian-optimization.qmd)
+* [Neural Network Gaussian Process (NNGP, Neal 1998)](../../Deep_Learning/nngp-ntk.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.21. CRC Press.
+* Rasmussen, C. E., & Williams, C. K. I. (2006). *Gaussian Processes for Machine Learning*. MIT Press.
+* O'Hagan, A. (1978). Curve Fitting and Optimal Design for Prediction. *Journal of the Royal Statistical Society B*, 40, 1-42.
+* Neal, R. M. (1998). Regression and Classification Using Gaussian Process Priors. *Bayesian Statistics*, 6, 475-501.
+* Vanhatalo, J., Riihimaki, J., Hartikainen, J., Jylanki, P., Tolvanen, V., & Vehtari, A. (2013). GPstuff: Bayesian Modeling with Gaussian Processes. *Journal of Machine Learning Research*, 14, 1175-1179.
+* Hensman, J., Fusi, N., & Lawrence, N. D. (2013). Gaussian Processes for Big Data. *UAI*.
+* Lindgren, F., Rue, H., & Lindstrom, J. (2011). An Explicit Link between Gaussian Fields and Gaussian Markov Random Fields: The SPDE Approach. *JRSS B*, 73, 423-498.
+* Henderson, R., Shimakura, S., & Gorst, D. (2002). Modeling Spatial Variation in Leukemia Survival Data. *JASA*, 97, 965-972.
+* Riihimaki, J., & Vehtari, A. (2010). Gaussian Processes with Monotonicity Information. *AISTATS*.
+* Kundu, S., & Dunson, D. B. (2014). Latent Factor Models for Density Estimation. *Biometrika*, 101, 641-654.
+* Vehtari, A., Mononen, T., Tolvanen, V., Sivula, T., & Winther, O. (2016). Bayesian Leave-One-Out Cross-Validation Approximations for Gaussian Latent Variable Models. *JMLR*, 17, 1-38.
