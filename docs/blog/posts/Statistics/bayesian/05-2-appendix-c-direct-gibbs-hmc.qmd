@@ -1,0 +1,1103 @@
+---
+title: "Appendix C § C.3~C.4 심화 — Direct Simulation · Gibbs · Metropolis · HMC (R + Python)"
+subtitle: "8 schools 모델을 Stan 없이 직접 구현·marginal-conditional grid simulation·standard Gibbs sampler·parameter-expanded Gibbs (mixing 개선)·t-model Gibbs (fixed nu)·Gibbs-Metropolis (unknown nu)·HMC log posterior + gradient + leapfrog integrator + hmc_iteration / hmc_run wrapper·hyperparameter tuning·R 와 Python (numpy) 병행 구현"
+description: |
+  Gelman BDA Appendix C 의 § C.3~C.4 를 한 편으로 깊게 다룬다. Stan 의 자동 NUTS 가 아닌 R + Python (NumPy) 으로 베이즈 sampler 를 직접 구현.
+  C.3 Direct simulation, Gibbs, Metropolis in R: (1) marginal-conditional grid simulation 으로 BDA § 5.4 식 (5.20)~(5.21) 의 직접 구현, (2) standard Gibbs sampler (theta_update, mu_update, tau_update 3 conditional), (3) parameter-expanded Gibbs (theta = mu + alpha * gamma 형태) 의 mixing 개선 메커니즘, (4) t-model with fixed nu 의 Gibbs sampler (V_j augmentation), (5) Gibbs-Metropolis for unknown nu (log posterior + Metropolis step + 44% acceptance rate tuning).
+  C.4 Programming HMC in R: log posterior log_p_th, 해석적 gradient gradient_th, 수치적 gradient gradient_th_numerical (debugging), hmc_iteration (leapfrog L steps + accept/reject), hmc_run (multiple chains, warmup, random epsilon/L), hyperparameter tuning (epsilon_0, L_0, mass matrix M).
+  모든 코드를 R 과 Python (numpy/scipy) 으로 병행 제시. Pure 직접 구현이므로 Stan / PyMC / NumPyro 없이 학습 가능. Stan 의 NUTS 가 자동화하는 모든 단계를 명시적으로 작성하여 베이즈 sampler 의 본질을 드러낸다.
+categories:
+  - Statistics
+  - Bayesian
+  - Gibbs-Sampler
+  - Metropolis
+  - HMC
+  - Computational-Bayes
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 들어가며 — Stan 의 자동화 vs 직접 구현
+
+Appendix C 의 사다리:
+
+| 편 | 주제 |
+|:---|:------|
+| [Overview (05)](./05-appendix-c-r-stan-overview.qmd) | Appendix C 큰 그림 |
+| [§ C.1~C.2 (05-1)](./05-1-appendix-c-getting-started-stan.qmd) | 환경 셋업 + Stan 으로 8 schools |
+| **§ C.3~C.4 (본 편)** | **R + Python 직접 구현 (Gibbs·Metropolis·HMC)** |
+| § C.5~C.6 (예정) | Debugging·Bibliographic |
+
+::: {.callout-important}
+## 본 편이 답하는 다섯 가지 질문
+
+1. Stan 이 한 줄로 해주는 것 (NUTS sampling) 을 R/Python 으로 직접 구현하면 어떻게 되는가?
+2. **Marginal-conditional grid** simulation 이 8 schools 같은 1D hyperparameter 문제에서 왜 정확하고 효율적인가?
+3. **Parameter-expanded Gibbs** 가 standard Gibbs 보다 mixing 이 더 좋은 이유는? ($\alpha$ 보조 변수가 무엇을 푸는가?)
+4. **Gibbs-Metropolis hybrid** — conjugate 단계 + Metropolis 단계 — 의 본질은?
+5. **HMC 의 leapfrog integrator** 와 accept/reject 가 어떻게 결합되어 정확한 사후 분포를 보장하는가?
+:::
+
+### 직접 구현의 학습 가치
+
+Stan/PyMC/NumPyro 의 자동화는 실무에 좋지만, **베이즈 sampler 의 본질** 을 이해하려면 직접 구현이 필수.
+
+| 자동화 도구 | 직접 구현 학습 가치 |
+|:---|:------|
+| Stan compile | 모델 → log posterior 변환 명시 |
+| Autodiff | gradient 손으로 유도 |
+| NUTS | leapfrog + accept/reject 메커니즘 이해 |
+| Adapt step size | hyperparameter tuning 의 trade-off |
+
+8 schools 같은 단순 모델에서 직접 구현이 의미 있는 이유:
+
+* **Closed-form conditional** 이 존재 → Gibbs 가 자연.
+* **저차원 hyperparameter** ($\tau$ 만 1D) → grid 가능.
+* **HMC overkill 지만 template** 으로 학습 ideal.
+
+## C.3 Direct Simulation, Gibbs, Metropolis in R + Python
+
+### 데이터 (8 Schools 재방문)
+
+```r
+# R
+J <- 8
+y <- c(28, 8, -3, 7, -1, 1, 18, 12)
+sigma <- c(15, 10, 16, 11, 9, 11, 10, 18)
+```
+
+```python
+# Python
+import numpy as np
+
+J = 8
+y = np.array([28., 8., -3., 7., -1., 1., 18., 12.])
+sigma = np.array([15., 10., 16., 11., 9., 11., 10., 18.])
+```
+
+### Marginal-Conditional Grid Simulation
+
+[Ch.5 § 5.4](./00-5-2-normal-eight-schools-meta.qmd) 의 두 단계 분해:
+
+1. **$\tau$ marginal**: $\theta, \mu$ 적분 소거.
+2. **$(\mu, \theta) \mid \tau$**: conditional, closed form.
+
+#### 식 (5.20)
+
+$$
+\hat\mu(\tau) = \frac{\sum_j y_j/(\sigma_j^2 + \tau^2)}{\sum_j 1/(\sigma_j^2 + \tau^2)}
+$$
+
+$$
+V_\mu(\tau) = \frac{1}{\sum_j 1/(\sigma_j^2 + \tau^2)}
+$$
+
+#### 식 (5.21) — Marginal log-posterior of $\tau$
+
+$$
+\log p(\tau \mid y) = \frac{1}{2}\log V_\mu(\tau) - \frac{1}{2}\sum_j \log(\sigma_j^2 + \tau^2) - \frac{1}{2}\sum_j \frac{(y_j - \hat\mu)^2}{\sigma_j^2 + \tau^2} + \text{const}
+$$
+
+#### R 구현
+
+```r
+mu_hat <- function(tau, y, sigma) {
+  sum(y / (sigma^2 + tau^2)) / sum(1 / (sigma^2 + tau^2))
+}
+
+V_mu <- function(tau, y, sigma) {
+  1 / sum(1 / (sigma^2 + tau^2))
+}
+
+# Grid for tau
+n_grid <- 2000
+tau_grid <- seq(0.01, 40, length=n_grid)
+log_p_tau <- numeric(n_grid)
+for (i in 1:n_grid) {
+  mu_i <- mu_hat(tau_grid[i], y, sigma)
+  V_i <- V_mu(tau_grid[i], y, sigma)
+  log_p_tau[i] <- 0.5*log(V_i) - 0.5*sum(log(sigma^2 + tau_grid[i]^2)) -
+                  0.5*sum((y - mu_i)^2 / (sigma^2 + tau_grid[i]^2))
+}
+
+# Normalize on log scale (overflow 회피)
+log_p_tau <- log_p_tau - max(log_p_tau)
+p_tau <- exp(log_p_tau) / sum(exp(log_p_tau))
+
+# Sample
+n_sims <- 1000
+tau <- sample(tau_grid, n_sims, replace=TRUE, prob=p_tau)
+mu <- numeric(n_sims)
+theta <- matrix(NA, n_sims, J)
+for (i in 1:n_sims) {
+  mu[i] <- rnorm(1, mu_hat(tau[i], y, sigma), sqrt(V_mu(tau[i], y, sigma)))
+  theta_mean <- (mu[i]/tau[i]^2 + y/sigma^2) / (1/tau[i]^2 + 1/sigma^2)
+  theta_sd <- sqrt(1 / (1/tau[i]^2 + 1/sigma^2))
+  theta[i, ] <- rnorm(J, theta_mean, theta_sd)
+}
+```
+
+#### Python 구현
+
+```python
+def mu_hat(tau, y, sigma):
+    return np.sum(y / (sigma**2 + tau**2)) / np.sum(1 / (sigma**2 + tau**2))
+
+def V_mu(tau, y, sigma):
+    return 1 / np.sum(1 / (sigma**2 + tau**2))
+
+
+# Grid
+n_grid = 2000
+tau_grid = np.linspace(0.01, 40, n_grid)
+log_p_tau = np.zeros(n_grid)
+for i, t in enumerate(tau_grid):
+    mu_i = mu_hat(t, y, sigma)
+    V_i = V_mu(t, y, sigma)
+    log_p_tau[i] = (0.5*np.log(V_i)
+                    - 0.5*np.sum(np.log(sigma**2 + t**2))
+                    - 0.5*np.sum((y - mu_i)**2 / (sigma**2 + t**2)))
+
+log_p_tau -= log_p_tau.max()
+p_tau = np.exp(log_p_tau) / np.exp(log_p_tau).sum()
+
+# Sample
+rng = np.random.default_rng(42)
+n_sims = 1000
+tau_samples = rng.choice(tau_grid, size=n_sims, p=p_tau)
+mu_samples = np.zeros(n_sims)
+theta_samples = np.zeros((n_sims, J))
+for i, t in enumerate(tau_samples):
+    mu_samples[i] = rng.normal(mu_hat(t, y, sigma), np.sqrt(V_mu(t, y, sigma)))
+    theta_mean = ((mu_samples[i]/t**2 + y/sigma**2)
+                  / (1/t**2 + 1/sigma**2))
+    theta_sd = np.sqrt(1 / (1/t**2 + 1/sigma**2))
+    theta_samples[i, :] = rng.normal(theta_mean, theta_sd)
+
+print(f"tau: mean={tau_samples.mean():.2f}, "
+      f"95% CI=[{np.percentile(tau_samples, 2.5):.2f}, "
+      f"{np.percentile(tau_samples, 97.5):.2f}]")
+```
+
+::: {.callout-tip}
+## 직관 — Grid Simulation 이 작동하는 조건
+
+**조건**:
+
+* Marginal hyperparameter 가 **저차원** (1~2D).
+* Conditional posterior 가 **closed form**.
+* Hyperparameter 의 사후 영역이 알려져 있음.
+
+8 schools 의 $\tau$ 는 1D scalar → grid 2000 점 충분.
+
+**Grid 의 우위**:
+
+* **정확** (numerical integration error 만).
+* **MCMC 진단 불필요** (No autocorrelation).
+* **빠름** (1 second 미만).
+
+**Grid 의 한계**:
+
+* 차원 ≥ 3 이면 폭발.
+* Conditional 이 closed form 아니면 불가.
+
+따라서 grid 는 **simple hierarchical 에 ideal**, 일반 응용에는 MCMC 필요.
+
+코드 핵심:
+
+* **Log scale 계산**: `log_p_tau - max(log_p_tau)` 후 `exp` — overflow/underflow 회피.
+* **확률 정규화**: `p_tau / sum(p_tau)`.
+:::
+
+### Standard Gibbs Sampler
+
+#### 3 가지 Conditional
+
+**$\theta_j \mid \mu, \tau, y \sim N(\hat\theta_j, V_{\theta_j})$**:
+
+$$
+\hat\theta_j = \frac{\mu/\tau^2 + y_j/\sigma_j^2}{1/\tau^2 + 1/\sigma_j^2}, \quad V_{\theta_j} = \frac{1}{1/\tau^2 + 1/\sigma_j^2}
+$$
+
+**$\mu \mid \theta, \tau \sim N(\bar\theta, \tau^2/J)$**:
+
+$$
+\bar\theta = \frac{1}{J}\sum_j \theta_j
+$$
+
+**$\tau \mid \theta, \mu$**: scaled inverse-$\chi^2$.
+
+$$
+\tau \mid \cdots \sim \text{Inv-}\chi^2_{J-1}\Bigl(\frac{1}{J-1}\sum_j (\theta_j - \mu)^2\Bigr)
+$$
+
+#### R 구현
+
+```r
+theta_update <- function(mu, tau, y, sigma) {
+  theta_hat <- (mu/tau^2 + y/sigma^2) / (1/tau^2 + 1/sigma^2)
+  V_theta <- 1 / (1/tau^2 + 1/sigma^2)
+  rnorm(length(y), theta_hat, sqrt(V_theta))
+}
+
+mu_update <- function(theta, tau) {
+  rnorm(1, mean(theta), tau / sqrt(length(theta)))
+}
+
+tau_update <- function(theta, mu) {
+  J <- length(theta)
+  sqrt(sum((theta - mu)^2) / rchisq(1, J - 1))
+}
+
+# Multiple chains
+chains <- 5
+iter <- 1000
+J <- length(y)
+sims <- array(NA, dim=c(iter, chains, J + 2))
+for (m in 1:chains) {
+  mu <- rnorm(1, mean(y), sd(y))
+  tau <- runif(1, 0, sd(y))
+  for (t in 1:iter) {
+    theta <- theta_update(mu, tau, y, sigma)
+    mu <- mu_update(theta, tau)
+    tau <- tau_update(theta, mu)
+    sims[t, m, ] <- c(theta, mu, tau)
+  }
+}
+
+# Convergence (rstan 의 monitor() 사용)
+library(rstan)
+monitor(sims)
+```
+
+#### Python 구현
+
+```python
+def theta_update(mu, tau, y, sigma, rng):
+    theta_hat = (mu/tau**2 + y/sigma**2) / (1/tau**2 + 1/sigma**2)
+    V_theta = 1 / (1/tau**2 + 1/sigma**2)
+    return rng.normal(theta_hat, np.sqrt(V_theta))
+
+
+def mu_update(theta, tau, rng):
+    return rng.normal(theta.mean(), tau / np.sqrt(len(theta)))
+
+
+def tau_update(theta, mu, rng):
+    J = len(theta)
+    return np.sqrt(np.sum((theta - mu)**2) / rng.chisquare(J - 1))
+
+
+# Multiple chains
+chains = 5
+n_iter = 1000
+sims = np.zeros((n_iter, chains, J + 2))
+rng = np.random.default_rng(42)
+
+for m in range(chains):
+    mu = rng.normal(y.mean(), y.std())
+    tau = rng.uniform(0, y.std())
+    for t in range(n_iter):
+        theta = theta_update(mu, tau, y, sigma, rng)
+        mu = mu_update(theta, tau, rng)
+        tau = tau_update(theta, mu, rng)
+        sims[t, m, :J] = theta
+        sims[t, m, J] = mu
+        sims[t, m, J + 1] = tau
+
+# 사후 진단
+import arviz as az
+
+idata = az.from_dict(
+    posterior={"theta": sims[:, :, :J].transpose(1, 0, 2),
+               "mu": sims[:, :, J].transpose(1, 0),
+               "tau": sims[:, :, J + 1].transpose(1, 0)},
+)
+print(az.summary(idata))
+```
+
+::: {.callout-tip}
+## 직관 — Gibbs Sampler 가 작동하는 메커니즘
+
+각 conditional 이 **conjugate** (정규-정규, 정규-Inv-$\chi^2$) → 표준 분포에서 직접 sampling.
+
+각 step 의 의미:
+
+1. **`theta_update`**: $\theta_j$ 를 $(\mu, \tau)$ 가정 하에 conjugate posterior 에서 sample.
+   * $\hat\theta_j$ = $\mu$ 와 $y_j$ 의 precision-weighted average.
+   * $V_{\theta_j}$ = $\mu$ 와 $y_j$ 의 precision 합의 inverse.
+
+2. **`mu_update`**: $\mu$ 를 $\theta$ 가정 하에 sample.
+   * $\theta_j$ 의 평균을 $\mu$ 의 posterior mean 으로 (uniform prior 가정).
+   * 분산 $\tau^2/J$ — $J$ 개 $\theta_j$ 가 $\mu$ 추정에 기여.
+
+3. **`tau_update`**: $\tau$ 를 $(\theta, \mu)$ 가정 하에 Inv-$\chi^2$ 에서 sample.
+   * $\sum (\theta_j - \mu)^2$ 가 sufficient statistic.
+
+**핵심**: 각 step 이 **conditional 의 정확한 closed form** 에서 sampling. Markov chain 의 stationary distribution 이 joint posterior.
+:::
+
+### Parameter-Expanded Gibbs (PX-Gibbs)
+
+#### 동기 — 표준 Gibbs 의 Mixing 한계
+
+표준 Gibbs 에서 $\tau$ 가 작을 때 $\theta_j$ 의 conditional 이 좁아짐 → **funnel 과 유사한 효과** → mixing 느림.
+
+#### Reparameterization
+
+$\theta_j = \mu + \alpha \gamma_j$ 로 도입 ($\alpha$ 는 보조 scale, $\gamma_j$ 는 standardized).
+
+* 새 parameters: $(\mu, \alpha, \gamma_1, \ldots, \gamma_J, \tau)$.
+* $\theta_j = \mu + \alpha \gamma_j$ 는 결정적 변환.
+
+#### Conditional 갱신
+
+**$\gamma_j \mid \alpha, \mu, \tau, y$**:
+
+$$
+\hat\gamma_j = \frac{\alpha(y_j - \mu)/\sigma_j^2}{1/\tau^2 + \alpha^2/\sigma_j^2}, \quad V_{\gamma_j} = \frac{1}{1/\tau^2 + \alpha^2/\sigma_j^2}
+$$
+
+**$\alpha \mid \gamma, \mu, \tau, y$**: 정규.
+
+$$
+\hat\alpha = \frac{\sum_j \gamma_j (y_j - \mu)/\sigma_j^2}{\sum_j \gamma_j^2/\sigma_j^2}, \quad V_\alpha = \frac{1}{\sum_j \gamma_j^2/\sigma_j^2}
+$$
+
+**$\mu, \tau$**: 표준 Gibbs 와 유사.
+
+#### R 구현
+
+```r
+gamma_update <- function(alpha, mu, tau, y, sigma) {
+  gamma_hat <- (alpha * (y - mu)/sigma^2) / (1/tau^2 + alpha^2/sigma^2)
+  V_gamma <- 1 / (1/tau^2 + alpha^2/sigma^2)
+  rnorm(length(y), gamma_hat, sqrt(V_gamma))
+}
+
+alpha_update <- function(gamma, mu, y, sigma) {
+  alpha_hat <- sum(gamma * (y - mu)/sigma^2) / sum(gamma^2/sigma^2)
+  V_alpha <- 1 / sum(gamma^2/sigma^2)
+  rnorm(1, alpha_hat, sqrt(V_alpha))
+}
+
+# 메인 loop 의 핵심:
+for (t in 1:iter) {
+  gamma <- gamma_update(alpha, mu, tau, y, sigma)
+  alpha <- alpha_update(gamma, mu, y, sigma)
+  mu <- mu_update_px(...)
+  tau <- tau_update_px(...)
+  sims[t, m, ] <- c(mu + alpha * gamma, mu, abs(alpha) * tau)
+}
+```
+
+::: {.callout-important}
+## 직관 — PX 가 Mixing 을 개선하는 이유
+
+**표준 Gibbs**: $\theta_j$ 와 $\tau$ 가 직접 conditional 결합 → funnel 영향.
+
+**PX-Gibbs**: $\gamma_j \sim N(0, 1)$ 형태로 standardize. $\alpha$ 가 추가 scale parameter.
+
+* $\tau$ 와 $\alpha$ 가 같은 scale 정보를 공유 → over-parameterized.
+* 그러나 두 변수가 **다른 방향에서 같은 효과** 를 표현 → MCMC 가 funnel 영역에서 더 자유롭게 움직임.
+* $|\alpha| \tau$ 가 식별 가능한 scale ($\theta_j$ 의 분산 = $\alpha^2 \tau^2 \cdot \text{Var}(\gamma_j)$).
+
+**Liu & Wu (1999)** 의 PX-Gibbs 정리: 표준 Gibbs 보다 항상 mixing 같거나 좋음 (autocorrelation 작음).
+
+이것이 NCP 와 같은 정신 — **추가 변수 도입으로 geometry 풀기**.
+:::
+
+### t-Model with Fixed $\nu$
+
+#### 모델
+
+학교별 효과의 heavy tail 허용:
+
+$$
+\theta_j \mid V_j \sim N(\mu, V_j), \quad V_j \mid \tau, \nu \sim \text{Inv-}\chi^2_\nu(\tau^2)
+$$
+
+$V_j$ 적분 소거하면 $\theta_j \sim t_\nu(\mu, \tau^2)$.
+
+#### Gibbs Conditional
+
+$V_j$ 를 augmentation 변수로 추가.
+
+* $\theta_j \mid \mu, V_j, y_j$: 정규 ($\theta_j$ 의 분산이 $V_j$).
+* $V_j \mid \theta_j, \mu, \tau, \nu$: scaled Inv-$\chi^2$.
+* $\mu \mid \theta, V$: 정규 (precision-weighted by $V_j$).
+* $\tau \mid V, \nu$: Gamma.
+
+#### R 구현 (핵심)
+
+```r
+theta_update_t <- function(mu, V, y, sigma) {
+  theta_hat <- (mu/V + y/sigma^2) / (1/V + 1/sigma^2)
+  V_theta <- 1 / (1/V + 1/sigma^2)
+  rnorm(length(y), theta_hat, sqrt(V_theta))
+}
+
+V_update <- function(theta, mu, tau, nu) {
+  J <- length(theta)
+  (nu*tau^2 + (theta - mu)^2) / rchisq(J, nu + 1)
+}
+
+mu_update_t <- function(theta, V) {
+  mu_hat <- sum(theta/V) / sum(1/V)
+  V_mu <- 1 / sum(1/V)
+  rnorm(1, mu_hat, sqrt(V_mu))
+}
+
+tau_update_t <- function(V, nu) {
+  J <- length(V)
+  sqrt(rgamma(1, J*nu/2 + 1, (nu/2) * sum(1/V)))
+}
+
+nu <- 4  # fixed
+# Gibbs loop:
+for (t in 1:iter) {
+  theta <- theta_update_t(mu, V, y, sigma)
+  V <- V_update(theta, mu, tau, nu)
+  mu <- mu_update_t(theta, V)
+  tau <- tau_update_t(V, nu)
+}
+```
+
+#### Python 구현
+
+```python
+def theta_update_t(mu, V, y, sigma, rng):
+    theta_hat = (mu/V + y/sigma**2) / (1/V + 1/sigma**2)
+    V_theta = 1 / (1/V + 1/sigma**2)
+    return rng.normal(theta_hat, np.sqrt(V_theta))
+
+
+def V_update(theta, mu, tau, nu, rng):
+    J = len(theta)
+    return (nu*tau**2 + (theta - mu)**2) / rng.chisquare(nu + 1, size=J)
+
+
+def mu_update_t(theta, V, rng):
+    mu_hat = np.sum(theta/V) / np.sum(1/V)
+    V_mu = 1 / np.sum(1/V)
+    return rng.normal(mu_hat, np.sqrt(V_mu))
+
+
+def tau_update_t(V, nu, rng):
+    J = len(V)
+    return np.sqrt(rng.gamma(J*nu/2 + 1, 1 / ((nu/2) * np.sum(1/V))))
+
+
+nu = 4
+# Loop similar to R
+```
+
+::: {.callout-tip}
+## 직관 — $V_j$ Augmentation 의 역할
+
+**$V_j$ 가 없으면**:
+
+$\theta_j \sim t_\nu(\mu, \tau^2)$ 직접 → $\theta_j$ 의 conditional 이 closed form 아님.
+
+**$V_j$ 가 있으면**:
+
+$\theta_j \mid V_j$ 는 정규 → conjugate Gibbs.
+
+$V_j$ 를 적분 소거하면 $\theta_j \sim t_\nu$.
+
+핵심: **continuous mixture** ([Ch.22 § 22.1](./04-22-1-setup-schizophrenia-label-switching.qmd) 의 robust 통계학) 의 augmentation 형태.
+
+같은 정신:
+
+* Negative binomial = Poisson-Gamma mixture → Gamma augmentation.
+* Beta-binomial = binomial-Beta mixture → Beta augmentation.
+
+**Marginal 이 표준 분포 아니면 augmentation → conditional 이 conjugate 가 되도록**.
+:::
+
+### Gibbs-Metropolis for Unknown $\nu$
+
+#### 동기
+
+$\nu$ 의 conditional 이 closed form 아님 → Gibbs 불가능. **Metropolis step within Gibbs**.
+
+#### Log Posterior
+
+$$
+\log p(\nu \mid \cdots) = \sum_j \Bigl[\frac{\nu}{2}\log\frac{\nu}{2} + \nu \log \tau - \log\Gamma(\nu/2) - (\nu/2 + 1)\log V_j - \frac{\nu \tau^2}{2 V_j}\Bigr] + \text{const}
+$$
+
+#### Metropolis Step
+
+$\nu^{-1}$ 에 정규 random walk proposal.
+
+```r
+log_post <- function(theta, V, mu, tau, nu, y, sigma) {
+  sum(dnorm(y, theta, sigma, log=TRUE)) +
+    sum(dnorm(theta, mu, sqrt(V), log=TRUE)) +
+    sum(0.5*nu*log(nu/2) + nu*log(tau) - lgamma(nu/2)
+        - (nu/2 + 1)*log(V) - 0.5*nu*tau^2/V)
+}
+
+nu_update <- function(nu, theta, V, mu, tau, y, sigma, sigma_jump_nu) {
+  nu_inv_star <- rnorm(1, 1/nu, sigma_jump_nu)
+  if (nu_inv_star <= 0 || nu_inv_star > 1) {
+    return(list(nu = nu, p_jump = 0))
+  }
+  nu_star <- 1/nu_inv_star
+  log_r <- log_post(theta, V, mu, tau, nu_star, y, sigma) -
+           log_post(theta, V, mu, tau, nu, y, sigma)
+  if (log(runif(1)) < log_r) {
+    return(list(nu = nu_star, p_jump = min(exp(log_r), 1)))
+  } else {
+    return(list(nu = nu, p_jump = min(exp(log_r), 1)))
+  }
+}
+```
+
+#### Acceptance Rate Tuning
+
+이론적 최적: 1D parameter 의 random walk Metropolis 는 **44%** acceptance.
+
+Pilot run 으로 `sigma_jump_nu` 조절:
+
+* `sigma_jump_nu = 1` → acceptance 17% (낮음).
+* `sigma_jump_nu = 0.5` → acceptance 32%.
+* `sigma_jump_nu = 0.3` → acceptance 46% (최적 근처).
+
+::: {.callout-tip}
+## 직관 — Acceptance Rate 의 Goldilocks Zone
+
+**너무 높음** (>70%): proposal 이 너무 작음 → diffusion 느림.
+
+**너무 낮음** (<10%): proposal 이 너무 큼 → 대부분 reject.
+
+**최적**: 1D 는 44%, 다차원 일수록 줄어 high-dim 에서 23% (Roberts-Gelman-Gilks 1997).
+
+조절 방법:
+
+* Acceptance < 30% → proposal SD 줄이기.
+* Acceptance > 60% → proposal SD 늘리기.
+* Pilot run + adaptive scaling 가 표준.
+
+NUTS (Stan) 가 이 tuning 을 자동화 — 수동 조절 불필요. 그러나 직접 구현 학습 가치는 높음.
+:::
+
+### t-Model + Parameter Expansion
+
+위의 두 기법 (PX + Metropolis) 결합. Mixing 이 더욱 개선되어 acceptance rate 가 다른 패턴:
+
+* `sigma_jump_nu = 1`: 17%.
+* `sigma_jump_nu = 0.5`: 32%.
+* `sigma_jump_nu = 0.3`: 46% (최적).
+
+복잡한 모델일수록 PX 의 효과 큼.
+
+## C.4 Programming HMC in R + Python
+
+### HMC 의 핵심 — Hamilton Dynamics
+
+위치 $\theta$ + 운동량 $\rho$ 의 결합 dynamics:
+
+$$
+H(\theta, \rho) = -\log p(\theta \mid y) + \frac{1}{2}\rho^T M^{-1} \rho
+$$
+
+* 첫 항: potential energy (negative log-posterior).
+* 둘째 항: kinetic energy.
+
+Hamilton 방정식:
+
+$$
+\frac{d\theta}{dt} = \frac{\partial H}{\partial \rho} = M^{-1} \rho, \quad \frac{d\rho}{dt} = -\frac{\partial H}{\partial \theta} = \nabla \log p(\theta \mid y)
+$$
+
+### Leapfrog Integrator
+
+연속 dynamics 의 이산 근사:
+
+1. **Half momentum step**: $\rho \leftarrow \rho + \frac{\epsilon}{2} \nabla \log p(\theta)$.
+2. **Full position step**: $\theta \leftarrow \theta + \epsilon M^{-1} \rho$.
+3. **Full momentum step**: $\rho \leftarrow \rho + \epsilon \nabla \log p(\theta)$ (마지막은 half).
+4. 2~3 을 $L$ 번 반복.
+5. 마지막 half momentum step.
+
+::: {.callout-tip}
+## 직관 — Symplectic Leapfrog
+
+**왜 leapfrog 인가?**
+
+* **Symplectic** integrator — phase space volume 보존.
+* Energy $H$ 가 거의 보존 (시간 reversible).
+* Acceptance rate 가 높음 (정확하면 100%).
+
+대조:
+
+* Forward Euler: 발산 가능, energy drift.
+* Runge-Kutta: 정확하지만 비-symplectic, long trajectory 에서 drift.
+
+Leapfrog 의 우아함: **운동량과 위치를 교차 update** 하여 symmetry 보존.
+:::
+
+### log_p_th + gradient_th
+
+#### R 구현
+
+```r
+log_p_th <- function(th, y, sigma) {
+  J <- length(th) - 2
+  theta <- th[1:J]
+  mu <- th[J + 1]
+  tau <- th[J + 2]
+  if (is.nan(tau) || tau <= 0) return(-Inf)
+
+  log_prior <- sum(dnorm(theta, mu, tau, log = TRUE))
+  log_likelihood <- sum(dnorm(y, theta, sigma, log = TRUE))
+  return(log_prior + log_likelihood)
+}
+
+gradient_th <- function(th, y, sigma) {
+  J <- length(th) - 2
+  theta <- th[1:J]
+  mu <- th[J + 1]
+  tau <- th[J + 2]
+  if (tau <= 0) return(rep(0, J + 2))
+
+  d_theta <- -(theta - y)/sigma^2 - (theta - mu)/tau^2
+  d_mu <- -sum(mu - theta)/tau^2
+  d_tau <- -J/tau + sum((mu - theta)^2)/tau^3
+  c(d_theta, d_mu, d_tau)
+}
+```
+
+#### Python 구현
+
+```python
+def log_p_th(th, y, sigma):
+    J = len(th) - 2
+    theta = th[:J]
+    mu = th[J]
+    tau = th[J + 1]
+    if np.isnan(tau) or tau <= 0:
+        return -np.inf
+
+    log_prior = np.sum(-0.5*np.log(2*np.pi*tau**2) - 0.5*((theta - mu)/tau)**2)
+    log_likelihood = np.sum(-0.5*np.log(2*np.pi*sigma**2)
+                             - 0.5*((y - theta)/sigma)**2)
+    return log_prior + log_likelihood
+
+
+def gradient_th(th, y, sigma):
+    J = len(th) - 2
+    theta = th[:J]
+    mu = th[J]
+    tau = th[J + 1]
+    if tau <= 0:
+        return np.zeros_like(th)
+
+    d_theta = -(theta - y)/sigma**2 - (theta - mu)/tau**2
+    d_mu = -np.sum(mu - theta)/tau**2
+    d_tau = -J/tau + np.sum((mu - theta)**2)/tau**3
+    return np.concatenate([d_theta, [d_mu, d_tau]])
+```
+
+### Numerical Gradient (Debugging)
+
+해석적 gradient 가 맞는지 검증.
+
+```python
+def gradient_th_numerical(th, y, sigma, eps=1e-4):
+    d = len(th)
+    diff = np.zeros(d)
+    for k in range(d):
+        th_hi = th.copy(); th_hi[k] += eps
+        th_lo = th.copy(); th_lo[k] -= eps
+        diff[k] = (log_p_th(th_hi, y, sigma) - log_p_th(th_lo, y, sigma)) / (2 * eps)
+    return diff
+
+
+# Verify
+th_test = np.concatenate([np.zeros(8), [5, 5]])
+analytical = gradient_th(th_test, y, sigma)
+numerical = gradient_th_numerical(th_test, y, sigma)
+print(f"Max abs diff: {np.max(np.abs(analytical - numerical)):.6f}")
+```
+
+::: {.callout-important}
+## 직관 — Numerical Gradient 의 가치
+
+**복잡한 모델** 에서 해석적 gradient 유도가 실수 많음.
+
+**Numerical gradient** (finite difference):
+
+* $\frac{\partial}{\partial \theta_k} \log p \approx \frac{\log p(\theta + e_k \epsilon) - \log p(\theta - e_k \epsilon)}{2\epsilon}$.
+* $O(d)$ 비용 (느리지만 단순).
+
+**Verification 절차**:
+
+1. 임의 $\theta$ 에서 analytical + numerical gradient 비교.
+2. 차이가 $10^{-4}$ 이내면 OK.
+3. 큰 차이 → 해석적 gradient 버그.
+
+**Stan**: autodiff 가 자동 → 사용자가 gradient 손으로 안 짬. 이것이 Stan 의 큰 가치.
+
+**직접 HMC 구현 시**: 항상 numerical gradient 로 verify.
+:::
+
+### HMC Iteration
+
+```r
+hmc_iteration <- function(th, y, sigma, epsilon, L, M) {
+  M_inv <- 1/M
+  d <- length(th)
+  phi <- rnorm(d, 0, sqrt(M))
+  th_old <- th
+  log_p_old <- log_p_th(th, y, sigma) - 0.5*sum(M_inv * phi^2)
+
+  # Half step
+  phi <- phi + 0.5*epsilon*gradient_th(th, y, sigma)
+
+  # L leapfrog steps
+  for (l in 1:L) {
+    th <- th + epsilon * M_inv * phi
+    if (l < L) {
+      phi <- phi + epsilon*gradient_th(th, y, sigma)
+    }
+  }
+
+  # Final half step
+  phi <- phi + 0.5*epsilon*gradient_th(th, y, sigma)
+
+  # Negate momentum (reversibility)
+  phi <- -phi
+
+  # Accept/reject
+  log_p_star <- log_p_th(th, y, sigma) - 0.5*sum(M_inv * phi^2)
+  r <- exp(log_p_star - log_p_old)
+  if (is.nan(r)) r <- 0
+  p_jump <- min(r, 1)
+  th_new <- if (runif(1) < p_jump) th else th_old
+
+  list(th = th_new, p_jump = p_jump)
+}
+```
+
+```python
+def hmc_iteration(th, y, sigma, epsilon, L, M, rng):
+    M_inv = 1 / M
+    d = len(th)
+    phi = rng.normal(0, np.sqrt(M))
+    th_old = th.copy()
+    log_p_old = log_p_th(th, y, sigma) - 0.5 * np.sum(M_inv * phi**2)
+
+    # Half step
+    phi = phi + 0.5 * epsilon * gradient_th(th, y, sigma)
+
+    # L leapfrog steps
+    for l in range(L):
+        th = th + epsilon * M_inv * phi
+        if l < L - 1:
+            phi = phi + epsilon * gradient_th(th, y, sigma)
+
+    # Final half step
+    phi = phi + 0.5 * epsilon * gradient_th(th, y, sigma)
+
+    # Negate
+    phi = -phi
+
+    # Accept/reject
+    log_p_star = log_p_th(th, y, sigma) - 0.5 * np.sum(M_inv * phi**2)
+    r = np.exp(log_p_star - log_p_old)
+    if np.isnan(r):
+        r = 0
+    p_jump = min(r, 1)
+    th_new = th if rng.uniform() < p_jump else th_old
+    return th_new, p_jump
+```
+
+::: {.callout-tip}
+## 직관 — HMC Iteration 의 4 단계
+
+1. **Initial momentum** $\rho \sim N(0, M)$ — 매 iteration 새로 추출.
+2. **Leapfrog**: $L$ steps 의 dynamics 시뮬레이션.
+3. **Reverse momentum**: detailed balance 보장.
+4. **Accept/reject**: $\min(1, \exp(-\Delta H))$.
+
+핵심:
+
+* Momentum resampling 이 새 directional move 부여 → mixing.
+* Leapfrog 가 gradient 활용한 ballistic move.
+* Accept/reject 가 numerical error 보정.
+
+이상적 HMC: $\Delta H = 0$ → acceptance 100%. 실제: $\Delta H \neq 0$ (numerical) → acceptance 65~80%.
+:::
+
+### HMC Run Wrapper
+
+```python
+def hmc_run(starting_values, n_iter, epsilon_0, L_0, M, y, sigma, rng):
+    chains, d = starting_values.shape
+    sims = np.zeros((n_iter, chains, d))
+    p_jumps = np.zeros((n_iter, chains))
+
+    for j in range(chains):
+        th = starting_values[j].copy()
+        for t in range(n_iter):
+            # Random epsilon, L per iteration
+            epsilon = rng.uniform(0, 2*epsilon_0)
+            L = int(np.ceil(2 * L_0 * rng.uniform()))
+            th, p_jump = hmc_iteration(th, y, sigma, epsilon, L, M, rng)
+            sims[t, j] = th
+            p_jumps[t, j] = p_jump
+    return sims, p_jumps
+
+
+# Run
+parameter_names = [f"theta[{i}]" for i in range(J)] + ["mu", "tau"]
+d = len(parameter_names)
+chains = 4
+
+# Mass vector (rough scale)
+M = np.full(d, 1/15**2)
+
+# Random starting values
+starts = np.zeros((chains, d))
+for j in range(chains):
+    starts[j, :J] = rng.normal(0, 15, J)
+    starts[j, J] = rng.normal(0, 15)
+    starts[j, J + 1] = rng.uniform(0, 15)  # tau > 0
+
+# First trial run
+sims_trial, _ = hmc_run(starts, 20, 0.1, 10, M, y, sigma, rng)
+
+# Production run
+sims, p_jumps = hmc_run(starts, 1000, 0.05, 20, M, y, sigma, rng)
+
+# Diagnostics
+print(f"Mean acceptance: {p_jumps.mean():.3f}")
+print(f"Theta means: {sims[500:, :, :J].mean(axis=(0, 1)).round(2)}")
+```
+
+### Hyperparameter Tuning
+
+#### $\epsilon$ (step size)
+
+* 너무 큼 → leapfrog 발산, acceptance 0.
+* 너무 작음 → trajectory 짧음, mixing 느림.
+* 권장: target acceptance 65% (Beskos et al. 2013).
+
+#### $L$ (leapfrog steps)
+
+* 너무 작음 → random walk 가깝게 (HMC 효과 없음).
+* 너무 큼 → 같은 영역 두 번 도달 (waste).
+* 권장: trajectory 길이 $L \cdot \epsilon$ 가 분포의 typical scale.
+
+#### $M$ (mass matrix)
+
+* Identity 가 default.
+* Diagonal 로 각 dimension 의 scale 조정 권장.
+* Full matrix 는 강한 correlation 처리.
+
+::: {.callout-important}
+## 직관 — Random $\epsilon$ 과 $L$
+
+매 iteration 마다 $\epsilon \sim U(0, 2\epsilon_0)$, $L \sim \lceil 2 L_0 U \rceil$.
+
+**이유**:
+
+* Fixed $\epsilon, L$ 은 phase space 의 특정 frequency 와 resonance 가능 → 같은 영역 반복.
+* Random 은 모든 영역 골고루 탐색.
+
+**NUTS** (Hoffman-Gelman 2014):
+
+* $L$ 을 자동 결정 (U-turn detection).
+* $\epsilon$ 을 dual averaging 으로 자동 튜닝.
+* 사용자가 $\epsilon_0, L_0$ 결정 불필요.
+
+따라서 NUTS 가 직접 HMC 보다 실무에서 절대 유리. 직접 HMC 는 학습 + 특수 모델용.
+:::
+
+## 4 가지 Sampler 비교
+
+| Sampler | 8 schools 결과 | 장점 | 단점 |
+|:----|:------|:------|:------|
+| Marginal-conditional | 정확, 빠름 | 1D problem ideal | 차원 ≥ 3 불가 |
+| Standard Gibbs | OK, mixing 보통 | Conjugate 활용 | Funnel 영역 mixing 느림 |
+| PX-Gibbs | Mixing 빠름 | Funnel 회피 | 추가 보조변수 |
+| Gibbs-Metropolis | $\nu$ unknown 시 | Non-conjugate 처리 | Acceptance tuning |
+| HMC (직접) | Mixing 매우 빠름 | High-dim 효율 | gradient 필요 + tuning |
+| NUTS (Stan) | 위 + 자동 tuning | 사용자 부담 최소 | 복잡한 internals |
+
+::: {.callout-tip}
+## 직관 — 어느 Sampler 를 언제 쓰는가
+
+**1-2D hyperparameter**: marginal-conditional grid 정확 + 빠름.
+
+**Conjugate hierarchical**: standard Gibbs 가 자연.
+
+**Funnel 의심**: PX-Gibbs 또는 NCP (NUTS).
+
+**비-conjugate**: Gibbs-Metropolis 또는 NUTS.
+
+**고차원**: NUTS (HMC 의 자동화).
+
+**프로토타입**: PyMC / NumPyro / Stan 의 자동화.
+
+**학습 + 특수 모델**: 직접 구현.
+:::
+
+## 종합 통합 — Python 한 파일
+
+```python
+"""8 schools — 4 가지 sampler 직접 구현 비교."""
+import numpy as np
+import arviz as az
+
+rng = np.random.default_rng(42)
+
+# Data
+J = 8
+y = np.array([28., 8., -3., 7., -1., 1., 18., 12.])
+sigma = np.array([15., 10., 16., 11., 9., 11., 10., 18.])
+
+# 1. Marginal-conditional grid
+def marginal_conditional(y, sigma, n_sims=1000, rng=rng):
+    n_grid = 2000
+    tau_grid = np.linspace(0.01, 40, n_grid)
+    log_p_tau = np.zeros(n_grid)
+    for i, t in enumerate(tau_grid):
+        mu_i = mu_hat(t, y, sigma)
+        V_i = V_mu(t, y, sigma)
+        log_p_tau[i] = (0.5*np.log(V_i) - 0.5*np.sum(np.log(sigma**2 + t**2))
+                        - 0.5*np.sum((y - mu_i)**2 / (sigma**2 + t**2)))
+    p_tau = np.exp(log_p_tau - log_p_tau.max())
+    p_tau /= p_tau.sum()
+    tau = rng.choice(tau_grid, size=n_sims, p=p_tau)
+    mu = np.array([rng.normal(mu_hat(t, y, sigma), np.sqrt(V_mu(t, y, sigma)))
+                   for t in tau])
+    theta = np.array([rng.normal(
+        (mu[i]/tau[i]**2 + y/sigma**2) / (1/tau[i]**2 + 1/sigma**2),
+        np.sqrt(1 / (1/tau[i]**2 + 1/sigma**2)))
+        for i in range(n_sims)])
+    return tau, mu, theta
+
+
+# 2. Standard Gibbs
+def standard_gibbs(y, sigma, chains=5, n_iter=1000, rng=rng):
+    J = len(y)
+    sims = np.zeros((n_iter, chains, J + 2))
+    for m in range(chains):
+        mu = rng.normal(y.mean(), y.std())
+        tau = rng.uniform(0, y.std())
+        for t in range(n_iter):
+            theta = theta_update(mu, tau, y, sigma, rng)
+            mu = mu_update(theta, tau, rng)
+            tau = tau_update(theta, mu, rng)
+            sims[t, m, :J] = theta
+            sims[t, m, J] = mu
+            sims[t, m, J + 1] = tau
+    return sims
+
+
+# 3. HMC (위에서 정의된 함수 사용)
+M = np.full(J + 2, 1/15**2)
+starts = np.array([
+    np.concatenate([rng.normal(0, 15, J),
+                    [rng.normal(0, 15), rng.uniform(0.1, 15)]])
+    for _ in range(4)
+])
+sims_hmc, p_jumps = hmc_run(starts, 1000, 0.05, 20, M, y, sigma, rng)
+
+# Compare
+tau_mc, mu_mc, theta_mc = marginal_conditional(y, sigma, rng=rng)
+sims_gibbs = standard_gibbs(y, sigma, rng=rng)
+
+print("Marginal-conditional:")
+print(f"  mu: {mu_mc.mean():.2f}, tau: {tau_mc.mean():.2f}")
+
+print("Standard Gibbs (last half):")
+gibbs_burn = sims_gibbs[500:].reshape(-1, J + 2)
+print(f"  mu: {gibbs_burn[:, J].mean():.2f}, tau: {gibbs_burn[:, J+1].mean():.2f}")
+
+print("HMC (last half):")
+hmc_burn = sims_hmc[500:].reshape(-1, J + 2)
+print(f"  mu: {hmc_burn[:, J].mean():.2f}, tau: {hmc_burn[:, J+1].mean():.2f}")
+print(f"  Acceptance: {p_jumps.mean():.3f}")
+```
+
+기대 결과: 3 sampler 모두 $\mu \approx 7.5, \tau \approx 6.5$ — 동일 사후 분포, 다른 sampling 경로.
+
+## 실전 체크리스트 — § C.3~C.4
+
+**Direct Simulation**
+
+1. **저차원 hyperparameter (1-2D)** 만 적용 가능.
+2. **Closed-form conditional** 검증.
+3. **Log-scale 계산** 으로 overflow/underflow 회피.
+4. **Grid 의 fine-ness** 검증 — 더 dense grid 로 결과 확인.
+
+**Standard Gibbs**
+
+5. **Conditional 유도** — conjugate 인지 확인.
+6. **Multiple chains** + over-dispersed starting.
+7. **Convergence**: $\widehat R$, $n_{\text{eff}}$ ($\geq 100$).
+8. **Funnel 의심** 시 reparameterization (NCP / PX).
+
+**Parameter-Expanded Gibbs**
+
+9. **Reparameterization** ($\theta = \mu + \alpha \gamma$) 도입.
+10. **식별 가능한 quantity** 만 보고 ($\alpha \tau$ 같은).
+11. Standard Gibbs 보다 mixing 측정해 비교.
+
+**Gibbs-Metropolis**
+
+12. **Non-conjugate 변수**만 Metropolis.
+13. **Proposal scale** pilot run 으로 튜닝.
+14. **Acceptance rate**: 1D 는 44%, multi-D 는 23%.
+
+**HMC**
+
+15. **Analytical gradient** + numerical gradient 로 verify.
+16. **Mass matrix** 를 사후 scale 에 맞춤.
+17. **Random $\epsilon, L$** per iteration 권장.
+18. **Trial run** 짧게 + production run.
+19. **Acceptance** 65~80% 목표.
+20. **NUTS 우선** — 직접 HMC 는 학습 / 특수 case.
+
+## 관련 주제
+
+**Appendix C 시리즈**
+
+* [Appendix C Overview (05)](./05-appendix-c-r-stan-overview.qmd)
+* [§ C.1~C.2 — Stan Getting Started](./05-1-appendix-c-getting-started-stan.qmd)
+
+**선행 지식**
+
+* [Ch.5 § 5.4 — Eight Schools Conjugate](./00-5-2-normal-eight-schools-meta.qmd)
+* [Ch.10 — Bayesian Computation Intro](./02-10-0-computation-intro.qmd)
+* [Ch.11 — MCMC Basics (Gibbs·Metropolis)](./02-11-0-mcmc-basics.qmd)
+* [Ch.12 § 12.4~12.6 — HMC, NUTS, Stan](./02-12-2-hmc-nuts-stan.qmd)
+* [Ch.17 — Robust Inference (t-model)](./03-17-0-robust-inference-overview.qmd)
+
+**관련 개념 (cross-category)**
+
+* [Hamiltonian Monte Carlo](../../Math/hmc.qmd)
+* [Leapfrog Integrator (Symplectic)](../../Math/leapfrog.qmd)
+* [Parameter Expansion (Liu-Wu)](../../Math/parameter-expansion.qmd)
+* [Acceptance Rate Tuning (Roberts-Gelman-Gilks)](../../Math/metropolis-tuning.qmd)
+* [Automatic Differentiation](../../Math/autodiff.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Appendix C § C.3~C.4. CRC Press.
+* Liu, J. S., & Wu, Y. N. (1999). Parameter Expansion for Data Augmentation. *JASA*, 94(448), 1264-1274.
+* Roberts, G. O., Gelman, A., & Gilks, W. R. (1997). Weak Convergence and Optimal Scaling of Random Walk Metropolis Algorithms. *Annals of Applied Probability*, 7(1), 110-120.
+* Roberts, G. O., & Rosenthal, J. S. (2001). Optimal Scaling for Various Metropolis-Hastings Algorithms. *Statistical Science*, 16(4), 351-367.
+* Neal, R. M. (2011). MCMC Using Hamiltonian Dynamics. In *Handbook of Markov Chain Monte Carlo*, Brooks et al. (eds.), Chapman & Hall/CRC.
+* Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths in HMC. *JMLR*, 15, 1593-1623.
+* Beskos, A., Pillai, N., Roberts, G., Sanz-Serna, J. M., & Stuart, A. (2013). Optimal Tuning of the Hybrid Monte Carlo Algorithm. *Bernoulli*, 19(5A), 1501-1534. (HMC acceptance rate 0.65)
+* Betancourt, M. (2017). A Conceptual Introduction to Hamiltonian Monte Carlo. *arXiv:1701.02434*.
+* Geman, S., & Geman, D. (1984). Stochastic Relaxation, Gibbs Distributions, and the Bayesian Restoration of Images. *IEEE PAMI*, 6(6), 721-741. (Gibbs sampler 원전)
+* Metropolis, N., Rosenbluth, A. W., Rosenbluth, M. N., Teller, A. H., & Teller, E. (1953). Equation of State Calculations by Fast Computing Machines. *Journal of Chemical Physics*, 21(6), 1087-1092. (Metropolis 원전)
+* Hastings, W. K. (1970). Monte Carlo Sampling Methods Using Markov Chains and Their Applications. *Biometrika*, 57(1), 97-109. (Metropolis-Hastings 일반화)
+* Duane, S., Kennedy, A. D., Pendleton, B. J., & Roweth, D. (1987). Hybrid Monte Carlo. *Physics Letters B*, 195(2), 216-222. (HMC 원전)
