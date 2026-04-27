@@ -1,0 +1,2125 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ko" xml:lang="ko"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.543">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Kwangmin Kim">
+<meta name="description" content="Gelman BDA Appendix C (Computation in R and Stan) 의 6 절을 한 편으로 조망한다. C.1 R + Stan 개발 환경 셋업, C.2 8 schools (Rubin 1981) hierarchical normal model 의 Stan 구현 — data / parameters / transformed parameters / model block 의 역할과 non-centered parameterization (theta = mu + tau * eta, eta ~ N(0,1)) 의 funnel posterior 회피 메커니즘, C.3 R 에서 직접 marginal-conditional grid 기반 시뮬레이션 + Gibbs sampler + Metropolis algorithm 명시 구현, C.4 R 에서 직접 HMC + leapfrog integrator 구현, C.5 debugging tips (수치 안정성·hyperparameter 선택·convergence 점검), C.6 bibliographic note. Stan 의 핵심 — NUTS (No-U-Turn Sampler), autodiff (automatic differentiation), HMC 의 leapfrog dynamics — 의 직관을 정리하고, 실무 워크플로우 (모델 작성 → R 데이터 준비 → Stan 호출 → 사후 분석 → posterior predictive checks) 를 8 schools 예제로 구체화. 베이즈 추론의 software 측면 — BDA 의 통계 이론을 실제 코드로 옮기는 다리.">
+
+<title>Kwangmin Kim - Appendix C Overview — Computation in R and Stan</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../../../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../../../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../../../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../../../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../../../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../../../../">
+<script src="../../../../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../../../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../../../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../../../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../../../../site_libs/quarto-html/quarto-syntax-highlighting-dark.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<script src="../../../../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../../../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../../../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../../../../site_libs/bootstrap/bootstrap-dark.min.css" rel="prefetch" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": true,
+  "language": {
+    "search-no-results-text": "일치 없음",
+    "search-matching-documents-text": "일치된 문서",
+    "search-copy-link-title": "검색 링크 복사",
+    "search-hide-matches-text": "추가 검색 결과 숨기기",
+    "search-more-match-text": "추가 검색결과",
+    "search-more-matches-text": "추가 검색결과",
+    "search-clear-button-title": "제거",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "취소",
+    "search-submit-button-title": "검색",
+    "search-label": "검색"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-6W0EKFMWBN"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-6W0EKFMWBN', { 'anonymize_ip': true});
+</script>
+<style>
+
+      .quarto-title-block .quarto-title-banner h1,
+      .quarto-title-block .quarto-title-banner h2,
+      .quarto-title-block .quarto-title-banner h3,
+      .quarto-title-block .quarto-title-banner h4,
+      .quarto-title-block .quarto-title-banner h5,
+      .quarto-title-block .quarto-title-banner h6
+      {
+        color: black;
+      }
+
+      .quarto-title-block .quarto-title-banner {
+        color: black;
+background: #EDF3F9;
+      }
+</style>
+<style>
+.custom-footer { 
+  text-align: center; 
+  font-size: 0.8em; 
+  color: #666; 
+  margin-top: 2rem; 
+}
+</style>
+
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../../../../styles.css">
+<meta property="og:title" content="Kwangmin Kim - Appendix C Overview — Computation in R and Stan">
+<meta property="og:description" content="Gelman BDA Appendix C (Computation in R and Stan) 의 6 절을 한 편으로 조망한다. C.1 R + Stan 개발 환경 셋업, C.2 8 schools (Rubin 1981) hierarchical normal model 의 Stan 구현 — data / parameters / transformed parameters / model block 의 역할과 non-centered parameterization (theta = mu + tau * eta, eta ~ N(0,1)) 의 funnel posterior 회피 메커니즘, C.3 R 에서 직접 marginal-conditional grid 기반 시뮬레이션 + Gibbs sampler + Metropolis algorithm 명시 구현, C.4 R 에서 직접 HMC + leapfrog integrator 구현, C.5 debugging tips (수치 안정성·hyperparameter 선택·convergence 점검), C.6 bibliographic note. Stan 의 핵심 — NUTS (No-U-Turn Sampler), autodiff (automatic differentiation), HMC 의 leapfrog dynamics — 의 직관을 정리하고, 실무 워크플로우 (모델 작성 → R 데이터 준비 → Stan 호출 → 사후 분석 → posterior predictive checks) 를 8 schools 예제로 구체화. 베이즈 추론의 software 측면 — BDA 의 통계 이론을 실제 코드로 옮기는 다리.">
+<meta property="og:site_name" content="Kwangmin Kim">
+</head>
+
+<body class="nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../../../../../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../../../.././images/logo.png" alt="" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../../../../../index.html">
+    <span class="navbar-title">Kwangmin Kim</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="검색"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="탐색 전환" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../docs/blog/index.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html"> 
+<span class="menu-text">Me</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225"> <i class="bi bi-github" role="img" aria-label="Github">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://www.linkedin.com/in/kwangmin-kim-a5241b200/"> <i class="bi bi-linkedin" role="img" aria-label="Linkedin">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="../../../../../docs/blog/index.xml"> <i class="bi bi-rss" role="img" aria-label="RSS">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+          <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="다크 모드 전환"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<header id="title-block-header" class="quarto-title-block default page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">Appendix C Overview — Computation in R and Stan</h1>
+            <p class="subtitle lead">BDA 본편 23 장 다음의 software companion: 8 schools 예제로 Stan 의 data·parameters·model block 분석·non-centered parameterization·R direct simulation (grid·Gibbs·Metropolis·HMC) 직접 구현·debugging tips·NUTS / autodiff / HMC 의 직관</p>
+                  <div>
+        <div class="description">
+          <p>Gelman BDA Appendix C (Computation in R and Stan) 의 6 절을 한 편으로 조망한다. C.1 R + Stan 개발 환경 셋업, C.2 8 schools (Rubin 1981) hierarchical normal model 의 Stan 구현 — data / parameters / transformed parameters / model block 의 역할과 non-centered parameterization (theta = mu + tau * eta, eta ~ N(0,1)) 의 funnel posterior 회피 메커니즘, C.3 R 에서 직접 marginal-conditional grid 기반 시뮬레이션 + Gibbs sampler + Metropolis algorithm 명시 구현, C.4 R 에서 직접 HMC + leapfrog integrator 구현, C.5 debugging tips (수치 안정성·hyperparameter 선택·convergence 점검), C.6 bibliographic note. Stan 의 핵심 — NUTS (No-U-Turn Sampler), autodiff (automatic differentiation), HMC 의 leapfrog dynamics — 의 직관을 정리하고, 실무 워크플로우 (모델 작성 → R 데이터 준비 → Stan 호출 → 사후 분석 → posterior predictive checks) 를 8 schools 예제로 구체화. 베이즈 추론의 software 측면 — BDA 의 통계 이론을 실제 코드로 옮기는 다리.</p>
+        </div>
+      </div>
+                          <div class="quarto-categories">
+                <div class="quarto-category">Statistics</div>
+                <div class="quarto-category">Bayesian</div>
+                <div class="quarto-category">Stan</div>
+                <div class="quarto-category">HMC</div>
+                <div class="quarto-category">Computational-Bayes</div>
+                <div class="quarto-category">Software</div>
+              </div>
+                  </div>
+  </div>
+    
+  
+  <div class="quarto-title-meta">
+
+      <div>
+      <div class="quarto-title-meta-heading">저자</div>
+      <div class="quarto-title-meta-contents">
+               <p>Kwangmin Kim </p>
+            </div>
+    </div>
+      
+      <div>
+      <div class="quarto-title-meta-heading">공개</div>
+      <div class="quarto-title-meta-contents">
+        <p class="date">2026년 04월 27일</p>
+      </div>
+    </div>
+    
+      
+    </div>
+    
+  
+  </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">목차</h2>
+   
+  <ul>
+  <li><a href="#개요-bda-의-software-companion" id="toc-개요-bda-의-software-companion" class="nav-link active" data-scroll-target="#개요-bda-의-software-companion"><span class="header-section-number">1</span> 개요 — BDA 의 Software Companion</a>
+  <ul class="collapse">
+  <li><a href="#stan-이-자동화하는-4-가지" id="toc-stan-이-자동화하는-4-가지" class="nav-link" data-scroll-target="#stan-이-자동화하는-4-가지"><span class="header-section-number">1.1</span> Stan 이 자동화하는 4 가지</a></li>
+  <li><a href="#학습-순서" id="toc-학습-순서" class="nav-link" data-scroll-target="#학습-순서"><span class="header-section-number">1.2</span> 학습 순서</a></li>
+  </ul></li>
+  <li><a href="#c.1-getting-started-with-r-and-stan" id="toc-c.1-getting-started-with-r-and-stan" class="nav-link" data-scroll-target="#c.1-getting-started-with-r-and-stan"><span class="header-section-number">2</span> C.1 Getting Started with R and Stan</a>
+  <ul class="collapse">
+  <li><a href="#환경-셋업" id="toc-환경-셋업" class="nav-link" data-scroll-target="#환경-셋업"><span class="header-section-number">2.1</span> 환경 셋업</a></li>
+  <li><a href="#python-대안" id="toc-python-대안" class="nav-link" data-scroll-target="#python-대안"><span class="header-section-number">2.2</span> Python 대안</a></li>
+  </ul></li>
+  <li><a href="#c.2-fitting-a-hierarchical-model-in-stan-8-schools-예제" id="toc-c.2-fitting-a-hierarchical-model-in-stan-8-schools-예제" class="nav-link" data-scroll-target="#c.2-fitting-a-hierarchical-model-in-stan-8-schools-예제"><span class="header-section-number">3</span> C.2 Fitting a Hierarchical Model in Stan — 8 Schools 예제</a>
+  <ul class="collapse">
+  <li><a href="#데이터-rubin-1981" id="toc-데이터-rubin-1981" class="nav-link" data-scroll-target="#데이터-rubin-1981"><span class="header-section-number">3.1</span> 데이터 (Rubin 1981)</a></li>
+  <li><a href="#hierarchical-normal-model" id="toc-hierarchical-normal-model" class="nav-link" data-scroll-target="#hierarchical-normal-model"><span class="header-section-number">3.2</span> Hierarchical Normal Model</a></li>
+  <li><a href="#stan-code-분석" id="toc-stan-code-분석" class="nav-link" data-scroll-target="#stan-code-분석"><span class="header-section-number">3.3</span> Stan Code 분석</a></li>
+  <li><a href="#개-block-의-역할" id="toc-개-block-의-역할" class="nav-link" data-scroll-target="#개-block-의-역할"><span class="header-section-number">3.4</span> 4 개 Block 의 역할</a></li>
+  <li><a href="#non-centered-parameterization-ncp-핵심-트릭" id="toc-non-centered-parameterization-ncp-핵심-트릭" class="nav-link" data-scroll-target="#non-centered-parameterization-ncp-핵심-트릭"><span class="header-section-number">3.5</span> Non-Centered Parameterization (NCP) — 핵심 트릭</a></li>
+  <li><a href="#r-에서-stan-호출" id="toc-r-에서-stan-호출" class="nav-link" data-scroll-target="#r-에서-stan-호출"><span class="header-section-number">3.6</span> R 에서 Stan 호출</a></li>
+  <li><a href="#stan-출력-분석-figure-c.1" id="toc-stan-출력-분석-figure-c.1" class="nav-link" data-scroll-target="#stan-출력-분석-figure-c.1"><span class="header-section-number">3.7</span> Stan 출력 분석 (Figure C.1)</a></li>
+  <li><a href="#posterior-predictive-checks" id="toc-posterior-predictive-checks" class="nav-link" data-scroll-target="#posterior-predictive-checks"><span class="header-section-number">3.8</span> Posterior Predictive Checks</a></li>
+  <li><a href="#alternative-priors" id="toc-alternative-priors" class="nav-link" data-scroll-target="#alternative-priors"><span class="header-section-number">3.9</span> Alternative Priors</a></li>
+  <li><a href="#t-distribution-hierarchical" id="toc-t-distribution-hierarchical" class="nav-link" data-scroll-target="#t-distribution-hierarchical"><span class="header-section-number">3.10</span> t-Distribution Hierarchical</a></li>
+  </ul></li>
+  <li><a href="#c.3-direct-simulation-gibbs-and-metropolis-in-r" id="toc-c.3-direct-simulation-gibbs-and-metropolis-in-r" class="nav-link" data-scroll-target="#c.3-direct-simulation-gibbs-and-metropolis-in-r"><span class="header-section-number">4</span> C.3 Direct Simulation, Gibbs, and Metropolis in R</a>
+  <ul class="collapse">
+  <li><a href="#marginalconditional-simulation-grid" id="toc-marginalconditional-simulation-grid" class="nav-link" data-scroll-target="#marginalconditional-simulation-grid"><span class="header-section-number">4.1</span> Marginal/Conditional Simulation (Grid)</a></li>
+  <li><a href="#gibbs-sampler" id="toc-gibbs-sampler" class="nav-link" data-scroll-target="#gibbs-sampler"><span class="header-section-number">4.2</span> Gibbs Sampler</a></li>
+  <li><a href="#metropolis-algorithm" id="toc-metropolis-algorithm" class="nav-link" data-scroll-target="#metropolis-algorithm"><span class="header-section-number">4.3</span> Metropolis Algorithm</a></li>
+  </ul></li>
+  <li><a href="#c.4-hmc-in-r-개념-직관" id="toc-c.4-hmc-in-r-개념-직관" class="nav-link" data-scroll-target="#c.4-hmc-in-r-개념-직관"><span class="header-section-number">5</span> C.4 HMC in R (개념 + 직관)</a>
+  <ul class="collapse">
+  <li><a href="#hmc-의-핵심-아이디어" id="toc-hmc-의-핵심-아이디어" class="nav-link" data-scroll-target="#hmc-의-핵심-아이디어"><span class="header-section-number">5.1</span> HMC 의 핵심 아이디어</a></li>
+  <li><a href="#leapfrog-integrator" id="toc-leapfrog-integrator" class="nav-link" data-scroll-target="#leapfrog-integrator"><span class="header-section-number">5.2</span> Leapfrog Integrator</a></li>
+  <li><a href="#nuts-의-자동화" id="toc-nuts-의-자동화" class="nav-link" data-scroll-target="#nuts-의-자동화"><span class="header-section-number">5.3</span> NUTS 의 자동화</a></li>
+  </ul></li>
+  <li><a href="#c.5-debugging-tips" id="toc-c.5-debugging-tips" class="nav-link" data-scroll-target="#c.5-debugging-tips"><span class="header-section-number">6</span> C.5 Debugging Tips</a>
+  <ul class="collapse">
+  <li><a href="#흔한-문제와-해결" id="toc-흔한-문제와-해결" class="nav-link" data-scroll-target="#흔한-문제와-해결"><span class="header-section-number">6.1</span> 흔한 문제와 해결</a></li>
+  <li><a href="#convergence-점검-절차" id="toc-convergence-점검-절차" class="nav-link" data-scroll-target="#convergence-점검-절차"><span class="header-section-number">6.2</span> Convergence 점검 절차</a></li>
+  <li><a href="#prior-sensitivity" id="toc-prior-sensitivity" class="nav-link" data-scroll-target="#prior-sensitivity"><span class="header-section-number">6.3</span> Prior Sensitivity</a></li>
+  </ul></li>
+  <li><a href="#c.6-bibliographic-note-요지" id="toc-c.6-bibliographic-note-요지" class="nav-link" data-scroll-target="#c.6-bibliographic-note-요지"><span class="header-section-number">7</span> C.6 Bibliographic Note (요지)</a>
+  <ul class="collapse">
+  <li><a href="#stan" id="toc-stan" class="nav-link" data-scroll-target="#stan"><span class="header-section-number">7.1</span> Stan</a></li>
+  <li><a href="#hmc" id="toc-hmc" class="nav-link" data-scroll-target="#hmc"><span class="header-section-number">7.2</span> HMC</a></li>
+  <li><a href="#r-for-bayesian" id="toc-r-for-bayesian" class="nav-link" data-scroll-target="#r-for-bayesian"><span class="header-section-number">7.3</span> R for Bayesian</a></li>
+  <li><a href="#practical-bayesian-workflow" id="toc-practical-bayesian-workflow" class="nav-link" data-scroll-target="#practical-bayesian-workflow"><span class="header-section-number">7.4</span> Practical Bayesian Workflow</a></li>
+  </ul></li>
+  <li><a href="#stan-의-핵심-개념-통합" id="toc-stan-의-핵심-개념-통합" class="nav-link" data-scroll-target="#stan-의-핵심-개념-통합"><span class="header-section-number">8</span> Stan 의 핵심 개념 통합</a>
+  <ul class="collapse">
+  <li><a href="#nuts-의-작동" id="toc-nuts-의-작동" class="nav-link" data-scroll-target="#nuts-의-작동"><span class="header-section-number">8.1</span> NUTS 의 작동</a></li>
+  <li><a href="#autodiff-의-자동화" id="toc-autodiff-의-자동화" class="nav-link" data-scroll-target="#autodiff-의-자동화"><span class="header-section-number">8.2</span> Autodiff 의 자동화</a></li>
+  <li><a href="#hmc-와-변분-추론-vi-의-비교" id="toc-hmc-와-변분-추론-vi-의-비교" class="nav-link" data-scroll-target="#hmc-와-변분-추론-vi-의-비교"><span class="header-section-number">8.3</span> HMC 와 변분 추론 (VI) 의 비교</a></li>
+  </ul></li>
+  <li><a href="#실무-워크플로우-bayesian-workflow" id="toc-실무-워크플로우-bayesian-workflow" class="nav-link" data-scroll-target="#실무-워크플로우-bayesian-workflow"><span class="header-section-number">9</span> 실무 워크플로우 — Bayesian Workflow</a>
+  <ul class="collapse">
+  <li><a href="#단계" id="toc-단계" class="nav-link" data-scroll-target="#단계"><span class="header-section-number">9.1</span> 8 단계</a></li>
+  </ul></li>
+  <li><a href="#코드-통합-stan-pymc-예제" id="toc-코드-통합-stan-pymc-예제" class="nav-link" data-scroll-target="#코드-통합-stan-pymc-예제"><span class="header-section-number">10</span> 코드 — 통합 Stan + PyMC 예제</a>
+  <ul class="collapse">
+  <li><a href="#stan-rstan" id="toc-stan-rstan" class="nav-link" data-scroll-target="#stan-rstan"><span class="header-section-number">10.1</span> Stan (rstan)</a></li>
+  <li><a href="#pymc-python-대안" id="toc-pymc-python-대안" class="nav-link" data-scroll-target="#pymc-python-대안"><span class="header-section-number">10.2</span> PyMC (Python 대안)</a></li>
+  </ul></li>
+  <li><a href="#통합-체크리스트" id="toc-통합-체크리스트" class="nav-link" data-scroll-target="#통합-체크리스트"><span class="header-section-number">11</span> 통합 체크리스트</a></li>
+  <li><a href="#관련-주제" id="toc-관련-주제" class="nav-link" data-scroll-target="#관련-주제"><span class="header-section-number">12</span> 관련 주제</a></li>
+  <li><a href="#참고문헌" id="toc-참고문헌" class="nav-link" data-scroll-target="#참고문헌"><span class="header-section-number">13</span> 참고문헌</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+
+
+<section id="개요-bda-의-software-companion" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="개요-bda-의-software-companion"><span class="header-section-number">1</span> 개요 — BDA 의 Software Companion</h2>
+<p>BDA (Bayesian Data Analysis, Gelman et al.&nbsp;2013) 본편 23 장이 베이즈 통계의 <strong>이론과 모델</strong> 을 다뤘다면, Appendix C 는 그것들을 <strong>실제로 돌리는 방법</strong> 을 다룬다.</p>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Appendix C 의 한 줄 요약
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>“같은 베이즈 모델을 (1) 고수준 언어 Stan 에서 작성, (2) R 에서 직접 grid·Gibbs·Metropolis·HMC 로 구현해 보면, 두 접근의 강점·한계와 베이즈 계산의 본질이 모두 드러난다 — 8 schools 예제 한 가지로.”</strong></p>
+<p>같은 hierarchical normal 모델을 Stan, R 직접 구현 두 방식으로 풀면서 Stan 이 자동화하는 것이 무엇인지·언제 직접 구현이 필요한지를 학습한다.</p>
+</div>
+</div>
+<section id="stan-이-자동화하는-4-가지" class="level3" data-number="1.1">
+<h3 data-number="1.1" class="anchored" data-anchor-id="stan-이-자동화하는-4-가지"><span class="header-section-number">1.1</span> Stan 이 자동화하는 4 가지</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: left;">자동화</th>
+<th style="text-align: left;">Stan 의 역할</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><strong>확률 모델 → log-posterior</strong></td>
+<td style="text-align: left;">Stan 컴파일러가 자동</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>Gradient 계산</strong></td>
+<td style="text-align: left;">Autodiff (automatic differentiation)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>Sampler 선택</strong></td>
+<td style="text-align: left;">NUTS (No-U-Turn) 기본</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>Adaptive tuning</strong></td>
+<td style="text-align: left;">Step size·mass matrix 자동 조절</td>
+</tr>
+</tbody>
+</table>
+<p>R 직접 구현은 이 4 가지를 <strong>사용자가 모두 작성</strong>. 단순 모델은 가능하나 복잡한 모델에는 비현실적.</p>
+</section>
+<section id="학습-순서" class="level3" data-number="1.2">
+<h3 data-number="1.2" class="anchored" data-anchor-id="학습-순서"><span class="header-section-number">1.2</span> 학습 순서</h3>
+<pre><code>Stan 으로 빠르게 작동 확인 (C.1, C.2)
+  ↓
+같은 모델을 R 에서 직접 구현 (C.3, C.4)
+  ↓
+두 결과 비교 (정답이 같은가?)
+  ↓
+Debugging 및 hyperparameter 조정 (C.5)</code></pre>
+</section>
+</section>
+<section id="c.1-getting-started-with-r-and-stan" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="c.1-getting-started-with-r-and-stan"><span class="header-section-number">2</span> C.1 Getting Started with R and Stan</h2>
+<section id="환경-셋업" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="환경-셋업"><span class="header-section-number">2.1</span> 환경 셋업</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: left;">도구</th>
+<th style="text-align: left;">URL</th>
+<th style="text-align: left;">역할</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">R</td>
+<td style="text-align: left;">https://www.r-project.org/</td>
+<td style="text-align: left;">통계 일반 + 데이터 처리</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Stan</td>
+<td style="text-align: left;">https://mc-stan.org/</td>
+<td style="text-align: left;">HMC 기반 베이즈 추론 엔진</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">RStudio</td>
+<td style="text-align: left;">https://rstudio.org/</td>
+<td style="text-align: left;">IDE (선택)</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>rstan</code> 패키지</td>
+<td style="text-align: left;">CRAN</td>
+<td style="text-align: left;">R 에서 Stan 호출</td>
+</tr>
+</tbody>
+</table>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — R + Stan 의 협업 구조
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>R</strong>: 데이터 입출력, 전처리, 시각화, 통계 일반.</p>
+<p><strong>Stan</strong>: 베이즈 모델 컴파일·MCMC 실행.</p>
+<p><strong><code>rstan</code> 패키지</strong>: R ↔︎ Stan 다리.</p>
+<p>워크플로우:</p>
+<ol type="1">
+<li>R 에서 데이터 준비.</li>
+<li><code>*.stan</code> 파일에 모델 작성.</li>
+<li>R 에서 <code>stan(file="model.stan", data=...)</code> 호출.</li>
+<li>Stan 이 컴파일·실행, 결과를 R 로 반환.</li>
+<li>R 에서 사후 분석.</li>
+</ol>
+<p>장점: 각 도구가 자기 강점에 집중. Stan 이 베이즈 추론 엔진, R 이 모든 외부 인프라.</p>
+</div>
+</div>
+</section>
+<section id="python-대안" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="python-대안"><span class="header-section-number">2.2</span> Python 대안</h3>
+<p>R 외에 Python 진영도 활용 가능:</p>
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: left;">패키지</th>
+<th style="text-align: left;">특징</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><strong>CmdStanPy</strong></td>
+<td style="text-align: left;">Stan 의 공식 Python 인터페이스</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>PyMC</strong></td>
+<td style="text-align: left;">Stan 과 유사한 고수준 베이즈 (NumPyro 와 함께 표준)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>NumPyro</strong></td>
+<td style="text-align: left;">JAX 기반, GPU 가속</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>Edward2 / TFP</strong></td>
+<td style="text-align: left;">TensorFlow Probability</td>
+</tr>
+</tbody>
+</table>
+<p>이후 코드 예제는 R + Stan 외에 PyMC 도 병행 제시.</p>
+</section>
+</section>
+<section id="c.2-fitting-a-hierarchical-model-in-stan-8-schools-예제" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="c.2-fitting-a-hierarchical-model-in-stan-8-schools-예제"><span class="header-section-number">3</span> C.2 Fitting a Hierarchical Model in Stan — 8 Schools 예제</h2>
+<section id="데이터-rubin-1981" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="데이터-rubin-1981"><span class="header-section-number">3.1</span> 데이터 (Rubin 1981)</h3>
+<p>8 학교의 SAT 코칭 효과 평가:</p>
+<ul>
+<li><span class="math inline">\(J = 8\)</span> 학교.</li>
+<li><span class="math inline">\(y_j\)</span> = 학교 <span class="math inline">\(j\)</span> 의 추정 처치 효과.</li>
+<li><span class="math inline">\(\sigma_j\)</span> = 그 추정의 표준오차 (이미 알려진 값).</li>
+</ul>
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: center;">학교</th>
+<th style="text-align: center;"><span class="math inline">\(y_j\)</span></th>
+<th style="text-align: center;"><span class="math inline">\(\sigma_j\)</span></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">A</td>
+<td style="text-align: center;">28</td>
+<td style="text-align: center;">15</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">B</td>
+<td style="text-align: center;">8</td>
+<td style="text-align: center;">10</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">C</td>
+<td style="text-align: center;">-3</td>
+<td style="text-align: center;">16</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">D</td>
+<td style="text-align: center;">7</td>
+<td style="text-align: center;">11</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">E</td>
+<td style="text-align: center;">-1</td>
+<td style="text-align: center;">9</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">F</td>
+<td style="text-align: center;">1</td>
+<td style="text-align: center;">11</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">G</td>
+<td style="text-align: center;">18</td>
+<td style="text-align: center;">10</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">H</td>
+<td style="text-align: center;">12</td>
+<td style="text-align: center;">18</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="hierarchical-normal-model" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="hierarchical-normal-model"><span class="header-section-number">3.2</span> Hierarchical Normal Model</h3>
+<p><span class="math display">\[
+y_j \mid \theta_j \sim N(\theta_j, \sigma_j^2), \quad \theta_j \sim N(\mu, \tau^2)
+\]</span></p>
+<ul>
+<li><span class="math inline">\(\theta_j\)</span> = 학교별 진짜 처치 효과.</li>
+<li><span class="math inline">\(\mu\)</span> = 모집단 평균 효과.</li>
+<li><span class="math inline">\(\tau\)</span> = 학교 간 변동 (heterogeneity).</li>
+</ul>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Hierarchical Model 의 정신
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>Pooled</strong> (<span class="math inline">\(\tau = 0\)</span>): 모든 학교가 같은 효과 → 정보 공유 최대, 차이 무시.</p>
+<p><strong>No pooling</strong> (<span class="math inline">\(\tau = \infty\)</span>): 각 학교 별도 추정 → 차이 반영, 정보 공유 없음.</p>
+<p><strong>Partial pooling</strong> (hierarchical): 데이터로부터 <span class="math inline">\(\tau\)</span> 학습 → <strong>각 학교가 자기 추정 + 모집단 평균의 가중 평균</strong>.</p>
+<p>8 schools 의 결과: <span class="math inline">\(\tau \approx 7\)</span> → 학교 간 차이가 있으나 적당한 shrinkage. School A 의 효과 28 이 사후 평균 약 11 로 줄어듦 (<span class="math inline">\(\bar y \approx 8\)</span> 에 가까이).</p>
+<p>이것이 <a href="../../../../../docs/blog/posts/Statistics/bayesian/00-5-0-hierarchical.html">Ch.5 hierarchical model</a> 의 핵심.</p>
+</div>
+</div>
+</section>
+<section id="stan-code-분석" class="level3" data-number="3.3">
+<h3 data-number="3.3" class="anchored" data-anchor-id="stan-code-분석"><span class="header-section-number">3.3</span> Stan Code 분석</h3>
+<div class="sourceCode" id="cb2"><pre class="sourceCode numberSource stan number-lines code-with-copy"><code class="sourceCode stan"><span id="cb2-1"><a href="#cb2-1"></a><span class="kw">data</span> {</span>
+<span id="cb2-2"><a href="#cb2-2"></a>  <span class="dt">int</span>&lt;<span class="kw">lower</span>=<span class="dv">0</span>&gt; J;              <span class="co">// number of schools</span></span>
+<span id="cb2-3"><a href="#cb2-3"></a>  <span class="dt">real</span> y[J];                    <span class="co">// estimated treatment effects</span></span>
+<span id="cb2-4"><a href="#cb2-4"></a>  <span class="dt">real</span>&lt;<span class="kw">lower</span>=<span class="dv">0</span>&gt; sigma[J];       <span class="co">// s.e.'s of effect estimates</span></span>
+<span id="cb2-5"><a href="#cb2-5"></a>}</span>
+<span id="cb2-6"><a href="#cb2-6"></a></span>
+<span id="cb2-7"><a href="#cb2-7"></a><span class="kw">parameters</span> {</span>
+<span id="cb2-8"><a href="#cb2-8"></a>  <span class="dt">real</span> mu;                      <span class="co">// population mean</span></span>
+<span id="cb2-9"><a href="#cb2-9"></a>  <span class="dt">real</span>&lt;<span class="kw">lower</span>=<span class="dv">0</span>&gt; tau;            <span class="co">// population sd</span></span>
+<span id="cb2-10"><a href="#cb2-10"></a>  <span class="dt">vector</span>[J] eta;                <span class="co">// school-level errors (standardized)</span></span>
+<span id="cb2-11"><a href="#cb2-11"></a>}</span>
+<span id="cb2-12"><a href="#cb2-12"></a></span>
+<span id="cb2-13"><a href="#cb2-13"></a><span class="kw">transformed parameters</span> {</span>
+<span id="cb2-14"><a href="#cb2-14"></a>  <span class="dt">vector</span>[J] theta;</span>
+<span id="cb2-15"><a href="#cb2-15"></a>  theta = mu + tau * eta;       <span class="co">// school effects</span></span>
+<span id="cb2-16"><a href="#cb2-16"></a>}</span>
+<span id="cb2-17"><a href="#cb2-17"></a></span>
+<span id="cb2-18"><a href="#cb2-18"></a><span class="kw">model</span> {</span>
+<span id="cb2-19"><a href="#cb2-19"></a>  eta ~ normal(<span class="dv">0</span>, <span class="dv">1</span>);           <span class="co">// priors on standardized effects</span></span>
+<span id="cb2-20"><a href="#cb2-20"></a>  y ~ normal(theta, sigma);     <span class="co">// likelihood</span></span>
+<span id="cb2-21"><a href="#cb2-21"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="개-block-의-역할" class="level3" data-number="3.4">
+<h3 data-number="3.4" class="anchored" data-anchor-id="개-block-의-역할"><span class="header-section-number">3.4</span> 4 개 Block 의 역할</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: left;">Block</th>
+<th style="text-align: left;">역할</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>data</code></td>
+<td style="text-align: left;">외부 데이터·고정 hyperparameter (관측값)</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>parameters</code></td>
+<td style="text-align: left;">MCMC 가 sampling 할 미지 모수</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>transformed parameters</code></td>
+<td style="text-align: left;">parameters 의 함수 — 매 iteration 재계산</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>model</code></td>
+<td style="text-align: left;">log-posterior 를 정의 (prior + likelihood)</td>
+</tr>
+</tbody>
+</table>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Block 분리의 이유
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<ul>
+<li><strong><code>data</code></strong>: 변하지 않음 (한 번만 입력). 형 검사 + 제약 (<code>&lt;lower=0&gt;</code>) 적용.</li>
+<li><strong><code>parameters</code></strong>: NUTS 가 sampling. Continuous 만 (discrete 는 marginalize).</li>
+<li><strong><code>transformed parameters</code></strong>: 사후에서도 자동 저장. 시각화·해석에 유용한 파생량.</li>
+<li><strong><code>model</code></strong>: log-posterior 의 누적 (Stan 내부적 <code>target +=</code>).</li>
+</ul>
+<p>분리의 장점:</p>
+<ol type="1">
+<li><strong>명시적 의도</strong>: data ↔︎ parameters 구분이 모델을 읽기 쉽게 함.</li>
+<li><strong>효율성</strong>: transformed parameter 가 매 iteration 재계산되지만 cache 가능.</li>
+<li><strong>자동 저장</strong>: parameters 와 transformed parameters 모두 사후 표본에 자동 포함.</li>
+</ol>
+</div>
+</div>
+</section>
+<section id="non-centered-parameterization-ncp-핵심-트릭" class="level3" data-number="3.5">
+<h3 data-number="3.5" class="anchored" data-anchor-id="non-centered-parameterization-ncp-핵심-트릭"><span class="header-section-number">3.5</span> Non-Centered Parameterization (NCP) — 핵심 트릭</h3>
+<p>원래 <strong>centered parameterization (CP)</strong>:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode numberSource stan number-lines code-with-copy"><code class="sourceCode stan"><span id="cb3-1"><a href="#cb3-1"></a><span class="kw">parameters</span> {</span>
+<span id="cb3-2"><a href="#cb3-2"></a>  <span class="dt">real</span> mu;</span>
+<span id="cb3-3"><a href="#cb3-3"></a>  <span class="dt">real</span>&lt;<span class="kw">lower</span>=<span class="dv">0</span>&gt; tau;</span>
+<span id="cb3-4"><a href="#cb3-4"></a>  <span class="dt">vector</span>[J] theta;       <span class="co">// school effects directly</span></span>
+<span id="cb3-5"><a href="#cb3-5"></a>}</span>
+<span id="cb3-6"><a href="#cb3-6"></a><span class="kw">model</span> {</span>
+<span id="cb3-7"><a href="#cb3-7"></a>  theta ~ normal(mu, tau);</span>
+<span id="cb3-8"><a href="#cb3-8"></a>  y ~ normal(theta, sigma);</span>
+<span id="cb3-9"><a href="#cb3-9"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>이 모델은 <strong>funnel posterior</strong> 발생 — <span class="math inline">\(\tau\)</span> 작을 때 <span class="math inline">\(\theta\)</span> 의 분산이 매우 작아 sampling 어려움 (Neal’s funnel).</p>
+<p><strong>NCP</strong>:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode numberSource stan number-lines code-with-copy"><code class="sourceCode stan"><span id="cb4-1"><a href="#cb4-1"></a><span class="kw">parameters</span> {</span>
+<span id="cb4-2"><a href="#cb4-2"></a>  <span class="dt">real</span> mu;</span>
+<span id="cb4-3"><a href="#cb4-3"></a>  <span class="dt">real</span>&lt;<span class="kw">lower</span>=<span class="dv">0</span>&gt; tau;</span>
+<span id="cb4-4"><a href="#cb4-4"></a>  <span class="dt">vector</span>[J] eta;         <span class="co">// standardized</span></span>
+<span id="cb4-5"><a href="#cb4-5"></a>}</span>
+<span id="cb4-6"><a href="#cb4-6"></a><span class="kw">transformed parameters</span> {</span>
+<span id="cb4-7"><a href="#cb4-7"></a>  <span class="dt">vector</span>[J] theta = mu + tau * eta;</span>
+<span id="cb4-8"><a href="#cb4-8"></a>}</span>
+<span id="cb4-9"><a href="#cb4-9"></a><span class="kw">model</span> {</span>
+<span id="cb4-10"><a href="#cb4-10"></a>  eta ~ normal(<span class="dv">0</span>, <span class="dv">1</span>);</span>
+<span id="cb4-11"><a href="#cb4-11"></a>  y ~ normal(theta, sigma);</span>
+<span id="cb4-12"><a href="#cb4-12"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — NCP 가 funnel 을 어떻게 푸는가
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>Centered</strong>:</p>
+<ul>
+<li><span class="math inline">\(\theta_j \sim N(\mu, \tau^2)\)</span> — <span class="math inline">\(\theta_j\)</span> 의 분산이 <span class="math inline">\(\tau\)</span> 에 의존.</li>
+<li><span class="math inline">\(\tau \to 0\)</span> 일 때 <span class="math inline">\(\theta_j\)</span> 의 사후 좁아짐.</li>
+<li>HMC 의 step size 가 <span class="math inline">\(\tau\)</span> 에 따라 달라야 함 → 비효율.</li>
+</ul>
+<p><strong>Non-centered</strong>:</p>
+<ul>
+<li><span class="math inline">\(\eta_j \sim N(0, 1)\)</span> — <span class="math inline">\(\tau\)</span> 와 무관하게 standardized.</li>
+<li><span class="math inline">\(\theta_j = \mu + \tau \eta_j\)</span> — 결정적 변환.</li>
+<li>HMC 가 <span class="math inline">\((\mu, \tau, \eta)\)</span> 공간에서 sampling — geometry 가 fixed.</li>
+</ul>
+<p>비유: centered 는 좁은 깔때기 (funnel) 의 좁은 부분에서 빠져나오기 어려움. NCP 는 깔때기를 펼친 좌표계 사용.</p>
+<p><strong>일반 원칙</strong>: 데이터가 약하면 NCP 권장 (<span class="math inline">\(\tau\)</span> 의 사후가 0 근처에 mass), 데이터가 강하면 CP 가 더 효율 (<span class="math inline">\(\tau\)</span> 의 사후가 명확히 0 떨어짐).</p>
+<p>8 schools 는 데이터 약함 → NCP 가 표준.</p>
+</div>
+</div>
+</section>
+<section id="r-에서-stan-호출" class="level3" data-number="3.6">
+<h3 data-number="3.6" class="anchored" data-anchor-id="r-에서-stan-호출"><span class="header-section-number">3.6</span> R 에서 Stan 호출</h3>
+<div class="sourceCode" id="cb5"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1"></a><span class="fu">library</span>(<span class="st">"rstan"</span>)</span>
+<span id="cb5-2"><a href="#cb5-2"></a></span>
+<span id="cb5-3"><a href="#cb5-3"></a><span class="co"># 데이터 입력</span></span>
+<span id="cb5-4"><a href="#cb5-4"></a>schools <span class="ot">&lt;-</span> <span class="fu">read.csv</span>(<span class="st">"schools.csv"</span>, <span class="at">header=</span><span class="cn">TRUE</span>)</span>
+<span id="cb5-5"><a href="#cb5-5"></a>J <span class="ot">&lt;-</span> <span class="fu">nrow</span>(schools)</span>
+<span id="cb5-6"><a href="#cb5-6"></a>y <span class="ot">&lt;-</span> schools<span class="sc">$</span>estimate</span>
+<span id="cb5-7"><a href="#cb5-7"></a>sigma <span class="ot">&lt;-</span> schools<span class="sc">$</span>sd</span>
+<span id="cb5-8"><a href="#cb5-8"></a></span>
+<span id="cb5-9"><a href="#cb5-9"></a><span class="co"># Stan 컴파일·실행</span></span>
+<span id="cb5-10"><a href="#cb5-10"></a>schools_fit <span class="ot">&lt;-</span> <span class="fu">stan</span>(</span>
+<span id="cb5-11"><a href="#cb5-11"></a>  <span class="at">file =</span> <span class="st">"schools.stan"</span>,</span>
+<span id="cb5-12"><a href="#cb5-12"></a>  <span class="at">data =</span> <span class="fu">c</span>(<span class="st">"J"</span>, <span class="st">"y"</span>, <span class="st">"sigma"</span>),</span>
+<span id="cb5-13"><a href="#cb5-13"></a>  <span class="at">iter =</span> <span class="dv">1000</span>,</span>
+<span id="cb5-14"><a href="#cb5-14"></a>  <span class="at">chains =</span> <span class="dv">4</span></span>
+<span id="cb5-15"><a href="#cb5-15"></a>)</span>
+<span id="cb5-16"><a href="#cb5-16"></a></span>
+<span id="cb5-17"><a href="#cb5-17"></a><span class="fu">print</span>(schools_fit)</span>
+<span id="cb5-18"><a href="#cb5-18"></a><span class="fu">plot</span>(schools_fit)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="stan-출력-분석-figure-c.1" class="level3" data-number="3.7">
+<h3 data-number="3.7" class="anchored" data-anchor-id="stan-출력-분석-figure-c.1"><span class="header-section-number">3.7</span> Stan 출력 분석 (Figure C.1)</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: left;">모수</th>
+<th style="text-align: center;">mean</th>
+<th style="text-align: center;">sd</th>
+<th style="text-align: center;">25%</th>
+<th style="text-align: center;">50%</th>
+<th style="text-align: center;">75%</th>
+<th style="text-align: center;">n_eff</th>
+<th style="text-align: center;">Rhat</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><span class="math inline">\(\mu\)</span></td>
+<td style="text-align: center;">7.4</td>
+<td style="text-align: center;">4.8</td>
+<td style="text-align: center;">4.5</td>
+<td style="text-align: center;">7.4</td>
+<td style="text-align: center;">10.5</td>
+<td style="text-align: center;">534</td>
+<td style="text-align: center;">1</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><span class="math inline">\(\tau\)</span></td>
+<td style="text-align: center;">6.9</td>
+<td style="text-align: center;">6.1</td>
+<td style="text-align: center;">2.4</td>
+<td style="text-align: center;">5.4</td>
+<td style="text-align: center;">9.3</td>
+<td style="text-align: center;">138</td>
+<td style="text-align: center;">1</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><span class="math inline">\(\theta_1\)</span></td>
+<td style="text-align: center;">12.1</td>
+<td style="text-align: center;">11.1</td>
+<td style="text-align: center;">5.8</td>
+<td style="text-align: center;">10.0</td>
+<td style="text-align: center;">15.4</td>
+<td style="text-align: center;">72</td>
+<td style="text-align: center;">1</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>mean, sd</strong>: 사후 평균·표준편차.</li>
+<li><strong>n_eff</strong>: 효과적 표본 크기 (식 11.8).</li>
+<li><strong>Rhat</strong>: potential scale reduction factor (식 11.4) — <span class="math inline">\(&lt; 1.1\)</span> 이면 수렴.</li>
+</ul>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — n_eff vs total samples
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>총 2000 draws (4 chains × 500) 인데 <span class="math inline">\(\theta_1\)</span> 의 n_eff = 72.</p>
+<p>이유: posterior autocorrelation. <span class="math inline">\(\theta_1\)</span> (=12.1, 사후 mean) 이 chain 안에서 인접 sample 끼리 상관 → 효과적 정보가 72 점만큼.</p>
+<ul>
+<li>n_eff/total 비율 &lt; 0.1: poor mixing → tuning 필요.</li>
+<li><blockquote class="blockquote">
+<p>0.1: 양호.</p>
+</blockquote></li>
+<li><blockquote class="blockquote">
+<p>0.5: 매우 좋음.</p>
+</blockquote></li>
+</ul>
+<p>n_eff 작은 모수는 <strong>장기 분포</strong> 추정에 더 많은 sample 필요. tail quantile (95% interval) 이 특히 영향 받음.</p>
+</div>
+</div>
+</section>
+<section id="posterior-predictive-checks" class="level3" data-number="3.8">
+<h3 data-number="3.8" class="anchored" data-anchor-id="posterior-predictive-checks"><span class="header-section-number">3.8</span> Posterior Predictive Checks</h3>
+<p>같은 학교에 새 데이터:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1"></a>n_sims <span class="ot">&lt;-</span> <span class="fu">length</span>(schools_sim<span class="sc">$</span>lp__)  <span class="co"># number of MCMC draws</span></span>
+<span id="cb6-2"><a href="#cb6-2"></a>y_rep <span class="ot">&lt;-</span> <span class="fu">array</span>(<span class="cn">NA</span>, <span class="fu">c</span>(n_sims, J))</span>
+<span id="cb6-3"><a href="#cb6-3"></a><span class="cf">for</span> (s <span class="cf">in</span> <span class="dv">1</span><span class="sc">:</span>n_sims) {</span>
+<span id="cb6-4"><a href="#cb6-4"></a>  y_rep[s, ] <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(J, schools_sim<span class="sc">$</span>theta[s, ], sigma)</span>
+<span id="cb6-5"><a href="#cb6-5"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>새 학교에 새 데이터:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1"></a>theta_rep <span class="ot">&lt;-</span> <span class="fu">array</span>(<span class="cn">NA</span>, <span class="fu">c</span>(n_sims, J))</span>
+<span id="cb7-2"><a href="#cb7-2"></a>y_rep_new <span class="ot">&lt;-</span> <span class="fu">array</span>(<span class="cn">NA</span>, <span class="fu">c</span>(n_sims, J))</span>
+<span id="cb7-3"><a href="#cb7-3"></a><span class="cf">for</span> (s <span class="cf">in</span> <span class="dv">1</span><span class="sc">:</span>n_sims) {</span>
+<span id="cb7-4"><a href="#cb7-4"></a>  theta_rep[s, ] <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(J, schools_sim<span class="sc">$</span>mu[s], schools_sim<span class="sc">$</span>tau[s])</span>
+<span id="cb7-5"><a href="#cb7-5"></a>  y_rep_new[s, ] <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(J, theta_rep[s, ], sigma)</span>
+<span id="cb7-6"><a href="#cb7-6"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — 두 가지 Posterior Predictive
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>Type 1 (existing schools)</strong>: 같은 <span class="math inline">\(\theta\)</span>, 새 <span class="math inline">\(y\)</span>.</p>
+<ul>
+<li>“이미 본 8 학교에서 다음 시즌 데이터” — within-population variation.</li>
+</ul>
+<p><strong>Type 2 (new schools)</strong>: 새 <span class="math inline">\(\theta\)</span>, 새 <span class="math inline">\(y\)</span>.</p>
+<ul>
+<li>“다른 8 학교에서 같은 실험” — between-population variation.</li>
+</ul>
+<p>Type 2 의 분산이 더 큼 (<span class="math inline">\(\tau^2\)</span> 추가). 모델 평가 목적이면 Type 1 (구체 학교 적합 점검), 일반화 평가면 Type 2.</p>
+</div>
+</div>
+</section>
+<section id="alternative-priors" class="level3" data-number="3.9">
+<h3 data-number="3.9" class="anchored" data-anchor-id="alternative-priors"><span class="header-section-number">3.9</span> Alternative Priors</h3>
+<p>원래 모델: <span class="math inline">\(\mu, \tau\)</span> 에 nearly flat priors.</p>
+<p><strong>Half-Cauchy</strong>:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode numberSource stan number-lines code-with-copy"><code class="sourceCode stan"><span id="cb8-1"><a href="#cb8-1"></a><span class="kw">model</span> {</span>
+<span id="cb8-2"><a href="#cb8-2"></a>  tau ~ cauchy(<span class="dv">0</span>, <span class="dv">25</span>);</span>
+<span id="cb8-3"><a href="#cb8-3"></a>  ...</span>
+<span id="cb8-4"><a href="#cb8-4"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<ul>
+<li>효과: <span class="math inline">\(\tau\)</span> 의 사후 평균/중앙값이 더 작음.</li>
+<li><span class="math inline">\(\theta_j\)</span> 의 shrinkage 가 더 강함.</li>
+<li>Heavy tail 로 큰 <span class="math inline">\(\tau\)</span> 도 허용 (덜 informative).</li>
+</ul>
+<p><a href="../../../../../docs/blog/posts/Statistics/bayesian/00-5-3-variance-priors-exercises.html">Ch.5 § 5.7 의 variance prior 권장</a>.</p>
+</section>
+<section id="t-distribution-hierarchical" class="level3" data-number="3.10">
+<h3 data-number="3.10" class="anchored" data-anchor-id="t-distribution-hierarchical"><span class="header-section-number">3.10</span> t-Distribution Hierarchical</h3>
+<div class="sourceCode" id="cb9"><pre class="sourceCode numberSource stan number-lines code-with-copy"><code class="sourceCode stan"><span id="cb9-1"><a href="#cb9-1"></a><span class="kw">parameters</span> {</span>
+<span id="cb9-2"><a href="#cb9-2"></a>  ...</span>
+<span id="cb9-3"><a href="#cb9-3"></a>  <span class="dt">real</span>&lt;<span class="kw">lower</span>=<span class="dv">1</span>&gt; nu;  <span class="co">// degrees of freedom</span></span>
+<span id="cb9-4"><a href="#cb9-4"></a>}</span>
+<span id="cb9-5"><a href="#cb9-5"></a><span class="kw">model</span> {</span>
+<span id="cb9-6"><a href="#cb9-6"></a>  nu ~ ... (e.g., gamma(<span class="dv">2</span>, <span class="fl">0.1</span>));</span>
+<span id="cb9-7"><a href="#cb9-7"></a>  eta ~ student_t(nu, <span class="dv">0</span>, <span class="dv">1</span>);</span>
+<span id="cb9-8"><a href="#cb9-8"></a>  y ~ normal(theta, sigma);</span>
+<span id="cb9-9"><a href="#cb9-9"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>학교별 효과의 heavy tail 허용 — Ch.17 robust inference.</p>
+</section>
+</section>
+<section id="c.3-direct-simulation-gibbs-and-metropolis-in-r" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="c.3-direct-simulation-gibbs-and-metropolis-in-r"><span class="header-section-number">4</span> C.3 Direct Simulation, Gibbs, and Metropolis in R</h2>
+<p>같은 8 schools 모델을 Stan 없이 R 에서 직접 구현.</p>
+<section id="marginalconditional-simulation-grid" class="level3" data-number="4.1">
+<h3 data-number="4.1" class="anchored" data-anchor-id="marginalconditional-simulation-grid"><span class="header-section-number">4.1</span> Marginal/Conditional Simulation (Grid)</h3>
+<p><a href="../../../../../docs/blog/posts/Statistics/bayesian/00-5-2-normal-eight-schools-meta.html">Ch.5 § 5.4 의 두 단계 분해</a>:</p>
+<ol type="1">
+<li><strong><span class="math inline">\(\tau\)</span> 의 marginal</strong>: <span class="math inline">\(\theta, \mu\)</span> 적분 소거.</li>
+<li><strong><span class="math inline">\((\mu, \theta) \mid \tau\)</span></strong>: conditional, closed form.</li>
+</ol>
+<div class="sourceCode" id="cb10"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1"></a><span class="co"># Step 1: tau grid + log marginal posterior</span></span>
+<span id="cb10-2"><a href="#cb10-2"></a>n_grid <span class="ot">&lt;-</span> <span class="dv">2000</span></span>
+<span id="cb10-3"><a href="#cb10-3"></a>tau_grid <span class="ot">&lt;-</span> <span class="fu">seq</span>(<span class="fl">0.01</span>, <span class="dv">40</span>, <span class="at">length=</span>n_grid)</span>
+<span id="cb10-4"><a href="#cb10-4"></a>log_p_tau <span class="ot">&lt;-</span> <span class="fu">rep</span>(<span class="cn">NA</span>, n_grid)</span>
+<span id="cb10-5"><a href="#cb10-5"></a><span class="cf">for</span> (i <span class="cf">in</span> <span class="dv">1</span><span class="sc">:</span>n_grid) {</span>
+<span id="cb10-6"><a href="#cb10-6"></a>  mu_i <span class="ot">&lt;-</span> <span class="fu">mu_hat</span>(tau_grid[i], y, sigma)</span>
+<span id="cb10-7"><a href="#cb10-7"></a>  V_i <span class="ot">&lt;-</span> <span class="fu">V_mu</span>(tau_grid[i], y, sigma)</span>
+<span id="cb10-8"><a href="#cb10-8"></a>  log_p_tau[i] <span class="ot">&lt;-</span> <span class="fl">0.5</span><span class="sc">*</span><span class="fu">log</span>(V_i) <span class="sc">-</span> <span class="fl">0.5</span><span class="sc">*</span><span class="fu">sum</span>(<span class="fu">log</span>(sigma<span class="sc">^</span><span class="dv">2</span> <span class="sc">+</span> tau_grid[i]<span class="sc">^</span><span class="dv">2</span>)) <span class="sc">-</span></span>
+<span id="cb10-9"><a href="#cb10-9"></a>                  <span class="fl">0.5</span><span class="sc">*</span><span class="fu">sum</span>((y <span class="sc">-</span> mu_i)<span class="sc">^</span><span class="dv">2</span> <span class="sc">/</span> (sigma<span class="sc">^</span><span class="dv">2</span> <span class="sc">+</span> tau_grid[i]<span class="sc">^</span><span class="dv">2</span>))</span>
+<span id="cb10-10"><a href="#cb10-10"></a>}</span>
+<span id="cb10-11"><a href="#cb10-11"></a></span>
+<span id="cb10-12"><a href="#cb10-12"></a><span class="co"># Normalize on log scale (overflow 회피)</span></span>
+<span id="cb10-13"><a href="#cb10-13"></a>log_p_tau <span class="ot">&lt;-</span> log_p_tau <span class="sc">-</span> <span class="fu">max</span>(log_p_tau)</span>
+<span id="cb10-14"><a href="#cb10-14"></a>p_tau <span class="ot">&lt;-</span> <span class="fu">exp</span>(log_p_tau) <span class="sc">/</span> <span class="fu">sum</span>(<span class="fu">exp</span>(log_p_tau))</span>
+<span id="cb10-15"><a href="#cb10-15"></a></span>
+<span id="cb10-16"><a href="#cb10-16"></a><span class="co"># Sample tau, then mu, then theta (conditionally)</span></span>
+<span id="cb10-17"><a href="#cb10-17"></a>tau <span class="ot">&lt;-</span> <span class="fu">sample</span>(tau_grid, n_sims, <span class="at">replace=</span><span class="cn">TRUE</span>, <span class="at">prob=</span>p_tau)</span>
+<span id="cb10-18"><a href="#cb10-18"></a>mu <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(n_sims, <span class="fu">mu_hat</span>(tau, y, sigma), <span class="fu">sqrt</span>(<span class="fu">V_mu</span>(tau, y, sigma)))</span>
+<span id="cb10-19"><a href="#cb10-19"></a>theta <span class="ot">&lt;-</span> ...  <span class="co"># conditional given mu, tau</span></span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Grid 가 가능한 이유
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>8 schools 의 <span class="math inline">\(\tau\)</span> 는 <strong>1 차원</strong> scalar. Grid 로 <span class="math inline">\([0, 40]\)</span> 을 2000 점으로 나눠도 충분.</p>
+<p>일반적으로 marginal posterior 의 차원이 1~2 일 때 grid 효율적. 고차원이면 grid 가 폭발 — MCMC 필요.</p>
+<p>장점: 정확 (numerical integration error 만), debugging 쉬움. 단점: 차원 ≥ 3 이면 비현실적.</p>
+</div>
+</div>
+</section>
+<section id="gibbs-sampler" class="level3" data-number="4.2">
+<h3 data-number="4.2" class="anchored" data-anchor-id="gibbs-sampler"><span class="header-section-number">4.2</span> Gibbs Sampler</h3>
+<p>각 conditional 을 차례로 sampling:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1"></a>theta_update <span class="ot">&lt;-</span> <span class="cf">function</span>() {</span>
+<span id="cb11-2"><a href="#cb11-2"></a>  theta_hat <span class="ot">&lt;-</span> (mu<span class="sc">/</span>tau<span class="sc">^</span><span class="dv">2</span> <span class="sc">+</span> y<span class="sc">/</span>sigma<span class="sc">^</span><span class="dv">2</span>) <span class="sc">/</span> (<span class="dv">1</span><span class="sc">/</span>tau<span class="sc">^</span><span class="dv">2</span> <span class="sc">+</span> <span class="dv">1</span><span class="sc">/</span>sigma<span class="sc">^</span><span class="dv">2</span>)</span>
+<span id="cb11-3"><a href="#cb11-3"></a>  V_theta <span class="ot">&lt;-</span> <span class="dv">1</span> <span class="sc">/</span> (<span class="dv">1</span><span class="sc">/</span>tau<span class="sc">^</span><span class="dv">2</span> <span class="sc">+</span> <span class="dv">1</span><span class="sc">/</span>sigma<span class="sc">^</span><span class="dv">2</span>)</span>
+<span id="cb11-4"><a href="#cb11-4"></a>  <span class="fu">rnorm</span>(J, theta_hat, <span class="fu">sqrt</span>(V_theta))</span>
+<span id="cb11-5"><a href="#cb11-5"></a>}</span>
+<span id="cb11-6"><a href="#cb11-6"></a>mu_update <span class="ot">&lt;-</span> <span class="cf">function</span>() {</span>
+<span id="cb11-7"><a href="#cb11-7"></a>  <span class="fu">rnorm</span>(<span class="dv">1</span>, <span class="fu">mean</span>(theta), tau<span class="sc">/</span><span class="fu">sqrt</span>(J))</span>
+<span id="cb11-8"><a href="#cb11-8"></a>}</span>
+<span id="cb11-9"><a href="#cb11-9"></a>tau_update <span class="ot">&lt;-</span> <span class="cf">function</span>() {</span>
+<span id="cb11-10"><a href="#cb11-10"></a>  <span class="co"># Inv-chi^2 from theta - mu</span></span>
+<span id="cb11-11"><a href="#cb11-11"></a>  ...</span>
+<span id="cb11-12"><a href="#cb11-12"></a>}</span>
+<span id="cb11-13"><a href="#cb11-13"></a></span>
+<span id="cb11-14"><a href="#cb11-14"></a><span class="co"># Main Gibbs loop</span></span>
+<span id="cb11-15"><a href="#cb11-15"></a>n_iter <span class="ot">&lt;-</span> <span class="dv">2000</span></span>
+<span id="cb11-16"><a href="#cb11-16"></a><span class="cf">for</span> (s <span class="cf">in</span> <span class="dv">1</span><span class="sc">:</span>n_iter) {</span>
+<span id="cb11-17"><a href="#cb11-17"></a>  theta <span class="ot">&lt;-</span> <span class="fu">theta_update</span>()</span>
+<span id="cb11-18"><a href="#cb11-18"></a>  mu <span class="ot">&lt;-</span> <span class="fu">mu_update</span>()</span>
+<span id="cb11-19"><a href="#cb11-19"></a>  tau <span class="ot">&lt;-</span> <span class="fu">tau_update</span>()</span>
+<span id="cb11-20"><a href="#cb11-20"></a>  <span class="co"># save samples...</span></span>
+<span id="cb11-21"><a href="#cb11-21"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Gibbs 가 작동하는 이유
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>각 conditional 이 표준 분포 (정규, Inv-<span class="math inline">\(\chi^2\)</span>) 면 Gibbs 가 자연.</p>
+<p>8 schools:</p>
+<ul>
+<li><span class="math inline">\(\theta_j \mid \mu, \tau, y\)</span>: 정규.</li>
+<li><span class="math inline">\(\mu \mid \theta, \tau\)</span>: 정규.</li>
+<li><span class="math inline">\(\tau \mid \theta, \mu\)</span>: scaled Inv-<span class="math inline">\(\chi^2\)</span>.</li>
+</ul>
+<p>→ 모든 conditional 이 conjugate. Gibbs 가 매우 단순.</p>
+<p>복잡한 모델 (비-conjugate prior, GLM) 에서는 Gibbs 의 conditional 이 표준 분포가 아닌 경우 → Metropolis-within-Gibbs 또는 HMC.</p>
+</div>
+</div>
+</section>
+<section id="metropolis-algorithm" class="level3" data-number="4.3">
+<h3 data-number="4.3" class="anchored" data-anchor-id="metropolis-algorithm"><span class="header-section-number">4.3</span> Metropolis Algorithm</h3>
+<p>Conditional 이 표준이 아닐 때:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1"></a>metropolis_step <span class="ot">&lt;-</span> <span class="cf">function</span>(current, log_post_fn, proposal_sd) {</span>
+<span id="cb12-2"><a href="#cb12-2"></a>  proposed <span class="ot">&lt;-</span> current <span class="sc">+</span> <span class="fu">rnorm</span>(<span class="fu">length</span>(current), <span class="dv">0</span>, proposal_sd)</span>
+<span id="cb12-3"><a href="#cb12-3"></a>  log_ratio <span class="ot">&lt;-</span> <span class="fu">log_post_fn</span>(proposed) <span class="sc">-</span> <span class="fu">log_post_fn</span>(current)</span>
+<span id="cb12-4"><a href="#cb12-4"></a>  <span class="cf">if</span> (<span class="fu">log</span>(<span class="fu">runif</span>(<span class="dv">1</span>)) <span class="sc">&lt;</span> log_ratio) {</span>
+<span id="cb12-5"><a href="#cb12-5"></a>    <span class="fu">return</span>(proposed)  <span class="co"># accept</span></span>
+<span id="cb12-6"><a href="#cb12-6"></a>  } <span class="cf">else</span> {</span>
+<span id="cb12-7"><a href="#cb12-7"></a>    <span class="fu">return</span>(current)   <span class="co"># reject</span></span>
+<span id="cb12-8"><a href="#cb12-8"></a>  }</span>
+<span id="cb12-9"><a href="#cb12-9"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>핵심:</p>
+<ul>
+<li><strong>Proposal</strong>: 어떻게 새 상태 제안 (정규 walk).</li>
+<li><strong>Accept ratio</strong>: <span class="math inline">\(\min(1, p(\text{proposed})/p(\text{current}))\)</span> — 확률적 채택.</li>
+<li><strong>Tuning</strong>: proposal_sd 가 acceptance rate 23~50% 가 되도록.</li>
+</ul>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Metropolis 의 보편성
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>장점</strong>:</p>
+<ul>
+<li>어떤 분포에도 적용 (정규화 상수 불필요).</li>
+<li>Conditional 의 closed form 불필요.</li>
+</ul>
+<p><strong>단점</strong>:</p>
+<ul>
+<li>Proposal 튜닝 필요 (manual).</li>
+<li>Random walk → slow mixing in high dimensions.</li>
+<li>High-dim (<span class="math inline">\(d &gt; 50\)</span>) 에서 비효율.</li>
+</ul>
+<p>→ HMC (다음 절) 가 high-dim 의 효율적 대안.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="c.4-hmc-in-r-개념-직관" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="c.4-hmc-in-r-개념-직관"><span class="header-section-number">5</span> C.4 HMC in R (개념 + 직관)</h2>
+<section id="hmc-의-핵심-아이디어" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="hmc-의-핵심-아이디어"><span class="header-section-number">5.1</span> HMC 의 핵심 아이디어</h3>
+<p>Metropolis 의 random walk 대신 <strong>물리학의 Hamilton dynamics</strong> 사용:</p>
+<ul>
+<li>모수 <span class="math inline">\(\theta\)</span> + 보조 운동량 <span class="math inline">\(\rho\)</span>.</li>
+<li>Hamiltonian <span class="math inline">\(H(\theta, \rho) = -\log p(\theta) + \frac{1}{2}\rho^T M^{-1} \rho\)</span>.</li>
+<li>Leapfrog integrator 로 dynamics 시뮬레이션.</li>
+<li>Acceptance: <span class="math inline">\(H\)</span> 의 변화에 따라.</li>
+</ul>
+</section>
+<section id="leapfrog-integrator" class="level3" data-number="5.2">
+<h3 data-number="5.2" class="anchored" data-anchor-id="leapfrog-integrator"><span class="header-section-number">5.2</span> Leapfrog Integrator</h3>
+<div class="sourceCode" id="cb13"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1"></a>leapfrog <span class="ot">&lt;-</span> <span class="cf">function</span>(theta, rho, eps, L, grad_log_post) {</span>
+<span id="cb13-2"><a href="#cb13-2"></a>  rho <span class="ot">&lt;-</span> rho <span class="sc">+</span> <span class="fl">0.5</span> <span class="sc">*</span> eps <span class="sc">*</span> <span class="fu">grad_log_post</span>(theta)</span>
+<span id="cb13-3"><a href="#cb13-3"></a>  <span class="cf">for</span> (l <span class="cf">in</span> <span class="dv">1</span><span class="sc">:</span>L) {</span>
+<span id="cb13-4"><a href="#cb13-4"></a>    theta <span class="ot">&lt;-</span> theta <span class="sc">+</span> eps <span class="sc">*</span> rho</span>
+<span id="cb13-5"><a href="#cb13-5"></a>    <span class="cf">if</span> (l <span class="sc">&lt;</span> L) rho <span class="ot">&lt;-</span> rho <span class="sc">+</span> eps <span class="sc">*</span> <span class="fu">grad_log_post</span>(theta)</span>
+<span id="cb13-6"><a href="#cb13-6"></a>  }</span>
+<span id="cb13-7"><a href="#cb13-7"></a>  rho <span class="ot">&lt;-</span> rho <span class="sc">+</span> <span class="fl">0.5</span> <span class="sc">*</span> eps <span class="sc">*</span> <span class="fu">grad_log_post</span>(theta)</span>
+<span id="cb13-8"><a href="#cb13-8"></a>  <span class="fu">list</span>(<span class="at">theta =</span> theta, <span class="at">rho =</span> rho)</span>
+<span id="cb13-9"><a href="#cb13-9"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<ul>
+<li><code>eps</code>: step size.</li>
+<li><code>L</code>: 단계 수.</li>
+<li><strong>Half step + full step + half step</strong> 의 symplectic 구조 — 수치적 안정성.</li>
+</ul>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — HMC 가 효율적인 이유
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>Random walk Metropolis</strong>: 매 step 이 작은 random move → diffusion. <span class="math inline">\(O(d)\)</span> steps 으로 분포 cover.</p>
+<p><strong>HMC</strong>: gradient 활용한 directed move → ballistic. <span class="math inline">\(O(d^{1/4})\)</span> steps 으로 분포 cover (Neal 2011).</p>
+<p>→ <strong>고차원에서 압도적 효율성</strong>.</p>
+<p>비유:</p>
+<ul>
+<li>Random walk = 안개 속에서 무작위 방향 탐색.</li>
+<li>HMC = gradient 가 보이는 지도 + 관성으로 빠르게 이동.</li>
+</ul>
+<p>NUTS (Hoffman &amp; Gelman 2014): HMC 의 step 수 <span class="math inline">\(L\)</span> 을 자동 결정. Stan 의 기본 sampler.</p>
+</div>
+</div>
+</section>
+<section id="nuts-의-자동화" class="level3" data-number="5.3">
+<h3 data-number="5.3" class="anchored" data-anchor-id="nuts-의-자동화"><span class="header-section-number">5.3</span> NUTS 의 자동화</h3>
+<p>NUTS = No-U-Turn Sampler:</p>
+<ul>
+<li>Stop criterion: trajectory 가 “U-turn” 하기 전까지 진행.</li>
+<li>Step size: dual averaging 으로 자동 튜닝 (target acceptance ≈ 0.8).</li>
+<li>Mass matrix: warmup 동안 학습.</li>
+</ul>
+<p>이 모든 것이 Stan 안에서 자동 — 사용자는 모델만 작성.</p>
+</section>
+</section>
+<section id="c.5-debugging-tips" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="c.5-debugging-tips"><span class="header-section-number">6</span> C.5 Debugging Tips</h2>
+<section id="흔한-문제와-해결" class="level3" data-number="6.1">
+<h3 data-number="6.1" class="anchored" data-anchor-id="흔한-문제와-해결"><span class="header-section-number">6.1</span> 흔한 문제와 해결</h3>
+<table class="table">
+<colgroup>
+<col style="width: 26%">
+<col style="width: 36%">
+<col style="width: 36%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">문제</th>
+<th style="text-align: left;">증상</th>
+<th style="text-align: left;">해결</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><strong>Divergent transitions</strong></td>
+<td style="text-align: left;">사후가 잘못됨</td>
+<td style="text-align: left;">NCP 변환, target_accept 증가</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>Low n_eff</strong></td>
+<td style="text-align: left;">tail quantile 부정확</td>
+<td style="text-align: left;">iterations 증가, NCP, prior 재검토</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>High Rhat</strong></td>
+<td style="text-align: left;">chain 분리</td>
+<td style="text-align: left;">다른 starting points, prior 재검토</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>Numerical overflow</strong></td>
+<td style="text-align: left;">NA, Inf</td>
+<td style="text-align: left;">log scale 계산, clipping</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>Slow compilation</strong></td>
+<td style="text-align: left;">첫 실행 오래</td>
+<td style="text-align: left;">precompile + cache</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="convergence-점검-절차" class="level3" data-number="6.2">
+<h3 data-number="6.2" class="anchored" data-anchor-id="convergence-점검-절차"><span class="header-section-number">6.2</span> Convergence 점검 절차</h3>
+<div class="sourceCode" id="cb14"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1"></a><span class="co"># 1. Rhat: 모든 모수에 대해 &lt; 1.01 권장 (1.1 도 OK)</span></span>
+<span id="cb14-2"><a href="#cb14-2"></a><span class="fu">rhat</span>(schools_fit)</span>
+<span id="cb14-3"><a href="#cb14-3"></a></span>
+<span id="cb14-4"><a href="#cb14-4"></a><span class="co"># 2. n_eff: 적어도 100 이상, 가능하면 1000+</span></span>
+<span id="cb14-5"><a href="#cb14-5"></a>neff_lowest <span class="ot">&lt;-</span> <span class="fu">min</span>(<span class="fu">neff</span>(schools_fit))</span>
+<span id="cb14-6"><a href="#cb14-6"></a></span>
+<span id="cb14-7"><a href="#cb14-7"></a><span class="co"># 3. Trace plots: chain 들이 같은 영역 cover</span></span>
+<span id="cb14-8"><a href="#cb14-8"></a><span class="fu">traceplot</span>(schools_fit)</span>
+<span id="cb14-9"><a href="#cb14-9"></a></span>
+<span id="cb14-10"><a href="#cb14-10"></a><span class="co"># 4. Pairs plots: posterior geometry (funnel 등)</span></span>
+<span id="cb14-11"><a href="#cb14-11"></a><span class="fu">pairs</span>(schools_fit, <span class="at">pars =</span> <span class="fu">c</span>(<span class="st">"mu"</span>, <span class="st">"tau"</span>))</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Pairs Plot 으로 Funnel 발견
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>8 schools 의 centered parameterization:</p>
+<ul>
+<li><span class="math inline">\((\mu, \tau, \theta_j)\)</span> 의 pairs plot 에서 <span class="math inline">\((\tau, \theta_j)\)</span> 가 funnel 모양.</li>
+<li><span class="math inline">\(\tau\)</span> 작을 때 <span class="math inline">\(\theta_j\)</span> 의 분산 작음 → 좁은 깔때기.</li>
+</ul>
+<p>NCP 적용 후:</p>
+<ul>
+<li><span class="math inline">\((\tau, \eta_j)\)</span> 가 사각형 (rectangular) 모양.</li>
+<li>HMC 가 효율적으로 sampling.</li>
+</ul>
+<p>→ pairs plot 이 reparameterization 의 효과 시각화.</p>
+</div>
+</div>
+</section>
+<section id="prior-sensitivity" class="level3" data-number="6.3">
+<h3 data-number="6.3" class="anchored" data-anchor-id="prior-sensitivity"><span class="header-section-number">6.3</span> Prior Sensitivity</h3>
+<div class="sourceCode" id="cb15"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1"></a><span class="co"># 다른 prior 로 fit</span></span>
+<span id="cb15-2"><a href="#cb15-2"></a>fit1 <span class="ot">&lt;-</span> <span class="fu">stan</span>(<span class="at">file=</span><span class="st">"schools.stan"</span>, ...)        <span class="co"># uniform on tau</span></span>
+<span id="cb15-3"><a href="#cb15-3"></a>fit2 <span class="ot">&lt;-</span> <span class="fu">stan</span>(<span class="at">file=</span><span class="st">"schools_cauchy.stan"</span>, ...) <span class="co"># half-cauchy on tau</span></span>
+<span id="cb15-4"><a href="#cb15-4"></a>fit3 <span class="ot">&lt;-</span> <span class="fu">stan</span>(<span class="at">file=</span><span class="st">"schools_normal.stan"</span>, ...) <span class="co"># half-normal on tau</span></span>
+<span id="cb15-5"><a href="#cb15-5"></a></span>
+<span id="cb15-6"><a href="#cb15-6"></a><span class="co"># Posterior 비교</span></span>
+<span id="cb15-7"><a href="#cb15-7"></a><span class="fu">compare_posteriors</span>(fit1, fit2, fit3)</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>8 schools 에서 prior 변경 효과:</p>
+<ul>
+<li>Posterior of <span class="math inline">\(\tau\)</span>: prior 에 민감 (데이터가 약함).</li>
+<li>Posterior of <span class="math inline">\(\mu\)</span>: prior 에 거의 무관 (데이터가 강함).</li>
+<li><span class="math inline">\(\theta_j\)</span> shrinkage: prior 에 따라 강도 다름.</li>
+</ul>
+</section>
+</section>
+<section id="c.6-bibliographic-note-요지" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="c.6-bibliographic-note-요지"><span class="header-section-number">7</span> C.6 Bibliographic Note (요지)</h2>
+<section id="stan" class="level3" data-number="7.1">
+<h3 data-number="7.1" class="anchored" data-anchor-id="stan"><span class="header-section-number">7.1</span> Stan</h3>
+<ul>
+<li><strong>Carpenter et al.&nbsp;(2017)</strong> — <em>Stan: A Probabilistic Programming Language</em> (JSS).</li>
+<li><strong>Hoffman &amp; Gelman (2014)</strong> — <em>NUTS</em> (JMLR).</li>
+<li><strong>Stan Development Team</strong> — Stan User’s Guide.</li>
+</ul>
+</section>
+<section id="hmc" class="level3" data-number="7.2">
+<h3 data-number="7.2" class="anchored" data-anchor-id="hmc"><span class="header-section-number">7.2</span> HMC</h3>
+<ul>
+<li><strong>Neal (2011)</strong> — <em>MCMC Using Hamiltonian Dynamics</em> (Handbook of MCMC).</li>
+<li><strong>Betancourt (2017)</strong> — <em>A Conceptual Introduction to HMC</em> (arXiv).</li>
+<li><strong>Betancourt &amp; Girolami (2013)</strong> — Hierarchical models 와 NCP.</li>
+</ul>
+</section>
+<section id="r-for-bayesian" class="level3" data-number="7.3">
+<h3 data-number="7.3" class="anchored" data-anchor-id="r-for-bayesian"><span class="header-section-number">7.3</span> R for Bayesian</h3>
+<ul>
+<li><strong>R Core Team</strong> — R reference manual.</li>
+<li><strong>Wickham (2019)</strong> — <em>Advanced R</em>.</li>
+<li><strong>Gelman, Hill, Vehtari (2020)</strong> — <em>Regression and Other Stories</em> (R workflow).</li>
+</ul>
+</section>
+<section id="practical-bayesian-workflow" class="level3" data-number="7.4">
+<h3 data-number="7.4" class="anchored" data-anchor-id="practical-bayesian-workflow"><span class="header-section-number">7.4</span> Practical Bayesian Workflow</h3>
+<ul>
+<li><strong>Gelman et al.&nbsp;(2020)</strong> — <em>Bayesian Workflow</em> (arXiv).</li>
+<li><strong>Gabry, Simpson, Vehtari, Betancourt, Gelman (2019)</strong> — <em>Visualization in Bayesian Workflow</em>.</li>
+</ul>
+</section>
+</section>
+<section id="stan-의-핵심-개념-통합" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="stan-의-핵심-개념-통합"><span class="header-section-number">8</span> Stan 의 핵심 개념 통합</h2>
+<section id="nuts-의-작동" class="level3" data-number="8.1">
+<h3 data-number="8.1" class="anchored" data-anchor-id="nuts-의-작동"><span class="header-section-number">8.1</span> NUTS 의 작동</h3>
+<pre><code>1. Initial state (theta, rho)
+2. Build trajectory using leapfrog
+3. Stop when trajectory makes U-turn
+4. Sample from trajectory weighted by Hamiltonian</code></pre>
+</section>
+<section id="autodiff-의-자동화" class="level3" data-number="8.2">
+<h3 data-number="8.2" class="anchored" data-anchor-id="autodiff-의-자동화"><span class="header-section-number">8.2</span> Autodiff 의 자동화</h3>
+<p>Stan 컴파일러가 모델 코드 → log-posterior 함수 + gradient 함수 자동 생성.</p>
+<ul>
+<li><strong>Forward mode</strong>: <span class="math inline">\(d \times\)</span> 비용.</li>
+<li><strong>Reverse mode</strong>: 1 × 비용 (gradient 한 번).</li>
+</ul>
+<p>→ 사용자가 gradient 손으로 계산할 필요 없음.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Autodiff 가 베이즈 추론을 변혁
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>이전 (BUGS, JAGS): Gibbs 를 위한 conjugate 모델만 효율.</p>
+<p>이후 (Stan, PyMC, NumPyro): Autodiff 로 임의 모델 + HMC.</p>
+<p>따라서 모델 작성의 자유도 대폭 증가:</p>
+<ul>
+<li>비-conjugate prior 자유롭게.</li>
+<li>GP·GP 변종.</li>
+<li>Mixture·hierarchical mixture.</li>
+<li>GLM·GAM·structural equation.</li>
+</ul>
+<p>Stan 이 베이즈의 표준 도구가 된 핵심 이유.</p>
+</div>
+</div>
+</section>
+<section id="hmc-와-변분-추론-vi-의-비교" class="level3" data-number="8.3">
+<h3 data-number="8.3" class="anchored" data-anchor-id="hmc-와-변분-추론-vi-의-비교"><span class="header-section-number">8.3</span> HMC 와 변분 추론 (VI) 의 비교</h3>
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: left;"></th>
+<th style="text-align: left;">HMC (NUTS)</th>
+<th style="text-align: left;">Variational (ADVI)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">정확도</td>
+<td style="text-align: left;">Asymptotically exact</td>
+<td style="text-align: left;">근사</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">속도</td>
+<td style="text-align: left;">느림 (초~분)</td>
+<td style="text-align: left;">빠름 (초)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">모형 복잡성</td>
+<td style="text-align: left;">임의</td>
+<td style="text-align: left;">일부 제한</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Posterior 형태</td>
+<td style="text-align: left;">정확</td>
+<td style="text-align: left;">mean-field 가정</td>
+</tr>
+</tbody>
+</table>
+<p>→ 둘 다 Stan 에서 지원. 빠른 prototype 은 ADVI, 최종 inference 는 NUTS.</p>
+</section>
+</section>
+<section id="실무-워크플로우-bayesian-workflow" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="실무-워크플로우-bayesian-workflow"><span class="header-section-number">9</span> 실무 워크플로우 — Bayesian Workflow</h2>
+<section id="단계" class="level3" data-number="9.1">
+<h3 data-number="9.1" class="anchored" data-anchor-id="단계"><span class="header-section-number">9.1</span> 8 단계</h3>
+<ol type="1">
+<li><strong>Domain modeling</strong>: 문제 정의, prior elicitation.</li>
+<li><strong>Computational model</strong>: Stan code 작성.</li>
+<li><strong>Prior predictive check</strong>: prior 만으로 시뮬레이션 → 합리적 데이터 분포?</li>
+<li><strong>Fitting</strong>: NUTS sampling.</li>
+<li><strong>Convergence check</strong>: Rhat, n_eff, divergent.</li>
+<li><strong>Posterior predictive check</strong>: 데이터와 비교.</li>
+<li><strong>Comparison</strong>: 여러 모델 (LOO, WAIC).</li>
+<li><strong>Iterate</strong>: 문제 발견 → 모델 개선 → 반복.</li>
+</ol>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+직관 — Workflow 가 모델보다 중요
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>좋은 베이즈 분석 = 좋은 모델 + 좋은 workflow.</p>
+<p><strong>나쁜 workflow</strong>:</p>
+<ul>
+<li>모델 한 번 fit.</li>
+<li>결과 받아들임.</li>
+<li>“잘 되는 것 같다” 보고.</li>
+</ul>
+<p><strong>좋은 workflow</strong>:</p>
+<ul>
+<li>단순 모델 → fit → check → 확장.</li>
+<li>Convergence 점검, prior sensitivity, posterior predictive.</li>
+<li>Multiple models 비교.</li>
+<li>Iteration.</li>
+</ul>
+<p>8 schools 가 BDA 의 hierarchical 예제로 반복 등장하는 이유: workflow 의 모든 단계가 자연스럽게 적용 가능한 단순+풍부한 예제.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="코드-통합-stan-pymc-예제" class="level2" data-number="10">
+<h2 data-number="10" class="anchored" data-anchor-id="코드-통합-stan-pymc-예제"><span class="header-section-number">10</span> 코드 — 통합 Stan + PyMC 예제</h2>
+<section id="stan-rstan" class="level3" data-number="10.1">
+<h3 data-number="10.1" class="anchored" data-anchor-id="stan-rstan"><span class="header-section-number">10.1</span> Stan (rstan)</h3>
+<div class="sourceCode" id="cb17"><pre class="sourceCode numberSource r number-lines code-with-copy"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1"></a><span class="fu">library</span>(<span class="st">"rstan"</span>)</span>
+<span id="cb17-2"><a href="#cb17-2"></a></span>
+<span id="cb17-3"><a href="#cb17-3"></a>J <span class="ot">&lt;-</span> <span class="dv">8</span></span>
+<span id="cb17-4"><a href="#cb17-4"></a>y <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">28</span>, <span class="dv">8</span>, <span class="sc">-</span><span class="dv">3</span>, <span class="dv">7</span>, <span class="sc">-</span><span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">18</span>, <span class="dv">12</span>)</span>
+<span id="cb17-5"><a href="#cb17-5"></a>sigma <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">15</span>, <span class="dv">10</span>, <span class="dv">16</span>, <span class="dv">11</span>, <span class="dv">9</span>, <span class="dv">11</span>, <span class="dv">10</span>, <span class="dv">18</span>)</span>
+<span id="cb17-6"><a href="#cb17-6"></a></span>
+<span id="cb17-7"><a href="#cb17-7"></a>schools_fit <span class="ot">&lt;-</span> <span class="fu">stan</span>(</span>
+<span id="cb17-8"><a href="#cb17-8"></a>  <span class="at">file =</span> <span class="st">"schools.stan"</span>,</span>
+<span id="cb17-9"><a href="#cb17-9"></a>  <span class="at">data =</span> <span class="fu">c</span>(<span class="st">"J"</span>, <span class="st">"y"</span>, <span class="st">"sigma"</span>),</span>
+<span id="cb17-10"><a href="#cb17-10"></a>  <span class="at">iter =</span> <span class="dv">2000</span>,</span>
+<span id="cb17-11"><a href="#cb17-11"></a>  <span class="at">chains =</span> <span class="dv">4</span>,</span>
+<span id="cb17-12"><a href="#cb17-12"></a>  <span class="at">control =</span> <span class="fu">list</span>(<span class="at">adapt_delta =</span> <span class="fl">0.95</span>)</span>
+<span id="cb17-13"><a href="#cb17-13"></a>)</span>
+<span id="cb17-14"><a href="#cb17-14"></a></span>
+<span id="cb17-15"><a href="#cb17-15"></a><span class="co"># Convergence check</span></span>
+<span id="cb17-16"><a href="#cb17-16"></a><span class="fu">print</span>(schools_fit, <span class="at">pars =</span> <span class="fu">c</span>(<span class="st">"mu"</span>, <span class="st">"tau"</span>, <span class="st">"theta"</span>))</span>
+<span id="cb17-17"><a href="#cb17-17"></a><span class="fu">traceplot</span>(schools_fit, <span class="at">pars =</span> <span class="st">"tau"</span>)</span>
+<span id="cb17-18"><a href="#cb17-18"></a><span class="fu">pairs</span>(schools_fit, <span class="at">pars =</span> <span class="fu">c</span>(<span class="st">"mu"</span>, <span class="st">"tau"</span>, <span class="st">"eta[1]"</span>))</span>
+<span id="cb17-19"><a href="#cb17-19"></a></span>
+<span id="cb17-20"><a href="#cb17-20"></a><span class="co"># Posterior predictive</span></span>
+<span id="cb17-21"><a href="#cb17-21"></a>sims <span class="ot">&lt;-</span> <span class="fu">extract</span>(schools_fit)</span>
+<span id="cb17-22"><a href="#cb17-22"></a>y_rep <span class="ot">&lt;-</span> <span class="fu">matrix</span>(<span class="cn">NA</span>, <span class="at">nrow =</span> <span class="fu">length</span>(sims<span class="sc">$</span>mu), <span class="at">ncol =</span> J)</span>
+<span id="cb17-23"><a href="#cb17-23"></a><span class="cf">for</span> (s <span class="cf">in</span> <span class="dv">1</span><span class="sc">:</span><span class="fu">length</span>(sims<span class="sc">$</span>mu)) {</span>
+<span id="cb17-24"><a href="#cb17-24"></a>  y_rep[s, ] <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(J, sims<span class="sc">$</span>theta[s, ], sigma)</span>
+<span id="cb17-25"><a href="#cb17-25"></a>}</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+<section id="pymc-python-대안" class="level3" data-number="10.2">
+<h3 data-number="10.2" class="anchored" data-anchor-id="pymc-python-대안"><span class="header-section-number">10.2</span> PyMC (Python 대안)</h3>
+<div class="sourceCode" id="cb18"><pre class="sourceCode numberSource python number-lines code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb18-2"><a href="#cb18-2"></a><span class="im">import</span> pymc <span class="im">as</span> pm</span>
+<span id="cb18-3"><a href="#cb18-3"></a><span class="im">import</span> arviz <span class="im">as</span> az</span>
+<span id="cb18-4"><a href="#cb18-4"></a></span>
+<span id="cb18-5"><a href="#cb18-5"></a>J <span class="op">=</span> <span class="dv">8</span></span>
+<span id="cb18-6"><a href="#cb18-6"></a>y <span class="op">=</span> np.array([<span class="dv">28</span>, <span class="dv">8</span>, <span class="op">-</span><span class="dv">3</span>, <span class="dv">7</span>, <span class="op">-</span><span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">18</span>, <span class="dv">12</span>])</span>
+<span id="cb18-7"><a href="#cb18-7"></a>sigma <span class="op">=</span> np.array([<span class="dv">15</span>, <span class="dv">10</span>, <span class="dv">16</span>, <span class="dv">11</span>, <span class="dv">9</span>, <span class="dv">11</span>, <span class="dv">10</span>, <span class="dv">18</span>])</span>
+<span id="cb18-8"><a href="#cb18-8"></a></span>
+<span id="cb18-9"><a href="#cb18-9"></a><span class="cf">with</span> pm.Model() <span class="im">as</span> schools_model:</span>
+<span id="cb18-10"><a href="#cb18-10"></a>    <span class="co"># Hyperpriors</span></span>
+<span id="cb18-11"><a href="#cb18-11"></a>    mu <span class="op">=</span> pm.Normal(<span class="st">"mu"</span>, <span class="dv">0</span>, <span class="dv">10</span>)</span>
+<span id="cb18-12"><a href="#cb18-12"></a>    tau <span class="op">=</span> pm.HalfCauchy(<span class="st">"tau"</span>, <span class="dv">25</span>)</span>
+<span id="cb18-13"><a href="#cb18-13"></a></span>
+<span id="cb18-14"><a href="#cb18-14"></a>    <span class="co"># Non-centered parameterization</span></span>
+<span id="cb18-15"><a href="#cb18-15"></a>    eta <span class="op">=</span> pm.Normal(<span class="st">"eta"</span>, <span class="dv">0</span>, <span class="dv">1</span>, shape<span class="op">=</span>J)</span>
+<span id="cb18-16"><a href="#cb18-16"></a>    theta <span class="op">=</span> pm.Deterministic(<span class="st">"theta"</span>, mu <span class="op">+</span> tau <span class="op">*</span> eta)</span>
+<span id="cb18-17"><a href="#cb18-17"></a></span>
+<span id="cb18-18"><a href="#cb18-18"></a>    <span class="co"># Likelihood</span></span>
+<span id="cb18-19"><a href="#cb18-19"></a>    pm.Normal(<span class="st">"y"</span>, theta, sigma, observed<span class="op">=</span>y)</span>
+<span id="cb18-20"><a href="#cb18-20"></a></span>
+<span id="cb18-21"><a href="#cb18-21"></a>    trace <span class="op">=</span> pm.sample(<span class="dv">2000</span>, tune<span class="op">=</span><span class="dv">2000</span>, target_accept<span class="op">=</span><span class="fl">0.95</span>, chains<span class="op">=</span><span class="dv">4</span>)</span>
+<span id="cb18-22"><a href="#cb18-22"></a></span>
+<span id="cb18-23"><a href="#cb18-23"></a><span class="co"># Diagnostics</span></span>
+<span id="cb18-24"><a href="#cb18-24"></a><span class="bu">print</span>(az.summary(trace, var_names<span class="op">=</span>[<span class="st">"mu"</span>, <span class="st">"tau"</span>, <span class="st">"theta"</span>]))</span>
+<span id="cb18-25"><a href="#cb18-25"></a>az.plot_trace(trace, var_names<span class="op">=</span>[<span class="st">"mu"</span>, <span class="st">"tau"</span>])</span>
+<span id="cb18-26"><a href="#cb18-26"></a>az.plot_pair(trace, var_names<span class="op">=</span>[<span class="st">"mu"</span>, <span class="st">"tau"</span>, <span class="st">"eta"</span>], divergences<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb18-27"><a href="#cb18-27"></a></span>
+<span id="cb18-28"><a href="#cb18-28"></a><span class="co"># Posterior predictive</span></span>
+<span id="cb18-29"><a href="#cb18-29"></a><span class="cf">with</span> schools_model:</span>
+<span id="cb18-30"><a href="#cb18-30"></a>    ppc <span class="op">=</span> pm.sample_posterior_predictive(trace, var_names<span class="op">=</span>[<span class="st">"y"</span>])</span></code><button title="클립보드 복사" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+코드 가이드
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<ul>
+<li><strong>Stan</strong>: 모델 파일 (<code>schools.stan</code>) + R script. <code>adapt_delta = 0.95</code> 로 divergent 회피.</li>
+<li><strong>PyMC</strong>: Python 한 파일에 모델·sampling·진단. <code>target_accept = 0.95</code> 로 NUTS step size 조정.</li>
+<li>두 결과가 거의 동일 — Stan 과 PyMC 모두 NUTS 사용.</li>
+</ul>
+</div>
+</div>
+</section>
+</section>
+<section id="통합-체크리스트" class="level2" data-number="11">
+<h2 data-number="11" class="anchored" data-anchor-id="통합-체크리스트"><span class="header-section-number">11</span> 통합 체크리스트</h2>
+<p><strong>모델 작성</strong></p>
+<ol type="1">
+<li><strong>NCP 적용</strong>: hierarchical 모델은 거의 항상.</li>
+<li><strong>Prior 선택</strong>: weakly informative (half-Cauchy 등).</li>
+<li><strong>데이터 표준화</strong>: numerical stability 위해.</li>
+</ol>
+<p><strong>Sampling</strong></p>
+<ol start="4" type="1">
+<li><strong>Iterations</strong>: warmup 1000 + sampling 1000 (default).</li>
+<li><strong>Chains</strong>: 4 권장 (병렬 + 진단).</li>
+<li><strong>adapt_delta / target_accept</strong>: divergent 발생 시 0.95~0.99 로 증가.</li>
+</ol>
+<p><strong>진단</strong></p>
+<ol start="7" type="1">
+<li><strong>Rhat &lt; 1.01</strong> for all parameters.</li>
+<li><strong>n_eff &gt; 100</strong> for all important parameters (가능하면 &gt; 1000).</li>
+<li><strong>Divergent transitions</strong>: 1% 이상이면 모델 / parameterization 검토.</li>
+<li><strong>Pairs plot</strong>: funnel·banana·multimodality 시각화.</li>
+</ol>
+<p><strong>검증</strong></p>
+<ol start="11" type="1">
+<li><strong>Posterior predictive check</strong>: data 와 ppc 분포 비교.</li>
+<li><strong>LOO / WAIC</strong>: 모델 비교.</li>
+<li><strong>Prior sensitivity</strong>: 다른 prior 로 fit 비교.</li>
+</ol>
+<p><strong>워크플로우</strong></p>
+<ol start="14" type="1">
+<li>단순 → 복잡 (incremental).</li>
+<li>시뮬레이션된 데이터로 모델 검증 (simulation-based calibration).</li>
+<li>Documentation: 모델 결정 이유 기록.</li>
+</ol>
+</section>
+<section id="관련-주제" class="level2" data-number="12">
+<h2 data-number="12" class="anchored" data-anchor-id="관련-주제"><span class="header-section-number">12</span> 관련 주제</h2>
+<p><strong>선행 지식</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/00-5-2-normal-eight-schools-meta.html">Ch.5 § 5.4~5.5 — 8 Schools Hierarchical</a> — 모델 자체</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-10-0-computation-intro.html">Ch.10 — Bayesian Computation Intro</a> — 일반 계산 framework</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-11-0-mcmc-basics.html">Ch.11 — MCMC Basics</a> — Metropolis, Gibbs</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-12-0-efficient-mcmc.html">Ch.12 — Efficient MCMC + HMC + Stan</a> — HMC 이론</li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-13-0-modal-variational-approximations.html">Ch.13 — Modal/Variational Approximations</a> — VI 대안</li>
+</ul>
+<p><strong>Bayesian 시리즈</strong></p>
+<ul>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/00-bayesian-part1-overview.html">Part I (Ch.1~5)</a></li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/01-bayesian-part2-overview.html">Part II (Ch.6~9)</a></li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/02-bayesian-part3-overview.html">Part III (Ch.10~13)</a></li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/03-bayesian-part4-overview.html">Part IV (Ch.14~18)</a></li>
+<li><a href="../../../../../docs/blog/posts/Statistics/bayesian/04-bayesian-part5-overview.html">Part V (Ch.19~23)</a></li>
+</ul>
+<p><strong>관련 개념 (cross-category)</strong></p>
+<ul>
+<li><a href="../../Math/hmc.qmd">Hamiltonian Monte Carlo</a></li>
+<li><a href="../../Math/nuts.qmd">NUTS — No-U-Turn Sampler</a></li>
+<li><a href="../../Math/autodiff.qmd">Automatic Differentiation</a></li>
+<li><a href="../../Engineering/probabilistic-programming.qmd">Probabilistic Programming Languages</a></li>
+<li><a href="../../Data_Science/bayesian-workflow.qmd">Bayesian Workflow Best Practices</a></li>
+</ul>
+</section>
+<section id="참고문헌" class="level2" data-number="13">
+<h2 data-number="13" class="anchored" data-anchor-id="참고문헌"><span class="header-section-number">13</span> 참고문헌</h2>
+<ul>
+<li>Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., &amp; Rubin, D. B. (2013). <em>Bayesian Data Analysis</em> (3rd ed.), Appendix C. CRC Press.</li>
+<li>Carpenter, B., Gelman, A., Hoffman, M. D., Lee, D., Goodrich, B., Betancourt, M., Brubaker, M., Guo, J., Li, P., &amp; Riddell, A. (2017). Stan: A Probabilistic Programming Language. <em>Journal of Statistical Software</em>, 76(1), 1-32.</li>
+<li>Hoffman, M. D., &amp; Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths in Hamiltonian Monte Carlo. <em>JMLR</em>, 15, 1593-1623.</li>
+<li>Neal, R. M. (2011). MCMC Using Hamiltonian Dynamics. In <em>Handbook of Markov Chain Monte Carlo</em>, Brooks et al.&nbsp;(eds.). Chapman &amp; Hall/CRC.</li>
+<li>Betancourt, M. (2017). A Conceptual Introduction to Hamiltonian Monte Carlo. <em>arXiv:1701.02434</em>.</li>
+<li>Betancourt, M., &amp; Girolami, M. (2013). Hamiltonian Monte Carlo for Hierarchical Models. <em>arXiv:1312.0906</em>.</li>
+<li>Gelman, A., Vehtari, A., Simpson, D., Margossian, C. C., Carpenter, B., Yao, Y., Kennedy, L., Gabry, J., Bürkner, P., &amp; Modrák, M. (2020). Bayesian Workflow. <em>arXiv:2011.01808</em>.</li>
+<li>Gabry, J., Simpson, D., Vehtari, A., Betancourt, M., &amp; Gelman, A. (2019). Visualization in Bayesian Workflow. <em>JRSS A</em>, 182(2), 389-402.</li>
+<li>Gelman, A., Hill, J., &amp; Vehtari, A. (2020). <em>Regression and Other Stories</em>. Cambridge University Press.</li>
+<li>Vehtari, A., Gelman, A., Simpson, D., Carpenter, B., &amp; Bürkner, P. (2021). Rank-Normalization, Folding, and Localization: An Improved <span class="math inline">\(\widehat R\)</span> for Assessing Convergence of MCMC. <em>Bayesian Analysis</em>, 16(2), 667-718.</li>
+<li>Stan Development Team (2024). <em>Stan User’s Guide</em> and <em>Stan Reference Manual</em>. https://mc-stan.org/users/documentation/.</li>
+<li>Salvatier, J., Wiecki, T. V., &amp; Fonnesbeck, C. (2016). Probabilistic Programming in Python Using PyMC3. <em>PeerJ Computer Science</em>, 2, e55.</li>
+<li>Phan, D., Pradhan, N., &amp; Jankowiak, M. (2019). Composable Effects for Flexible and Accelerated Probabilistic Programming in NumPyro. <em>arXiv:1912.11554</em>.</li>
+<li>Rubin, D. B. (1981). Estimation in Parallel Randomized Experiments. <em>Journal of Educational Statistics</em>, 6(4), 377-401. (8 schools 데이터 출처)</li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<script type="text/javascript">
+
+// replace cmd keyboard shortcut w/ control on non-Mac platforms
+const kPlatformMac = typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;
+if (!kPlatformMac) {
+   var kbds = document.querySelectorAll("kbd")
+   kbds.forEach(function(kbd) {
+      kbd.innerHTML = kbd.innerHTML.replace(/⌘/g, '⌃');
+   });
+}
+
+// tweak headings in pymd
+document.querySelectorAll(".pymd span.co").forEach(el => {
+   if (!el.innerText.startsWith("#|")) {
+      el.style.fontWeight = 1000;
+   }
+});
+
+</script>
+<!-- Begin Mailchimp Signup Form -->
+<div id="mc_embed_signup" style="padding-bottom: 1em; max-width: 400px;" class="ms-auto me-auto">
+  <p style="font-weight: 600; margin-bottom: 0;">Subscribe</p>
+  <span style="font-size: 0.9em;">Enjoy this blog? Get notified of new posts by email:</span>
+<form action="https://quarto.us14.list-manage.com/subscribe/post?u=c79fb56a311ae347fbe916740&amp;id=ec05dfca03" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate="">
+    <div id="mc_embed_signup_scroll">
+	
+        <div class="input-group mt-1 mb-2">
+        <input type="email" class="form-control" placeholder="Email Address" aria-label="Email Address" name="EMAIL" style="font-size: 0.8em; padding: .2em;">
+        </div>              
+
+	<div id="mce-responses" class="clear foot">
+		<div class="response" id="mce-error-response" style="display:none"></div>
+		<div class="response" id="mce-success-response" style="display:none"></div>
+	</div>    <!-- real people should not fill this in and expect good things - do not remove this or risk form bot signups-->
+    <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_c79fb56a311ae347fbe916740_ec05dfca03" tabindex="-1" value=""></div>
+        <div class="optionalParent">
+            <div class="clear foot" style="display: flex; align-items: center; justify-content: center;">
+              
+              
+                <input type="submit" value="Subscribe" name="subscribe" style="min-width: 150px; font-size: 0.8em;" id="mc-embedded-subscribe" class="button btn btn-light btn-sm ms-auto me-auto">
+            </div>
+        </div>
+    </div>
+</form>
+</div>
+
+<!--End mc_embed_signup-->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const disableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'prefetch';
+    }
+  }
+  const enableStylesheet = (stylesheets) => {
+    for (let i=0; i < stylesheets.length; i++) {
+      const stylesheet = stylesheets[i];
+      stylesheet.rel = 'stylesheet';
+    }
+  }
+  const manageTransitions = (selector, allowTransitions) => {
+    const els = window.document.querySelectorAll(selector);
+    for (let i=0; i < els.length; i++) {
+      const el = els[i];
+      if (allowTransitions) {
+        el.classList.remove('notransition');
+      } else {
+        el.classList.add('notransition');
+      }
+    }
+  }
+  const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+    const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+    const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+    let newTheme = '';
+    if(darkModeDefault) {
+      newTheme = isAlternate ? baseTheme : alternateTheme;
+    } else {
+      newTheme = isAlternate ? alternateTheme : baseTheme;
+    }
+    const changeGiscusTheme = () => {
+      // From: https://github.com/giscus/giscus/issues/336
+      const sendMessage = (message) => {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe) return;
+        iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+      }
+      sendMessage({
+        setConfig: {
+          theme: newTheme
+        }
+      });
+    }
+    const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+    if (isGiscussLoaded) {
+      changeGiscusTheme();
+    }
+  }
+  const toggleColorMode = (alternate) => {
+    // Switch the stylesheets
+    const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+    manageTransitions('#quarto-margin-sidebar .nav-link', false);
+    if (alternate) {
+      enableStylesheet(alternateStylesheets);
+      for (const sheetNode of alternateStylesheets) {
+        if (sheetNode.id === "quarto-bootstrap") {
+          toggleBodyColorMode(sheetNode);
+        }
+      }
+    } else {
+      disableStylesheet(alternateStylesheets);
+      toggleBodyColorPrimary();
+    }
+    manageTransitions('#quarto-margin-sidebar .nav-link', true);
+    // Switch the toggles
+    const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+    for (let i=0; i < toggles.length; i++) {
+      const toggle = toggles[i];
+      if (toggle) {
+        if (alternate) {
+          toggle.classList.add("alternate");     
+        } else {
+          toggle.classList.remove("alternate");
+        }
+      }
+    }
+    // Hack to workaround the fact that safari doesn't
+    // properly recolor the scrollbar when toggling (#1455)
+    if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+      manageTransitions("body", false);
+      window.scrollTo(0, 1);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        manageTransitions("body", true);
+      }, 40);  
+    }
+  }
+  const isFileUrl = () => { 
+    return window.location.protocol === 'file:';
+  }
+  const hasAlternateSentinel = () => {  
+    let styleSentinel = getColorSchemeSentinel();
+    if (styleSentinel !== null) {
+      return styleSentinel === "alternate";
+    } else {
+      return false;
+    }
+  }
+  const setStyleSentinel = (alternate) => {
+    const value = alternate ? "alternate" : "default";
+    if (!isFileUrl()) {
+      window.localStorage.setItem("quarto-color-scheme", value);
+    } else {
+      localAlternateSentinel = value;
+    }
+  }
+  const getColorSchemeSentinel = () => {
+    if (!isFileUrl()) {
+      const storageValue = window.localStorage.getItem("quarto-color-scheme");
+      return storageValue != null ? storageValue : localAlternateSentinel;
+    } else {
+      return localAlternateSentinel;
+    }
+  }
+  const darkModeDefault = false;
+  let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+  // Dark / light mode switch
+  window.quartoToggleColorScheme = () => {
+    // Read the current dark / light value 
+    let toAlternate = !hasAlternateSentinel();
+    toggleColorMode(toAlternate);
+    setStyleSentinel(toAlternate);
+    toggleGiscusIfUsed(toAlternate, darkModeDefault);
+  };
+  // Ensure there is a toggle, if there isn't float one in the top right
+  if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+    const a = window.document.createElement('a');
+    a.classList.add('top-right');
+    a.classList.add('quarto-color-scheme-toggle');
+    a.href = "";
+    a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+    const i = window.document.createElement("i");
+    i.classList.add('bi');
+    a.appendChild(i);
+    window.document.body.appendChild(a);
+  }
+  // Switch to dark mode if need be
+  if (hasAlternateSentinel()) {
+    toggleColorMode(true);
+  } else {
+    toggleColorMode(false);
+  }
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "복사완료!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "복사완료!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+<script src="https://giscus.app/client.js" data-repo="kmink3225/blog" data-repo-id="R_kgDOLCZyDg" data-category="Blog" data-category-id="" data-mapping="title" data-reactions-enabled="1" data-emit-metadata="0" data-input-position="top" data-theme="light" data-lang="en" crossorigin="anonymous" async="">
+</script>
+<input type="hidden" id="giscus-base-theme" value="light">
+<input type="hidden" id="giscus-alt-theme" value="dark">
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>© Kwangmin Kim</p>
+</div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="../../../../../about.html">
+<p>About</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kmink3225/blog">
+      <i class="bi bi-github" role="img">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

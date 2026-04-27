@@ -1,0 +1,872 @@
+---
+title: "Appendix C Overview — Computation in R and Stan"
+subtitle: "BDA 본편 23 장 다음의 software companion: 8 schools 예제로 Stan 의 data·parameters·model block 분석·non-centered parameterization·R direct simulation (grid·Gibbs·Metropolis·HMC) 직접 구현·debugging tips·NUTS / autodiff / HMC 의 직관"
+description: |
+  Gelman BDA Appendix C (Computation in R and Stan) 의 6 절을 한 편으로 조망한다.
+  C.1 R + Stan 개발 환경 셋업, C.2 8 schools (Rubin 1981) hierarchical normal model 의 Stan 구현 — data / parameters / transformed parameters / model block 의 역할과 non-centered parameterization (theta = mu + tau * eta, eta ~ N(0,1)) 의 funnel posterior 회피 메커니즘, C.3 R 에서 직접 marginal-conditional grid 기반 시뮬레이션 + Gibbs sampler + Metropolis algorithm 명시 구현, C.4 R 에서 직접 HMC + leapfrog integrator 구현, C.5 debugging tips (수치 안정성·hyperparameter 선택·convergence 점검), C.6 bibliographic note.
+  Stan 의 핵심 — NUTS (No-U-Turn Sampler), autodiff (automatic differentiation), HMC 의 leapfrog dynamics — 의 직관을 정리하고, 실무 워크플로우 (모델 작성 → R 데이터 준비 → Stan 호출 → 사후 분석 → posterior predictive checks) 를 8 schools 예제로 구체화. 베이즈 추론의 software 측면 — BDA 의 통계 이론을 실제 코드로 옮기는 다리.
+categories:
+  - Statistics
+  - Bayesian
+  - Stan
+  - HMC
+  - Computational-Bayes
+  - Software
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 개요 — BDA 의 Software Companion
+
+BDA (Bayesian Data Analysis, Gelman et al. 2013) 본편 23 장이 베이즈 통계의 **이론과 모델** 을 다뤘다면, Appendix C 는 그것들을 **실제로 돌리는 방법** 을 다룬다.
+
+::: {.callout-important}
+## Appendix C 의 한 줄 요약
+
+**"같은 베이즈 모델을 (1) 고수준 언어 Stan 에서 작성, (2) R 에서 직접 grid·Gibbs·Metropolis·HMC 로 구현해 보면, 두 접근의 강점·한계와 베이즈 계산의 본질이 모두 드러난다 — 8 schools 예제 한 가지로."**
+
+같은 hierarchical normal 모델을 Stan, R 직접 구현 두 방식으로 풀면서 Stan 이 자동화하는 것이 무엇인지·언제 직접 구현이 필요한지를 학습한다.
+:::
+
+### Stan 이 자동화하는 4 가지
+
+| 자동화 | Stan 의 역할 |
+|:---|:------|
+| **확률 모델 → log-posterior** | Stan 컴파일러가 자동 |
+| **Gradient 계산** | Autodiff (automatic differentiation) |
+| **Sampler 선택** | NUTS (No-U-Turn) 기본 |
+| **Adaptive tuning** | Step size·mass matrix 자동 조절 |
+
+R 직접 구현은 이 4 가지를 **사용자가 모두 작성**. 단순 모델은 가능하나 복잡한 모델에는 비현실적.
+
+### 학습 순서
+
+```
+Stan 으로 빠르게 작동 확인 (C.1, C.2)
+  ↓
+같은 모델을 R 에서 직접 구현 (C.3, C.4)
+  ↓
+두 결과 비교 (정답이 같은가?)
+  ↓
+Debugging 및 hyperparameter 조정 (C.5)
+```
+
+## C.1 Getting Started with R and Stan
+
+### 환경 셋업
+
+| 도구 | URL | 역할 |
+|:----|:----|:------|
+| R | https://www.r-project.org/ | 통계 일반 + 데이터 처리 |
+| Stan | https://mc-stan.org/ | HMC 기반 베이즈 추론 엔진 |
+| RStudio | https://rstudio.org/ | IDE (선택) |
+| `rstan` 패키지 | CRAN | R 에서 Stan 호출 |
+
+::: {.callout-tip}
+## 직관 — R + Stan 의 협업 구조
+
+**R**: 데이터 입출력, 전처리, 시각화, 통계 일반.
+
+**Stan**: 베이즈 모델 컴파일·MCMC 실행.
+
+**`rstan` 패키지**: R ↔ Stan 다리.
+
+워크플로우:
+
+1. R 에서 데이터 준비.
+2. `*.stan` 파일에 모델 작성.
+3. R 에서 `stan(file="model.stan", data=...)` 호출.
+4. Stan 이 컴파일·실행, 결과를 R 로 반환.
+5. R 에서 사후 분석.
+
+장점: 각 도구가 자기 강점에 집중. Stan 이 베이즈 추론 엔진, R 이 모든 외부 인프라.
+:::
+
+### Python 대안
+
+R 외에 Python 진영도 활용 가능:
+
+| 패키지 | 특징 |
+|:----|:------|
+| **CmdStanPy** | Stan 의 공식 Python 인터페이스 |
+| **PyMC** | Stan 과 유사한 고수준 베이즈 (NumPyro 와 함께 표준) |
+| **NumPyro** | JAX 기반, GPU 가속 |
+| **Edward2 / TFP** | TensorFlow Probability |
+
+이후 코드 예제는 R + Stan 외에 PyMC 도 병행 제시.
+
+## C.2 Fitting a Hierarchical Model in Stan — 8 Schools 예제
+
+### 데이터 (Rubin 1981)
+
+8 학교의 SAT 코칭 효과 평가:
+
+* $J = 8$ 학교.
+* $y_j$ = 학교 $j$ 의 추정 처치 효과.
+* $\sigma_j$ = 그 추정의 표준오차 (이미 알려진 값).
+
+| 학교 | $y_j$ | $\sigma_j$ |
+|:----:|:-----:|:----:|
+| A | 28 | 15 |
+| B | 8 | 10 |
+| C | -3 | 16 |
+| D | 7 | 11 |
+| E | -1 | 9 |
+| F | 1 | 11 |
+| G | 18 | 10 |
+| H | 12 | 18 |
+
+### Hierarchical Normal Model
+
+$$
+y_j \mid \theta_j \sim N(\theta_j, \sigma_j^2), \quad \theta_j \sim N(\mu, \tau^2)
+$$
+
+* $\theta_j$ = 학교별 진짜 처치 효과.
+* $\mu$ = 모집단 평균 효과.
+* $\tau$ = 학교 간 변동 (heterogeneity).
+
+::: {.callout-tip}
+## 직관 — Hierarchical Model 의 정신
+
+**Pooled** ($\tau = 0$): 모든 학교가 같은 효과 → 정보 공유 최대, 차이 무시.
+
+**No pooling** ($\tau = \infty$): 각 학교 별도 추정 → 차이 반영, 정보 공유 없음.
+
+**Partial pooling** (hierarchical): 데이터로부터 $\tau$ 학습 → **각 학교가 자기 추정 + 모집단 평균의 가중 평균**.
+
+8 schools 의 결과: $\tau \approx 7$ → 학교 간 차이가 있으나 적당한 shrinkage. School A 의 효과 28 이 사후 평균 약 11 로 줄어듦 ($\bar y \approx 8$ 에 가까이).
+
+이것이 [Ch.5 hierarchical model](./00-5-0-hierarchical.qmd) 의 핵심.
+:::
+
+### Stan Code 분석
+
+```stan
+data {
+  int<lower=0> J;              // number of schools
+  real y[J];                    // estimated treatment effects
+  real<lower=0> sigma[J];       // s.e.'s of effect estimates
+}
+
+parameters {
+  real mu;                      // population mean
+  real<lower=0> tau;            // population sd
+  vector[J] eta;                // school-level errors (standardized)
+}
+
+transformed parameters {
+  vector[J] theta;
+  theta = mu + tau * eta;       // school effects
+}
+
+model {
+  eta ~ normal(0, 1);           // priors on standardized effects
+  y ~ normal(theta, sigma);     // likelihood
+}
+```
+
+### 4 개 Block 의 역할
+
+| Block | 역할 |
+|:----|:------|
+| `data` | 외부 데이터·고정 hyperparameter (관측값) |
+| `parameters` | MCMC 가 sampling 할 미지 모수 |
+| `transformed parameters` | parameters 의 함수 — 매 iteration 재계산 |
+| `model` | log-posterior 를 정의 (prior + likelihood) |
+
+::: {.callout-tip}
+## 직관 — Block 분리의 이유
+
+* **`data`**: 변하지 않음 (한 번만 입력). 형 검사 + 제약 (`<lower=0>`) 적용.
+* **`parameters`**: NUTS 가 sampling. Continuous 만 (discrete 는 marginalize).
+* **`transformed parameters`**: 사후에서도 자동 저장. 시각화·해석에 유용한 파생량.
+* **`model`**: log-posterior 의 누적 (Stan 내부적 `target +=`).
+
+분리의 장점:
+
+1. **명시적 의도**: data ↔ parameters 구분이 모델을 읽기 쉽게 함.
+2. **효율성**: transformed parameter 가 매 iteration 재계산되지만 cache 가능.
+3. **자동 저장**: parameters 와 transformed parameters 모두 사후 표본에 자동 포함.
+:::
+
+### Non-Centered Parameterization (NCP) — 핵심 트릭
+
+원래 **centered parameterization (CP)**:
+
+```stan
+parameters {
+  real mu;
+  real<lower=0> tau;
+  vector[J] theta;       // school effects directly
+}
+model {
+  theta ~ normal(mu, tau);
+  y ~ normal(theta, sigma);
+}
+```
+
+이 모델은 **funnel posterior** 발생 — $\tau$ 작을 때 $\theta$ 의 분산이 매우 작아 sampling 어려움 (Neal's funnel).
+
+**NCP**:
+
+```stan
+parameters {
+  real mu;
+  real<lower=0> tau;
+  vector[J] eta;         // standardized
+}
+transformed parameters {
+  vector[J] theta = mu + tau * eta;
+}
+model {
+  eta ~ normal(0, 1);
+  y ~ normal(theta, sigma);
+}
+```
+
+::: {.callout-important}
+## 직관 — NCP 가 funnel 을 어떻게 푸는가
+
+**Centered**:
+
+* $\theta_j \sim N(\mu, \tau^2)$ — $\theta_j$ 의 분산이 $\tau$ 에 의존.
+* $\tau \to 0$ 일 때 $\theta_j$ 의 사후 좁아짐.
+* HMC 의 step size 가 $\tau$ 에 따라 달라야 함 → 비효율.
+
+**Non-centered**:
+
+* $\eta_j \sim N(0, 1)$ — $\tau$ 와 무관하게 standardized.
+* $\theta_j = \mu + \tau \eta_j$ — 결정적 변환.
+* HMC 가 $(\mu, \tau, \eta)$ 공간에서 sampling — geometry 가 fixed.
+
+비유: centered 는 좁은 깔때기 (funnel) 의 좁은 부분에서 빠져나오기 어려움. NCP 는 깔때기를 펼친 좌표계 사용.
+
+**일반 원칙**: 데이터가 약하면 NCP 권장 ($\tau$ 의 사후가 0 근처에 mass), 데이터가 강하면 CP 가 더 효율 ($\tau$ 의 사후가 명확히 0 떨어짐).
+
+8 schools 는 데이터 약함 → NCP 가 표준.
+:::
+
+### R 에서 Stan 호출
+
+```r
+library("rstan")
+
+# 데이터 입력
+schools <- read.csv("schools.csv", header=TRUE)
+J <- nrow(schools)
+y <- schools$estimate
+sigma <- schools$sd
+
+# Stan 컴파일·실행
+schools_fit <- stan(
+  file = "schools.stan",
+  data = c("J", "y", "sigma"),
+  iter = 1000,
+  chains = 4
+)
+
+print(schools_fit)
+plot(schools_fit)
+```
+
+### Stan 출력 분석 (Figure C.1)
+
+| 모수 | mean | sd | 25% | 50% | 75% | n_eff | Rhat |
+|:----|:----:|:----:|:----:|:----:|:----:|:----:|:----:|
+| $\mu$ | 7.4 | 4.8 | 4.5 | 7.4 | 10.5 | 534 | 1 |
+| $\tau$ | 6.9 | 6.1 | 2.4 | 5.4 | 9.3 | 138 | 1 |
+| $\theta_1$ | 12.1 | 11.1 | 5.8 | 10.0 | 15.4 | 72 | 1 |
+
+* **mean, sd**: 사후 평균·표준편차.
+* **n_eff**: 효과적 표본 크기 (식 11.8).
+* **Rhat**: potential scale reduction factor (식 11.4) — $< 1.1$ 이면 수렴.
+
+::: {.callout-tip}
+## 직관 — n_eff vs total samples
+
+총 2000 draws (4 chains × 500) 인데 $\theta_1$ 의 n_eff = 72.
+
+이유: posterior autocorrelation. $\theta_1$ (=12.1, 사후 mean) 이 chain 안에서 인접 sample 끼리 상관 → 효과적 정보가 72 점만큼.
+
+* n_eff/total 비율 < 0.1: poor mixing → tuning 필요.
+* > 0.1: 양호.
+* > 0.5: 매우 좋음.
+
+n_eff 작은 모수는 **장기 분포** 추정에 더 많은 sample 필요. tail quantile (95% interval) 이 특히 영향 받음.
+:::
+
+### Posterior Predictive Checks
+
+같은 학교에 새 데이터:
+
+```r
+n_sims <- length(schools_sim$lp__)  # number of MCMC draws
+y_rep <- array(NA, c(n_sims, J))
+for (s in 1:n_sims) {
+  y_rep[s, ] <- rnorm(J, schools_sim$theta[s, ], sigma)
+}
+```
+
+새 학교에 새 데이터:
+
+```r
+theta_rep <- array(NA, c(n_sims, J))
+y_rep_new <- array(NA, c(n_sims, J))
+for (s in 1:n_sims) {
+  theta_rep[s, ] <- rnorm(J, schools_sim$mu[s], schools_sim$tau[s])
+  y_rep_new[s, ] <- rnorm(J, theta_rep[s, ], sigma)
+}
+```
+
+::: {.callout-note}
+## 직관 — 두 가지 Posterior Predictive
+
+**Type 1 (existing schools)**: 같은 $\theta$, 새 $y$.
+
+* "이미 본 8 학교에서 다음 시즌 데이터" — within-population variation.
+
+**Type 2 (new schools)**: 새 $\theta$, 새 $y$.
+
+* "다른 8 학교에서 같은 실험" — between-population variation.
+
+Type 2 의 분산이 더 큼 ($\tau^2$ 추가). 모델 평가 목적이면 Type 1 (구체 학교 적합 점검), 일반화 평가면 Type 2.
+:::
+
+### Alternative Priors
+
+원래 모델: $\mu, \tau$ 에 nearly flat priors.
+
+**Half-Cauchy**:
+
+```stan
+model {
+  tau ~ cauchy(0, 25);
+  ...
+}
+```
+
+* 효과: $\tau$ 의 사후 평균/중앙값이 더 작음.
+* $\theta_j$ 의 shrinkage 가 더 강함.
+* Heavy tail 로 큰 $\tau$ 도 허용 (덜 informative).
+
+[Ch.5 § 5.7 의 variance prior 권장](./00-5-3-variance-priors-exercises.qmd).
+
+### t-Distribution Hierarchical
+
+```stan
+parameters {
+  ...
+  real<lower=1> nu;  // degrees of freedom
+}
+model {
+  nu ~ ... (e.g., gamma(2, 0.1));
+  eta ~ student_t(nu, 0, 1);
+  y ~ normal(theta, sigma);
+}
+```
+
+학교별 효과의 heavy tail 허용 — Ch.17 robust inference.
+
+## C.3 Direct Simulation, Gibbs, and Metropolis in R
+
+같은 8 schools 모델을 Stan 없이 R 에서 직접 구현.
+
+### Marginal/Conditional Simulation (Grid)
+
+[Ch.5 § 5.4 의 두 단계 분해](./00-5-2-normal-eight-schools-meta.qmd):
+
+1. **$\tau$ 의 marginal**: $\theta, \mu$ 적분 소거.
+2. **$(\mu, \theta) \mid \tau$**: conditional, closed form.
+
+```r
+# Step 1: tau grid + log marginal posterior
+n_grid <- 2000
+tau_grid <- seq(0.01, 40, length=n_grid)
+log_p_tau <- rep(NA, n_grid)
+for (i in 1:n_grid) {
+  mu_i <- mu_hat(tau_grid[i], y, sigma)
+  V_i <- V_mu(tau_grid[i], y, sigma)
+  log_p_tau[i] <- 0.5*log(V_i) - 0.5*sum(log(sigma^2 + tau_grid[i]^2)) -
+                  0.5*sum((y - mu_i)^2 / (sigma^2 + tau_grid[i]^2))
+}
+
+# Normalize on log scale (overflow 회피)
+log_p_tau <- log_p_tau - max(log_p_tau)
+p_tau <- exp(log_p_tau) / sum(exp(log_p_tau))
+
+# Sample tau, then mu, then theta (conditionally)
+tau <- sample(tau_grid, n_sims, replace=TRUE, prob=p_tau)
+mu <- rnorm(n_sims, mu_hat(tau, y, sigma), sqrt(V_mu(tau, y, sigma)))
+theta <- ...  # conditional given mu, tau
+```
+
+::: {.callout-tip}
+## 직관 — Grid 가 가능한 이유
+
+8 schools 의 $\tau$ 는 **1 차원** scalar. Grid 로 $[0, 40]$ 을 2000 점으로 나눠도 충분.
+
+일반적으로 marginal posterior 의 차원이 1~2 일 때 grid 효율적. 고차원이면 grid 가 폭발 — MCMC 필요.
+
+장점: 정확 (numerical integration error 만), debugging 쉬움.
+단점: 차원 ≥ 3 이면 비현실적.
+:::
+
+### Gibbs Sampler
+
+각 conditional 을 차례로 sampling:
+
+```r
+theta_update <- function() {
+  theta_hat <- (mu/tau^2 + y/sigma^2) / (1/tau^2 + 1/sigma^2)
+  V_theta <- 1 / (1/tau^2 + 1/sigma^2)
+  rnorm(J, theta_hat, sqrt(V_theta))
+}
+mu_update <- function() {
+  rnorm(1, mean(theta), tau/sqrt(J))
+}
+tau_update <- function() {
+  # Inv-chi^2 from theta - mu
+  ...
+}
+
+# Main Gibbs loop
+n_iter <- 2000
+for (s in 1:n_iter) {
+  theta <- theta_update()
+  mu <- mu_update()
+  tau <- tau_update()
+  # save samples...
+}
+```
+
+::: {.callout-tip}
+## 직관 — Gibbs 가 작동하는 이유
+
+각 conditional 이 표준 분포 (정규, Inv-$\chi^2$) 면 Gibbs 가 자연.
+
+8 schools:
+
+* $\theta_j \mid \mu, \tau, y$: 정규.
+* $\mu \mid \theta, \tau$: 정규.
+* $\tau \mid \theta, \mu$: scaled Inv-$\chi^2$.
+
+→ 모든 conditional 이 conjugate. Gibbs 가 매우 단순.
+
+복잡한 모델 (비-conjugate prior, GLM) 에서는 Gibbs 의 conditional 이 표준 분포가 아닌 경우 → Metropolis-within-Gibbs 또는 HMC.
+:::
+
+### Metropolis Algorithm
+
+Conditional 이 표준이 아닐 때:
+
+```r
+metropolis_step <- function(current, log_post_fn, proposal_sd) {
+  proposed <- current + rnorm(length(current), 0, proposal_sd)
+  log_ratio <- log_post_fn(proposed) - log_post_fn(current)
+  if (log(runif(1)) < log_ratio) {
+    return(proposed)  # accept
+  } else {
+    return(current)   # reject
+  }
+}
+```
+
+핵심:
+
+* **Proposal**: 어떻게 새 상태 제안 (정규 walk).
+* **Accept ratio**: $\min(1, p(\text{proposed})/p(\text{current}))$ — 확률적 채택.
+* **Tuning**: proposal_sd 가 acceptance rate 23~50% 가 되도록.
+
+::: {.callout-note}
+## 직관 — Metropolis 의 보편성
+
+**장점**:
+
+* 어떤 분포에도 적용 (정규화 상수 불필요).
+* Conditional 의 closed form 불필요.
+
+**단점**:
+
+* Proposal 튜닝 필요 (manual).
+* Random walk → slow mixing in high dimensions.
+* High-dim ($d > 50$) 에서 비효율.
+
+→ HMC (다음 절) 가 high-dim 의 효율적 대안.
+:::
+
+## C.4 HMC in R (개념 + 직관)
+
+### HMC 의 핵심 아이디어
+
+Metropolis 의 random walk 대신 **물리학의 Hamilton dynamics** 사용:
+
+* 모수 $\theta$ + 보조 운동량 $\rho$.
+* Hamiltonian $H(\theta, \rho) = -\log p(\theta) + \frac{1}{2}\rho^T M^{-1} \rho$.
+* Leapfrog integrator 로 dynamics 시뮬레이션.
+* Acceptance: $H$ 의 변화에 따라.
+
+### Leapfrog Integrator
+
+```r
+leapfrog <- function(theta, rho, eps, L, grad_log_post) {
+  rho <- rho + 0.5 * eps * grad_log_post(theta)
+  for (l in 1:L) {
+    theta <- theta + eps * rho
+    if (l < L) rho <- rho + eps * grad_log_post(theta)
+  }
+  rho <- rho + 0.5 * eps * grad_log_post(theta)
+  list(theta = theta, rho = rho)
+}
+```
+
+* `eps`: step size.
+* `L`: 단계 수.
+* **Half step + full step + half step** 의 symplectic 구조 — 수치적 안정성.
+
+::: {.callout-tip}
+## 직관 — HMC 가 효율적인 이유
+
+**Random walk Metropolis**: 매 step 이 작은 random move → diffusion. $O(d)$ steps 으로 분포 cover.
+
+**HMC**: gradient 활용한 directed move → ballistic. $O(d^{1/4})$ steps 으로 분포 cover (Neal 2011).
+
+→ **고차원에서 압도적 효율성**.
+
+비유:
+
+* Random walk = 안개 속에서 무작위 방향 탐색.
+* HMC = gradient 가 보이는 지도 + 관성으로 빠르게 이동.
+
+NUTS (Hoffman & Gelman 2014): HMC 의 step 수 $L$ 을 자동 결정. Stan 의 기본 sampler.
+:::
+
+### NUTS 의 자동화
+
+NUTS = No-U-Turn Sampler:
+
+* Stop criterion: trajectory 가 "U-turn" 하기 전까지 진행.
+* Step size: dual averaging 으로 자동 튜닝 (target acceptance ≈ 0.8).
+* Mass matrix: warmup 동안 학습.
+
+이 모든 것이 Stan 안에서 자동 — 사용자는 모델만 작성.
+
+## C.5 Debugging Tips
+
+### 흔한 문제와 해결
+
+| 문제 | 증상 | 해결 |
+|:----|:------|:------|
+| **Divergent transitions** | 사후가 잘못됨 | NCP 변환, target_accept 증가 |
+| **Low n_eff** | tail quantile 부정확 | iterations 증가, NCP, prior 재검토 |
+| **High Rhat** | chain 분리 | 다른 starting points, prior 재검토 |
+| **Numerical overflow** | NA, Inf | log scale 계산, clipping |
+| **Slow compilation** | 첫 실행 오래 | precompile + cache |
+
+### Convergence 점검 절차
+
+```r
+# 1. Rhat: 모든 모수에 대해 < 1.01 권장 (1.1 도 OK)
+rhat(schools_fit)
+
+# 2. n_eff: 적어도 100 이상, 가능하면 1000+
+neff_lowest <- min(neff(schools_fit))
+
+# 3. Trace plots: chain 들이 같은 영역 cover
+traceplot(schools_fit)
+
+# 4. Pairs plots: posterior geometry (funnel 등)
+pairs(schools_fit, pars = c("mu", "tau"))
+```
+
+::: {.callout-tip}
+## 직관 — Pairs Plot 으로 Funnel 발견
+
+8 schools 의 centered parameterization:
+
+* $(\mu, \tau, \theta_j)$ 의 pairs plot 에서 $(\tau, \theta_j)$ 가 funnel 모양.
+* $\tau$ 작을 때 $\theta_j$ 의 분산 작음 → 좁은 깔때기.
+
+NCP 적용 후:
+
+* $(\tau, \eta_j)$ 가 사각형 (rectangular) 모양.
+* HMC 가 효율적으로 sampling.
+
+→ pairs plot 이 reparameterization 의 효과 시각화.
+:::
+
+### Prior Sensitivity
+
+```r
+# 다른 prior 로 fit
+fit1 <- stan(file="schools.stan", ...)        # uniform on tau
+fit2 <- stan(file="schools_cauchy.stan", ...) # half-cauchy on tau
+fit3 <- stan(file="schools_normal.stan", ...) # half-normal on tau
+
+# Posterior 비교
+compare_posteriors(fit1, fit2, fit3)
+```
+
+8 schools 에서 prior 변경 효과:
+
+* Posterior of $\tau$: prior 에 민감 (데이터가 약함).
+* Posterior of $\mu$: prior 에 거의 무관 (데이터가 강함).
+* $\theta_j$ shrinkage: prior 에 따라 강도 다름.
+
+## C.6 Bibliographic Note (요지)
+
+### Stan
+
+* **Carpenter et al. (2017)** — *Stan: A Probabilistic Programming Language* (JSS).
+* **Hoffman & Gelman (2014)** — *NUTS* (JMLR).
+* **Stan Development Team** — Stan User's Guide.
+
+### HMC
+
+* **Neal (2011)** — *MCMC Using Hamiltonian Dynamics* (Handbook of MCMC).
+* **Betancourt (2017)** — *A Conceptual Introduction to HMC* (arXiv).
+* **Betancourt & Girolami (2013)** — Hierarchical models 와 NCP.
+
+### R for Bayesian
+
+* **R Core Team** — R reference manual.
+* **Wickham (2019)** — *Advanced R*.
+* **Gelman, Hill, Vehtari (2020)** — *Regression and Other Stories* (R workflow).
+
+### Practical Bayesian Workflow
+
+* **Gelman et al. (2020)** — *Bayesian Workflow* (arXiv).
+* **Gabry, Simpson, Vehtari, Betancourt, Gelman (2019)** — *Visualization in Bayesian Workflow*.
+
+## Stan 의 핵심 개념 통합
+
+### NUTS 의 작동
+
+```
+1. Initial state (theta, rho)
+2. Build trajectory using leapfrog
+3. Stop when trajectory makes U-turn
+4. Sample from trajectory weighted by Hamiltonian
+```
+
+### Autodiff 의 자동화
+
+Stan 컴파일러가 모델 코드 → log-posterior 함수 + gradient 함수 자동 생성.
+
+* **Forward mode**: $d \times$ 비용.
+* **Reverse mode**: 1 × 비용 (gradient 한 번).
+
+→ 사용자가 gradient 손으로 계산할 필요 없음.
+
+::: {.callout-tip}
+## 직관 — Autodiff 가 베이즈 추론을 변혁
+
+이전 (BUGS, JAGS): Gibbs 를 위한 conjugate 모델만 효율.
+
+이후 (Stan, PyMC, NumPyro): Autodiff 로 임의 모델 + HMC.
+
+따라서 모델 작성의 자유도 대폭 증가:
+
+* 비-conjugate prior 자유롭게.
+* GP·GP 변종.
+* Mixture·hierarchical mixture.
+* GLM·GAM·structural equation.
+
+Stan 이 베이즈의 표준 도구가 된 핵심 이유.
+:::
+
+### HMC 와 변분 추론 (VI) 의 비교
+
+| | HMC (NUTS) | Variational (ADVI) |
+|:----|:------|:------|
+| 정확도 | Asymptotically exact | 근사 |
+| 속도 | 느림 (초~분) | 빠름 (초) |
+| 모형 복잡성 | 임의 | 일부 제한 |
+| Posterior 형태 | 정확 | mean-field 가정 |
+
+→ 둘 다 Stan 에서 지원. 빠른 prototype 은 ADVI, 최종 inference 는 NUTS.
+
+## 실무 워크플로우 — Bayesian Workflow
+
+### 8 단계
+
+1. **Domain modeling**: 문제 정의, prior elicitation.
+2. **Computational model**: Stan code 작성.
+3. **Prior predictive check**: prior 만으로 시뮬레이션 → 합리적 데이터 분포?
+4. **Fitting**: NUTS sampling.
+5. **Convergence check**: Rhat, n_eff, divergent.
+6. **Posterior predictive check**: 데이터와 비교.
+7. **Comparison**: 여러 모델 (LOO, WAIC).
+8. **Iterate**: 문제 발견 → 모델 개선 → 반복.
+
+::: {.callout-tip}
+## 직관 — Workflow 가 모델보다 중요
+
+좋은 베이즈 분석 = 좋은 모델 + 좋은 workflow.
+
+**나쁜 workflow**:
+
+* 모델 한 번 fit.
+* 결과 받아들임.
+* "잘 되는 것 같다" 보고.
+
+**좋은 workflow**:
+
+* 단순 모델 → fit → check → 확장.
+* Convergence 점검, prior sensitivity, posterior predictive.
+* Multiple models 비교.
+* Iteration.
+
+8 schools 가 BDA 의 hierarchical 예제로 반복 등장하는 이유: workflow 의 모든 단계가 자연스럽게 적용 가능한 단순+풍부한 예제.
+:::
+
+## 코드 — 통합 Stan + PyMC 예제
+
+### Stan (rstan)
+
+```r
+library("rstan")
+
+J <- 8
+y <- c(28, 8, -3, 7, -1, 1, 18, 12)
+sigma <- c(15, 10, 16, 11, 9, 11, 10, 18)
+
+schools_fit <- stan(
+  file = "schools.stan",
+  data = c("J", "y", "sigma"),
+  iter = 2000,
+  chains = 4,
+  control = list(adapt_delta = 0.95)
+)
+
+# Convergence check
+print(schools_fit, pars = c("mu", "tau", "theta"))
+traceplot(schools_fit, pars = "tau")
+pairs(schools_fit, pars = c("mu", "tau", "eta[1]"))
+
+# Posterior predictive
+sims <- extract(schools_fit)
+y_rep <- matrix(NA, nrow = length(sims$mu), ncol = J)
+for (s in 1:length(sims$mu)) {
+  y_rep[s, ] <- rnorm(J, sims$theta[s, ], sigma)
+}
+```
+
+### PyMC (Python 대안)
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+J = 8
+y = np.array([28, 8, -3, 7, -1, 1, 18, 12])
+sigma = np.array([15, 10, 16, 11, 9, 11, 10, 18])
+
+with pm.Model() as schools_model:
+    # Hyperpriors
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfCauchy("tau", 25)
+
+    # Non-centered parameterization
+    eta = pm.Normal("eta", 0, 1, shape=J)
+    theta = pm.Deterministic("theta", mu + tau * eta)
+
+    # Likelihood
+    pm.Normal("y", theta, sigma, observed=y)
+
+    trace = pm.sample(2000, tune=2000, target_accept=0.95, chains=4)
+
+# Diagnostics
+print(az.summary(trace, var_names=["mu", "tau", "theta"]))
+az.plot_trace(trace, var_names=["mu", "tau"])
+az.plot_pair(trace, var_names=["mu", "tau", "eta"], divergences=True)
+
+# Posterior predictive
+with schools_model:
+    ppc = pm.sample_posterior_predictive(trace, var_names=["y"])
+```
+
+::: {.callout-tip}
+## 코드 가이드
+
+* **Stan**: 모델 파일 (`schools.stan`) + R script. `adapt_delta = 0.95` 로 divergent 회피.
+* **PyMC**: Python 한 파일에 모델·sampling·진단. `target_accept = 0.95` 로 NUTS step size 조정.
+* 두 결과가 거의 동일 — Stan 과 PyMC 모두 NUTS 사용.
+:::
+
+## 통합 체크리스트
+
+**모델 작성**
+
+1. **NCP 적용**: hierarchical 모델은 거의 항상.
+2. **Prior 선택**: weakly informative (half-Cauchy 등).
+3. **데이터 표준화**: numerical stability 위해.
+
+**Sampling**
+
+4. **Iterations**: warmup 1000 + sampling 1000 (default).
+5. **Chains**: 4 권장 (병렬 + 진단).
+6. **adapt_delta / target_accept**: divergent 발생 시 0.95~0.99 로 증가.
+
+**진단**
+
+7. **Rhat < 1.01** for all parameters.
+8. **n_eff > 100** for all important parameters (가능하면 > 1000).
+9. **Divergent transitions**: 1% 이상이면 모델 / parameterization 검토.
+10. **Pairs plot**: funnel·banana·multimodality 시각화.
+
+**검증**
+
+11. **Posterior predictive check**: data 와 ppc 분포 비교.
+12. **LOO / WAIC**: 모델 비교.
+13. **Prior sensitivity**: 다른 prior 로 fit 비교.
+
+**워크플로우**
+
+14. 단순 → 복잡 (incremental).
+15. 시뮬레이션된 데이터로 모델 검증 (simulation-based calibration).
+16. Documentation: 모델 결정 이유 기록.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Ch.5 § 5.4~5.5 — 8 Schools Hierarchical](./00-5-2-normal-eight-schools-meta.qmd) — 모델 자체
+* [Ch.10 — Bayesian Computation Intro](./02-10-0-computation-intro.qmd) — 일반 계산 framework
+* [Ch.11 — MCMC Basics](./02-11-0-mcmc-basics.qmd) — Metropolis, Gibbs
+* [Ch.12 — Efficient MCMC + HMC + Stan](./02-12-0-efficient-mcmc.qmd) — HMC 이론
+* [Ch.13 — Modal/Variational Approximations](./02-13-0-modal-variational-approximations.qmd) — VI 대안
+
+**Bayesian 시리즈**
+
+* [Part I (Ch.1~5)](./00-bayesian-part1-overview.qmd)
+* [Part II (Ch.6~9)](./01-bayesian-part2-overview.qmd)
+* [Part III (Ch.10~13)](./02-bayesian-part3-overview.qmd)
+* [Part IV (Ch.14~18)](./03-bayesian-part4-overview.qmd)
+* [Part V (Ch.19~23)](./04-bayesian-part5-overview.qmd)
+
+**관련 개념 (cross-category)**
+
+* [Hamiltonian Monte Carlo](../../Math/hmc.qmd)
+* [NUTS — No-U-Turn Sampler](../../Math/nuts.qmd)
+* [Automatic Differentiation](../../Math/autodiff.qmd)
+* [Probabilistic Programming Languages](../../Engineering/probabilistic-programming.qmd)
+* [Bayesian Workflow Best Practices](../../Data_Science/bayesian-workflow.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Appendix C. CRC Press.
+* Carpenter, B., Gelman, A., Hoffman, M. D., Lee, D., Goodrich, B., Betancourt, M., Brubaker, M., Guo, J., Li, P., & Riddell, A. (2017). Stan: A Probabilistic Programming Language. *Journal of Statistical Software*, 76(1), 1-32.
+* Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths in Hamiltonian Monte Carlo. *JMLR*, 15, 1593-1623.
+* Neal, R. M. (2011). MCMC Using Hamiltonian Dynamics. In *Handbook of Markov Chain Monte Carlo*, Brooks et al. (eds.). Chapman & Hall/CRC.
+* Betancourt, M. (2017). A Conceptual Introduction to Hamiltonian Monte Carlo. *arXiv:1701.02434*.
+* Betancourt, M., & Girolami, M. (2013). Hamiltonian Monte Carlo for Hierarchical Models. *arXiv:1312.0906*.
+* Gelman, A., Vehtari, A., Simpson, D., Margossian, C. C., Carpenter, B., Yao, Y., Kennedy, L., Gabry, J., Bürkner, P., & Modrák, M. (2020). Bayesian Workflow. *arXiv:2011.01808*.
+* Gabry, J., Simpson, D., Vehtari, A., Betancourt, M., & Gelman, A. (2019). Visualization in Bayesian Workflow. *JRSS A*, 182(2), 389-402.
+* Gelman, A., Hill, J., & Vehtari, A. (2020). *Regression and Other Stories*. Cambridge University Press.
+* Vehtari, A., Gelman, A., Simpson, D., Carpenter, B., & Bürkner, P. (2021). Rank-Normalization, Folding, and Localization: An Improved $\widehat R$ for Assessing Convergence of MCMC. *Bayesian Analysis*, 16(2), 667-718.
+* Stan Development Team (2024). *Stan User's Guide* and *Stan Reference Manual*. https://mc-stan.org/users/documentation/.
+* Salvatier, J., Wiecki, T. V., & Fonnesbeck, C. (2016). Probabilistic Programming in Python Using PyMC3. *PeerJ Computer Science*, 2, e55.
+* Phan, D., Pradhan, N., & Jankowiak, M. (2019). Composable Effects for Flexible and Accelerated Probabilistic Programming in NumPyro. *arXiv:1912.11554*.
+* Rubin, D. B. (1981). Estimation in Parallel Randomized Experiments. *Journal of Educational Statistics*, 6(4), 377-401. (8 schools 데이터 출처)
