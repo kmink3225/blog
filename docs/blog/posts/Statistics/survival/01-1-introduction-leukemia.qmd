@@ -1,0 +1,655 @@
+---
+title: "Klein Ch.1 § 1.1~1.2 심화 — Introduction · Acute Leukemia 6-MP Trial"
+subtitle: "시간-사건 데이터의 6 응용 분야 (medicine·biology·epidemiology·engineering·economics·demography)·중도절단/절단 5 유형의 직관적 정의·Freireich 1963 의 6-MP vs placebo matched-pair 임상시험·21 pair × 2 = 42 명 데이터 완전 분석·matched pair 설계의 통계적 함의·R survival + Python lifelines EDA"
+description: |
+  Klein & Moeschberger Ch.1 의 § 1.1 Introduction 과 § 1.2 Acute Leukemia 6-MP Trial 을 한 편으로 깊게 다룬다.
+  § 1.1 시간-사건 데이터의 6 가지 응용 분야 (의학·생물학·역학·공학·경제·인구학) 에서 같은 통계 도구가 통합되는 이유, 중도절단 (right·left·interval) 과 절단 (left·right) 의 5 유형 직관적 정의, 본 chapter 의 19 예제가 Ch.2~Ch.13 의 도구를 동기 부여하는 메커니즘.
+  § 1.2 Freireich et al. (1963) 의 6-mercaptopurine (6-MP) vs placebo 임상시험. 임상 배경 (prednisone induction → maintenance therapy 의 중요성, 6-MP 의 purine analog 메커니즘), matched-pair 설계 (11 미국 병원 × 병원·remission status 매칭 + 무작위 배정), Table 1.1 의 21 pair × 2 = 42 명 데이터 완전 정리, censoring 패턴의 비대칭성 (placebo 0 censored vs 6-MP 12 censored) 이 시사하는 효과의 강도, R `survival` 패키지 + Python `lifelines` 로 EDA 와 첫 KM 곡선 + log-rank test preview.
+  Matched-pair 설계의 통계적 함의 (within-pair variance reduction·stratified analysis 의 정당화), Klein 책 Ch.4 (KM/NA), Ch.6.4 (Bayesian density), Ch.7.5 (stratified log-rank), Ch.9.3 (stratified Cox) 4 곳에서 반복 사용되는 이유.
+categories:
+  - Statistics
+  - Survival Analysis
+  - Klein-Moeschberger
+  - Clinical-Trial
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 들어가며 — 본 편의 자리
+
+Klein 시리즈 사다리:
+
+| 편 | 주제 |
+|:---|:------|
+| [Ch.1 Overview (01)](./01-klein-ch1-examples.qmd) | 19 예제 catalog + 표준 데이터 구조 |
+| **§ 1.1~1.2 (본 편)** | **Introduction 본문 + 첫 핵심 데이터 (6-MP Leukemia)** |
+| § 1.3~1.10 (예정) | BMT·Dialysis·Breast·Burn 등 8 예제 |
+| § 1.11~1.19 (예정) | 추가 예제 |
+
+::: {.callout-important}
+## 본 편이 답하는 다섯 가지 질문
+
+1. 시간-사건 데이터가 의학·공학·경제 같은 **다른 분야** 에서 같은 통계 도구로 분석되는 이유는?
+2. 중도절단의 3 유형 (right·left·interval) 과 절단의 2 유형 (left·right) 을 **한 그림** 으로 구분할 수 있는가?
+3. **Freireich 1963 의 6-MP 임상시험** 이 왜 생존분석의 표준 예제가 되었는가? 의학적·통계적·역사적 가치?
+4. **Matched-pair 설계** 가 분석의 어느 단계 (KM·log-rank·Cox) 에서 어떤 효과를 주는가?
+5. 6-MP 그룹의 **압도적 censoring** (12/21 = 57%) 이 효과 추론에 어떻게 활용되는가?
+:::
+
+## § 1.1 Introduction — 시간-사건 데이터의 본질
+
+### 6 응용 분야의 통합
+
+Klein 책 첫 단락:
+
+> "The problem of analyzing time to event data arises in a number of applied fields, such as medicine, biology, public health, epidemiology, engineering, economics, and demography."
+
+::: {.callout-tip}
+## 직관 — 같은 도구, 다른 분야
+
+| 분야 | 사건 (event) | 시간 출발점 | censoring 발생 |
+|:---|:------|:------|:------|
+| **의학** | 사망·재발·완치 | 진단·치료 시점 | study 종료, follow-up 실패 |
+| **생물학** | 폐사·번식·발달 단계 | 출생·실험 시작 | 실험 종료 |
+| **역학** | 발병·감염 | 노출·등록 | follow-up 종료 |
+| **공학** | 고장·파손 | 가동 시작 | inspection 종료 |
+| **경제** | 실업·계약 종료·이탈 | 등록·고용 시작 | 추적 종료 |
+| **인구학** | 결혼·출산·이주 | 출생·연령 시작 | survey cutoff |
+
+**공통 추상화**:
+
+* 데이터: $(T_i, \delta_i, Z_i)$.
+* 모델 대상: $S(t), h(t), F(t)$.
+* 핵심 도구: KM, log-rank, Cox.
+
+→ 같은 코드가 의학 임상시험·공학 reliability·고객 churn analysis 모두에 작동.
+
+Klein 책의 focus 는 **biology and medicine** 이지만, 도구 자체는 분야 무관.
+:::
+
+### Censoring 의 3 유형 (Ch.3 에서 엄밀)
+
+```
+실제 사건 시점 T (모름)            관측 영역
+       |                              |
+
+Right Censoring (가장 흔함):
+  Study 시작                            관측 종료
+    |─────────────────────────────────|→ T (미관측)
+                                       ↑ T ≥ c (c = 종료 시점)
+
+Left Censoring (드물음):
+                              Study 시작
+    T → ←(과거)──────────────|─────────────
+                              ↑ T 가 이 시점 이전임만 알려짐
+
+Interval Censoring (정기 검진):
+  검진 1                  검진 2
+    |─────T──────────────|
+    ↑                    ↑
+    T_L ≤ T ≤ T_U
+```
+
+::: {.callout-note}
+## 직관 — 3 유형의 mental model
+
+* **Right**: 시간이 "오른쪽" (큰 값) 으로 알 수 없음. "$T \geq c$".
+* **Left**: 시간이 "왼쪽" (과거) 에 발생했음만 안다. "$T \leq c$".
+* **Interval**: 시간이 두 검진 사이 어딘가. "$T_L \leq T \leq T_U$".
+
+오른쪽이 가장 흔한 이유: study 종료 시 미발생자는 **모두 right censored**.
+
+좌측은 드물지만 발생: HIV 양성 진단된 환자의 감염 시점 (이미 과거).
+
+구간은 정기 검진 기반 연구 (cancer screening): 사건이 두 검진 사이에 발생.
+:::
+
+### Truncation 의 2 유형
+
+```
+Left Truncation (delayed entry):
+  실제 시작                   등록 시점         관측 종료
+       |─────●────────────────|─────────────|
+       ↑     ↑
+       0     이 시점 이전 사건자는 표본에 포함 안 됨
+
+Right Truncation:
+  실제 시작                                  관측 마감
+       |─────●─── 사건 발생 → 표본 포함 ✓     |
+       |─────────────── 사건 미발생 → 표본 제외 ✗
+                                              ↑
+                                              관측 마감 후 사건자 표본 못 됨
+```
+
+::: {.callout-important}
+## 직관 — Censoring vs Truncation 다시 정리
+
+| | Censoring | Truncation |
+|:---|:------|:------|
+| 본질 | 관측 불완전 | 표본 자체 편향 |
+| 처리 | likelihood 에 부분 정보 | 조건부 분포 |
+| 예제 | Right: 추적 종료 | Left: AIDS 진단 후 등록 |
+
+**Censoring** 은 개체가 **표본 안** 에 있고 정보 일부만 부족.
+
+**Truncation** 은 개체가 **표본 자체에 들어올 자격** 이 사건 발생에 의존.
+
+수학적 차이:
+
+* Censoring: $L = \prod f(T_i)^{\delta_i} S(T_i)^{1-\delta_i}$.
+* Left truncation: $L = \prod \frac{f(T_i)^{\delta_i} S(T_i)^{1-\delta_i}}{S(L_i)}$ — denominator 가 truncation 보정.
+
+Klein Ch.3 에서 정확히.
+:::
+
+## § 1.2 Acute Leukemia 6-MP Trial — 임상 시험 배경
+
+### 연구 (Freireich et al. 1963)
+
+* **저자**: Emil J Freireich, Edmund A Gehan, Emil Frei III, et al.
+* **출판**: *Blood* (American Society of Hematology), 1963년 6월.
+* **임상기관**: 11 개 미국 병원의 협력 임상시험 (multi-center).
+* **대상**: 42 명의 급성 백혈병 (acute leukemia) 소아 환자.
+
+### 의학적 배경
+
+#### 급성 백혈병의 1960 년대 치료 패러다임
+
+1950 년대 말 ~ 1960 년대 초:
+
+* **Prednisone (corticosteroid)**: 백혈병 induction (관해 유도) 에 효과.
+* 그러나 모든 환자가 결국 **재발 (relapse)**.
+* 의문: **maintenance therapy** (관해 유지 치료) 가 재발을 막을 수 있는가?
+
+#### 6-Mercaptopurine (6-MP)
+
+* **분류**: purine analog (퓨린 유사체).
+* **메커니즘**: DNA 합성에 필요한 purine 의 모방체. 백혈병 세포 분열 억제.
+* **개발**: Gertrude Elion (1988 노벨 의학상).
+* **가설**: 관해된 환자에게 6-MP 유지 → 재발 시간 지연.
+
+::: {.callout-tip}
+## 직관 — Maintenance Therapy 라는 발상
+
+당시 (1960 년) 의 임상 패러다임:
+
+* "관해 = 치료 성공" → 환자 퇴원.
+* 재발 시 → 다시 induction → 다시 관해 → 반복.
+
+Freireich 의 발상 전환:
+
+* 관해된 환자도 미세 잔존 백혈병 세포가 있을 것.
+* **관해 동안에도 약을 유지** → 재발 지연 또는 예방.
+
+오늘날의 표준 치료 패러다임 (induction → consolidation → maintenance) 의 **출발점**.
+:::
+
+### Matched-Pair 설계
+
+```
+임상시험 절차:
+
+1. 11 미국 병원에서 환자 등록.
+2. Prednisone 으로 induction → 관해 (complete or partial).
+3. 같은 병원의 환자 2 명을 매칭:
+   - 같은 병원
+   - 같은 remission status (complete vs partial)
+4. 매칭된 pair 안에서 무작위 배정:
+   - 한 명: 6-MP maintenance.
+   - 다른 한 명: placebo maintenance.
+5. 재발 (사건) 또는 study 종료까지 추적.
+```
+
+::: {.callout-tip}
+## 직관 — Matched-Pair 설계의 가치
+
+**왜 매칭?**
+
+* 병원: 표준 치료 프로토콜 동일.
+* Remission status: baseline 차이 통제 (complete remission > partial remission).
+
+매칭의 효과:
+
+* **변동 감소**: pair 내 baseline 차이가 작음 → treatment effect 분리 명확.
+* **혼란 변수 통제**: 명시적 covariate 측정 없이도 통제.
+* **검정력 증가**: same n 에서 더 큰 statistical power.
+
+**무작위 배정** (within pair):
+
+* Treatment assignment bias 회피.
+* Causal inference 의 기반.
+
+이는 **Fisher 의 randomized block design** 의 임상 버전.
+:::
+
+### Table 1.1 — 데이터 완전
+
+원본 데이터 (월 단위, `+` = censored):
+
+| Pair | Remission Status | Placebo | 6-MP |
+|:---:|:---|:---:|:---:|
+| 1 | Partial | 1 | 10 |
+| 2 | Complete | 22 | 7 |
+| 3 | Complete | 3 | 32+ |
+| 4 | Complete | 12 | 23 |
+| 5 | Complete | 8 | 22 |
+| 6 | Partial | 17 | 6 |
+| 7 | Complete | 2 | 16 |
+| 8 | Complete | 11 | 34+ |
+| 9 | Complete | 8 | 32+ |
+| 10 | Complete | 12 | 25+ |
+| 11 | Complete | 2 | 11+ |
+| 12 | Partial | 5 | 20+ |
+| 13 | Complete | 4 | 19+ |
+| 14 | Complete | 15 | 6 |
+| 15 | Complete | 8 | 17+ |
+| 16 | Partial | 23 | 35+ |
+| 17 | Partial | 5 | 6 |
+| 18 | Complete | 11 | 13 |
+| 19 | Complete | 4 | 9+ |
+| 20 | Complete | 1 | 6+ |
+| 21 | Complete | 8 | 10+ |
+
+### 첫 관찰
+
+* **Placebo (n = 21)**:
+  - 사건 (재발): 21/21 = 100%.
+  - Censored: 0.
+  - Range: 1~23 개월. 평균 ≈ 8.7.
+
+* **6-MP (n = 21)**:
+  - 사건 (재발): 9/21 = 43%.
+  - Censored: 12/21 = 57%.
+  - Range: 6~35 개월. 평균 (관측만) ≈ 17.
+
+::: {.callout-important}
+## 직관 — Censoring 패턴의 비대칭성
+
+**Placebo 0 censored**:
+
+* 모든 placebo 환자가 study 안에서 재발.
+* Treatment 가 약해서 재발이 일찍 발생.
+
+**6-MP 12 censored**:
+
+* 절반 이상이 study 종료까지 재발 안 함.
+* Treatment 가 효과적이어서 재발 지연.
+
+**역설적 통찰**:
+
+* Censoring 비율이 **그룹 차이의 강한 신호**.
+* 일반 회귀라면 censored 데이터를 버리거나 잘못 사용.
+* 생존분석은 censoring 자체를 **정보** 로 활용.
+
+→ 6-MP 의 효과는 **단순 평균 비교 (8.7 vs 17)** 보다 더 큼.
+실제 KM 추정 사후 6-MP 의 median survival 이 alived 절반에 도달 안 할 수 있음.
+:::
+
+### Pair-Level 시각화 (직관)
+
+```
+Pair 1:  P●1 ────────●6MP10        (6-MP 가 더 길게 생존)
+Pair 2:  P●22 ───●6MP7              (placebo 가 더 길게 — 예외)
+Pair 3:  P●3 ─────────────●6MP32+   (6-MP censored at 32)
+Pair 4:  P●12 ──────●6MP23
+...
+```
+
+대부분 pair 에서 6-MP 가 더 길게 생존 → 그룹 효과의 시각적 증거.
+
+### 데이터 사용 매핑 (Klein 책 전체)
+
+| Chapter | 사용 |
+|:---:|:------|
+| **Ch.4** | Kaplan-Meier·Nelson-Aalen 의 **첫** 비모수 추정 예제 |
+| **Ch.6.4** | Bayesian density estimation (Dirichlet process) 시연 |
+| **Ch.7.5** | Stratified log-rank test (matched pair stratification) |
+| **Ch.9.3** | Stratified Cox proportional hazards model |
+
+이 데이터가 4 chapter 에 등장하는 이유:
+
+1. **단순 + 풍부**: 작은 데이터지만 censoring·matching·effect 모두 포함.
+2. **역사적 가치**: 의학적 의의 + 통계적 모범.
+3. **Pedagogical**: 손계산 가능 (21 + 21 점).
+
+## R + Python EDA
+
+### R — `survival` 패키지
+
+```r
+library(survival)
+library(survminer)
+library(ggplot2)
+
+# 데이터 (Klein Table 1.1)
+leukemia <- data.frame(
+  pair = rep(1:21, each = 2),
+  group = rep(c("placebo", "6-MP"), 21),
+  remission = rep(c("Partial", "Complete", "Complete", "Complete", "Complete",
+                    "Partial", "Complete", "Complete", "Complete", "Complete",
+                    "Complete", "Partial", "Complete", "Complete", "Complete",
+                    "Partial", "Partial", "Complete", "Complete", "Complete",
+                    "Complete"), each = 2),
+  time = c(1, 10, 22, 7, 3, 32, 12, 23, 8, 22, 17, 6, 2, 16, 11, 34, 8, 32,
+           12, 25, 2, 11, 5, 20, 4, 19, 15, 6, 8, 17, 23, 35, 5, 6, 11, 13,
+           4, 9, 1, 6, 8, 10),
+  status = c(1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0,
+             1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0)
+)
+
+# 그룹별 요약
+table(leukemia$group, leukemia$status)
+#          0  1
+# 6-MP    12  9
+# placebo  0 21
+
+# Kaplan-Meier 추정
+km_fit <- survfit(Surv(time, status) ~ group, data = leukemia)
+print(km_fit)
+# records  n.max  events  median  0.95LCL  0.95UCL
+# 6-MP        21    21     9      23       16       NA
+# placebo     21    21    21       8        4       12
+
+# KM curve
+ggsurvplot(
+  km_fit, data = leukemia,
+  risk.table = TRUE, conf.int = TRUE,
+  pval = TRUE, palette = c("blue", "red"),
+  xlab = "Months", ylab = "Survival probability",
+  legend.title = "Group", legend.labs = c("6-MP", "placebo")
+)
+
+# Log-rank test (unstratified)
+survdiff(Surv(time, status) ~ group, data = leukemia)
+# Chisq = 16.79, p = 4.17e-05
+
+# Stratified log-rank (matched pair 활용)
+survdiff(Surv(time, status) ~ group + strata(pair), data = leukemia)
+```
+
+### Python — `lifelines` 패키지
+
+```python
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from lifelines import KaplanMeierFitter
+from lifelines.statistics import logrank_test, multivariate_logrank_test
+
+# 데이터
+leukemia = pd.DataFrame({
+    "pair": np.repeat(range(1, 22), 2),
+    "group": ["placebo", "6-MP"] * 21,
+    "remission": np.repeat(
+        ["Partial", "Complete", "Complete", "Complete", "Complete",
+         "Partial", "Complete", "Complete", "Complete", "Complete",
+         "Complete", "Partial", "Complete", "Complete", "Complete",
+         "Partial", "Partial", "Complete", "Complete", "Complete",
+         "Complete"], 2),
+    "time": [1, 10, 22, 7, 3, 32, 12, 23, 8, 22, 17, 6, 2, 16, 11, 34, 8, 32,
+             12, 25, 2, 11, 5, 20, 4, 19, 15, 6, 8, 17, 23, 35, 5, 6, 11, 13,
+             4, 9, 1, 6, 8, 10],
+    "status": [1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0,
+               1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0]
+})
+
+# 그룹별 요약
+print(leukemia.groupby("group")["status"].agg(
+    events=lambda x: x.sum(),
+    censored=lambda x: (x == 0).sum(),
+    n=lambda x: len(x),
+))
+#         events  censored  n
+# 6-MP         9        12  21
+# placebo     21         0  21
+
+# Kaplan-Meier 추정
+fig, ax = plt.subplots(figsize=(9, 6))
+for grp, color in [("placebo", "red"), ("6-MP", "blue")]:
+    sub = leukemia[leukemia["group"] == grp]
+    kmf = KaplanMeierFitter()
+    kmf.fit(sub["time"], sub["status"], label=grp)
+    kmf.plot_survival_function(ax=ax, color=color)
+    print(f"{grp}: median survival = {kmf.median_survival_time_}")
+
+ax.set_xlabel("Months")
+ax.set_ylabel("Survival probability")
+ax.set_title("Acute Leukemia: 6-MP vs Placebo (Freireich 1963)")
+ax.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("freireich_km.png", dpi=100)
+
+# Log-rank test
+result = logrank_test(
+    leukemia[leukemia["group"] == "placebo"]["time"],
+    leukemia[leukemia["group"] == "6-MP"]["time"],
+    leukemia[leukemia["group"] == "placebo"]["status"],
+    leukemia[leukemia["group"] == "6-MP"]["status"]
+)
+print(f"Log-rank test: chi^2 = {result.test_statistic:.3f}, p = {result.p_value:.4e}")
+# chi^2 = 16.79, p = 4.17e-05
+
+# Pair-level 시각화 (strip plot)
+fig, ax = plt.subplots(figsize=(10, 7))
+for i, row in leukemia.iterrows():
+    color = "red" if row["group"] == "placebo" else "blue"
+    marker = "o" if row["status"] == 1 else "s"
+    y_pos = row["pair"] + (0.15 if row["group"] == "6-MP" else -0.15)
+    ax.scatter(row["time"], y_pos, c=color, marker=marker, s=80,
+               edgecolors="black", linewidths=0.5)
+ax.set_xlabel("Time (months)")
+ax.set_ylabel("Pair")
+ax.set_yticks(range(1, 22))
+ax.legend(["placebo (event)", "6-MP (event)", "censored"], loc="upper right")
+plt.tight_layout()
+plt.savefig("freireich_strip.png", dpi=100)
+```
+
+### EDA 결과 해석
+
+#### Median Survival
+
+* **Placebo**: 8 개월.
+* **6-MP**: 23 개월 (관측), 그러나 **upper bound 가 무한** — 사후 12 명의 censored 가 23+ 이상.
+
+::: {.callout-tip}
+## 직관 — Median Survival 해석
+
+**Placebo median 8 개월**: 절반 환자가 8 개월 안에 재발.
+
+**6-MP median 23 개월**: 절반이 23 개월까지 재발 안 함.
+
+**비율 차이**: 6-MP 가 placebo 의 약 **3 배** 재발 지연.
+
+**Note**: 6-MP 의 median 추정의 신뢰구간 [16, ∞] — 너무 많은 censored 로 upper bound 무한대.
+
+이는 **6-MP 의 효과가 너무 커서 study duration 이 짧다** 는 의미. 더 긴 추적이 있으면 더 정확한 median 추정 가능.
+:::
+
+#### Log-Rank Test
+
+* **Statistic**: $\chi^2 = 16.79$, df = 1.
+* **p-value**: $4.17 \times 10^{-5}$ (매우 유의).
+
+→ 두 그룹의 생존 분포가 통계적으로 명확히 다름.
+
+::: {.callout-note}
+## 통계적 vs 의학적 의의
+
+**통계적 유의** (p < 0.001): "두 그룹이 다르다" 의 strong evidence.
+
+**의학적 의의**:
+
+* 1963 년 당시 **standard of care 변경** 의 evidence.
+* Maintenance therapy 가 일반적이지 않던 시대 → 이 연구로 **6-MP maintenance 표준화**.
+* 이후 다른 leukemia (ALL 소아) 의 maintenance 연구 표준 설계.
+
+따라서 이 데이터는 **single small study** 가 어떻게 임상 표준을 바꾸는지의 모범.
+:::
+
+## Matched-Pair 설계의 통계적 함의
+
+### Within-Pair Variance Reduction
+
+각 pair $j$ 의 placebo 와 6-MP 의 baseline 가 매칭됨 → pair 내 차이가 **treatment effect 만**.
+
+수학적:
+
+$$
+T_{j,\text{placebo}} - T_{j,\text{6-MP}} = \text{baseline}_j - \text{baseline}_j + \text{effect} + \epsilon_j = \text{effect} + \epsilon_j
+$$
+
+* Baseline (병원·remission status) 가 cancel out.
+* $\epsilon_j$ = pair 내 random variation.
+* Variance 가 unmatched 보다 작음.
+
+### Stratified Analysis 의 정당화
+
+Matched-pair → 각 pair 를 별도 stratum.
+
+**Unstratified log-rank**: 모든 pair 를 무시, 그룹별 비교.
+
+**Stratified log-rank** (Ch.7.5): pair 를 stratum 으로 이용.
+
+* 같은 pair 내 비교 정보 활용.
+* 작은 pair 의 영향 averaging.
+
+::: {.callout-tip}
+## 직관 — Stratified vs Unstratified Log-Rank
+
+이 데이터에서:
+
+* **Unstratified**: $\chi^2 = 16.79, p = 4.17e-05$.
+* **Stratified by pair**: 비슷한 결과.
+
+이유: matched-pair design 이지만 pair 간 baseline 차이가 작음 (모두 prednisone induction 후 관해).
+
+따라서 unstratified 와 stratified 결과 비슷. **Pair stratification 의 가치는 매칭이 baseline 차이를 강하게 줄였을 때 명확**.
+
+복잡한 multi-center 임상시험 (병원 간 standard care 차이가 큼) 에서는 pair stratification 의 효과 큼.
+:::
+
+## 6-MP 임상시험의 역사적 의의
+
+### 1960 년대 임상시험의 표준 모델
+
+* **Multi-center**: 11 병원 협력 — 일반화 가능성.
+* **Randomized**: 무작위 배정 — bias 회피.
+* **Matched**: 병원·remission status 매칭 — variance 감소.
+* **Maintenance hypothesis**: 새로운 치료 패러다임 검증.
+
+이 4 가지 요소가 **이후 임상시험의 표준 청사진**.
+
+### Statistical Methods 발전 동기
+
+* Freireich 1963 의 데이터를 분석하기 위해:
+  - **Kaplan-Meier (1958)** 가 이미 있었으나 censoring 처리에 적용 시연.
+  - **Mantel-Haenszel log-rank (1959, 1966)** 의 표준 예제.
+  - **Cox proportional hazards (1972)** 의 motivation 데이터 중 하나.
+
+→ 이 데이터가 **현대 생존분석 도구 발전의 동기**.
+
+### Gertrude Elion (6-MP 개발자)
+
+* 1988 년 노벨 생리·의학상 수상 (rational drug design).
+* 6-MP 외에도 azathioprine·acyclovir·AZT 개발에 기여.
+* 6-MP 는 leukemia 외 IBD·이식 거부 반응 치료에도 사용.
+
+::: {.callout-tip}
+## 직관 — 한 데이터셋의 무게
+
+42 명의 작은 데이터지만:
+
+* **의학사**: maintenance therapy 표준 정립.
+* **통계학**: 4 개 핵심 도구의 표준 예제.
+* **약물학**: 6-MP 의 광범위 응용 (현재까지).
+* **임상시험 설계**: matched-pair multicenter 의 청사진.
+
+→ 데이터의 **크기** 가 아닌 **질** 이 영향력 결정.
+:::
+
+## 핵심 직관 통합
+
+**시간-사건 데이터의 통합 원리**:
+
+* 의학·공학·경제 — 같은 추상화 $(T_i, \delta_i, Z_i)$.
+* 분야는 다르되 도구는 같음.
+
+**Censoring 의 정보 가치**:
+
+* Censoring 자체가 **그룹 차이의 신호**.
+* 6-MP 12 censored vs placebo 0 censored 의 비대칭성이 효과의 강도를 시사.
+
+**Matched-Pair 의 통계적 함의**:
+
+* Variance reduction.
+* Stratified analysis 의 정당화.
+* Causal inference 의 기반.
+
+**역사적 가치**:
+
+* 한 작은 데이터셋이 의학 패러다임과 통계 도구를 동시에 발전.
+
+## 실전 체크리스트 — § 1.1~1.2
+
+**§ 1.1 응용 분야 인식**
+
+1. 시간-사건 데이터의 6 분야 응용 인지.
+2. Censoring 3 유형 (right·left·interval) 구분.
+3. Truncation 2 유형 (left·right) 구분.
+4. Censoring vs Truncation 의 본질적 차이.
+
+**§ 1.2 6-MP 데이터 분석**
+
+5. **임상 배경** 이해 (maintenance therapy 의 의의).
+6. **Matched-pair 설계** 의 이유 인지 (variance reduction + bias 통제).
+7. Table 1.1 의 21 pair × 2 데이터 정확히 로드.
+8. **Censoring 패턴** 의 비대칭성 (12 vs 0) 의 의미 해석.
+9. **KM curve** 그리고 두 그룹 비교.
+10. **Log-rank test** 로 통계적 유의성 검정.
+11. **Stratified log-rank** 로 pair 효과 확인.
+
+**EDA**
+
+12. 그룹별 events·censored·n 요약.
+13. Median survival 비교.
+14. KM curve + confidence band 시각화.
+15. Pair-level strip plot (직관 시각화).
+
+**다음 단계**
+
+16. § 1.3 (Bone Marrow Transplant) 으로 multistate model 예고.
+17. Ch.4 (KM·NA) 가 본 데이터의 첫 깊은 분석.
+18. Ch.7.5 (stratified log-rank) 가 matched-pair 의 정확한 분석.
+
+## 관련 주제
+
+**Klein 시리즈**
+
+* [Ch.1 Overview — Examples of Survival Data](./01-klein-ch1-examples.qmd)
+* (다음) § 1.3~1.10 (예정) — BMT·Dialysis·Breast·Burn 등
+
+**입문 자료**
+
+* [생존 분석 개요 (Kleinbaum 기반)](./survival-overview.qmd)
+
+**관련 개념 (cross-category)**
+
+* [Randomized Block Design (Fisher)](../../Experimentation/randomized-block.qmd)
+* [Matched-Pair Designs](../../Experimentation/matched-pair.qmd)
+* [Mantel-Haenszel Test](../../Math/mantel-haenszel.qmd)
+* [Maintenance Therapy in Clinical Trials](../../Data_Science/clinical-trial-design.qmd)
+
+## 참고문헌
+
+* Klein, J. P., & Moeschberger, M. L. (2003). *Survival Analysis: Techniques for Censored and Truncated Data* (2nd ed.), Ch.1 § 1.1~1.2. Springer.
+* Freireich, E. J., Gehan, E. A., Frei, E. III, et al. (1963). The Effect of 6-Mercaptopurine on the Duration of Steroid-Induced Remissions in Acute Leukemia: A Model for Evaluation of Other Potentially Useful Therapy. *Blood*, 21(6), 699-716.
+* Elion, G. B. (1989). Nobel Lecture: The Purine Path to Chemotherapy. *Science*, 244(4900), 41-47.
+* Kaplan, E. L., & Meier, P. (1958). Nonparametric Estimation from Incomplete Observations. *JASA*, 53(282), 457-481.
+* Mantel, N., & Haenszel, W. (1959). Statistical Aspects of the Analysis of Data from Retrospective Studies of Disease. *JNCI*, 22(4), 719-748.
+* Mantel, N. (1966). Evaluation of Survival Data and Two New Rank Order Statistics Arising in Its Consideration. *Cancer Chemotherapy Reports*, 50(3), 163-170.
+* Cox, D. R. (1972). Regression Models and Life-Tables. *JRSS B*, 34(2), 187-220.
+* Therneau, T. M., & Grambsch, P. M. (2000). *Modeling Survival Data: Extending the Cox Model*. Springer.
+* Davidson-Pilon, C. (2019). lifelines: Survival Analysis in Python. *Journal of Open Source Software*, 4(40), 1317.
+* Hill, A. B. (1937, reprinted 1971). *Principles of Medical Statistics* (9th ed.). Lancet. (임상시험 설계 고전)
+* Pocock, S. J. (1983). *Clinical Trials: A Practical Approach*. Wiley.
