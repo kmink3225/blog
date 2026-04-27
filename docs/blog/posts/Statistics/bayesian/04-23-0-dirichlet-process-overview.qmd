@@ -1,0 +1,796 @@
+---
+title: "Ch.23 Overview — Dirichlet Process Models"
+subtitle: "Part V 마지막 관문: 식 (23.1) DP 정의·식 (23.2) Bayes 추정·식 (23.3) stick-breaking·식 (23.4)~(23.5) DP mixture·식 (23.6)~(23.7) Polya urn / Chinese Restaurant Process·blocked Gibbs sampler·toxicology·HDP·NDP·식 (23.21) density regression"
+description: |
+  Gelman BDA Ch.23 의 7개 절을 한 편으로 조망한다.
+  Ch.22 의 finite mixture ($H$ 유한) 에서 한 단계 더 — $H \to \infty$ 한계로 보내 분포 자체에 사전분포를 부여하는 비모수 베이즈의 완성.
+  § 23.1 Bayesian histogram 의 Dirichlet conjugate 로 motivation,
+  § 23.2 식 (23.1) DP 정의·식 (23.2) Bayes 추정량의 base + empirical 가중 평균·Bayesian bootstrap·식 (23.3) stick-breaking 으로 random measure 의 명시적 구성·DP 의 discreteness 라는 본질적 한계,
+  § 23.3 DP mixture 의 식 (23.4) kernel mixture·식 (23.5) infinite kernel mixture·식 (23.6)~(23.7) Polya urn 예측 규칙과 Chinese Restaurant Process metaphor·marginal Gibbs vs blocked Gibbs·toxicology mouse implant·hyperprior on $\alpha$·$P_0$ 의 변동성 함정,
+  § 23.4 식 (23.10) nonparametric residual 회귀·식 (23.11)~(23.13) ANOVA random effect 의 비모수화·FDA 의 functional clustering,
+  § 23.5 hierarchical dependence — Hierarchical DP (HDP) 의 group 간 atom 공유·Nested DP 식 (23.17)~(23.18) 의 distribution clustering·식 (23.19)~(23.20) convex mixture·dynamic mixture,
+  § 23.6 식 (23.21) mixture of experts·dependent stick-breaking·kernel stick-breaking·probit stick-breaking 의 density regression,
+  § 23.7 핵심 문헌. Ch.22 의 sparse Dirichlet $a = n_0/H$ 한계로 자연스럽게 연결되는 비모수 베이즈의 완성.
+categories:
+  - Statistics
+  - Bayesian
+  - Dirichlet-Process
+  - Nonparametric-Bayes
+  - Stick-Breaking
+  - HDP
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 개요 — Part V 사다리의 마지막
+
+Part V 의 다섯 번째 (마지막) 관문:
+
+* [**Ch.19** Parametric Nonlinear](./04-19-0-parametric-nonlinear-overview.qmd) — 도메인 이론 수식.
+* [**Ch.20** Basis Function](./04-20-0-basis-function-models-overview.qmd) — 미리 정한 $H$ basis 가중합.
+* [**Ch.21** Gaussian Process](./04-21-0-gaussian-process-overview.qmd) — 함수 자체의 무한 사전.
+* [**Ch.22** Finite Mixture](./04-22-0-finite-mixture-overview.qmd) — $H$ 유한 분포 가중합.
+* **Ch.23 Dirichlet Process (본편)** — $H \to \infty$ 분포 자체의 무한 사전.
+
+::: {.callout-important}
+## Ch.23 의 한 줄 요약
+
+**"Dirichlet 분포를 무한 차원으로 일반화한 Dirichlet Process (DP) 를 미지의 분포 $P$ 자체에 대한 사전분포로 사용하면, mixture component 수를 미리 정하지 않고 데이터가 cluster 수를 결정하는 비모수 베이즈 모형이 된다."**
+
+Ch.22 의 sparse Dirichlet $a = n_0/H$ 한계 ($H \to \infty$) 가 정확히 DP — Ch.22 가 finite approximation, Ch.23 이 본체.
+:::
+
+### Ch.22 vs Ch.23 비교
+
+| 측면 | Ch.22 Finite Mixture | Ch.23 Dirichlet Process |
+|------|-------|-------|
+| 사전분포 대상 | $H$ component 가중합 | 분포 $P$ 자체 |
+| Components | 유한 $H$ (사전 결정) | 무한 (자동) |
+| Sparse mechanism | $a = n_0/H$ Dirichlet | Stick-breaking $V_h \sim \text{Beta}(1, \alpha)$ |
+| RJMCMC 필요? | 예 (ranging $H$) 또는 truncated | 불필요 (Polya urn) |
+| Marginal predictive | 식 + multinomial | 식 (23.6) Polya urn / CRP |
+| Cluster 수 사후 | $H_n$ on truncated | 자동, $E[k_n] = O(\alpha \log n)$ |
+| Limit | $H \to \infty, a \to 0$ | DP 그 자체 |
+
+::: {.callout-tip}
+## 직관 — DP 가 자연스러운 이유
+
+Ch.22 finite mixture 는 두 결정 필요:
+
+1. $H$ (component 수).
+2. $\lambda$ (mixing weights).
+
+$H$ 결정이 어렵다 → truncated upper bound + sparse Dirichlet → 그러나 여전히 $H$ 가 hyperparameter.
+
+DP 는 $H = \infty$ 로 보낸 뒤 **stick-breaking 이 자동으로 sparsity 부여**:
+
+$$
+\pi_h = V_h \prod_{l < h}(1 - V_l), \qquad V_h \sim \text{Beta}(1, \alpha)
+$$
+
+처음 몇 component 가 큰 weight, 뒤로 갈수록 기하급수적 감소. **무한 component 지만 effectively 유한 cluster 사용**.
+:::
+
+## Ch.23 의 논리 지도
+
+| 절 | 핵심 질문 | 주요 결과 |
+|:---:|:------|:-----|
+| § 23.1 | **Bayesian histogram 이 어떻게 motivation?** | Dirichlet conjugate, bin 개수 sensitivity |
+| § 23.2 | **Bin 없이 무한 차원 분포 prior?** | 식 (23.1)~(23.2)·식 (23.3) stick-breaking·Bayesian bootstrap |
+| § 23.3 | **DP 가 mixture 모델의 mixing measure?** | 식 (23.4)~(23.7) Polya urn / CRP·blocked Gibbs·toxicology |
+| § 23.4 | **DP 를 다른 hierarchical 부품으로?** | 식 (23.10)~(23.13) nonparametric residual / ANOVA / FDA |
+| § 23.5 | **여러 그룹의 분포에 dependence?** | HDP·NDP 식 (23.17)~(23.18)·convex mixture |
+| § 23.6 | **연속 predictor 의 density regression?** | 식 (23.21) mixture of experts·kernel·probit stick-breaking |
+| § 23.7 | Bibliographic | Ferguson·Sethuraman·Escobar-West |
+
+## § 23.1 Bayesian Histograms — Motivation
+
+### Histogram 의 베이즈 표현
+
+Pre-specified knots $\xi_0 < \xi_1 < \cdots < \xi_k$, $y_i \in [\xi_0, \xi_k]$:
+
+$$
+f(y) = \sum_{h=1}^k 1_{\xi_{h-1} < y \leq \xi_h} \frac{\pi_h}{\xi_h - \xi_{h-1}}
+$$
+
+* 각 bin $(\xi_{h-1}, \xi_h]$ 안에서 균등 밀도 $\pi_h / (\xi_h - \xi_{h-1})$.
+* $\sum_h \pi_h = 1$.
+
+### Dirichlet Prior + 사후
+
+$\pi \sim \text{Dirichlet}(a_1, \ldots, a_k)$, $a = \alpha \pi_0$ (mean × scale).
+
+$n_h = \sum_i 1_{\xi_{h-1} < y_i \leq \xi_h}$ — bin $h$ 의 관측 수.
+
+**사후**:
+
+$$
+\pi \mid y \sim \text{Dirichlet}(a_1 + n_1, \ldots, a_k + n_k)
+$$
+
+::: {.callout-tip}
+## 직관 — Bayes histogram 의 한계가 DP 동기
+
+장점:
+
+* Conjugate, closed form.
+* Prior 정보 통합 가능.
+
+한계:
+
+* **Knot 위치·개수에 민감**.
+* 다변량 시 bin 폭발 (curse of dimensionality).
+* 인접 bin 간 smoothing 부재 (Dirichlet 은 음의 상관).
+
+해결 방향: **bin 격자 자체를 적분 소거** → Dirichlet **process** 로 진화. Knot 의 존재가 DP 정의 자체에서 사라짐.
+:::
+
+## § 23.2 Dirichlet Process Prior
+
+### 식 (23.1) DP 의 정의
+
+샘플 공간 $\Omega$ 의 임의의 측정 가능 분할 $B_1, \ldots, B_k$ 에 대해:
+
+$$
+P(B_1), \ldots, P(B_k) \sim \text{Dirichlet}\bigl(\alpha P_0(B_1), \ldots, \alpha P_0(B_k)\bigr) \quad (23.1)
+$$
+
+* $P_0$ = base measure (분포의 사전 평균).
+* $\alpha > 0$ = precision (집중 모수).
+
+이 조건을 **모든 가능한 분할** 에서 만족하는 random probability measure $P$ 가 존재 (Kolmogorov 일관성) → **$P \sim \text{DP}(\alpha P_0)$**.
+
+::: {.callout-note}
+## 직관 — DP 의 이중 표현
+
+Dirichlet 분포는 simplex 위의 분포 (유한 차원). DP 는 무한 차원으로 확장:
+
+* "**$P$ 의 임의의 partition 에서의 marginal probabilities** 가 항상 finite Dirichlet" 로 정의 — partition-invariant.
+* Bin 없이 정의되므로 다변량·연속에 자연.
+
+이중 정의:
+
+1. **Partition-based** (식 23.1) — 모든 partition 의 일관성.
+2. **Stick-breaking** (식 23.3) — 명시적 구성.
+
+두 정의가 같은 random measure 임이 Sethuraman (1994) 의 핵심 정리.
+:::
+
+### 식 (23.2) — 사후와 Bayes 추정
+
+$y_i \stackrel{iid}{\sim} P$, $P \sim \text{DP}(\alpha P_0)$:
+
+$$
+P \mid y_1, \ldots, y_n \sim \text{DP}\Bigl(\alpha P_0 + \sum_i \delta_{y_i}\Bigr)
+$$
+
+→ **DP 도 conjugate**. Updated precision = $\alpha + n$.
+
+Squared error loss 하 Bayes 추정:
+
+$$
+E(P(B) \mid y^n) = \frac{\alpha}{\alpha + n} P_0(B) + \frac{n}{\alpha + n} \cdot \frac{1}{n}\sum_i \delta_{y_i}(B) \quad (23.2)
+$$
+
+::: {.callout-tip}
+## 직관 — Base + Empirical 의 가중 평균
+
+식 (23.2) 는 **base measure 와 empirical 분포의 가중 평균**:
+
+* $\alpha$ 큼 (정보적 prior): $P_0$ 비중 큼, 데이터 무시 경향.
+* $\alpha$ 작음 (약정보 prior): empirical 비중 큼, 데이터에 가까움.
+* $n \to \infty$: $\alpha/(\alpha + n) \to 0$, **사후가 empirical 로 수렴**.
+
+따라서 DP 는 **prior 가 약하면 empirical bootstrap 으로 회귀**, 강하면 base 로.
+:::
+
+### Bayesian Bootstrap — $\alpha \to 0$ 한계
+
+$\alpha \to 0$ 이면:
+
+$$
+P \mid y^n \sim \text{DP}\Bigl(\sum_i \delta_{y_i}\Bigr)
+$$
+
+Discrete distribution at observed $y_i$ with **Dirichlet weights** = **Bayesian bootstrap** (Rubin 1981).
+
+비교: classical bootstrap 은 multinomial weight (각 $y_i$ 에 균일 1/n 또는 resample), Bayesian bootstrap 은 Dirichlet 으로 부드러움.
+
+### 식 (23.3) Stick-Breaking Construction
+
+$P \sim \text{DP}(\alpha P_0)$ 의 명시적 구성:
+
+$$
+P(\cdot) = \sum_{h=1}^\infty \pi_h \delta_{\theta_h}(\cdot), \quad \pi_h = V_h \prod_{l < h}(1 - V_l), \quad V_h \sim \text{Beta}(1, \alpha), \quad \theta_h \sim P_0 \quad (23.3)
+$$
+
+::: {.callout-tip}
+## 직관 — Stick-Breaking 의 시각화
+
+길이 1 의 막대를 차례로 자른다:
+
+* 첫 자르기: $V_1 \sim \text{Beta}(1, \alpha)$. $\pi_1 = V_1$.
+* 둘째 자르기: 남은 $1 - V_1$ 의 비율 $V_2$. $\pi_2 = V_2(1 - V_1)$.
+* …
+
+$E(V_h) = 1/(1 + \alpha)$. 따라서 $\alpha$ 작으면 $\pi_1$ 이 큼 (소수 dominant), $\alpha$ 크면 $\pi_h$ 들이 비슷하게 분산.
+
+**핵심 함의**: DP 의 표본 $P$ 는 항상 **discrete distribution** (유한 또는 가산 무한 atoms 의 가중합).
+
+→ DP 는 **연속 분포를 직접 표현 못 함**. 따라서 density estimation 에는 부적절, **DP mixture (DPM)** 가 자연스러운 사용.
+:::
+
+### DP 의 Discreteness 한계
+
+$P \sim \text{DP}$ 는 항상 discrete → 연속 데이터 ($y_i$ 가 모두 다름) 에서 직접 prior 부적절.
+
+해결: **$y_i$ 가 latent $\theta_i$ 의 함수** (kernel 로 smoothed) 로 표현 → **DPM** (§ 23.3).
+
+## § 23.3 Dirichlet Process Mixtures (DPM)
+
+### 식 (23.4) Kernel Mixture
+
+$$
+f(y \mid P) = \int \mathcal{K}(y \mid \theta) dP(\theta) \quad (23.4)
+$$
+
+$\mathcal{K}$ = kernel (예: Gaussian), $P$ = mixing measure.
+
+$P$ 가 finite discrete → **finite mixture (Ch.22)**.
+$P \sim \text{DP}$ → **DP mixture**.
+
+### 식 (23.5) — DP Mixture Model
+
+Stick-breaking $P$ 를 (23.4) 에 대입:
+
+$$
+f(y) = \sum_{h=1}^\infty \pi_h \mathcal{K}(y \mid \theta_h^*), \qquad \pi \sim \text{stick}(\alpha), \quad \theta_h^* \sim P_0 \quad (23.5)
+$$
+
+**Hierarchical 표현**:
+
+$$
+y_i \sim \mathcal{K}(\theta_i), \quad \theta_i \sim P, \quad P \sim \text{DP}(\alpha P_0)
+$$
+
+::: {.callout-note}
+## 직관 — DPM 이 Ch.22 의 자연 확장
+
+Ch.22 finite mixture: $H$ 개 component, 데이터가 그중 하나에서.
+
+DPM: $\infty$ 개 component, 데이터가 그중 하나에서. 단 **유한 데이터 $n$ 에 대해 유한 cluster 만 점유**:
+
+$$
+E[\text{occupied clusters}] = O(\alpha \log n)
+$$
+
+새 데이터가 들어올 때마다 **점진적으로** 새 cluster 가 형성될 가능성 → **"$H$ 가 데이터에 따라 자동 결정"**.
+:::
+
+### 식 (23.6) Polya Urn 예측 규칙
+
+$P$ 를 적분 소거하면 $\theta_i$ 의 sequential predictive:
+
+$$
+p(\theta_i \mid \theta_1, \ldots, \theta_{i-1}) \sim \frac{\alpha}{\alpha + i - 1} P_0(\theta_i) + \sum_{j=1}^{i-1} \frac{1}{\alpha + i - 1} \delta_{\theta_j} \quad (23.6)
+$$
+
+* "새 cluster 형성" 확률 $\alpha/(\alpha + i - 1)$.
+* "$j$ 번째 사람의 cluster 에 합류" 확률 $1/(\alpha + i - 1)$.
+
+::: {.callout-tip}
+## 직관 — Chinese Restaurant Process
+
+Metaphor: 무한 테이블 식당.
+
+* 1 번 손님: 빈 테이블 1 에 앉아 dish $\theta_1$ 를 시킴.
+* 2 번 손님: 테이블 1 (확률 $1/(1 + \alpha)$) 또는 새 테이블 (확률 $\alpha/(1 + \alpha)$).
+* $i$ 번 손님: 점유된 테이블 $j$ ($c_j$ 명 있음) 에 확률 $c_j/(i - 1 + \alpha)$, 새 테이블에 확률 $\alpha/(i - 1 + \alpha)$.
+
+함의:
+
+* **Rich-get-richer**: 큰 테이블이 더 인기 (cluster 균형 깨짐).
+* **새 cluster** 확률은 $\alpha$ 에 비례.
+* **자동 cluster 수**: $E[k_n] \approx \alpha \log n$.
+
+CRP 가 DPM 의 marginal sequential 표현. Sampling 알고리즘의 기초.
+:::
+
+### 식 (23.7) — Conditional 예측
+
+Exchangeability 활용:
+
+$$
+\theta_i \mid \theta_{-i} \sim \frac{\alpha}{\alpha + n - 1} P_0(\theta_i) + \sum_{h=1}^{k^{(-i)}} \frac{n_h^{(-i)}}{\alpha + n - 1} \delta_{\theta_h^{*(-i)}} \quad (23.7)
+$$
+
+$k^{(-i)}$ = $\theta_{-i}$ 의 unique 값 수, $n_h^{(-i)}$ = $h$-th value 의 count.
+
+이것이 **marginal Gibbs sampler** 의 조건부 분포.
+
+### Marginal vs Blocked Gibbs
+
+#### Marginal Gibbs (CRP-based)
+
+* $P$ 적분 소거.
+* $\theta_i$ 를 (23.7) 의 mixture 에서 sampling.
+* **새 cluster 확률** 이 $\alpha \int \mathcal{K}(y_i \mid \theta) dP_0(\theta)$ (marginal likelihood) 비례.
+* 단점: cluster 한 점씩 → **slow mixing** (large cluster 형성·해체 어려움).
+
+#### Blocked Gibbs (Truncated stick-breaking)
+
+* $V_h, \theta_h^*$ ($h = 1, \ldots, N$) 명시적, $V_N = 1$ truncation.
+* $N = 25 \sim 50$ 충분 (실제 cluster 수 보다 큰 upper bound).
+* **Cluster allocation $S_i$**, **stick-breaking $V_c$**, **atom $\theta_c^*$** 를 block 별 sampling.
+* 빠르고 cluster-specific 추론 가능.
+
+::: {.callout-tip}
+## 직관 — DPM = Ch.22 의 truncated 한계
+
+Blocked Gibbs 는 Ch.22 의 finite mixture Gibbs 와 거의 동일. 차이:
+
+* Ch.22: $\pi \sim \text{Dirichlet}(a, \ldots, a)$, $a = n_0/H$.
+* Ch.23: $\pi$ = stick-breaking $V_h \sim \text{Beta}(1, \alpha)$.
+
+큰 $H$ + sparse Dirichlet ≈ truncated stick-breaking → **두 알고리즘이 거의 동치**. Ishwaran-Zarepour (2002) 의 정당화.
+:::
+
+### Toxicology 예제 — Mouse Implant Counts
+
+**데이터**: ethylene glycol 처치 후 implant 수, 4 dose group × ~25 마리.
+
+**문제**: Poisson 가정은 over-dispersion 못 잡음. NegBin 도 inflexible.
+
+**해결 1 — Direct DP prior**:
+
+$$
+y_i \sim P, \qquad P \sim \text{DP}(\alpha P_0), \qquad P_0 = \text{Poisson}(\bar y)
+$$
+
+DP 가 discrete 이므로 count data 에 직접 적용 가능. 사후가 base + empirical:
+
+$$
+\Pr(y = j \mid y^n) = \frac{\alpha}{\alpha + n} P_0(j) + \frac{1}{\alpha + n}\sum_i 1_{y_i = j}
+$$
+
+단점: 인접 count 간 smoothing 없음.
+
+**해결 2 — DPM with rounded Gaussian** (식 23.9):
+
+$$
+y_i^* \sim N(\mu_i, \tau_i^{-1}), \quad y_i = \lfloor y_i^* \rfloor
+$$
+
+$\mu_i \sim P, P \sim \text{DP}$. 정수로 rounding 하여 count 표현. **Smoothing 보장**.
+
+### Hyperprior on $\alpha$
+
+Default: $\alpha = 1$ (두 random subject 가 같은 cluster 일 prior 확률 1/2).
+
+데이터 기반: $\alpha \sim \text{Gamma}(a_\alpha, b_\alpha)$, blocked Gibbs 의 conditional posterior:
+
+$$
+\alpha \mid \cdots \sim \text{Gamma}\Bigl(a_\alpha + N - 1, b_\alpha - \sum_{h=1}^{N-1}\log(1 - V_h)\Bigr)
+$$
+
+데이터가 $\alpha$ 에 대해 **substantially informative**. High variance prior + 데이터 → low variance posterior.
+
+### $P_0$ 의 함정
+
+::: {.callout-important}
+## Diffuse $P_0$ 의 역효과
+
+Naive 한 직관: "$P_0$ variance 크게 → uninformative → cluster 수 자동 결정".
+
+**실제**: $P_0$ variance 매우 큼 → **cluster mean 들이 데이터 영역 밖에 흩어짐** → marginal likelihood 작음 → **단일 cluster 로 수렴** (모든 데이터 한 component).
+
+해결:
+
+1. **표준화** ($y$ 의 mean=0, sd=1).
+2. **$P_0$ scale = 1** (데이터 영역과 같은 scale).
+3. **$\mu_0 = 0, \kappa = 1$**: 권장 default.
+
+이는 Ch.22 § 22.4 의 동일 권장 사항. **Mixture (finite or DP) 의 보편 원칙**.
+:::
+
+## § 23.4 Beyond Density Estimation
+
+DPM 의 진정한 위력은 **hierarchical 모델의 부품** 으로서.
+
+### 식 (23.10) — Nonparametric Residual
+
+선형 회귀의 잔차에 DP scale mixture:
+
+$$
+y_i = X_i \beta + \epsilon_i, \quad \epsilon_i \sim N(0, \phi_i^{-1}), \quad \phi_i \sim P, \quad P \sim \text{DP}(\alpha P_0) \quad (23.10)
+$$
+
+$P_0 = \text{Gamma}(\nu/2, \nu/2)$ 면 prior 는 $t_\nu$ 잔차 위에 centered. 데이터가 더 복잡한 잔차 분포 (skewed, multimodal) 면 DP 가 그 형태 학습.
+
+::: {.callout-tip}
+## 직관 — Robust 회귀의 nonparametric 일반화
+
+Ch.17 의 $t$-distribution robust regression = scale mixture (continuous).
+
+DPM 잔차 = **scale mixture of mixtures** — $t$ 보다 유연. Heavy-tail 뿐 아니라 **multimodal·skewed 잔차** 도 처리.
+:::
+
+### ANOVA + DP — 식 (23.11)~(23.13)
+
+One-factor ANOVA:
+
+$$
+y_{ij} = \mu_i + \epsilon_{ij}, \quad \mu_i \sim f, \quad \epsilon_{ij} \sim g \quad (23.11)
+$$
+
+전통: $f = N(\mu, \psi^{-1})$, $g = N(0, \sigma^2)$.
+
+비모수: $\mu_i \sim P, P \sim \text{DP}(\alpha P_0)$ — **subject random effects 의 분포가 DP**.
+
+→ Subjects 가 latent class 로 cluster:
+
+$$
+\mu_i = \mu_{S_i}^*, \quad \Pr(S_i = h) = \pi_h \quad (23.13)
+$$
+
+::: {.callout-note}
+## 직관 — DPM ANOVA 가 Ch.5 와 다른 점
+
+Ch.5 hierarchical model: $\mu_i \sim N(\mu, \psi^2)$ — 모든 subject 가 다른 $\mu_i$ (continuous).
+
+DPM ANOVA: $\mu_i$ 들이 **type 으로 cluster** (discrete groups). 같은 type 의 subject 는 동일 $\mu$.
+
+응용:
+
+* **Latent disease subtype**: 같은 진단 환자 중 실제로는 여러 subtype.
+* **Hidden customer segments**: 마케팅 데이터에서 자동 segment 발견.
+:::
+
+### Functional Data Analysis (FDA) + DP
+
+[Ch.21 GP-FDA](./04-21-2-fda-density-exercises.qmd) 의 대안:
+
+$$
+y_{ij} \sim N(f_i(t_{ij}), \sigma^2), \quad f_i(t) = \sum_{h=1}^H \theta_{ih} b_h(t)
+$$
+
+각 subject 의 basis 계수 $\theta_i \sim P, P \sim \text{DP}$ → **functional clustering**.
+
+같은 cluster 의 subject 는 동일 함수 $f_i = f_h^*$. Soft cluster 이므로 **subject 별 사후 평균은 모두 다름** (cluster 평균).
+
+GP-FDA vs DP-FDA:
+
+* GP: smooth functional space, subject 별 다른 함수.
+* DP: discrete clusters, 같은 cluster 면 동일 함수.
+
+응용 차이:
+
+* GP: 환자별 trajectory 가 부드럽게 다른 경우.
+* DP: 환자가 명확한 subtype 으로 나뉘는 경우.
+
+## § 23.5 Hierarchical Dependence
+
+여러 그룹의 분포에 dependence 부여.
+
+### Hierarchical DP (HDP) — Group 간 Atom 공유
+
+각 그룹 $j$ 의 분포 $P_j$ 가 같은 atom 집합을 공유, weight 만 다름:
+
+$$
+P_j = \sum_h \pi_{jh} \delta_{\theta_h^*}, \quad \theta_h^* \sim P_{00}, \quad \pi_j \sim \text{HDP-stick}(\alpha, \beta)
+$$
+
+Group 간 cluster (atom) 공유 → **borrowing of information across groups**.
+
+::: {.callout-tip}
+## 직관 — HDP 응용 예
+
+* **Document clustering** (Teh et al. 2006): 문서별 topic 분포가 다르나 topic 자체는 corpus 공통.
+* **Medical**: state-level 병원 quality 분포가 state 별로 다르나 quality cluster type 은 공통.
+* **Speech**: speaker 별 acoustic 분포가 다르나 phoneme cluster 는 공통.
+
+HDP 의 매력: **유연성 + 공유 정보 모두**. 그룹간 완전 독립도 아니고 동일도 아닌 중간.
+:::
+
+### 식 (23.17)~(23.18) Nested DP (NDP)
+
+HDP 가 atom 공유 + weight 변동인 반면, NDP 는 **distribution 자체를 cluster**:
+
+$$
+P_j \sim P, \quad P \sim \text{DP}(\alpha P_0), \quad P_0 \equiv \text{DP}(\beta P_{00}) \quad (23.17)
+$$
+
+Stick-breaking:
+
+$$
+P_j \sim P = \sum_{h=1}^\infty \pi_h \delta_{P_h^*}, \quad \pi \sim \text{stick}(\alpha), \quad P_h^* \sim \text{DP}(\beta P_{00}) \quad (23.18)
+$$
+
+::: {.callout-note}
+## HDP vs NDP
+
+* **HDP**: $P_1, P_2, \ldots, P_J$ 가 다 다른 분포지만 atom 공유.
+* **NDP**: $P_j$ 들이 **그룹 단위로 cluster**. 같은 cluster 의 group 들은 **정확히 같은 분포** ($\Pr(P_j = P_{j'}) = 1/(1 + \alpha)$).
+
+응용:
+
+* **HDP**: 모든 그룹이 서로 다르지만 underlying components 공유.
+* **NDP**: 일부 그룹이 동일 분포 — multi-treatment Bayesian testing.
+
+NDP 는 dose group 등이 "동일한 효과" 인지의 **베이즈 가설 검정** 도구.
+:::
+
+### 식 (23.19)~(23.20) Convex Mixture
+
+Group 의 분포를 global + group-specific 의 convex 결합:
+
+$$
+P_c = \pi G_0 + (1 - \pi) G_c, \quad G_c \sim \text{DP}(\alpha G_0), \quad \pi \sim \text{Beta}(a, b) \quad (23.19)
+$$
+
+* $G_0$ = 모든 group 공통 분포.
+* $G_c$ = group-specific deviation.
+* $\pi$ = 공통성의 정도.
+
+**시간 의존성** 식 (23.20) — first-order autoregressive:
+
+$$
+P_t = (1 - \pi) P_{t-1} + \pi G_t, \quad G_t \sim \text{DP}(\alpha P_0)
+$$
+
+dose-response 같은 ordered group 에서 인접 group 끼리 smoothing.
+
+## § 23.6 Density Regression
+
+연속 predictor $x$ 의 함수로 conditional density $p(y \mid x)$ 가 변할 때.
+
+### 식 (23.21) Mixture of Experts
+
+$$
+p(y \mid x) = \sum_{h=1}^H \pi_h(x) N(y \mid x \beta_h, \tau_h^{-1}) \quad (23.21)
+$$
+
+* $H$ 개 linear regression "expert".
+* Predictor-dependent weights $\pi_h(x)$ — gating function.
+
+[Ch.22 § 22.5 mixture of experts](./04-22-2-unspecified-classification-exercises.qmd) 의 finite 버전. Ch.23 은 $H = \infty$ 로 확장.
+
+### Dependent Stick-Breaking (DDP)
+
+$$
+P_x = \sum_{h=1}^\infty \pi_h(x) \delta_{\theta_h^*(x)}, \qquad \pi_h(x) = V_h(x) \prod_{l < h}(1 - V_l(x))
+$$
+
+$V_h(x)$ 가 $x$ 에 따라 변함. 다양한 형태:
+
+* **Order-based DDP**.
+* **Local DP**.
+
+### Kernel Stick-Breaking Process
+
+$$
+V_h(x) = K_{\psi_h}(x, \Gamma_h) V_h, \quad V_h \sim \text{Beta}(1, \alpha), \quad \Gamma_h \sim G
+$$
+
+* $K_\psi(x, \Gamma)$ = kernel (Gaussian 등), $\Gamma$ 위치, $\psi$ bandwidth.
+* $x$ 가 $\Gamma_h$ 근처일수록 $V_h(x) \approx V_h$, 멀어지면 $V_h(x) \to 0$.
+
+→ **공간 위에서 지역적으로 다른 cluster 활성화**.
+
+### Probit Stick-Breaking Process (PSBP)
+
+$$
+V_h(x) = \Phi(\alpha_h + \mu_h(x)), \qquad \alpha_h \sim N(\mu, 1)
+$$
+
+* $\Phi$ = standard normal CDF.
+* $\mu_h(x)$ = 임의의 회귀 모형 (linear, GP 등).
+
+::: {.callout-tip}
+## 직관 — Probit Stick-Breaking 의 유연성
+
+Probit 변환이 $V_h$ 를 $[0, 1]$ 로 매핑.
+
+* $\mu = 0$, no $x$: $V_h \sim \text{Beta}(1, 1)$ → 표준 DP 와 동치.
+* $\mu_h(x)$ 가 GP: density 가 $x$ 에 따라 부드럽게 변화.
+* $\mu_h(x)$ 가 linear: 단순한 predictor 의존성.
+
+→ DDP 의 일반화. 계산도 효율적 (probit augmentation 으로 conjugate).
+:::
+
+## § 23.7 Bibliographic Note (요지)
+
+### DP 정전
+
+* **Ferguson (1973)** — Dirichlet Process 원전.
+* **Antoniak (1974)** — DP mixture 도입.
+* **Sethuraman (1994)** — Stick-breaking 정의.
+* **Escobar & West (1995)** — DPM 의 Gibbs sampler.
+
+### HDP·NDP
+
+* **Teh et al. (2006)** — Hierarchical Dirichlet Process.
+* **Rodriguez, Dunson, Gelfand (2008)** — Nested Dirichlet Process.
+* **MacEachern (1999)** — Dependent Dirichlet Process (DDP).
+
+### Density Regression
+
+* **Dunson, Pillai, Park (2007)** — Kernel stick-breaking.
+* **Chung, Dunson (2009)** — Probit stick-breaking.
+* **De Iorio, Müller, Rosner, MacEachern (2004)** — ANOVA-DDP.
+
+### Surveys
+
+* **Hjort, Holmes, Müller, Walker (eds., 2010)** — *Bayesian Nonparametrics* (Cambridge).
+* **Ghosal & van der Vaart (2017)** — *Fundamentals of Nonparametric Bayesian Inference*.
+* **Müller, Quintana, Jara, Hanson (2015)** — *Bayesian Nonparametric Data Analysis*.
+
+## Ch.23 핵심 수식 모음
+
+| 번호 | 수식 | 의미 |
+|:----:|:-----|:-----|
+| (23.1) | $P(B_1), \ldots, P(B_k) \sim \text{Dir}(\alpha P_0(B_1), \ldots, \alpha P_0(B_k))$ | DP partition 정의 |
+| (23.2) | $E(P(B) \mid y^n) = \frac{\alpha P_0(B) + \sum_i \delta_{y_i}(B)}{\alpha + n}$ | DP 사후 Bayes 추정 |
+| (23.3) | $P = \sum_h \pi_h \delta_{\theta_h},\ \pi_h = V_h \prod_{l<h}(1-V_l),\ V_h \sim \text{Beta}(1,\alpha)$ | Stick-breaking |
+| (23.4) | $f(y \mid P) = \int \mathcal{K}(y \mid \theta) dP(\theta)$ | Kernel mixture |
+| (23.5) | $f(y) = \sum_h \pi_h \mathcal{K}(y \mid \theta_h^*)$ | DPM |
+| (23.6) | Polya urn predictive | $p(\theta_i \mid \theta_{<i})$ sequential |
+| (23.7) | Conditional 예측 | Marginal Gibbs 의 기초 |
+| (23.10) | $\epsilon_i \sim N(0, \phi_i^{-1}),\ \phi_i \sim P,\ P \sim \text{DP}$ | Nonparametric residual |
+| (23.13) | $\mu_i = \mu_{S_i}^*,\ \Pr(S_i = h) = \pi_h$ | Latent class via DP |
+| (23.17) | $P_j \sim P,\ P \sim \text{DP}(\alpha P_0),\ P_0 \equiv \text{DP}(\beta P_{00})$ | Nested DP |
+| (23.21) | $p(y \mid x) = \sum_h \pi_h(x) N(y \mid x\beta_h, \tau_h^{-1})$ | Mixture of experts |
+
+## 최소 실행 예제 — 1D DP Mixture (PyMC + truncated stick-breaking)
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+rng = np.random.default_rng(42)
+
+# simulate 3-component mixture
+n = 200
+true_mu = [-2, 0, 2]
+true_sigma = [0.5, 0.5, 0.5]
+z_true = rng.choice(3, size=n, p=[0.3, 0.4, 0.3])
+y = rng.normal(np.array(true_mu)[z_true], np.array(true_sigma)[z_true])
+
+
+def stick_breaking(beta):
+    """Stick-breaking weights from Beta(1, alpha) draws."""
+    portion_remaining = pm.math.concatenate([[1], pm.math.cumprod(1 - beta)[:-1]])
+    return beta * portion_remaining
+
+
+N = 20  # truncation level
+
+with pm.Model() as dp_mixture:
+    alpha = pm.Gamma("alpha", 1, 1)  # DP precision
+
+    # stick-breaking: V_h ~ Beta(1, alpha), pi_h = V_h * prod_{l<h}(1 - V_l)
+    beta_sb = pm.Beta("beta", 1, alpha, shape=N)
+    pi = pm.Deterministic("pi", stick_breaking(beta_sb))
+
+    # cluster atoms ~ P_0 = Normal-InverseGamma
+    mu = pm.Normal("mu", 0, 5, shape=N,
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-3, 3, N))
+    sigma = pm.HalfNormal("sigma", 1, shape=N)
+
+    # mixture likelihood
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(N)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+
+    trace = pm.sample(1500, tune=1500, target_accept=0.95, chains=2,
+                      progressbar=False)
+
+
+# posterior summary
+print(az.summary(trace, var_names=["alpha"]))
+
+# occupied components
+pi_post = trace.posterior["pi"].mean(dim=("chain", "draw")).values
+print(f"Posterior pi (top 6): {np.sort(pi_post)[::-1][:6].round(3)}")
+print(f"Effective H_n: {(pi_post > 0.02).sum()}")
+```
+
+::: {.callout-tip}
+## 코드 가이드
+
+* **Stick-breaking** 명시적 구현 — $V_h \sim \text{Beta}(1, \alpha)$ 에서 $\pi_h$ 유도.
+* **Truncation** $N = 20$ 충분 (대부분 응용).
+* **$\alpha \sim \text{Gamma}(1, 1)$** 로 데이터가 cluster 수에 영향.
+* **Ordered $\mu$**: label switching 회피 (1D 에서만 가능).
+* `pm.Mixture` 가 latent indicator 자동 처리.
+
+비교: Ch.22 의 finite Dirichlet $a = 1/H$ 와 결과 거의 동일 — Ishwaran-Zarepour 정당화.
+:::
+
+## Ch.23 심화편 예고
+
+| 심화편 | 범위 | 주제 |
+|--------|------|------|
+| 04-23-1 | § 23.1~23.3 | Bayesian histogram·식 (23.1)~(23.3) DP 정의 완전 유도·stick-breaking·식 (23.4)~(23.7) Polya urn / CRP 완전 유도·marginal vs blocked Gibbs·toxicology 사례 |
+| 04-23-2 | § 23.4~23.7 | Nonparametric residual·ANOVA-DPM·FDA-DPM·HDP·NDP·convex mixture·식 (23.21) mixture of experts·kernel/probit stick-breaking·연습 + Ch.23 결산 |
+
+## Ch.23 실전 체크리스트
+
+**모델 결정**
+
+1. **DP 직접 vs DPM** — 데이터가 discrete (count) 면 DP 직접도 OK, 연속이면 DPM.
+2. **Kernel 가족** ($\mathcal{K}$): Gaussian (연속), Poisson (count, over-dispersion 만), rounded Gaussian (count, 양방향).
+3. **$P_0$**: Normal-Inverse-Gamma 또는 Normal-Inverse-Wishart (다변량). 데이터 영역 scale.
+4. **여러 그룹**: HDP (atom 공유) vs NDP (distribution cluster) vs convex mixture.
+
+**Hyperprior**
+
+5. $\alpha \sim \text{Gamma}(1, 1)$ default — 데이터가 informative.
+6. $P_0$ scale = 데이터 표준화 후 1 (Ch.22 권장 동일).
+7. 중심화 (centering) — base measure 가 데이터 영역 안.
+
+**계산**
+
+8. **Truncation $N = 25 \sim 50$** — blocked Gibbs.
+9. **Marginal Gibbs (CRP)**: cluster-specific 추론·일부 분포에 자연.
+10. **Blocked Gibbs**: 빠르고 일반적.
+11. $S_{\max} = \max(S_1, \ldots, S_n)$ 모니터 — truncation 안전 점검.
+12. **Mixing**: split-merge moves 또는 label switching 추가로 향상.
+
+**검증**
+
+13. **수렴**: density 또는 switching-invariant quantity 의 $\widehat R$.
+14. **$k_n$ 사후 분포**: occupied cluster 수.
+15. **$P_0$ sensitivity**: 다른 scale 로 cluster 결과 비교.
+16. **WAIC / LOO**: 다른 모델 (parametric, finite mixture, GP) 과 비교.
+
+**해석**
+
+17. **Density estimation**: cluster 무시, $\hat f(y) = \sum \pi_h \mathcal{K}(y \mid \theta_h^*)$ 만.
+18. **Cluster 해석**: postprocessing (KL loss) 필수, kernel 가정에 민감.
+19. **HDP atom 공유** vs **NDP distribution cluster** 도메인적으로 구분.
+20. **Density regression** ($x$ 의존): kernel/probit stick-breaking 선택.
+
+## 관련 주제
+
+**선행 지식**
+
+* [Part V Overview](./04-bayesian-part5-overview.qmd)
+* [Ch.22 Finite Mixture Overview](./04-22-0-finite-mixture-overview.qmd) — DP 의 finite approximation
+* [Ch.22 § 22.4 — Sparse Dirichlet $a = n_0/H$](./04-22-2-unspecified-classification-exercises.qmd)
+* [Ch.21 Gaussian Process Models](./04-21-0-gaussian-process-overview.qmd) — 비교 비모수 베이즈
+* [Ch.5 Hierarchical Models](./00-5-0-hierarchical.qmd)
+* [Ch.13 Variational Inference·EP](./02-13-3-variational-inference-expectation-propagation.qmd)
+
+**후속 주제**
+
+* [Ch.23 § 23.1~23.3 심화 — DP·stick-breaking·DPM (예정)](./04-23-1-dp-stickbreaking-dpm.qmd)
+* [Ch.23 § 23.4~23.7 심화 — HDP·NDP·density regression·연습 (예정)](./04-23-2-hdp-ndp-density-regression.qmd)
+
+**관련 개념 (cross-category)**
+
+* [Bayesian Bootstrap (Rubin 1981)](../bayesian-bootstrap.qmd)
+* [Chinese Restaurant Process](../../Math/chinese-restaurant-process.qmd)
+* [Topic Models (LDA, HDP-LDA)](../../Agent/lda-hdp-lda.qmd)
+* [Indian Buffet Process (Bayesian feature learning)](../../Math/indian-buffet-process.qmd)
+* [Bayesian Nonparametric Survival Analysis](../survival/bnp-survival.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.23. CRC Press.
+* Ferguson, T. S. (1973). A Bayesian Analysis of Some Nonparametric Problems. *Annals of Statistics*, 1(2), 209-230. (DP 원전)
+* Antoniak, C. E. (1974). Mixtures of Dirichlet Processes with Applications to Bayesian Nonparametric Problems. *Annals of Statistics*, 2(6), 1152-1174.
+* Sethuraman, J. (1994). A Constructive Definition of Dirichlet Priors. *Statistica Sinica*, 4, 639-650. (Stick-breaking)
+* Escobar, M. D., & West, M. (1995). Bayesian Density Estimation and Inference Using Mixtures. *JASA*, 90(430), 577-588.
+* Rubin, D. B. (1981). The Bayesian Bootstrap. *Annals of Statistics*, 9(1), 130-134.
+* Ishwaran, H., & Zarepour, M. (2002). Exact and Approximate Sum-Representations for the Dirichlet Process. *Canadian Journal of Statistics*, 30(2), 269-283.
+* Teh, Y. W., Jordan, M. I., Beal, M. J., & Blei, D. M. (2006). Hierarchical Dirichlet Processes. *JASA*, 101(476), 1566-1581.
+* Rodriguez, A., Dunson, D. B., & Gelfand, A. E. (2008). The Nested Dirichlet Process. *JASA*, 103(483), 1131-1154.
+* MacEachern, S. N. (1999). Dependent Nonparametric Processes. *Proc. Bayesian Stat. Sci. Sect., ASA*.
+* Dunson, D. B., Pillai, N., & Park, J. H. (2007). Bayesian Density Regression. *JRSS B*, 69(2), 163-183.
+* Chung, Y., & Dunson, D. B. (2009). Nonparametric Bayes Conditional Distribution Modeling with Variable Selection. *JASA*, 104(488), 1646-1660.
+* De Iorio, M., Müller, P., Rosner, G. L., & MacEachern, S. N. (2004). An ANOVA Model for Dependent Random Measures. *JASA*, 99(465), 205-215.
+* Hjort, N. L., Holmes, C. C., Müller, P., & Walker, S. G. (eds.) (2010). *Bayesian Nonparametrics*. Cambridge University Press.
+* Ghosal, S., & van der Vaart, A. (2017). *Fundamentals of Nonparametric Bayesian Inference*. Cambridge University Press.
+* Müller, P., Quintana, F. A., Jara, A., & Hanson, T. (2015). *Bayesian Nonparametric Data Analysis*. Springer.
