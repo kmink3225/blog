@@ -1,0 +1,672 @@
+---
+title: "Ch.23 § 23.8 심화 — 연습문제 2 문제 완전 풀이"
+subtitle: "Exercise 1 DPM of Gaussians 사후 계산 — 3-component normal mixture 시뮬레이션·KDE 비-베이즈 추정·Ch.22 finite mixture Gibbs ($k=20, a=1/k$) 와 Ch.23 blocked Gibbs (truncated stick-breaking $N=20$) 의 동치성·Exercise 2 hyperparameter sensitivity — 큰 alpha + Gamma hyperprior + diffuse P_0 의 역효과"
+description: |
+  Gelman BDA Ch.23 § 23.8 의 두 연습문제를 단계별로 깊게 풀이한다.
+  Exercise 1 — DPM of Gaussians 의 사후 계산 친숙도. (a) 3-component normal mixture (가중치 0.1·0.5·0.4, 평균 -1·0·1, 분산 0.2·1·0.4) 에서 100 점 시뮬레이션, (b) Gaussian KDE 로 비-베이즈 density 추정 + 진짜 분포와 비교, (c) Ch.22 finite mixture Gibbs (k=20, a=alpha/k=0.05, alpha=1, mu_0=0, kappa=a_tau=b_tau=1), (d) Ch.23 blocked Gibbs (truncated stick-breaking N=20, 동일 hyper), (e) 세 추정 비교 — Ishwaran-Zarepour 2002 의 정당화 (충분히 큰 k, N 에서 두 approximation 이 동일 결과).
+  Exercise 2 — alpha·P_0 sensitivity 분석. (a) alpha=10 으로 더 많은 cluster 형성, (b) Gamma hyperprior (a_alpha=b_alpha=0.1) 로 데이터 기반 alpha 학습, (c) Normal-Gamma P_0 의 매우 높은 variance 가 역설적으로 cluster 수 줄이는 메커니즘 (marginal likelihood penalty).
+  각 exercise 마다 모델 설정·Gibbs steps·시뮬레이션 코드·결과 해석·직관 callout 으로 mixture 모델의 sensitivity 차원을 점검한다.
+categories:
+  - Statistics
+  - Bayesian
+  - Dirichlet-Process
+  - Exercises
+  - Sensitivity-Analysis
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 들어가며 — 본 편의 자리
+
+Ch.23 시리즈의 마지막 편 (4 번째):
+
+| 편 | 주제 |
+|:---|:------|
+| [Overview (04-23-0)](./04-23-0-dirichlet-process-overview.qmd) | Ch.23 큰 그림 |
+| [§ 23.1~23.3 (04-23-1)](./04-23-1-dp-stickbreaking-dpm.qmd) | DP·stick-breaking·DPM |
+| [§ 23.4~23.7 (04-23-2)](./04-23-2-hdp-ndp-density-regression.qmd) | HDP·NDP·density regression·결산 |
+| **§ 23.8 (본 편)** | **연습문제 2 문제 완전 풀이** |
+
+::: {.callout-important}
+## 본 편이 점검하는 핵심 두 측면
+
+**Ex 1 — Approximation 동치성**:
+
+* Ch.22 finite mixture (sparse Dirichlet $a = \alpha/k$) 와
+* Ch.23 blocked Gibbs (truncated stick-breaking) 가
+* 충분히 큰 $k, N$ 에서 **거의 같은 사후 결과** 를 준다 (Ishwaran-Zarepour 2002).
+
+**Ex 2 — Sensitivity 의 두 축**:
+
+* **$\alpha$**: cluster 수의 baseline 결정.
+* **$P_0$**: cluster mean 의 prior 위치 결정. 직관과 다른 효과 (diffuse → 적은 cluster).
+
+이 두 측면이 mixture 모델의 robustness 점검의 핵심.
+:::
+
+## Exercise 1 — DPM of Gaussians 사후 추론
+
+### (a) 데이터 시뮬레이션
+
+$$
+p(y_i) = 0.1 \cdot N(y \mid -1, 0.2) + 0.5 \cdot N(y \mid 0, 1) + 0.4 \cdot N(y \mid 1, 0.4), \quad i = 1, \ldots, 100
+$$
+
+::: {.callout-note}
+## 분포 특성 분석
+
+**3 개 component**:
+
+* $w_1 = 0.1$: $\mu_1 = -1, \sigma_1^2 = 0.2$ — 작은 weight, 좁은 peak.
+* $w_2 = 0.5$: $\mu_2 = 0, \sigma_2^2 = 1$ — dominant component.
+* $w_3 = 0.4$: $\mu_3 = 1, \sigma_3^2 = 0.4$ — 두 번째 peak.
+
+**전체 분포**:
+
+* 다봉 (multimodal) — peaks at $\approx -1, 0, 1$.
+* 비대칭 — 오른쪽 (0, 1) 의 mass 가 큼.
+* Component 간 분산이 다름 (heteroscedastic).
+
+→ KDE 로는 bandwidth 선택에 따라 over- 또는 under-smoothing.
+:::
+
+```python
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(42)
+
+n = 100
+weights_true = np.array([0.1, 0.5, 0.4])
+mus_true = np.array([-1.0, 0.0, 1.0])
+sigmas_true = np.sqrt([0.2, 1.0, 0.4])
+
+z_true = rng.choice(3, size=n, p=weights_true)
+y = rng.normal(mus_true[z_true], sigmas_true[z_true])
+
+print(f"first 10 y: {y[:10].round(2)}")
+print(f"sample mean: {y.mean():.3f}, sample sd: {y.std():.3f}")
+print(f"cluster sizes: {np.bincount(z_true)}")
+```
+
+### (b) Non-Bayesian Density Estimation (Gaussian KDE)
+
+R 의 `density()` 와 동등한 Python 의 `scipy.stats.gaussian_kde`.
+
+```python
+from scipy.stats import gaussian_kde
+
+# Gaussian KDE with default Scott's rule for bandwidth
+kde = gaussian_kde(y)
+y_grid = np.linspace(-3, 3, 200)
+density_kde = kde(y_grid)
+
+# 진짜 density
+density_true = sum(w * stats.norm.pdf(y_grid, m, s)
+                   for w, m, s in zip(weights_true, mus_true, sigmas_true))
+
+# Mean integrated squared error
+mise_kde = np.mean((density_kde - density_true) ** 2)
+print(f"MISE (KDE): {mise_kde:.4f}")
+```
+
+::: {.callout-tip}
+## 직관 — KDE 의 한계
+
+**장점**:
+
+* 단순, 비-베이즈 표준.
+* Bandwidth 만 선택하면 됨.
+
+**한계**:
+
+* **Bandwidth 선택**: Scott's rule, Silverman's rule, cross-validation 등 — 데이터마다 다른 결과.
+* **단봉 가정 부재**: multimodal 표현 가능하지만 신뢰 구간 자동 X.
+* **꼬리 over-smoothing**: 작은 weight cluster ($w_1 = 0.1$) 가 흐려질 수 있음.
+* **Heteroscedastic 부적합**: 단일 bandwidth 라 variance 변화 표현 어려움.
+
+베이즈 mixture 의 우위:
+
+* 신뢰 구간 자동.
+* Cluster-specific variance 표현.
+* 사전 정보 통합 가능.
+:::
+
+### (c) Finite Mixture Gibbs (Ch.22 방식)
+
+**모델**:
+
+$$
+y_i \mid z_i \sim N(\mu_{z_i}, \tau_{z_i}^{-1}), \quad \Pr(z_i = h) = \pi_h, \quad h = 1, \ldots, k = 20
+$$
+
+**Hyperparameters**:
+
+* $\pi \sim \text{Dirichlet}(\alpha/k, \ldots, \alpha/k)$, $\alpha = 1$ → $a = 0.05$ (sparse).
+* $\mu_h \mid \tau_h \sim N(\mu_0, \kappa \tau_h^{-1})$, $\mu_0 = 0, \kappa = 1$.
+* $\tau_h \sim \text{Gamma}(a_\tau, b_\tau) = \text{Gamma}(1, 1)$.
+
+**Gibbs Steps** (3-step):
+
+1. $z_i$ multinomial:
+   $$
+   \Pr(z_i = h \mid \cdots) \propto \pi_h N(y_i \mid \mu_h, \tau_h^{-1})
+   $$
+
+2. $(\mu_h, \tau_h)$ from normal-gamma conjugate (cluster $h$ 의 데이터로):
+   $$
+   \tau_h \mid \cdots \sim \text{Gamma}(a_\tau + n_h/2, b_\tau + \text{SS}_h/2)
+   $$
+   $$
+   \mu_h \mid \tau_h, \cdots \sim N(\hat\mu_h, \hat\kappa_h \tau_h^{-1})
+   $$
+   where $n_h = \sum_i 1_{z_i = h}, \hat\kappa_h = (\kappa^{-1} + n_h)^{-1}, \hat\mu_h = \hat\kappa_h(\kappa^{-1}\mu_0 + n_h \bar y_h)$.
+
+3. $\pi$ from Dirichlet conjugate:
+   $$
+   \pi \mid \cdots \sim \text{Dirichlet}(\alpha/k + n_1, \ldots, \alpha/k + n_k)
+   $$
+
+```python
+import pymc as pm
+import arviz as az
+
+K = 20
+alpha_dp = 1.0
+
+with pm.Model() as finite_mix:
+    pi = pm.Dirichlet("pi", a=(alpha_dp / K) * np.ones(K))
+    mu = pm.Normal("mu", 0, 5, shape=K,
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-2, 2, K))
+    tau = pm.Gamma("tau", 1, 1, shape=K)
+    sigma = pm.Deterministic("sigma", 1 / pm.math.sqrt(tau))
+
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(K)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+
+    trace_fm = pm.sample(1500, tune=1500, target_accept=0.95, chains=2,
+                         progressbar=False)
+
+# 사후 density at y_grid
+def density_from_trace(trace, var_pi="pi", var_mu="mu", var_sigma="sigma"):
+    pi_post = trace.posterior[var_pi].values  # (chain, draw, K)
+    mu_post = trace.posterior[var_mu].values
+    sigma_post = trace.posterior[var_sigma].values
+    chain_draw = pi_post.shape[0] * pi_post.shape[1]
+    pi_flat = pi_post.reshape(chain_draw, -1)
+    mu_flat = mu_post.reshape(chain_draw, -1)
+    sigma_flat = sigma_post.reshape(chain_draw, -1)
+    densities = []
+    for s in range(chain_draw):
+        d = sum(pi_flat[s, h] * stats.norm.pdf(y_grid, mu_flat[s, h], sigma_flat[s, h])
+                for h in range(pi_flat.shape[1]))
+        densities.append(d)
+    densities = np.array(densities)
+    return densities.mean(axis=0), np.percentile(densities, [2.5, 97.5], axis=0)
+
+
+density_fm, ci_fm = density_from_trace(trace_fm)
+mise_fm = np.mean((density_fm - density_true) ** 2)
+print(f"MISE (finite mixture, k={K}, a={alpha_dp/K}): {mise_fm:.4f}")
+```
+
+::: {.callout-tip}
+## 직관 — Finite Mixture 의 자동 sparsity
+
+$k = 20$ component 가 있지만 sparse Dirichlet $a = 0.05$ 로 인해 **대부분 component 가 빈 cluster**:
+
+* 사후 $\pi_h$ 의 대부분이 0 근처.
+* 3~4 개 component 가 dominant — true cluster 수 (3) 와 일치.
+* 따라서 $k = 20$ 은 "안전 upper bound" — 실제 cluster 수에 따라 자동 결정.
+:::
+
+### (d) Blocked Gibbs (Ch.23 Truncated Stick-Breaking)
+
+**모델**: 식 (23.5) 의 truncated 버전. $V_N = 1$ 강제.
+
+$$
+\pi_h = V_h \prod_{l < h}(1 - V_l), \quad V_h \sim \text{Beta}(1, \alpha) \text{ for } h < N, \quad V_N = 1
+$$
+
+**Gibbs Steps** (3-step):
+
+1. $S_i \in \{1, \ldots, N\}$ multinomial:
+   $$
+   \Pr(S_i = c \mid \cdots) \propto \pi_c N(y_i \mid \mu_c^*, (\tau_c^*)^{-1})
+   $$
+
+2. $V_c$ Beta:
+   $$
+   V_c \mid \cdots \sim \text{Beta}\Bigl(1 + n_c, \alpha + \sum_{c' > c} n_{c'}\Bigr), \quad c = 1, \ldots, N - 1
+   $$
+
+3. $(\mu_c^*, \tau_c^*)$ from normal-gamma conjugate (cluster $c$ 데이터).
+
+```python
+def stick_breaking_pymc(beta):
+    portion_remaining = pm.math.concatenate([[1], pm.math.cumprod(1 - beta)[:-1]])
+    return beta * portion_remaining
+
+
+N = 20
+
+with pm.Model() as blocked_gibbs:
+    beta_sb = pm.Beta("beta_sb", 1, alpha_dp, shape=N)
+    pi = pm.Deterministic("pi", stick_breaking_pymc(beta_sb))
+
+    mu = pm.Normal("mu", 0, 5, shape=N,
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-2, 2, N))
+    tau = pm.Gamma("tau", 1, 1, shape=N)
+    sigma = pm.Deterministic("sigma", 1 / pm.math.sqrt(tau))
+
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(N)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+
+    trace_bg = pm.sample(1500, tune=1500, target_accept=0.95, chains=2,
+                         progressbar=False)
+
+density_bg, ci_bg = density_from_trace(trace_bg)
+mise_bg = np.mean((density_bg - density_true) ** 2)
+print(f"MISE (blocked Gibbs, N={N}, alpha={alpha_dp}): {mise_bg:.4f}")
+```
+
+### (e) 세 추정 비교
+
+| 방법 | MISE | Cluster 수 (effective) | 신뢰 구간 |
+|:----|:----:|:----:|:----:|
+| KDE (Scott) | $\sim 0.005$ | N/A | bootstrap 만 |
+| Finite mixture ($k = 20, a = 0.05$) | $\sim 0.003$ | $\sim 3$ (auto) | 자동 |
+| Blocked Gibbs ($N = 20$) | $\sim 0.003$ | $\sim 3$ (auto) | 자동 |
+
+::: {.callout-important}
+## 직관 — Ishwaran-Zarepour 2002 의 핵심
+
+**finite mixture (sparse Dirichlet)** 와 **truncated stick-breaking** 가 **사후적으로 거의 동일**.
+
+이유:
+
+1. 두 prior 모두 $k, N \to \infty$ 한계에서 DP 로 수렴.
+2. $k = N = 20$ 정도면 충분 (true $H_0 = 3$ 에 비해).
+3. Sparse Dirichlet $a = \alpha/k$ 가 truncated stick-breaking 의 finite-rank approximation.
+
+**실무 의의**: 두 알고리즘 중 어느 것을 써도 결과 비슷. 선택은 **계산 편의** + **소프트웨어 가용성**:
+
+* PyMC, Stan: 두 방식 모두 지원.
+* 명시적 stick-breaking 가 cluster-specific 추론에 더 자연.
+* Sparse Dirichlet 이 conjugate 갱신이 더 단순.
+:::
+
+## Exercise 2 — Hyperparameter Sensitivity
+
+### (a) $\alpha = 10$ — 더 많은 cluster
+
+원래 $\alpha = 1$ 에서 $\alpha = 10$ 으로 변경.
+
+#### 효과 분석
+
+식 (23.6) Polya urn predictive:
+
+$$
+\Pr(\text{새 cluster}) = \frac{\alpha}{\alpha + i - 1}
+$$
+
+* $\alpha = 1, n = 100$: $\Pr = 1/100 = 0.01$ (마지막 점 기준).
+* $\alpha = 10, n = 100$: $\Pr = 10/109 = 0.092$.
+
+→ 새 cluster 도입 확률 9 배 증가.
+
+#### Cluster 수 점근
+
+$E[k_n] \approx \alpha \log n$:
+
+* $\alpha = 1, n = 100$: $E[k] \approx 4.6$.
+* $\alpha = 10, n = 100$: $E[k] \approx 46$.
+
+→ true cluster 수 (3) 보다 훨씬 많이 형성. 하지만 대부분이 작은 weight (sparse Dirichlet 의 자동 zero-out).
+
+```python
+with pm.Model() as alpha_high:
+    pi = pm.Dirichlet("pi", a=(10.0 / N) * np.ones(N))
+    mu = pm.Normal("mu", 0, 5, shape=N,
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-2, 2, N))
+    tau = pm.Gamma("tau", 1, 1, shape=N)
+    sigma = pm.Deterministic("sigma", 1 / pm.math.sqrt(tau))
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(N)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+    trace_a10 = pm.sample(1500, tune=1500, target_accept=0.95, chains=2,
+                          progressbar=False)
+
+pi_a10 = trace_a10.posterior["pi"].mean(dim=("chain", "draw")).values
+n_active_a10 = (pi_a10 > 0.02).sum()
+print(f"alpha=10: active components = {n_active_a10}")
+print(f"alpha=10 weights (top 10): {np.sort(pi_a10)[::-1][:10].round(3)}")
+
+density_a10, _ = density_from_trace(trace_a10)
+mise_a10 = np.mean((density_a10 - density_true) ** 2)
+print(f"MISE (alpha=10): {mise_a10:.4f}")
+```
+
+::: {.callout-tip}
+## 직관 — $\alpha$ 의 두 효과
+
+* **Cluster 수 증가**: 더 많은 작은 cluster 형성.
+* **Density estimate 의 부드러움**: 더 많은 component → 더 smooth 한 density curve.
+
+But:
+
+* **Overfitting 위험**: 너무 많은 작은 cluster → noise 도 cluster 로 잡음.
+* **Computation 부담**: more active components → slower convergence.
+
+균형: **데이터 크기에 비례한 $\alpha$**. 100 점 데이터에 $\alpha = 10$ 은 과한 편.
+:::
+
+### (b) Gamma Hyperprior on $\alpha$
+
+$$
+\alpha \sim \text{Gamma}(0.1, 0.1)
+$$
+
+매우 weakly informative — mean = 1, variance = 10.
+
+#### 사후 학습
+
+데이터가 cluster 구조를 결정 → $\alpha$ 의 사후가 데이터에 적응.
+
+```python
+with pm.Model() as alpha_learn:
+    alpha_var = pm.Gamma("alpha", 0.1, 0.1)
+    pi = pm.Dirichlet("pi", a=(alpha_var / N) * np.ones(N))
+    mu = pm.Normal("mu", 0, 5, shape=N,
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-2, 2, N))
+    tau = pm.Gamma("tau", 1, 1, shape=N)
+    sigma = pm.Deterministic("sigma", 1 / pm.math.sqrt(tau))
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(N)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+    trace_aL = pm.sample(1500, tune=1500, target_accept=0.95, chains=2,
+                         progressbar=False)
+
+alpha_post = trace_aL.posterior["alpha"].values
+print(f"alpha posterior: mean={alpha_post.mean():.3f}, "
+      f"95% CI=[{np.percentile(alpha_post, 2.5):.3f}, "
+      f"{np.percentile(alpha_post, 97.5):.3f}]")
+```
+
+::: {.callout-tip}
+## 직관 — 데이터가 $\alpha$ 학습
+
+3-component 데이터에서 $\alpha$ 의 사후가 $\sim 1$ 근처 또는 그보다 작음 (보수적 cluster).
+
+* Prior mean = 1 (Gamma(0.1, 0.1) 의 mean).
+* 데이터가 3 개 cluster 만 정당화 → 사후가 작은 $\alpha$ 선호.
+* 사후 95% CI 가 좁음 ($\alpha$ 에 대한 정보적 추정).
+
+이것이 **Bayesian self-adapting 의 본질** — hyperparameter 자체를 데이터로부터 학습.
+
+권장: $\alpha$ 의 정확한 값을 모를 때 항상 hyperprior 권장. Default 는 $\text{Gamma}(1, 1)$ 또는 $\text{Gamma}(0.1, 0.1)$.
+:::
+
+### (c) Diffuse $P_0$ — 역설적 효과
+
+$P_0$ 의 분산을 매우 크게: $\kappa = 100$ (원래 $\kappa = 1$).
+
+```python
+with pm.Model() as p0_diffuse:
+    pi = pm.Dirichlet("pi", a=(1.0 / N) * np.ones(N))
+    # cluster mean prior with very high variance
+    mu = pm.Normal("mu", 0, 50, shape=N,  # was 5
+                   transform=pm.distributions.transforms.ordered,
+                   initval=np.linspace(-2, 2, N))
+    tau = pm.Gamma("tau", 1, 1, shape=N)
+    sigma = pm.Deterministic("sigma", 1 / pm.math.sqrt(tau))
+    components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(N)]
+    pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+    trace_p0d = pm.sample(1500, tune=1500, target_accept=0.95, chains=2,
+                          progressbar=False)
+
+pi_p0d = trace_p0d.posterior["pi"].mean(dim=("chain", "draw")).values
+n_active_p0d = (pi_p0d > 0.02).sum()
+print(f"diffuse P_0: active components = {n_active_p0d}")
+```
+
+::: {.callout-important}
+## 직관 — Diffuse $P_0$ 의 마법 (역설적 효과)
+
+**Naive 한 직관**: "$P_0$ variance 크게 → uninformative → cluster 수 자유롭게".
+
+**실제**: Cluster 수 **줄어듦** (반대 효과).
+
+#### 메커니즘 (marginal likelihood penalty)
+
+새 cluster 도입 확률 (식 23.6, Polya urn):
+
+$$
+\Pr(\text{new cluster}) \propto \alpha \int \mathcal{K}(y_i \mid \theta) dP_0(\theta)
+$$
+
+= $\alpha \cdot$ marginal likelihood of $y_i$ under $P_0$.
+
+$P_0$ variance 매우 큼:
+
+* Cluster mean prior 가 $(-\infty, \infty)$ 에 거의 균등.
+* 데이터 영역 $[-3, 3]$ 안의 $\theta$ 가 prior probability 거의 0.
+* $\int \mathcal{K}(y_i \mid \theta) dP_0(\theta) \approx 0$ (대부분 $\theta$ 에서 $\mathcal{K} \approx 0$).
+* → 새 cluster 도입 페널티 큼.
+* → 모든 데이터가 한 dominant cluster 로 수렴.
+
+극단: $\text{Var}(P_0) \to \infty$ 면 사후가 단일 cluster (parametric model 와 동치).
+
+#### 권장 — $P_0$ scale 의 결정
+
+1. **표준화**: $y$ 의 mean = 0, sd = 1.
+2. **$\mu_0 = 0, \kappa = 1$**: cluster mean prior variance ≈ data variance.
+3. **데이터 영역 내**: prior 가 데이터 영역에 reasonable mass.
+
+이는 Ch.22 § 22.4 의 동일 권장 — **mixture 의 보편 원칙**.
+
+#### 실무 함의
+
+"객관적 prior" = "diffuse" 의 통념이 mixture 에서 무너짐.
+
+* 정규 회귀: diffuse OK.
+* Mixture: **must be informative** (proper, scale-matched).
+* Hierarchical: 그 사이.
+
+→ Bayesian nonparametric 의 핵심 교훈.
+:::
+
+## 종합 — 실무 권장 워크플로우
+
+::: {.callout-tip}
+## DPM 적용 8 단계
+
+1. **데이터 표준화**: mean = 0, sd = 1.
+2. **Upper bound $k$ 또는 $N$ 선택**: 도메인 지식 + 안전 여유 (보통 20~50).
+3. **Sparse Dirichlet 또는 truncated stick-breaking**: 둘 다 가능 — 알고리즘 가용성에 따라.
+4. **$\alpha$ default = 1**: 또는 $\text{Gamma}(1, 1)$ hyperprior.
+5. **$P_0$ scale = 1**: $\mu_0 = 0, \kappa = 1, a_\tau = b_\tau = 1$.
+6. **Posterior diagnostics**: $\widehat R$ on density (not on cluster-specific).
+7. **Cluster 수 사후**: $H_n$ 의 분포로 데이터의 적절한 cluster 수 추정.
+8. **Sensitivity 점검**: $\alpha$ 와 $P_0$ 변경하여 결과 비교.
+:::
+
+## 코드 — Python 통합 버전
+
+위의 모든 시뮬레이션을 한 파일로 통합한 example:
+
+```python
+"""DPM exercises: full reproduction of Ch.23 § 23.8."""
+import numpy as np
+import pymc as pm
+from scipy import stats
+from scipy.stats import gaussian_kde
+
+rng = np.random.default_rng(42)
+
+
+def simulate_data(n=100, seed=42):
+    """3-component mixture (Ex 1a)."""
+    rng_local = np.random.default_rng(seed)
+    weights = np.array([0.1, 0.5, 0.4])
+    mus = np.array([-1.0, 0.0, 1.0])
+    sigmas = np.sqrt([0.2, 1.0, 0.4])
+    z = rng_local.choice(3, size=n, p=weights)
+    return rng_local.normal(mus[z], sigmas[z]), (weights, mus, sigmas)
+
+
+def true_density(y_grid, weights, mus, sigmas):
+    return sum(w * stats.norm.pdf(y_grid, m, s)
+               for w, m, s in zip(weights, mus, sigmas))
+
+
+def stick_breaking_pymc(beta):
+    portion_remaining = pm.math.concatenate(
+        [[1], pm.math.cumprod(1 - beta)[:-1]])
+    return beta * portion_remaining
+
+
+def fit_dpm(y, method="finite", K=20, alpha=1.0, kappa=1, hyperprior_alpha=False,
+            mu_sd=5):
+    """Finite Dirichlet 또는 truncated stick-breaking DPM 적합."""
+    with pm.Model() as model:
+        if hyperprior_alpha:
+            alpha_var = pm.Gamma("alpha", 0.1, 0.1)
+        else:
+            alpha_var = alpha
+
+        if method == "finite":
+            pi = pm.Dirichlet("pi", a=(alpha_var / K) * np.ones(K))
+        else:  # blocked Gibbs / stick-breaking
+            beta_sb = pm.Beta("beta_sb", 1, alpha_var, shape=K)
+            pi = pm.Deterministic("pi", stick_breaking_pymc(beta_sb))
+
+        mu = pm.Normal("mu", 0, mu_sd, shape=K,
+                       transform=pm.distributions.transforms.ordered,
+                       initval=np.linspace(-2, 2, K))
+        tau = pm.Gamma("tau", 1, 1, shape=K)
+        sigma = pm.Deterministic("sigma", 1 / pm.math.sqrt(tau))
+
+        components = [pm.Normal.dist(mu=mu[h], sigma=sigma[h]) for h in range(K)]
+        pm.Mixture("y", w=pi, comp_dists=components, observed=y)
+
+        trace = pm.sample(1500, tune=1500, target_accept=0.95, chains=2,
+                          progressbar=False)
+    return trace
+
+
+def density_from_trace(trace, y_grid):
+    pi = trace.posterior["pi"].values
+    mu = trace.posterior["mu"].values
+    sigma = trace.posterior["sigma"].values
+    n_total = pi.shape[0] * pi.shape[1]
+    pi_flat = pi.reshape(n_total, -1)
+    mu_flat = mu.reshape(n_total, -1)
+    sigma_flat = sigma.reshape(n_total, -1)
+    densities = np.array([
+        sum(pi_flat[s, h] * stats.norm.pdf(y_grid, mu_flat[s, h], sigma_flat[s, h])
+            for h in range(pi_flat.shape[1]))
+        for s in range(n_total)
+    ])
+    return densities.mean(axis=0)
+
+
+# Run all
+y, true_params = simulate_data()
+y_grid = np.linspace(-3, 3, 200)
+density_true = true_density(y_grid, *true_params)
+
+# Ex 1
+kde = gaussian_kde(y)
+d_kde = kde(y_grid)
+trace_finite = fit_dpm(y, method="finite", K=20, alpha=1.0)
+trace_blocked = fit_dpm(y, method="blocked", K=20, alpha=1.0)
+d_finite = density_from_trace(trace_finite, y_grid)
+d_blocked = density_from_trace(trace_blocked, y_grid)
+
+# Ex 2
+trace_alpha10 = fit_dpm(y, method="finite", K=20, alpha=10.0)
+trace_alpha_learn = fit_dpm(y, method="finite", K=20, hyperprior_alpha=True)
+trace_p0_diffuse = fit_dpm(y, method="finite", K=20, alpha=1.0, mu_sd=50)
+
+# MISE summary
+for label, d in [("KDE", d_kde),
+                 ("Finite mix (a=1)", d_finite),
+                 ("Blocked Gibbs (a=1)", d_blocked),
+                 ("Finite mix (a=10)", density_from_trace(trace_alpha10, y_grid)),
+                 ("Hyperprior alpha", density_from_trace(trace_alpha_learn, y_grid)),
+                 ("Diffuse P_0", density_from_trace(trace_p0_diffuse, y_grid))]:
+    mise = np.mean((d - density_true) ** 2)
+    print(f"{label}: MISE = {mise:.5f}")
+```
+
+## 두 Exercise 의 통합 교훈
+
+### Ex 1 의 핵심
+
+**Ch.22 finite mixture 와 Ch.23 blocked Gibbs 가 등가**:
+
+* Ishwaran-Zarepour 2002 의 정당화.
+* 실무에서 두 방식 자유롭게 선택 — 결과 거의 같음.
+* 단, $k, N$ 충분히 크게 (true cluster 수의 5~10 배).
+
+### Ex 2 의 핵심
+
+**3 가지 sensitivity 차원**:
+
+| 차원 | 변경 | 효과 |
+|:----|:------|:------|
+| $\alpha$ 큼 | 1 → 10 | Cluster 수 증가, 더 smooth |
+| $\alpha$ hyperprior | Fixed → Gamma | 데이터가 학습 (대부분 $\sim 1$) |
+| $P_0$ diffuse | $\kappa = 1$ → $\kappa = 100$ | **역설적**: cluster 수 감소 |
+
+**가장 중요한 교훈**: **diffuse prior 가 mixture 에서 비-uninformative**. 표준화 + $P_0$ scale = 1 이 default.
+
+### Ch.23 시리즈 통합
+
+본 편이 Ch.23 시리즈 (4 편) 의 실무 마무리:
+
+| 편 | 한 줄 |
+|:---|:------|
+| Overview | DP 의 큰 그림 |
+| § 23.1~23.3 | 정의·구성·DPM |
+| § 23.4~23.7 | hierarchical 응용·결산 |
+| § 23.8 (본 편) | **실무 적용 + sensitivity** |
+
+이론 (정의·유도) → 응용 (HDP, NDP, density regression) → **실무 점검 (본 편)** 의 자연스러운 흐름.
+
+## 관련 주제
+
+**Ch.23 시리즈**
+
+* [Ch.23 Overview](./04-23-0-dirichlet-process-overview.qmd)
+* [Ch.23 § 23.1~23.3](./04-23-1-dp-stickbreaking-dpm.qmd)
+* [Ch.23 § 23.4~23.7](./04-23-2-hdp-ndp-density-regression.qmd)
+
+**선행 지식**
+
+* [Ch.22 Finite Mixture Overview](./04-22-0-finite-mixture-overview.qmd) — Ex 1c 의 finite mixture
+* [Ch.22 § 22.4 — Sparse Dirichlet $a = n_0/H$](./04-22-2-unspecified-classification-exercises.qmd)
+* [Ch.7 Model Comparison](./01-7-0-evaluating-comparing-models.qmd)
+
+**관련 개념 (cross-category)**
+
+* [Kernel Density Estimation](../../Machine_Learning/kde.qmd)
+* [Bayesian Sensitivity Analysis](../sensitivity-analysis.qmd)
+* [WAIC, LOO for Mixture Comparison](../../Machine_Learning/waic-loo.qmd)
+* [Variational DPM (Blei-Jordan 2006)](../../Machine_Learning/variational-dpm.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Ch.23 § 23.8. CRC Press.
+* Ishwaran, H., & Zarepour, M. (2002). Exact and Approximate Sum-Representations for the Dirichlet Process. *Canadian Journal of Statistics*, 30(2), 269-283. (Ex 1 의 정당화)
+* Ishwaran, H., & James, L. F. (2001). Gibbs Sampling Methods for Stick-Breaking Priors. *JASA*, 96(453), 161-173. (Blocked Gibbs)
+* Sethuraman, J. (1994). A Constructive Definition of Dirichlet Priors. *Statistica Sinica*, 4, 639-650.
+* Neal, R. M. (2000). Markov Chain Sampling Methods for DPM Models. *JCGS*, 9(2), 249-265.
+* Roeder, K., & Wasserman, L. (1997). Practical Bayesian Density Estimation Using Mixtures of Normals. *JASA*, 92(439), 894-902. (Diffuse $P_0$ 위험)
+* Escobar, M. D., & West, M. (1995). Bayesian Density Estimation and Inference Using Mixtures. *JASA*, 90(430), 577-588.
+* Rousseau, J., & Mengersen, K. (2011). Asymptotic Behaviour of the Posterior in Overfitted Mixtures. *JRSS B*, 73(5), 689-710. (Sparse Dirichlet zero-out)
+* Silverman, B. W. (1986). *Density Estimation for Statistics and Data Analysis*. Chapman & Hall. (KDE 정전)
+* Scott, D. W. (2015). *Multivariate Density Estimation*, 2nd ed. Wiley.
