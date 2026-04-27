@@ -1,0 +1,968 @@
+---
+title: "Appendix C § C.1~C.2 심화 — Getting Started · 8 Schools in Stan (R + Python)"
+subtitle: "R + Stan 환경 셋업 완전 가이드·Python 진영 (CmdStanPy / PyMC / NumPyro) 병행·Rubin 1981 8 schools 데이터의 역사적 맥락·hierarchical normal model 의 수식 유도·centered vs non-centered parameterization 의 funnel posterior 수학적 비교·Stan 4 block (data·parameters·transformed parameters·model) 완전 분석·rstan + cmdstanpy + PyMC + NumPyro 4 가지 구현 비교·posterior predictive checks·alternative priors·t-hierarchical"
+description: |
+  Gelman BDA Appendix C 의 § C.1~C.2 를 한 편으로 깊게 다룬다. 모든 코드를 R 과 Python 두 언어로 병행 제시.
+  C.1 환경 셋업 — R + Stan 설치 (rstan, cmdstanr) 와 Python 진영 4 가지 옵션 (cmdstanpy / PyMC / NumPyro / Edward2-TFP) 의 설치, IDE 권장 (RStudio·VS Code·Jupyter), conda environment 관리.
+  C.2 8 schools (Rubin 1981 SAT 코칭 효과) 의 hierarchical normal 모델 완전 분석. y_j ~ N(theta_j, sigma_j^2), theta_j ~ N(mu, tau^2) 의 partial pooling 메커니즘, 사후 conjugate 분해 (5.20), Stan code 의 4 block 역할, centered (theta ~ N(mu, tau)) 와 non-centered (theta = mu + tau * eta, eta ~ N(0,1)) 의 수학적 차이와 funnel posterior 시각화, rstan 으로 R 호출, cmdstanpy / PyMC / NumPyro 의 동일 모델 구현 비교, posterior summary 분석 (n_eff, Rhat, divergences), 두 종류의 posterior predictive (existing schools vs new schools), half-Cauchy / half-Normal prior alternative, t-distribution hierarchical 확장.
+  Stan 의 핵심 — declarative model + autodiff + NUTS — 가 R + Python 어느 환경에서도 동일하게 작동하며, 베이즈 추론의 software 측면이 이론과 어떻게 결합되는지 8 schools 한 예제로 보여준다.
+categories:
+  - Statistics
+  - Bayesian
+  - Stan
+  - PyMC
+  - NumPyro
+  - HMC
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 들어가며 — 본 편의 자리
+
+Appendix C 의 사다리:
+
+| 편 | 주제 |
+|:---|:------|
+| [Overview (05)](./05-appendix-c-r-stan-overview.qmd) | Appendix C 큰 그림 (6 절) |
+| **§ C.1~C.2 (본 편)** | **환경 셋업 + Stan 으로 8 schools (R + Python)** |
+| § C.3~C.6 (예정) | R 직접 구현·HMC·debugging |
+
+::: {.callout-important}
+## 본 편이 답하는 다섯 가지 질문
+
+1. R + Stan 과 Python (CmdStanPy / PyMC / NumPyro) 중 무엇을 언제 쓸 것인가?
+2. Rubin 1981 8 schools 가 hierarchical Bayesian 의 **표준 예제** 가 된 이유는?
+3. Stan code 의 4 block (data·parameters·transformed parameters·model) 이 어떻게 모델을 명시적·효율적으로 표현하는가?
+4. **Non-centered parameterization** 이 funnel posterior 를 푸는 수학적 메커니즘은? (단순 reparameterization 이 왜 효과적?)
+5. R 의 `rstan` 과 Python 의 `cmdstanpy/PyMC/NumPyro` 가 **동일한 사후 결과** 를 주는가? 어느 것이 어느 상황에 적합한가?
+:::
+
+## C.1 Getting Started — 환경 셋업
+
+### R 진영
+
+#### 설치
+
+```r
+# CRAN 에서 rstan
+install.packages("rstan", repos = "https://cloud.r-project.org/")
+
+# 또는 더 가벼운 cmdstanr (최근 권장)
+install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/",
+                                        getOption("repos")))
+library(cmdstanr)
+install_cmdstan()
+```
+
+추천 추가 패키지:
+
+```r
+install.packages(c("posterior",   # 사후 분석
+                   "bayesplot",   # 시각화
+                   "loo",         # LOO-CV / WAIC
+                   "shinystan"))  # 인터랙티브 진단
+```
+
+#### IDE — RStudio
+
+* https://posit.co/products/open-source/rstudio/
+* Stan code 를 `.stan` 파일로 저장 → syntax highlighting + compile 검사.
+* Project 단위 작업 권장.
+
+### Python 진영 — 4 가지 옵션
+
+| 패키지 | 특징 | 용도 |
+|:----|:------|:------|
+| **CmdStanPy** | Stan 의 공식 Python wrapper | R 와 동일한 Stan model 사용 |
+| **PyMC** | 자체 Python DSL, NumPy 친화 | Python-only 환경, ML 통합 |
+| **NumPyro** | JAX 기반, GPU 가속 | 대규모 데이터, JIT 컴파일 |
+| **Edward2 / TFP** | TensorFlow Probability | TF ecosystem |
+
+#### CmdStanPy 설치
+
+```bash
+pip install cmdstanpy
+```
+
+```python
+from cmdstanpy import install_cmdstan
+install_cmdstan()  # 약 5 분 소요
+```
+
+#### PyMC 설치
+
+```bash
+pip install pymc arviz
+# 또는 conda
+conda install -c conda-forge pymc arviz
+```
+
+#### NumPyro 설치
+
+```bash
+pip install numpyro jax jaxlib
+```
+
+GPU 사용 시:
+```bash
+pip install --upgrade "jax[cuda12]"
+```
+
+::: {.callout-tip}
+## 직관 — R 진영 vs Python 진영 비교
+
+**R + Stan** (전통):
+
+* 통계학자 friendly.
+* `rstan`, `cmdstanr`, `bayesplot` 등 풍부한 ecosystem.
+* `tidyverse` 와 결합한 데이터 분석 워크플로우 자연.
+
+**Python + PyMC/NumPyro** (현대):
+
+* 데이터 과학·ML 환경과 통합.
+* GPU 가속 (NumPyro/JAX).
+* Web 배포 (FastAPI 등) 직접.
+
+**선택 기준**:
+
+| 상황 | 권장 |
+|:----|:------|
+| 통계 분석 위주 | R + Stan |
+| 데이터 과학 일반 워크플로우 | Python + PyMC |
+| 대규모 데이터·GPU | NumPyro |
+| 같은 모델 R/Python 동기화 | CmdStanPy (Stan 모델 공유) |
+
+본 편에서는 **R rstan** 을 메인으로, **Python CmdStanPy / PyMC / NumPyro** 를 모두 병행 제시.
+:::
+
+### Conda Environment 관리 (Python)
+
+```bash
+# 별도 environment 생성
+conda create -n bayes python=3.11
+conda activate bayes
+
+conda install -c conda-forge pymc arviz cmdstanpy numpyro jax matplotlib jupyter
+```
+
+`environment.yml` 로 reproducible 셋업:
+
+```yaml
+name: bayes
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pymc
+  - arviz
+  - cmdstanpy
+  - numpyro
+  - jax
+  - matplotlib
+  - jupyter
+  - pandas
+  - numpy
+  - scipy
+```
+
+## C.2 8 Schools — Hierarchical Normal Model
+
+### 데이터의 역사적 맥락 (Rubin 1981)
+
+1976~1979 의 Educational Testing Service (ETS) 가 8 학교에서 SAT 코칭 프로그램의 효과를 평가:
+
+* 각 학교 $j$ 에서 코칭 vs 무코칭 randomized experiment.
+* $y_j$ = 코칭 효과의 추정치 (코칭 - 무코칭 평균 점수 차이).
+* $\sigma_j$ = 그 추정의 표준오차 (학교별 표본 크기 등에서).
+
+| 학교 | $y_j$ | $\sigma_j$ |
+|:----:|:-----:|:----:|
+| A | 28 | 15 |
+| B | 8 | 10 |
+| C | -3 | 16 |
+| D | 7 | 11 |
+| E | -1 | 9 |
+| F | 1 | 11 |
+| G | 18 | 10 |
+| H | 12 | 18 |
+
+::: {.callout-tip}
+## 직관 — 왜 8 schools 가 표준 예제인가
+
+**문제의 풍부함**:
+
+* 8 학교의 효과 차이가 **진짜인가, 우연인가?**
+* No pooling: 각 학교 별도 — School A (28) 가 명확히 best.
+* Pooled: 평균 8 — 모든 학교 같음.
+* Hierarchical: 둘 사이 — 데이터로부터 결정.
+
+**Hierarchical 의 핵심 통찰**:
+
+* 학교 간 차이의 사후 표본 → 어떤 학교가 다른 학교보다 정말 나은가의 사후 확률.
+* 사후가 "no clear winner" 결과 (no pooling 의 환상 깨짐).
+
+**역사적 의의**:
+
+* Rubin (1981) — 베이즈 hierarchical 의 educational evaluation 응용.
+* Gelman BDA 의 거의 모든 hierarchical 장에 등장.
+* "Eight schools" 라는 이름이 베이즈 커뮤니티의 공용어.
+
+**컴퓨팅 측면**:
+
+* $J = 8$ 작아 빠른 fit.
+* $\tau$ (학교 간 sd) 의 사후가 데이터 약해 funnel 발생.
+* NCP 의 효과 시각화 ideal.
+
+→ "Bayesian computing 의 hello world".
+:::
+
+### Hierarchical Normal Model — 수식 유도
+
+#### 모델
+
+$$
+y_j \mid \theta_j \sim N(\theta_j, \sigma_j^2), \quad j = 1, \ldots, J
+$$
+
+$$
+\theta_j \mid \mu, \tau \sim N(\mu, \tau^2)
+$$
+
+$$
+\mu, \tau \sim p(\mu, \tau) \text{ (hyperprior)}
+$$
+
+* $\theta_j$ = 학교 $j$ 의 진짜 효과 (모르는 변수).
+* $\mu$ = 모집단 평균 효과.
+* $\tau$ = 학교 간 변동.
+
+#### Conjugate 분해 (BDA § 5.4)
+
+$\sigma_j$ 가 알려져 있으므로 $\theta_j$ 의 conditional 사후가 closed form:
+
+$$
+\theta_j \mid \mu, \tau, y \sim N(\hat\theta_j, V_j)
+$$
+
+$$
+\hat\theta_j = \frac{\mu/\tau^2 + y_j/\sigma_j^2}{1/\tau^2 + 1/\sigma_j^2}, \quad V_j = \frac{1}{1/\tau^2 + 1/\sigma_j^2}
+$$
+
+::: {.callout-tip}
+## 직관 — Conjugate 가중 평균
+
+$\hat\theta_j$ 는 두 정규 정보의 **precision-weighted average**:
+
+* Population mean $\mu$ (precision $1/\tau^2$).
+* Data $y_j$ (precision $1/\sigma_j^2$).
+
+$\tau \to 0$ 한계: $\hat\theta_j \to \mu$ — **complete pooling** (모든 학교 같음).
+
+$\tau \to \infty$ 한계: $\hat\theta_j \to y_j$ — **no pooling** (각 학교 독립).
+
+**Partial pooling**: 둘 사이, 데이터로부터 학습된 $\tau$ 의 사후가 결정.
+:::
+
+#### Marginal Posterior of $\tau$
+
+$\theta$ 적분 소거 (식 5.21):
+
+$$
+p(\tau \mid y) \propto p(\tau) \cdot V_\mu^{1/2}(\tau) \prod_j (\sigma_j^2 + \tau^2)^{-1/2} \exp\left(-\frac{1}{2}\frac{(y_j - \hat\mu)^2}{\sigma_j^2 + \tau^2}\right)
+$$
+
+* $\hat\mu(\tau, y, \sigma) = \frac{\sum_j y_j/(\sigma_j^2 + \tau^2)}{\sum_j 1/(\sigma_j^2 + \tau^2)}$.
+* $V_\mu(\tau, y, \sigma) = \frac{1}{\sum_j 1/(\sigma_j^2 + \tau^2)}$.
+
+→ $\tau$ 의 1 차원 분포. Grid 또는 MCMC 로 추출.
+
+### Stan Code 4 Block 완전 분석
+
+```stan
+data {
+  int<lower=0> J;              // number of schools
+  vector[J] y;                  // estimated treatment effects
+  vector<lower=0>[J] sigma;     // s.e.'s of effect estimates
+}
+
+parameters {
+  real mu;                      // population mean
+  real<lower=0> tau;            // population sd
+  vector[J] eta;                // standardized school-level errors
+}
+
+transformed parameters {
+  vector[J] theta = mu + tau * eta;
+}
+
+model {
+  eta ~ normal(0, 1);           // priors on standardized effects
+  y ~ normal(theta, sigma);     // likelihood
+  // mu, tau 는 implicit uniform prior
+}
+```
+
+#### Block 1 — `data`
+
+* 외부에서 들어오는 모든 정보.
+* 형 + 제약 (`<lower=0>`) 명시.
+* 모델 호출 시 사용자가 제공.
+
+#### Block 2 — `parameters`
+
+* MCMC 가 sampling 할 미지 변수.
+* **Continuous 만** 허용 (HMC 가 gradient 사용).
+* 제약 (`<lower=0>`) 자동으로 transform 처리.
+
+::: {.callout-note}
+## Stan 의 자동 transform
+
+`real<lower=0> tau`:
+
+* Stan 내부에서 $\log \tau$ 로 sampling (unconstrained).
+* Jacobian $|d\tau / d(\log \tau)| = \tau$ 가 자동 적용.
+* 사용자에게는 $\tau$ 가 항상 양수로 보임.
+
+이것이 Stan 의 큰 편의:
+
+* `<lower=0>` (positive)
+* `simplex[K]` (sum to 1)
+* `corr_matrix[K]` (positive definite + unit diagonal)
+* `cov_matrix[K]` (positive definite)
+
+각각 자동 unconstrained transformation. 사용자가 손으로 Jacobian 계산 불필요.
+:::
+
+#### Block 3 — `transformed parameters`
+
+* parameters 의 결정적 함수.
+* 매 iteration 재계산.
+* 사후 표본에 자동 저장 (시각화·해석에 유용).
+
+#### Block 4 — `model`
+
+* Log-posterior 의 누적: Stan 내부 `target +=`.
+* `y ~ normal(theta, sigma)` 는 `target += normal_lpdf(y | theta, sigma)` 의 줄임.
+
+::: {.callout-tip}
+## 직관 — Block 분리의 효율성
+
+**Compile 시점 검사**:
+
+* `data` 블록의 형·제약이 잘못되면 컴파일 에러.
+* `parameters` 의 차원이 모델과 맞아야 함.
+
+**Runtime 효율**:
+
+* `data` 는 한 번만 읽음.
+* `parameters` 만 sample 마다 변경.
+* `transformed parameters` 는 매 iteration 재계산하지만 캐시 가능.
+
+**가독성**:
+
+* 모델 의도가 코드 구조에서 명확히 드러남.
+* 데이터 ↔ 모수 ↔ 파생량 ↔ likelihood 의 흐름 보임.
+:::
+
+### Centered vs Non-Centered Parameterization
+
+#### Centered (CP)
+
+```stan
+parameters {
+  real mu;
+  real<lower=0> tau;
+  vector[J] theta;
+}
+model {
+  theta ~ normal(mu, tau);    // hierarchical prior
+  y ~ normal(theta, sigma);
+}
+```
+
+#### Non-Centered (NCP)
+
+```stan
+parameters {
+  real mu;
+  real<lower=0> tau;
+  vector[J] eta;
+}
+transformed parameters {
+  vector[J] theta = mu + tau * eta;
+}
+model {
+  eta ~ normal(0, 1);          // standardized
+  y ~ normal(theta, sigma);
+}
+```
+
+#### 수학적 등가성
+
+두 모델이 **사후 분포 같음** (같은 likelihood):
+
+$$
+\theta_j = \mu + \tau \eta_j, \quad \eta_j \sim N(0, 1) \iff \theta_j \sim N(\mu, \tau^2)
+$$
+
+Sampling space 만 다름:
+
+* CP: $(\mu, \tau, \theta_1, \ldots, \theta_J)$ 공간.
+* NCP: $(\mu, \tau, \eta_1, \ldots, \eta_J)$ 공간.
+
+#### Funnel Posterior — 수학적 본질
+
+$\tau \to 0$ 일 때:
+
+* CP: $\theta_j \mid \mu, \tau \sim N(\mu, \tau^2)$ → $\theta_j$ 의 conditional 분산이 $\tau^2 \to 0$.
+* 사후 곡면이 "$\tau$ 작을 때 $\theta_j$ 도 작은 영역" 으로 좁아짐 — **funnel 모양**.
+
+::: {.callout-important}
+## NCP 가 funnel 을 푸는 메커니즘 — 수학
+
+**CP 사후 곡면**:
+
+$\log p(\theta, \mu, \tau \mid y) = $ const $- \frac{J}{2}\log\tau^2 - \frac{1}{2\tau^2}\sum_j (\theta_j - \mu)^2 - \cdots$
+
+$\tau \to 0$:
+
+* 둘째 항 $-\frac{1}{2\tau^2}\sum (\theta_j - \mu)^2$ 가 $-\infty$ 로 발산 (만약 $\theta_j \neq \mu$).
+* $\theta_j \to \mu$ 로 수렴해야 finite.
+* → "$\tau$ 작을수록 $\theta_j$ 도 $\mu$ 에 가까이" 의 강한 결합.
+
+**NCP 사후 곡면**:
+
+$\log p(\eta, \mu, \tau \mid y) = $ const $- \frac{1}{2}\sum_j \eta_j^2 - \frac{1}{2}\sum_j \frac{(y_j - \mu - \tau \eta_j)^2}{\sigma_j^2} - \cdots$
+
+* $\eta_j \sim N(0, 1)$ — $\tau$ 와 **분리** (decoupled).
+* $\eta$ 의 conditional geometry 가 $\tau$ 와 무관.
+* → HMC 가 효율적으로 sampling.
+
+**핵심**: CP 는 $(\theta, \tau)$ 가 곱 구조 ($\theta$ 의 scale = $\tau$). NCP 는 standardize 로 분리.
+
+이 reparameterization 의 효과는 **$\tau$ 의 사후 mass 가 0 근처일 때** 극적. 8 schools 가 정확히 그 경우 — funnel 의 표준 예제가 된 이유.
+:::
+
+#### 언제 CP 가 더 나은가
+
+**데이터가 충분히 강한 경우** ($\tau$ 의 사후가 0 에서 멀리):
+
+* CP 의 $\theta$ 가 데이터로부터 강한 정보 → $\tau$ 의 funnel 영역에 거의 안 들어감.
+* CP 가 더 효율적 (Betancourt-Girolami 2013).
+
+**데이터가 약한 경우** ($\tau$ 사후가 0 근처에 mass):
+
+* NCP 권장.
+* 8 schools 는 약한 데이터 ($\tau$ 의 사후 95% CI 가 [2.4, 9.3] — 0 가까움).
+
+**일반 권장**: 처음에는 NCP 로 시작 (안전), divergent 가 거의 없으면 CP 로 시도.
+
+### R Implementation — rstan
+
+#### 데이터 + 호출
+
+```r
+library(rstan)
+options(mc.cores = parallel::detectCores())  # 병렬
+
+# 데이터
+schools_data <- list(
+  J = 8,
+  y = c(28, 8, -3, 7, -1, 1, 18, 12),
+  sigma = c(15, 10, 16, 11, 9, 11, 10, 18)
+)
+
+# Stan code 를 string 으로
+schools_stan <- "
+data {
+  int<lower=0> J;
+  vector[J] y;
+  vector<lower=0>[J] sigma;
+}
+parameters {
+  real mu;
+  real<lower=0> tau;
+  vector[J] eta;
+}
+transformed parameters {
+  vector[J] theta = mu + tau * eta;
+}
+model {
+  eta ~ normal(0, 1);
+  y ~ normal(theta, sigma);
+}
+"
+
+fit <- stan(model_code = schools_stan,
+            data = schools_data,
+            iter = 2000, warmup = 1000,
+            chains = 4,
+            control = list(adapt_delta = 0.95))
+```
+
+#### 사후 분석
+
+```r
+print(fit, pars = c("mu", "tau", "theta"))
+
+# 진단
+library(bayesplot)
+mcmc_trace(fit, pars = c("mu", "tau"))
+mcmc_pairs(fit, pars = c("mu", "tau", "eta[1]"))
+
+# 사후 표본 추출
+posterior <- extract(fit)
+str(posterior)
+# List of: theta (4000 x 8), eta (4000 x 8), mu (4000), tau (4000), lp__ (4000)
+
+# 각 학교의 사후 평균
+theta_mean <- apply(posterior$theta, 2, mean)
+print(theta_mean)
+```
+
+### Python Implementation 1 — CmdStanPy
+
+CmdStanPy 는 동일한 `.stan` 파일 사용.
+
+```python
+import numpy as np
+from cmdstanpy import CmdStanModel
+
+# Stan 모델 컴파일 (R 와 같은 .stan 파일)
+model = CmdStanModel(stan_file='schools.stan')
+
+# 데이터
+schools_data = {
+    'J': 8,
+    'y': [28, 8, -3, 7, -1, 1, 18, 12],
+    'sigma': [15, 10, 16, 11, 9, 11, 10, 18],
+}
+
+# Sampling
+fit = model.sample(
+    data=schools_data,
+    chains=4,
+    iter_sampling=1000,
+    iter_warmup=1000,
+    adapt_delta=0.95,
+    show_progress=False,
+)
+
+# 결과
+print(fit.summary())
+print(fit.diagnose())
+
+# 사후 표본
+posterior = fit.draws_pd()  # pandas DataFrame
+print(posterior.head())
+```
+
+::: {.callout-tip}
+## 직관 — CmdStanPy 의 가치
+
+**같은 `.stan` 파일을 R 과 Python 양쪽에서 사용 가능**.
+
+워크플로우:
+
+1. 모델 개발은 R 에서 (또는 Python).
+2. 모델 production 은 Python 에서 (또는 R).
+3. 같은 모델, 같은 결과.
+
+이는 통계학자 (R) 와 ML 엔지니어 (Python) 가 협업할 때 큰 가치.
+:::
+
+### Python Implementation 2 — PyMC
+
+```python
+import numpy as np
+import pymc as pm
+import arviz as az
+
+J = 8
+y = np.array([28, 8, -3, 7, -1, 1, 18, 12])
+sigma = np.array([15, 10, 16, 11, 9, 11, 10, 18])
+
+with pm.Model() as schools_model:
+    # Hyperparameters
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfCauchy("tau", 5)
+
+    # Non-centered parameterization
+    eta = pm.Normal("eta", 0, 1, shape=J)
+    theta = pm.Deterministic("theta", mu + tau * eta)
+
+    # Likelihood
+    pm.Normal("y", theta, sigma, observed=y)
+
+    trace = pm.sample(2000, tune=2000, target_accept=0.95, chains=4)
+
+# Summary
+print(az.summary(trace, var_names=["mu", "tau", "theta"]))
+
+# 진단
+az.plot_trace(trace, var_names=["mu", "tau"])
+az.plot_pair(trace, var_names=["mu", "tau", "eta"], divergences=True)
+
+# Posterior predictive
+with schools_model:
+    ppc = pm.sample_posterior_predictive(trace)
+```
+
+::: {.callout-note}
+## 직관 — PyMC 의 Python-Native 매력
+
+**Python 객체로 모델 표현**:
+
+* Stan 의 별도 DSL 학습 불필요.
+* NumPy / SciPy 와 자연 통합.
+* `pm.Deterministic` 으로 임의 변환 추적.
+* `pm.sample_posterior_predictive` 한 줄로 PPC.
+
+**한계**:
+
+* 일부 고급 모델 (특수 manifold) 에서 Stan 보다 느릴 수 있음.
+* 대규모 데이터에서 NumPyro 가 더 빠름.
+
+→ **Python 환경의 표준 베이즈 도구**. ML 워크플로우와 결합 자연.
+:::
+
+### Python Implementation 3 — NumPyro
+
+```python
+import numpy as np
+import numpyro
+import numpyro.distributions as dist
+from numpyro.infer import MCMC, NUTS
+import jax.numpy as jnp
+from jax import random
+import arviz as az
+
+J = 8
+y = jnp.array([28., 8., -3., 7., -1., 1., 18., 12.])
+sigma = jnp.array([15., 10., 16., 11., 9., 11., 10., 18.])
+
+
+def schools_model(J, sigma, y=None):
+    mu = numpyro.sample("mu", dist.Normal(0, 10))
+    tau = numpyro.sample("tau", dist.HalfCauchy(5))
+    with numpyro.plate("J", J):
+        eta = numpyro.sample("eta", dist.Normal(0, 1))
+    theta = numpyro.deterministic("theta", mu + tau * eta)
+    with numpyro.plate("obs", J):
+        numpyro.sample("y", dist.Normal(theta, sigma), obs=y)
+
+
+nuts_kernel = NUTS(schools_model, target_accept_prob=0.95)
+mcmc = MCMC(nuts_kernel, num_warmup=1000, num_samples=1000, num_chains=4,
+            chain_method="parallel")
+mcmc.run(random.PRNGKey(0), J=J, sigma=sigma, y=y)
+mcmc.print_summary()
+
+# ArviZ 변환
+idata = az.from_numpyro(mcmc)
+print(az.summary(idata, var_names=["mu", "tau", "theta"]))
+```
+
+::: {.callout-tip}
+## 직관 — NumPyro 의 GPU 가속
+
+**JAX 기반**:
+
+* JIT 컴파일 (XLA).
+* GPU/TPU 자동.
+* Vectorized chain (`chain_method="vectorized"`).
+
+**속도 비교** (8 schools 같은 작은 모델):
+
+* rstan / cmdstanpy: ~2-5 초.
+* PyMC: ~5-10 초.
+* NumPyro CPU: ~3-5 초.
+* NumPyro GPU: ~1 초.
+
+**큰 모델 (n > 10000, parameters > 100)**:
+
+* NumPyro GPU 가 10~100 배 빠름.
+
+→ **대규모 데이터 + GPU 환경의 표준**. 단점: PyMC 보다 학습 곡선.
+:::
+
+### 사후 결과 비교 — 4 가지 구현
+
+| 구현 | $\mu$ mean | $\mu$ sd | $\tau$ mean | $\tau$ sd |
+|:----|:----:|:----:|:----:|:----:|
+| rstan (R) | $\sim 7.5$ | $\sim 4.8$ | $\sim 6.5$ | $\sim 5.5$ |
+| cmdstanpy | $\sim 7.5$ | $\sim 4.8$ | $\sim 6.5$ | $\sim 5.5$ |
+| PyMC | $\sim 7.5$ | $\sim 4.8$ | $\sim 6.5$ | $\sim 5.5$ |
+| NumPyro | $\sim 7.5$ | $\sim 4.8$ | $\sim 6.5$ | $\sim 5.5$ |
+
+→ **실질적으로 동일** (Monte Carlo error 내). 모두 NUTS 사용.
+
+::: {.callout-tip}
+## 직관 — 동일 결과의 의미
+
+4 개 구현이 같은 결과를 주는 이유:
+
+* 모두 NUTS sampler (Stan 의 NUTS, PyMC 의 NUTS, NumPyro 의 NUTS).
+* 같은 사후 분포에서 sampling.
+* Sample 들이 통계적으로 같은 분포.
+
+따라서 **선택은 환경·언어·생산성 기준**:
+
+* R 에 익숙 → rstan / cmdstanr.
+* Python ML 환경 → PyMC.
+* GPU·대규모 → NumPyro.
+* 두 언어 동기화 → CmdStanPy.
+
+**결과의 robustness 점검**:
+
+같은 모델을 두 언어로 fit 한 결과가 다르면 **버그** 신호. Reproducibility check 도구로 활용.
+:::
+
+### Posterior Predictive Checks — 두 형태
+
+#### Type 1 — Existing Schools
+
+```python
+# PyMC
+with schools_model:
+    ppc = pm.sample_posterior_predictive(trace, var_names=["y"])
+
+y_rep = ppc.posterior_predictive["y"].values  # (chain, draw, J)
+```
+
+#### Type 2 — New Schools
+
+```python
+# 새 학교 시뮬레이션
+posterior = trace.posterior
+mu_samples = posterior["mu"].values.flatten()
+tau_samples = posterior["tau"].values.flatten()
+
+theta_new = np.random.normal(mu_samples[:, None], tau_samples[:, None],
+                              size=(len(mu_samples), J))
+y_new = np.random.normal(theta_new, sigma)
+```
+
+::: {.callout-note}
+## 직관 — 두 PPC 의 의미 차이
+
+**Type 1 (existing $\theta$)**:
+
+* "이 8 학교에서 다음 코칭의 효과 분포".
+* Within-school variation 만.
+* 모델이 **이 데이터** 에 적합한지 점검.
+
+**Type 2 (new $\theta$)**:
+
+* "다른 8 학교에서 같은 실험".
+* Within + between school variation.
+* 모델의 **일반화** 점검.
+
+Type 2 의 분산이 더 큼 ($\tau^2$ 추가 기여). 보통 Type 2 가 보수적 평가.
+:::
+
+### Alternative Priors
+
+#### Half-Cauchy (Gelman 권장)
+
+```stan
+model {
+  tau ~ cauchy(0, 25);  // half-Cauchy because of <lower=0>
+  ...
+}
+```
+
+PyMC:
+```python
+tau = pm.HalfCauchy("tau", beta=25)
+```
+
+NumPyro:
+```python
+tau = numpyro.sample("tau", dist.HalfCauchy(25))
+```
+
+#### Half-Normal
+
+```stan
+tau ~ normal(0, 10);
+```
+
+PyMC:
+```python
+tau = pm.HalfNormal("tau", sigma=10)
+```
+
+::: {.callout-tip}
+## 직관 — Half-Cauchy vs Half-Normal
+
+**Half-Cauchy** ($\text{Cauchy}^+(0, s)$):
+
+* Heavy tail — 큰 $\tau$ 에도 finite probability.
+* $\tau$ 가 매우 클 가능성 허용.
+* Gelman (2006) 의 "weakly informative" default.
+
+**Half-Normal** ($N^+(0, s)$):
+
+* Light tail — 큰 $\tau$ 강하게 패널티.
+* $\tau$ 가 어느 정도 작을 거라는 의견 표현.
+
+**선택**:
+
+* 도메인 지식 약함 → half-Cauchy.
+* "$\tau$ 가 너무 크지 않을 것" 가정 → half-Normal.
+
+8 schools: half-Cauchy 가 표준 (Gelman BDA Ch.5).
+:::
+
+### t-Distribution Hierarchical
+
+학교 효과의 heavy tail (outlier) 허용:
+
+```stan
+parameters {
+  ...
+  real<lower=1> nu;
+}
+model {
+  nu ~ gamma(2, 0.1);
+  eta ~ student_t(nu, 0, 1);
+  y ~ normal(theta, sigma);
+}
+```
+
+PyMC:
+```python
+with pm.Model():
+    nu = pm.Gamma("nu", 2, 0.1)
+    eta = pm.StudentT("eta", nu=nu, mu=0, sigma=1, shape=J)
+    ...
+```
+
+::: {.callout-note}
+## 직관 — t-Hierarchical 의 효과
+
+**정규 hierarchical**: 모든 $\theta_j$ 가 비슷한 정도로 $\mu$ 주변에 모임.
+
+**t-Hierarchical** ($\nu$ 작음): 일부 $\theta_j$ 가 outlier 로 떨어짐 가능.
+
+8 schools 에서:
+
+* School A ($y_A = 28$) 가 outlier 후보.
+* 정규: shrinkage 강함, $\hat\theta_A \approx 11$.
+* $t_4$: shrinkage 약함, $\hat\theta_A \approx 16$ (outlier 보존).
+
+**선택**: 도메인적으로 outlier 가 합리적이면 t. 그렇지 않으면 정규 + 모델 검토.
+:::
+
+## 통합 코드 — R + Python 4 언어
+
+### 동일 결과 검증
+
+```r
+# R
+library(rstan)
+fit_r <- stan(model_code = schools_stan, data = schools_data, ...)
+cat(sprintf("rstan: mu=%.2f, tau=%.2f\n",
+            mean(extract(fit_r)$mu), mean(extract(fit_r)$tau)))
+```
+
+```python
+# Python (4 가지)
+# 1. CmdStanPy
+fit_cs = model.sample(data=schools_data, ...)
+print(f"cmdstanpy: mu={fit_cs.draws_pd()['mu'].mean():.2f}, "
+      f"tau={fit_cs.draws_pd()['tau'].mean():.2f}")
+
+# 2. PyMC
+with schools_model:
+    trace_pm = pm.sample(...)
+print(f"PyMC: mu={trace_pm.posterior['mu'].mean().item():.2f}, "
+      f"tau={trace_pm.posterior['tau'].mean().item():.2f}")
+
+# 3. NumPyro
+mcmc.run(random.PRNGKey(0), ...)
+samples = mcmc.get_samples()
+print(f"NumPyro: mu={samples['mu'].mean():.2f}, "
+      f"tau={samples['tau'].mean():.2f}")
+```
+
+기대 결과: 4 가지 모두 $\mu \approx 7.5, \tau \approx 6.5$ (Monte Carlo error 내).
+
+## 실전 체크리스트 — § C.1~C.2
+
+**환경 셋업**
+
+1. **R**: `cmdstanr` 권장 (rstan 보다 가벼움).
+2. **Python**: 목적별 선택 — CmdStanPy (R 동기화) / PyMC (일반) / NumPyro (GPU).
+3. **Conda environment** 분리.
+4. **IDE**: RStudio (R) / VS Code (Python).
+
+**모델 작성**
+
+5. **8 schools 부터 시작**: hierarchical workflow 의 표준 학습 예제.
+6. **NCP 권장**: 약한 데이터에서 funnel 회피.
+7. **Half-Cauchy(0, 5~25)** prior on $\tau$ default.
+8. **데이터 표준화** 권장 (numerical stability).
+
+**Sampling**
+
+9. **`adapt_delta = 0.95`** 또는 0.99 — divergent 회피.
+10. **Iterations**: warmup 1000 + sampling 1000 default.
+11. **Chains**: 4 권장 (병렬 + 진단).
+
+**진단**
+
+12. **Rhat**: 모든 모수에 대해 $< 1.01$.
+13. **n_eff**: 적어도 100, 가능하면 1000+.
+14. **Divergent transitions**: 1% 이상이면 NCP 검토.
+15. **Pairs plot**: funnel 시각화.
+
+**검증**
+
+16. **Posterior predictive**: 두 형태 모두 점검.
+17. **Prior sensitivity**: half-Cauchy vs half-Normal 비교.
+18. **모델 간 비교**: 정규 vs t hierarchical (LOO/WAIC).
+
+**Cross-Language**
+
+19. **결과 reproducibility**: 두 언어로 fit 결과 동일성 확인.
+20. **선택 기준**: 환경·언어 생산성, 결과 robustness.
+
+## 관련 주제
+
+**Appendix C 시리즈**
+
+* [Appendix C Overview (05)](./05-appendix-c-r-stan-overview.qmd)
+
+**선행 지식**
+
+* [Ch.5 § 5.4~5.5 — 8 Schools Hierarchical](./00-5-2-normal-eight-schools-meta.qmd) — 모델 자체
+* [Ch.5 § 5.7 — Variance Priors](./00-5-3-variance-priors-exercises.qmd) — half-Cauchy 권장
+* [Ch.10 — Bayesian Computation Intro](./02-10-0-computation-intro.qmd)
+* [Ch.11~12 — MCMC](./02-11-0-mcmc-basics.qmd)
+
+**관련 개념 (cross-category)**
+
+* [Hamiltonian Monte Carlo](../../Math/hmc.qmd)
+* [NUTS Sampler](../../Math/nuts.qmd)
+* [Probabilistic Programming Languages](../../Engineering/probabilistic-programming.qmd)
+* [JAX for Scientific Computing](../../Engineering/jax-overview.qmd)
+* [Bayesian Workflow](../../Data_Science/bayesian-workflow.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Appendix C § C.1~C.2. CRC Press.
+* Rubin, D. B. (1981). Estimation in Parallel Randomized Experiments. *Journal of Educational Statistics*, 6(4), 377-401. (8 schools 데이터 출처)
+* Carpenter, B., Gelman, A., Hoffman, M. D., Lee, D., Goodrich, B., Betancourt, M., Brubaker, M., Guo, J., Li, P., & Riddell, A. (2017). Stan: A Probabilistic Programming Language. *Journal of Statistical Software*, 76(1), 1-32.
+* Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler: Adaptively Setting Path Lengths in Hamiltonian Monte Carlo. *JMLR*, 15, 1593-1623.
+* Betancourt, M., & Girolami, M. (2013). Hamiltonian Monte Carlo for Hierarchical Models. *arXiv:1312.0906*. (NCP 권장의 이론적 근거)
+* Gelman, A. (2006). Prior Distributions for Variance Parameters in Hierarchical Models. *Bayesian Analysis*, 1(3), 515-533. (half-Cauchy 권장)
+* Salvatier, J., Wiecki, T. V., & Fonnesbeck, C. (2016). Probabilistic Programming in Python Using PyMC3. *PeerJ Computer Science*, 2, e55.
+* Phan, D., Pradhan, N., & Jankowiak, M. (2019). Composable Effects for Flexible and Accelerated Probabilistic Programming in NumPyro. *arXiv:1912.11554*.
+* Bingham, E., Chen, J. P., Jankowiak, M., et al. (2019). Pyro: Deep Universal Probabilistic Programming. *JMLR*, 20(28), 1-6.
+* Kucukelbir, A., Tran, D., Ranganath, R., Gelman, A., & Blei, D. M. (2017). Automatic Differentiation Variational Inference. *JMLR*, 18(14), 1-45.
+* Stan Development Team (2024). *Stan User's Guide* and *Stan Reference Manual*. https://mc-stan.org/users/documentation/.
+* CmdStanPy Documentation. https://mc-stan.org/cmdstanpy/.
+* PyMC Documentation. https://www.pymc.io/.
+* NumPyro Documentation. https://num.pyro.ai/.

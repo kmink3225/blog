@@ -304,3 +304,330 @@ Vite proxy 가 VM 안에서 `localhost:8000` 으로 부르는 거니까 8000 은
 3. **사설 IP (172.16.x, 10.x, 192.168.x)** 는 같은 사설 네트워크 안에서만 통함. 인터넷 라우팅 안 됨.
 4. **VS Code Remote 의 port forwarding** 은 SSH 터널 위에서 동작. 사설 IP·방화벽 둘 다 우회.
 5. **dev 환경은 localhost (= SSH 터널) 가 정석**. 외부 노출은 운영 배포 단계에서 reverse proxy + HTTPS 로.
+
+---
+
+# Azure VM 으로 사내 동료 접속 시키기 — 네트워크 입문 (2026-04-27)
+
+## 발단
+
+> "나 이거 다른 사람들도 접속해서 사용해봐야 하는데 어떻게 접속해야 해?"
+
+MINERVA Platform 을 Azure VM(`test-agent`) 에서 돌리고 있었고, 사내 동료 몇 명이 시연 차원에서 접속해야 했다. 본인 노트북에서만 보던 화면을 옆 자리 사람이 자기 PC 에서 같은 URL 로 열게 하는, 일견 단순해 보이는 작업.
+
+이 작업 하나에 다음 개념이 다 얽혀 있다 — IP 주소 종류, 포트, NAT, CIDR, NSG 인바운드 룰, dev 서버의 bind 주소, Vite proxy. 네트워크 지식 없이 시작했고, 끝나고 보니 "내가 뭘 한 거지?" 가 남아 정리한다.
+
+## 1. 우리가 결국 한 일 — 한 줄 요약
+
+> Azure VM `test-agent` 의 NSG(`test-agent-nsg`) 인바운드 룰에 **TCP 5173 포트, Source `61.74.175.54/32` Allow** 한 줄을 추가했더니, 같은 회사에 있는 모든 동료가 `http://<test-agent-Public-IP>:5173` 로 접속 가능해졌다.
+
+이 한 줄을 이해하려면 알아야 할 5개 개념이 있다.
+
+## 2. 알아야 할 5가지 네트워크 기초
+
+### 2.1 IP 주소 — Public 과 Private 의 차이
+
+**IP 주소** 는 네트워크 상의 컴퓨터에게 붙는 식별자. 4개의 숫자로 표현 (예: `61.74.175.54`).
+
+여기에 두 종류가 있다:
+
+| 종류 | 예시 대역 | 의미 |
+|---|---|---|
+| **Private (사설)** | `10.x.x.x`, `172.16~31.x.x`, `192.168.x.x` | 사내 LAN 안에서만 통하는 IP. 인터넷에선 직접 못 봄. RFC1918 표준에 따라 "내부용" 으로 예약된 대역 |
+| **Public (공인)** | 그 외 모든 대역 | 인터넷 전체에서 유일. ISP(통신사)가 회사·집에 할당. 라우터가 인터넷 향해 나갈 때 쓰는 대표 IP |
+
+본인 PC 에서 두 종류 모두 확인 가능:
+
+- **사설 IP**: `ipconfig`(Windows) 또는 `ifconfig`/`hostname -I`(Linux) → `10.11.184.211` 같은 값. 본인 PC 가 사내 LAN 에서 부여받은 IP
+- **공인 IP**: 브라우저로 https://api.ipify.org 접속 → `61.74.175.54` 같은 값. **인터넷 상대 서버가 본 본인 PC 의 IP** — 사실 본인 PC 의 IP 가 아니라 **회사 게이트웨이의 IP**
+
+이 둘이 다른 이유는 다음 절의 NAT 때문.
+
+### 2.2 포트(Port)
+
+IP 가 "건물 주소" 라면 포트는 "그 건물의 호실". 한 컴퓨터(IP) 안에서 여러 서비스가 동시에 돌 수 있도록 구분하는 16비트 숫자 (0~65535).
+
+| 포트 | 일반 용도 |
+|---|---|
+| 22 | SSH |
+| 80 | HTTP |
+| 443 | HTTPS |
+| 5173 | Vite dev server (관례) |
+| 8000 | FastAPI (관례) |
+
+`http://61.74.175.54:5173` 라고 쓰면 "61.74.175.54 IP 컴퓨터의 5173 호실에 HTTP 로 노크" 라는 뜻. 같은 IP 라도 5173 과 8000 은 완전히 다른 서비스.
+
+### 2.3 NAT — 사무실 PC 들이 같은 공인 IP 를 공유하는 이유
+
+> "내 동료도 `61.74.175.54` 이거래"
+
+같은 사무실에서 다른 사람이 https://api.ipify.org 를 열어도 **같은 공인 IP** 가 나온다. 이게 우연이 아니라 **NAT (Network Address Translation)** 라는 표준 동작이다.
+
+작동 방식:
+
+```
+[ 본인 PC 10.11.184.211 ]    ┐
+[ 동료 PC 10.11.184.212 ]    ├──→ [ 회사 라우터 ] ──공인 IP 61.74.175.54──→ 인터넷
+[ 동료 PC 10.11.184.213 ]    ┘                       (NAT)
+```
+
+회사 라우터가 모든 사내 PC 의 인터넷 트래픽을 자기 공인 IP `61.74.175.54` 한 개로 **변환** 해서 내보낸다. 인터넷 상대방은 이 트래픽이 어느 사내 PC 에서 왔는지 모르고 그냥 "회사 게이트웨이" 한 곳에서 온 걸로 본다. 응답이 돌아오면 라우터가 (포트 매핑 테이블 보고) 원래 사내 PC 에게 전달.
+
+이게 **사무실 모든 PC 가 단 하나의 공인 IP 를 공유하는 비결**. IPv4 주소 부족 문제를 해결하는 핵심 메커니즘이기도 하다.
+
+**우리 작업에 미친 영향**: NSG 의 Source IP 화이트리스트에 `61.74.175.54/32` **딱 한 개**만 넣어도 회사 사무실 전체 PC 가 통과한다. 인터넷 상대방(Azure)은 우리 회사 트래픽이 한 IP 에서만 오는 걸로 보기 때문.
+
+### 2.4 CIDR 표기 — `/32`, `/24`, `/16` 의 의미
+
+NSG 룰에서 Source 를 `61.74.175.54/32` 처럼 쓴 그 슬래시 숫자가 CIDR (Classless Inter-Domain Routing).
+
+> **/N = "IP 의 앞에서부터 N비트는 고정, 뒤 (32-N)비트는 자유"**
+
+IPv4 는 32비트라 N 은 0~32 사이.
+
+| CIDR | 의미 | 포함 IP 개수 |
+|---|---|---|
+| `203.0.113.5/32` | 앞 32비트 전부 고정 = 정확히 그 한 IP | 1개 |
+| `203.0.113.0/24` | 앞 24비트 고정, 뒤 8비트 자유 = `.0` ~ `.255` | 256개 |
+| `203.0.113.0/16` | 앞 16비트 고정 = `203.0.0.0` ~ `203.0.255.255` | 65,536개 |
+| `0.0.0.0/0` | 0비트 고정 = 모든 IP | 약 43억개 (전체 인터넷) |
+
+직관적으로: **"/N 의 N 이 클수록 좁은 범위"**.
+
+회사 IP `61.74.175.54` 한 개만 허용하고 싶으면 `/32` ("정확히 이 IP") 가 맞다. 만약 회사가 `61.74.175.0` 부터 `61.74.175.255` 까지 256개를 다 쓴다면 `61.74.175.0/24` 로 한 번에 묶는다.
+
+`0.0.0.0/0` 은 **전체 인터넷 허용** — 시연 임시용으로 쓰면 편하지만 즉시 외부 공격 노출이라 실서비스에서는 절대 금물.
+
+### 2.5 방화벽 — 네트워크의 출입국 심사대
+
+**방화벽 (Firewall)** 은 "어떤 IP·포트에서 오는 트래픽을 통과시킬지/막을지" 결정하는 룰의 집합.
+
+비유: 사무실 빌딩 1층 출입국 심사대. 들어오는 사람(트래픽) 마다 "어디서 왔는지 (Source IP)", "어느 호실 가려는지 (Destination Port)" 확인하고 화이트리스트에 있으면 통과, 없으면 차단.
+
+여러 층위에 방화벽이 있다:
+
+| 층위 | 어디서 동작 | 예 |
+|---|---|---|
+| **클라우드 레벨** | Azure / AWS 경계 | NSG, Security Group |
+| **VM OS 레벨** | VM 운영체제 | Windows Defender Firewall, ufw, iptables |
+| **애플리케이션 레벨** | 앱 자체 | Express CORS, FastAPI 미들웨어 |
+
+VM 까지 트래픽이 도달하려면 모든 층위를 통과해야 한다. NSG 만 열고 OS 방화벽 안 열어도 막힌다.
+
+## 3. Azure 네트워크의 구성요소
+
+이제 Azure 쪽 용어. 위 5개 개념을 Azure 가 어떻게 이름 붙였는지의 매핑.
+
+### 3.1 Virtual Network (VNet)
+
+Azure 가 가상으로 만든 사내 LAN. VM 들이 같은 VNet 안에 있으면 사설 IP 끼리 직접 통신 가능. 사내 회사 LAN 의 클라우드 버전이라고 보면 된다.
+
+`test-agent` VM 이 어느 VNet 에 속하는지는 Azure portal → VM → Networking 에서 확인.
+
+### 3.2 NIC (Network Interface)
+
+VM 의 가상 네트워크 카드. VNet 에 꽂혀있고, 사설 IP 와 (선택적으로) 공인 IP 가 여기에 붙는다.
+
+`test-agent338_z1` 이 그것. 이름에 VM 이름이 들어가 있다.
+
+### 3.3 Public IP 주소
+
+VM 을 인터넷에서 접근 가능하게 하려면 Public IP 가 NIC 에 attach 돼 있어야 한다. 처음에 리소스 목록 보고 "test-agent 는 Public IP 없는 줄 알았더니" 실제로는 NIC 에 직접 붙어있어서 별도 리소스로 안 보였던 케이스.
+
+> **확인 방법**: Azure portal → VM → Overview 또는 Networking → "Public IP address" 항목.
+
+### 3.4 Network Security Group (NSG)
+
+**NSG = Azure 의 방화벽 룰 집합**. NIC 또는 서브넷에 attach 돼서 거기 들어오는/나가는 트래픽을 검사.
+
+`test-agent-nsg` 가 그것. 한 NSG 안에 여러 룰이 있고, 각 룰은 다음을 명시:
+
+- **Source**: 어디서 오는 트래픽? (IP, CIDR, 또는 서비스 태그)
+- **Source port**: 보통 `*` (any) — 클라이언트 측 포트는 랜덤
+- **Destination**: 보통 `Any` 또는 VM 자체
+- **Destination port**: 어느 포트로 들어가나? (예: 5173)
+- **Protocol**: TCP / UDP / Any
+- **Action**: Allow (허용) / Deny (차단)
+- **Priority**: 100~4096. **숫자가 작을수록 먼저 평가**. 한 룰에 매칭되면 그 룰의 Action 이 결정.
+
+### 3.5 인바운드 vs 아웃바운드
+
+- **인바운드 (Inbound)**: 외부 → VM 으로 들어오는 트래픽. 우리가 사내 동료 접속을 받기 위해 5173 을 여는 건 인바운드 룰.
+- **아웃바운드 (Outbound)**: VM → 외부로 나가는 트래픽. Azure OpenAI API 호출 같은 게 여기. 보통 기본값(다 허용) 으로 둔다.
+
+## 4. 서버 사이드 — bind 주소
+
+NSG·VM 이 다 열려도 서버 자체가 "외부 인터페이스로 못 들어오게" 설정돼 있으면 막힌다. 이게 **bind 주소**.
+
+### 4.1 `127.0.0.1` vs `0.0.0.0`
+
+서버를 띄울 때 어느 IP 로 들어오는 연결을 받을지 지정한다:
+
+- `127.0.0.1` (= `localhost`) — **자기 자신에서만**. 같은 컴퓨터 안의 다른 프로세스만 연결 가능. 외부에서 접속 시도해도 서버가 응답 자체를 안 함
+- `0.0.0.0` — **모든 인터페이스에서**. VM 의 사설 IP, 공인 IP, loopback 전부에서 들어오는 연결을 받음
+
+**이게 가장 자주 만나는 함정**: NSG 룰 다 열고 동료에게 URL 알려줬는데 "접속 안 돼요" 면 십중팔구 서버가 `127.0.0.1` 로 떠있는 것.
+
+### 4.2 Vite 와 uvicorn
+
+- **Vite**: `vite.config.ts` 의 `server.host: '0.0.0.0'` 설정으로 외부 인터페이스 허용. 우리 프로젝트는 이미 그렇게 돼 있었음
+- **uvicorn (FastAPI)**: 명령줄 옵션 `--host 0.0.0.0` 으로 명시. 기본값은 `127.0.0.1` 이라 별도 설정 없으면 외부 차단
+
+```bash
+# 외부 노출
+uvicorn services.api.main:app --host 0.0.0.0 --port 8000
+
+# 자기 자신만
+uvicorn services.api.main:app --host 127.0.0.1 --port 8000
+```
+
+우리 작업에서는 Makefile 에 변수로 빼서 default `0.0.0.0`, 보안 모드는 `make dev-backend HOST=127.0.0.1` 로 토글 가능하게 했다.
+
+### 4.3 Vite proxy 가 한 일 — backend 를 외부에 안 열어도 되는 이유
+
+브라우저는 Vite (5173) 에만 접속하지만, 사실 RAG API 는 FastAPI (8000) 에 있다. 그러면 8000 도 외부에 열어야 할까? **아니다**. Vite dev server 의 `proxy` 기능 덕분.
+
+```
+브라우저 → Vite (5173, VM 외부 노출) ──proxy──→ FastAPI (127.0.0.1:8000, VM 안)
+                                                       ↑ VM 안끼리 loopback OK
+```
+
+`vite.config.ts` 에 명시된 proxy 설정:
+
+```ts
+server: {
+  proxy: {
+    '/agents':    { target: 'http://localhost:8000' },
+    '/monitoring': { target: 'http://localhost:8000' },
+    '/feedback':  { target: 'http://localhost:8000' },
+    // ...
+  },
+}
+```
+
+브라우저가 `/agents/qna_chatbot/stream` 으로 요청 보내면 → Vite 가 받아서 → VM 안에서 `localhost:8000/agents/qna_chatbot/stream` 으로 다시 요청. 응답을 받아 브라우저에 전달.
+
+브라우저 입장에선 **Vite 가 다 처리하는 것처럼 보인다**. NSG 인바운드는 5173 만 열면 되고, 8000 은 외부에 안 노출됨 → 보안 우위.
+
+(부수 효과) **CORS 신경 안 써도 됐던 이유**: 브라우저가 본 origin 이 한 개 (`http://<Public-IP>:5173`) 라 cross-origin 요청 자체가 발생 안 함. 만약 브라우저가 직접 `:8000` 호출했다면 CORS 미들웨어 설정이 필요했을 것.
+
+## 5. 우리가 거친 작업 — 시간순
+
+처음부터 정리:
+
+### Step 1. 시나리오 결정
+
+후보:
+- **A**. 사내망 동료들 (LAN/VPN) — 가장 빠름, 임시 시연용
+- **B**. production 빌드 + StaticFiles 통합 — 8000 단일 포트
+- **C**. tech-manage-web iframe 통합 — 정식 사내 통합 (선결 이슈 P/Q/R 미해결)
+
+5월 발표 직전이라 **A** 채택. B/C 는 추후.
+
+### Step 2. Vite·uvicorn bind 점검
+
+- `vite.config.ts` 의 `server.host` — 이미 `0.0.0.0` 이라 변경 없음
+- `Makefile dev-backend` — uvicorn 에 `--host` 미지정 (기본 `127.0.0.1`) → `HOST ?= 0.0.0.0` 변수 추가해서 default 외부 노출
+
+```makefile
+HOST ?= 0.0.0.0
+PORT ?= 8000
+
+dev-backend:
+	poetry run uvicorn services.api.main:app --reload --host $(HOST) --port $(PORT)
+```
+
+### Step 3. NSG 인바운드 룰 추가 (Azure portal)
+
+`test-agent-nsg` → Inbound security rules → Add:
+
+| 필드 | 값 |
+|---|---|
+| Source | `IP Addresses` |
+| Source IP / CIDR | (다음 단계에서 결정) |
+| Source port | `*` |
+| Destination | `Any` |
+| Destination port | `5173` |
+| Protocol | `TCP` |
+| Action | `Allow` |
+| Priority | `1010` |
+| Name | `Allow-MINERVA-FE-5173` |
+
+### Step 4. Source IP 결정 — 가장 헷갈렸던 부분
+
+여기서 Public/Private IP, NAT, CIDR 개념이 다 동원됐다.
+
+본인 PC 의 두 IP:
+- 공인 IP (api.ipify.org): `61.74.175.54`
+- 사설 IP (ipconfig): `10.11.184.211`
+
+처음엔 "사설 IP 를 넣어야 하나? 공인 IP?" 헷갈렸다. 결정 기준:
+
+> **트래픽이 Azure 까지 갈 때 마지막에 보이는 IP 가 어떤 거냐**
+
+- 회사 인터넷 → Azure Public IP 경유 → 회사 라우터의 NAT 거쳐 공인 IP `61.74.175.54` 로 보임
+- 사내 ↔ Azure VPN/ExpressRoute 직결 환경 → 사설 IP 가 그대로 보임
+
+`test-agent` 가 알고보니 Public IP 가 NIC 에 붙어있었고, 회사 PC 가 인터넷 통해 그 Public IP 로 접근하는 경로였다. 그러면 NAT 거친 후 Source 는 공인 IP `61.74.175.54`.
+
+### Step 5. 동료 IP 확인 → 한 줄 화이트리스트 도출
+
+> "내 동료도 `61.74.175.54` 이거래"
+
+NAT 덕분이다. 사무실 모든 PC 가 같은 공인 IP 공유 → **`61.74.175.54/32` 한 개로 회사 전체 커버**.
+
+NSG 룰의 Source 에 `61.74.175.54/32` 입력 → Add. 적용까지 1~2초.
+
+### Step 6. 접속 테스트 — 성공
+
+본인 PC 에서 브라우저 → `http://<test-agent-Public-IP>:5173` → 정상 동작.
+동료 PC 에서도 같은 URL → 정상.
+
+## 6. 왜 한 줄로 충분했나 — NAT + 화이트리스트
+
+핵심 통찰을 다시 정리:
+
+```
+사무실 모든 PC ──NAT──→ 공인 IP 61.74.175.54 ──인터넷──→ Azure VM
+                              ↑
+                  NSG 가 보는 Source IP
+```
+
+NSG 입장에서 사무실 PC 들이 다 **하나의 IP** 로 보인다. 화이트리스트도 한 개면 끝.
+
+만약 동료가 다른 사무실(다른 회사 라우터) 또는 재택(집 인터넷) 이라면 다른 공인 IP 라서 별도 룰 필요.
+
+## 7. 보안 측면
+
+`/32` 한 개 화이트리스트의 효과:
+
+- **외부 인터넷 차단**: 인터넷 어디선가 5173 포트 스캔해도 NSG 가 Source 매칭 실패 → drop. 회사 IP 로 위장하려면 IP spoofing 인데 TCP 연결에선 응답을 받을 수 없어 사실상 불가능
+- **사무실 내부 한정**: 회사 외부 (집, 카페 등) 에선 접속 불가. 동료가 재택근무 시 못 봄
+- **포트 5173 만**: 다른 포트(예: 8000) 는 NSG 룰 없으니 외부 차단 유지
+
+만약 `0.0.0.0/0` 로 잘못 열었다면? 즉시 전 세계 봇이 5173 스캔해서 dev server 의 알려진 취약점(Vite 의 `/__open-in-editor` 같은 dev 엔드포인트 등) 시도. 짧은 시간이라도 위험.
+
+## 8. 한계와 다음 단계
+
+이번 설정은 **시연용 임시 노출**:
+
+- Vite dev server 는 production 부적합 (HMR, sourcemap, 큰 번들, 느림). 일 단위 시연 OK, 주 단위 운영 X
+- HTTPS 없음 — `http://` 라 트래픽 평문. 사내망 한정이라 큰 문제는 없지만 이상적이진 않음
+- 인증 없음 — `/docs` (FastAPI Swagger) 가 외부에 노출됨. 백엔드도 0.0.0.0 으로 떠 있으면 위험. 보안 모드는 `make dev-backend HOST=127.0.0.1` 로
+
+**다음 단계 후보**:
+
+- **시나리오 B**: `make build-frontend` 로 정적 번들 만들어서 FastAPI 가 직접 서빙. 8000 단일 포트, Node.js 운영 서버 불필요
+- **시나리오 C**: 사내 통합 플랫폼(tech-manage-web) 안에서 iframe 으로 띄움. NextAuth SSO 연동, 사내 도메인 사용
+- **HTTPS**: Caddy / nginx reverse proxy + Let's Encrypt 또는 Azure App Service 의 자동 HTTPS
+
+운영 단계로 가면 NSG 도 더 다듬어진다 — 5173 닫고 443 (HTTPS) 만 열기, 사내 IP 화이트리스트 + Azure AD 인증 더하기 등.
+
+## 9. 한 줄로 정리 — 재발견
+
+> 네트워크 작업의 99% 는 **"트래픽이 어느 IP·어느 포트로 어디까지 가나"** 를 추적하는 일.
+
+- 클라이언트 IP → NAT 거쳐 공인 IP 변환 → Azure NSG → VM NIC → OS 방화벽 → 서버 bind 주소 → 애플리케이션
+- 막히면 어느 단계에서 막혔는지 차근차근 추적
+
+이 흐름만 잡혀 있으면 처음 보는 환경에서도 적용 가능하다. NSG, NAT, CIDR 다 이 흐름을 컨트롤하는 도구일 뿐.
