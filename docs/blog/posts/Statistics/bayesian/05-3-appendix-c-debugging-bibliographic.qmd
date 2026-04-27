@@ -1,0 +1,1021 @@
+---
+title: "Appendix C § C.5~C.6 심화 — Debugging · Numerical Stability · Modern Bayesian Workflow + Appendix C 결산"
+subtitle: "Computational tips (incremental modeling·transparency vs efficiency)·흔한 실수 7 가지 (variance vs sd·1/nu 혼동·prior 오류·reparameterization bug)·R 와 Python debugging 도구 (browser/breakpoint·print/logging·tracemalloc)·numerical stability (log-scale·LogSumExp·Cholesky)·modern workflow (prior predictive check·simulation-based calibration·LOO/WAIC·sensitivity analysis)·Bibliographic note + Appendix C 4 편 시리즈 결산"
+description: |
+  Gelman BDA Appendix C 의 § C.5~C.6 을 한 편으로 깊게 다룬다. BDA 본문 자체는 짧으나 modern Bayesian workflow 의 핵심 도구를 통합 정리.
+  C.5 Further comments on computation: Section 10.7 의 일반 원칙 (단순 모델부터 시작, 작은 데이터부터, transparency 우선) + 흔한 실수 7 가지 (Stan syntax / variance vs sd / nu vs 1/nu / log-posterior 항 누락 / Metropolis 조건 / sims array 저장 / reparameterization bug / prior 선택 오류). Debugging 전략 (line-by-line 실행, print/logging, multi-algorithm cross-check). R 와 Python 의 debugging 도구 비교 (browser/debugonce vs pdb/breakpoint, message/warning vs logging, traceback). Numerical stability (log-scale computation, LogSumExp trick, Cholesky over direct inverse, adaptive Metropolis). Modern workflow 추가 (prior predictive check, simulation-based calibration SBC, LOO-PIT, posterior predictive check, sensitivity analysis).
+  C.6 Bibliographic note: R / S / Stan core 문헌 + modern Bayesian workflow references (Gelman 2020, Vehtari 2017 LOO, Talts 2018 SBC, Gabry 2019 visualization).
+  Appendix C 시리즈 4 편 (overview + § C.1~C.2 + § C.3~C.4 + 본 편) 결산.
+categories:
+  - Statistics
+  - Bayesian
+  - Debugging
+  - Numerical-Stability
+  - Bayesian-Workflow
+  - Software
+author: Kwangmin Kim
+date: 04/27/2026
+---
+
+## 들어가며 — Appendix C 의 마무리
+
+Appendix C 의 사다리:
+
+| 편 | 주제 |
+|:---|:------|
+| [Overview (05)](./05-appendix-c-r-stan-overview.qmd) | Appendix C 큰 그림 |
+| [§ C.1~C.2 (05-1)](./05-1-appendix-c-getting-started-stan.qmd) | 환경 셋업 + Stan 으로 8 schools |
+| [§ C.3~C.4 (05-2)](./05-2-appendix-c-direct-gibbs-hmc.qmd) | R + Python 직접 구현 (Gibbs·HMC) |
+| **§ C.5~C.6 (본 편)** | **Debugging·Numerical Stability·Workflow + 결산** |
+
+::: {.callout-important}
+## 본 편이 답하는 다섯 가지 질문
+
+1. 베이즈 모델의 **흔한 7 가지 실수** 와 각각의 발견 방법은?
+2. R 의 `browser()/debug()/print` 와 Python 의 `pdb/breakpoint/logging` 이 어떻게 다른가?
+3. **Numerical stability** 의 4 가지 표준 도구 (log-scale·LogSumExp·Cholesky·adaptive proposal) 이 어떤 문제를 푸는가?
+4. **Modern Bayesian workflow** (prior predictive·SBC·LOO-PIT·posterior predictive·sensitivity) 가 BDA 의 8 단계 (§ C.5) 를 어떻게 확장하는가?
+5. Appendix C 시리즈 4 편이 **이론 → 실무** 의 어떤 다리를 놓는가?
+:::
+
+## C.5 Further Comments on Computation
+
+### 일반 원칙 — Incremental Modeling
+
+BDA Section 10.7 의 핵심 권장:
+
+1. **단순 모델부터 시작**: pooled / no-pooling → hierarchical → robust.
+2. **작은 / 단순한 데이터**: synthetic 또는 sub-sample 로 시작.
+3. **Transparency 우선**: 먼저 명확히, 나중에 효율적으로.
+4. **이전 결과와 비교**: complexity 추가 시 이전 추정과 비교해 변화 확인.
+
+::: {.callout-tip}
+## 직관 — Why Incremental?
+
+**한 번에 복잡한 모델**:
+
+* 버그가 어디서 발생했는지 모름.
+* 데이터·모델·sampler 중 무엇이 문제인지 분리 불가.
+
+**Incremental**:
+
+* 단순 모델 (예: pooled) → fit → 결과 합리적인지 확인.
+* No-pooling 추가 → 결과 비교.
+* Hierarchical 확장 → 결과 비교.
+* 매 단계마다 **이전 결과가 baseline**.
+
+이전 결과와 결과가 *비합리적으로* 다르면 → 마지막 변경 사항 = 버그 후보.
+
+8 schools 의 경우: pooled (단일 $\mu$) → no-pooling ($\theta_j = y_j$) → hierarchical ($\tau$ 학습) 순서.
+:::
+
+### Transparency vs Efficiency
+
+BDA 의 권장:
+
+> "Start with transparent (and possibly inefficient) code and then reprogram more efficiently once we know it is working."
+
+#### 단계별 코드 진화
+
+**Stage 1 (transparent, 비효율)**:
+
+```r
+# 명시적 loop, 변수명 길게
+for (i in 1:n_iter) {
+  for (j in 1:J) {
+    theta_hat_j <- (mu_current/tau_current^2 + y[j]/sigma[j]^2) /
+                   (1/tau_current^2 + 1/sigma[j]^2)
+    theta_var_j <- 1 / (1/tau_current^2 + 1/sigma[j]^2)
+    theta_new[j] <- rnorm(1, theta_hat_j, sqrt(theta_var_j))
+  }
+}
+```
+
+**Stage 2 (vectorized)**:
+
+```r
+for (i in 1:n_iter) {
+  theta_hat <- (mu/tau^2 + y/sigma^2) / (1/tau^2 + 1/sigma^2)
+  theta_var <- 1 / (1/tau^2 + 1/sigma^2)
+  theta <- rnorm(J, theta_hat, sqrt(theta_var))
+}
+```
+
+**Stage 3 (Rcpp / numpy / JAX)**:
+
+```python
+# JAX-compiled
+@jax.jit
+def gibbs_step(theta, mu, tau, y, sigma, key):
+    theta_hat = (mu/tau**2 + y/sigma**2) / (1/tau**2 + 1/sigma**2)
+    theta_var = 1 / (1/tau**2 + 1/sigma**2)
+    return random.normal(key) * jnp.sqrt(theta_var) + theta_hat
+```
+
+::: {.callout-tip}
+## 직관 — 왜 Transparency 가 우선?
+
+**효율 먼저**:
+
+* 빠른 코드지만 어디가 무엇을 하는지 불명.
+* 버그 발견 어려움.
+* "잘못된 코드를 빠르게 실행" — 무익.
+
+**Transparency 먼저**:
+
+* 명시적 loop, 길고 명확한 변수명.
+* 각 step 의 의도 명확.
+* 버그 발견 쉬움.
+* **확신** 후에 효율화.
+
+**Donald Knuth**: "Premature optimization is the root of all evil."
+
+베이즈 추론은 **debugging 이 90%, optimization 이 10%**. Transparency 가 절대적으로 중요.
+:::
+
+### 흔한 실수 7 가지
+
+#### 1. Variance vs Standard Deviation 혼동
+
+```r
+# WRONG — V_alpha 가 분산인데 sd 자리에 들어감
+rnorm(1, alpha_hat, V_alpha)
+
+# CORRECT
+rnorm(1, alpha_hat, sqrt(V_alpha))
+```
+
+```python
+# WRONG
+rng.normal(alpha_hat, V_alpha)
+
+# CORRECT
+rng.normal(alpha_hat, np.sqrt(V_alpha))
+```
+
+::: {.callout-tip}
+## 직관 — Stan 의 약속과 그 함의
+
+**Stan 의 정규분포**: `normal(mu, sigma)` — sigma 는 **standard deviation**.
+
+**대다수 통계 텍스트**: $N(\mu, \sigma^2)$ — sigma^2 는 **variance**.
+
+이 차이로 변환 시 자주 혼동.
+
+권장:
+
+* **명시적 변수명**: `theta_sd` vs `theta_var`.
+* **Type annotation 활용**: Python `theta_var: float` 등.
+* **Print debugging**: 첫 iteration 의 sd/var 값 출력 → sanity check.
+:::
+
+#### 2. $\nu$ vs $1/\nu$ 혼동
+
+t-distribution 의 degrees of freedom $\nu$ 는 **양수 양의 무한대**, $1/\nu$ 는 $[0, 1)$.
+
+* $\nu \in (0, \infty)$ → unbounded — proposal SD 결정 어려움.
+* $1/\nu \in (0, 1]$ → bounded — Metropolis proposal 자연.
+
+```python
+# WRONG — nu 자체에 random walk
+nu_proposal = rng.normal(nu_current, sigma_jump)
+
+# CORRECT — 1/nu 에 random walk
+nu_inv_proposal = rng.normal(1 / nu_current, sigma_jump)
+if 0 < nu_inv_proposal <= 1:
+    nu_proposal = 1 / nu_inv_proposal
+```
+
+#### 3. Log-Posterior 항 누락
+
+복잡한 hierarchical 의 log-posterior 는 여러 항의 합. 한 항 빠뜨리면 prior/likelihood 잘못.
+
+```python
+def log_post(theta, V, mu, tau, nu, y, sigma):
+    # 데이터 likelihood
+    ll = np.sum(stats.norm.logpdf(y, theta, sigma))
+    # theta prior (정규)
+    lp_theta = np.sum(stats.norm.logpdf(theta, mu, np.sqrt(V)))
+    # V prior (Inv-chi^2) — 자주 빠뜨림!
+    lp_V = np.sum(0.5*nu*np.log(nu/2) + nu*np.log(tau)
+                   - sp.special.gammaln(nu/2)
+                   - (nu/2 + 1)*np.log(V) - 0.5*nu*tau**2/V)
+    return ll + lp_theta + lp_V
+```
+
+::: {.callout-important}
+## 직관 — Log-Posterior 의 모든 항을 명시
+
+베이즈 모델: $\log p(\theta \mid y) = \log p(y \mid \theta) + \log p(\theta) + \text{const}$.
+
+$\log p(\theta)$ 가 hierarchical 이면 여러 항:
+
+* $\log p(\theta_j \mid \mu, \tau)$
+* $\log p(\mu)$
+* $\log p(\tau)$
+* $\log p(\nu)$ (만약 unknown)
+
+각 변수마다 **명시적으로 항 추가**. 빠뜨리면 그 변수의 prior 가 적용 안 됨 → improper posterior 또는 잘못된 결과.
+
+권장: 모델 작성 시 **종이에 각 항 나열** 후 코드와 1대1 비교.
+:::
+
+#### 4. Metropolis 갱신 조건
+
+```python
+# WRONG — log_r > 0 이면 항상 채택? 아님!
+if log_r > 0:  # 잘못
+    accept = True
+
+# CORRECT
+if np.log(rng.uniform()) < log_r:
+    accept = True
+```
+
+또는
+
+```python
+# CORRECT — min(1, r) 형태
+r = np.exp(log_r)
+if rng.uniform() < min(r, 1):
+    accept = True
+```
+
+::: {.callout-note}
+## 직관 — Metropolis Acceptance 의 정확한 조건
+
+$\Pr(\text{accept}) = \min(1, r)$, $r = p(\theta^*)/p(\theta_{\text{current}})$.
+
+* $r \geq 1$: 무조건 채택.
+* $r < 1$: 확률 $r$ 로 채택.
+
+구현 (log scale):
+
+* $\log r = \log p(\theta^*) - \log p(\theta_{\text{current}})$.
+* `np.log(uniform()) < log_r` 이면 채택.
+
+**자주 발생하는 오류**:
+
+* `if log_r > 0` — proposal 이 better 일 때만 채택. 잘못 (Metropolis 의 stochastic 성격 위반).
+* `if uniform() < log_r` — uniform 이 [0, 1] 인데 log_r 은 보통 음수. 항상 reject.
+:::
+
+#### 5. sims Array 에 잘못된 저장
+
+```r
+# 흔한 실수: 같은 array 에 다른 의미의 값 저장
+sims[t, m, ] <- c(theta, mu, tau, nu)  # 4 개 값
+# 다른 곳에서:
+sims[t, m, 1:8]  # theta 만 의도했는데 다른 값일 수 있음
+```
+
+권장: **named array** (R) 또는 **dictionary** (Python).
+
+```python
+sims = {
+    "theta": np.zeros((n_iter, chains, J)),
+    "mu": np.zeros((n_iter, chains)),
+    "tau": np.zeros((n_iter, chains)),
+    "nu": np.zeros((n_iter, chains)),
+}
+```
+
+#### 6. Reparameterization Bug
+
+원본 모델 vs reparameterized 모델 의 결과가 **드라마틱하게 다름** → reparameterization 코드 버그.
+
+```python
+# 원본: theta ~ N(mu, tau^2)
+# Reparameterized: theta = mu + tau * eta, eta ~ N(0, 1)
+
+# WRONG — variance 곱셈
+theta = mu + tau**2 * eta  # 잘못
+
+# CORRECT — sd 곱셈
+theta = mu + tau * eta
+```
+
+::: {.callout-tip}
+## 직관 — Reparameterization 검증
+
+새 reparameterization 작성 시:
+
+1. **Closed-form sanity check**: 단순 case 의 사후 평균 비교.
+2. **Multi-implementation 검증**: 같은 모델을 두 parameterization 으로 fit, 결과 비교.
+3. **Trace plot**: 두 sampler 의 trace 가 같은 영역인지.
+4. **Posterior summary**: $\mu, \tau$ 의 사후 평균/분위수 비교.
+
+8 schools 의 경우 CP 와 NCP 가 같은 사후 → reparameterization 정확.
+
+**드라마틱한 차이**: $\mu$ 평균이 다르면 → reparameterization 수식 오류.
+:::
+
+#### 7. Prior 선택 오류
+
+Prior 의 영향을 모르고 적용 → posterior 가 prior 에 의해 dominate 됨.
+
+```python
+# 의도하지 않은 강한 prior
+mu = pm.Normal("mu", 0, 0.1)  # sd=0.1 — 매우 strong prior at 0
+# 실제로는 sd=10 정도가 적절
+```
+
+발견 방법: **Prior predictive check** (다음 절).
+
+### Debugging 전략
+
+#### R 의 도구
+
+```r
+# 1. browser() — 코드 중간에 멈춤
+gibbs_step <- function(...) {
+  browser()  # 여기서 stop, interactive
+  ...
+}
+
+# 2. debug() / debugonce()
+debugonce(gibbs_step)
+gibbs_step(...)  # 자동 step-through
+
+# 3. trace()
+trace(gibbs_step, edit = TRUE)
+
+# 4. print/cat
+cat("iter", t, ": mu =", mu, ", tau =", tau, "\n")
+
+# 5. message/warning
+warning("Unusual value detected")
+```
+
+#### Python 의 도구
+
+```python
+# 1. breakpoint() — Python 3.7+
+def gibbs_step(...):
+    breakpoint()  # PDB 진입
+    ...
+
+# 2. pdb directly
+import pdb
+pdb.set_trace()
+
+# 3. logging (print 보다 권장)
+import logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+logger.info(f"iter {t}: mu={mu:.3f}, tau={tau:.3f}")
+
+# 4. assertion
+assert tau > 0, f"tau should be positive, got {tau}"
+
+# 5. tracemalloc (memory profiling)
+import tracemalloc
+tracemalloc.start()
+# ... code ...
+print(tracemalloc.get_traced_memory())
+```
+
+::: {.callout-tip}
+## 직관 — Debugging 도구의 사다리
+
+**Level 1 (가벼움)**: print/cat, logging.
+* 빠르게 끼워넣기.
+* 메인 코드 수정 최소.
+
+**Level 2 (중간)**: assertion.
+* 가정 명시.
+* 실패 시 위치 + 정보.
+
+**Level 3 (인터랙티브)**: browser/breakpoint.
+* 변수 값 직접 검사.
+* Step-through.
+
+**Level 4 (강력)**: profiler, tracemalloc.
+* 성능·메모리 분석.
+* 큰 모델 최적화.
+
+추천 순서: print → assertion → breakpoint → profiler.
+:::
+
+#### 다중 알고리즘 Cross-Check
+
+같은 모델을 **여러 sampler** 로 fit → 결과 일치 확인.
+
+```python
+# 8 schools 모델
+result_grid = marginal_conditional_grid(y, sigma)
+result_gibbs = standard_gibbs(y, sigma)
+result_hmc = hmc_run(y, sigma)
+result_stan = stan_fit(y, sigma)
+
+# 사후 평균 비교
+for name, result in [("grid", result_grid), ("gibbs", result_gibbs),
+                     ("hmc", result_hmc), ("stan", result_stan)]:
+    print(f"{name}: mu={result['mu'].mean():.2f}, "
+          f"tau={result['tau'].mean():.2f}")
+
+# 모두 mu ≈ 7.5, tau ≈ 6.5 면 OK
+# 차이가 크면 → 어느 하나 버그
+```
+
+::: {.callout-important}
+## 직관 — Cross-Check 의 가치
+
+같은 사후 분포를 **다른 알고리즘** 으로 sampling → 결과 같음.
+
+**같은 결과 (Monte Carlo error 내)**:
+
+* 모델 정확.
+* 모든 algorithm 의 구현 정확.
+
+**다른 결과**:
+
+* 적어도 하나의 algorithm 에 버그.
+* 또는 모델 수식 오해.
+
+8 schools 같은 단순 모델: grid, Gibbs, HMC 가 동일 결과.
+
+복잡한 모델: VI, MCMC, Laplace 등 비교. 차이가 있다면 어느 것이 정확한지 추가 검증 (synthetic data).
+:::
+
+### Numerical Stability
+
+#### 1. Log-Scale Computation
+
+확률·likelihood 는 매우 작은 양수 → 곱셈 시 underflow.
+
+```python
+# WRONG — underflow risk
+post = prior * likelihood  # 매우 작은 수
+acceptance = post_proposed / post_current  # 0/0?
+
+# CORRECT — log scale
+log_post = log_prior + log_likelihood
+log_r = log_post_proposed - log_post_current
+if np.log(rng.uniform()) < log_r:
+    accept = True
+```
+
+#### 2. LogSumExp Trick
+
+여러 component 의 log probability 합:
+
+$$
+\log\Bigl(\sum_h e^{a_h}\Bigr) = a_{\max} + \log\Bigl(\sum_h e^{a_h - a_{\max}}\Bigr)
+$$
+
+```python
+def logsumexp(log_probs):
+    max_log = log_probs.max()
+    return max_log + np.log(np.sum(np.exp(log_probs - max_log)))
+
+
+# 사용 예: mixture posterior
+log_w = np.log(weights)  # log mixture weights
+log_lik = np.array([stats.norm.logpdf(y_i, mu_h, sigma_h)
+                     for mu_h, sigma_h in components])
+log_marginal = logsumexp(log_w + log_lik)
+```
+
+```python
+# scipy 에 직접 함수
+from scipy.special import logsumexp
+```
+
+::: {.callout-tip}
+## 직관 — LogSumExp 가 underflow 방지
+
+직접 계산:
+
+$\log(e^{-1000} + e^{-999}) = $ ?
+
+* $e^{-1000} \approx 0$ (underflow).
+* $e^{-999} \approx 0$ (underflow).
+* $\log(0 + 0) = -\infty$ — 잘못.
+
+LogSumExp:
+
+$= -999 + \log(e^{-1} + e^{0}) = -999 + \log(1.37) \approx -998.69$ — 정확.
+
+**핵심 응용**:
+
+* Mixture model 의 log-likelihood.
+* Categorical/multinomial 의 normalize.
+* Softmax 안정 계산.
+* Bayes' rule 의 normalizer.
+:::
+
+#### 3. Cholesky over Direct Inverse
+
+Multivariate Gaussian 사후 (예: GP, multivariate hierarchical) 에서 covariance matrix $\Sigma$ 의 inverse 필요.
+
+```python
+# WRONG — 직접 inverse
+Sigma_inv = np.linalg.inv(Sigma)
+mu_post = Sigma_inv @ y  # 수치 불안정
+
+# CORRECT — Cholesky
+L = np.linalg.cholesky(Sigma)
+# Sigma = L @ L.T
+# Sigma_inv @ y = solve(Sigma, y)
+mu_post = scipy.linalg.cho_solve((L, True), y)
+log_det = 2 * np.sum(np.log(np.diag(L)))
+```
+
+::: {.callout-tip}
+## 직관 — 왜 Cholesky 가 안정한가
+
+**직접 inverse**: $\Sigma^{-1}$ 의 condition number 가 $\Sigma$ 의 제곱.
+
+**Cholesky**: $L^{-1}$ 만 필요. Condition number 가 단지 $\Sigma$ 의 그것.
+
+따라서 **수치 오차가 절반의 자릿수**.
+
+추가 이점:
+
+* $\det(\Sigma) = \prod L_{ii}^2$ → $\log \det = 2 \sum \log L_{ii}$ — 안정적.
+* $L^{-1}$ 자체도 forward/backward substitution 으로 $O(n^2)$.
+
+GP·hierarchical 의 modern 베이즈는 항상 Cholesky.
+:::
+
+#### 4. Adaptive Metropolis
+
+Proposal SD 를 acceptance rate 에 따라 자동 조절.
+
+```python
+def adaptive_metropolis(target_log_post, n_iter, x0, target_accept=0.234,
+                        adapt_window=50):
+    x = x0.copy()
+    n_accepted = 0
+    sigma_jump = 1.0
+    samples = np.zeros((n_iter, len(x)))
+    accepts = np.zeros(n_iter)
+
+    for t in range(n_iter):
+        x_proposed = x + sigma_jump * rng.normal(size=len(x))
+        log_r = target_log_post(x_proposed) - target_log_post(x)
+        if np.log(rng.uniform()) < log_r:
+            x = x_proposed
+            n_accepted += 1
+        accepts[t] = n_accepted / (t + 1)
+        samples[t] = x
+
+        # Adapt every adapt_window iterations
+        if (t + 1) % adapt_window == 0 and t < 5000:  # warmup only
+            current_rate = n_accepted / (t + 1)
+            if current_rate > target_accept + 0.05:
+                sigma_jump *= 1.1  # increase
+            elif current_rate < target_accept - 0.05:
+                sigma_jump *= 0.9  # decrease
+    return samples, accepts
+```
+
+::: {.callout-note}
+## 직관 — Stan 의 자동 Adaptation
+
+Stan 은 NUTS 의 step size 를 **dual averaging** (Nesterov 2009) 으로 자동 조절. 사용자가 `target_accept = 0.8` 만 지정.
+
+직접 구현 시:
+
+* Random walk Metropolis: 23~44% acceptance.
+* HMC: 65~80% acceptance.
+* Adaptation 은 warmup 만 (sampling 중에는 mixing 망침).
+
+권장: 일반 응용에는 NUTS 사용. 직접 구현은 학습 + 특수 case.
+:::
+
+### Modern Bayesian Workflow — BDA Update
+
+BDA 본문은 단순 워크플로우 (시작 → fit → check). 현대 권장은 더 정교 (Gelman et al. 2020).
+
+#### 1. Prior Predictive Check
+
+데이터 없이 prior 만으로 시뮬레이션 → 합리적 데이터?
+
+```python
+import pymc as pm
+
+with pm.Model() as schools_prior_pc:
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfCauchy("tau", 5)
+    eta = pm.Normal("eta", 0, 1, shape=8)
+    theta = pm.Deterministic("theta", mu + tau * eta)
+    y_pred = pm.Normal("y_pred", theta, sigma)
+
+    # Prior predictive
+    prior_pred = pm.sample_prior_predictive(samples=1000)
+
+# 시각화: prior 예측이 reasonable 한가?
+import matplotlib.pyplot as plt
+plt.hist(prior_pred.prior_predictive["y_pred"].values.flatten(), bins=50)
+plt.title("Prior predictive distribution of y")
+plt.show()
+```
+
+::: {.callout-tip}
+## 직관 — Prior Predictive 의 가치
+
+**Prior 만으로 데이터 시뮬레이션**:
+
+* "이 prior 에서 어떤 데이터가 나올까?"
+* 도메인 지식과 비교.
+* 비합리적 데이터 (예: 음수 효과 평균 -1000) 가 자주 나오면 → prior 너무 약함.
+
+**8 schools**: prior $y$ 가 ±100 범위면 OK. ±10000 이면 prior 가 너무 wide.
+
+**일반 권장**:
+
+* `mu ~ N(0, 10)` for 표준화 데이터: prior $y$ 가 ±30 정도 → 합리적.
+* `mu ~ N(0, 1000)` (very flat): prior $y$ 가 ±3000 → 비현실적.
+
+→ "약한 informative prior" 가 "거의 flat prior" 보다 안전.
+:::
+
+#### 2. Simulation-Based Calibration (SBC)
+
+True parameter 를 알고 시뮬레이션 → 사후가 그 parameter 를 cover 하는가?
+
+```python
+# Talts, Betancourt, Simpson, Vehtari, Gelman (2018)
+def sbc_one_replicate(model_fn, prior_sampler, n_data=8):
+    # 1. Sample true parameter from prior
+    true_params = prior_sampler()
+    # 2. Simulate data
+    y_sim = simulate_data(true_params, n_data)
+    # 3. Fit model
+    posterior = model_fn(y_sim)
+    # 4. Compute rank of true_param within posterior
+    rank = (posterior < true_params).sum() / len(posterior)
+    return rank
+
+
+# Run many replicates
+ranks = [sbc_one_replicate(...) for _ in range(1000)]
+
+# Histogram should be uniform if model is correct
+plt.hist(ranks, bins=30)
+plt.title("SBC: ranks should be uniform")
+```
+
+::: {.callout-note}
+## 직관 — SBC 가 잡는 것
+
+**SBC 의 원리**:
+
+* True parameter $\theta_0 \sim \text{prior}$.
+* $y \sim p(y \mid \theta_0)$.
+* 사후 $p(\theta \mid y)$ 추정.
+* $\theta_0$ 의 rank in posterior 는 **uniform on [0, 1]**.
+
+**ranks 가 uniform 하지 않음**:
+
+* 사후가 너무 좁음 (over-concentrated).
+* 사후가 잘못된 위치 (bias).
+* sampler 버그.
+
+→ **모델 + sampler 의 공동 검증**.
+
+WAIC/LOO 가 모델 비교라면, SBC 는 **모델 자체의 정확성** 점검.
+:::
+
+#### 3. LOO-PIT (Leave-One-Out Probability Integral Transform)
+
+각 관측치의 사후 예측 분포에서 그 관측치의 quantile.
+
+```python
+import arviz as az
+
+# Compute LOO-PIT
+loo_pit = az.loo_pit(idata, y="y")
+
+# Should be approximately uniform on [0, 1]
+plt.hist(loo_pit, bins=20)
+plt.title("LOO-PIT (should be uniform if model fits)")
+```
+
+::: {.callout-tip}
+## 직관 — LOO-PIT 의 의미
+
+**모델이 잘 적합**:
+
+* 각 $y_i$ 의 leave-one-out 사후 예측 분포가 정확.
+* $y_i$ 의 quantile (PIT) 이 uniform.
+
+**Lack of fit**:
+
+* PIT 가 uniform 아님 (예: 양 끝에 집중).
+* "모델이 데이터 꼬리를 못 잡음" 등 진단.
+
+베이즈의 frequentist calibration 점검 도구.
+:::
+
+#### 4. Sensitivity Analysis
+
+다른 prior 로 fit → 결과 변화?
+
+```python
+priors = {
+    "weakly_informative": pm.HalfCauchy("tau", 5),
+    "informative": pm.HalfNormal("tau", 5),
+    "strong": pm.HalfNormal("tau", 1),
+    "very_weak": pm.HalfCauchy("tau", 50),
+}
+
+results = {}
+for name, prior_dist in priors.items():
+    with pm.Model() as m:
+        mu = pm.Normal("mu", 0, 10)
+        tau = prior_dist
+        eta = pm.Normal("eta", 0, 1, shape=8)
+        theta = pm.Deterministic("theta", mu + tau * eta)
+        pm.Normal("y", theta, sigma, observed=y)
+        results[name] = pm.sample(progressbar=False)
+
+# Compare posteriors
+for name, trace in results.items():
+    print(f"{name}: tau mean={trace.posterior['tau'].mean().item():.2f}")
+```
+
+::: {.callout-important}
+## 직관 — Sensitivity 의 두 시나리오
+
+**Robust** (좋음):
+
+* Weakly_informative ≈ informative ≈ very_weak 결과 비슷.
+* Posterior 가 데이터 dominate.
+* Prior 선택이 큰 문제 아님.
+
+**Sensitive** (주의):
+
+* Prior 다르면 posterior 크게 다름.
+* Prior 가 결과를 결정.
+* **데이터가 약함** — 더 많은 데이터 또는 더 informative prior 필요.
+
+8 schools: $\tau$ 의 사후가 prior 에 sensitive (데이터 약함). $\mu$ 는 prior 에 insensitive.
+
+이것이 hierarchical model 의 보편 패턴 — top-level hyperparameter 가 prior 에 sensitive.
+:::
+
+## C.6 Bibliographic Note
+
+### R 과 S
+
+* **R Project (2002~)** — https://www.r-project.org/. R 의 공식 사이트.
+* **Becker, Chambers, Wilks (1988)** — *The New S Language*. R 의 부모 언어 S.
+* **Fox (2002)** — *An R and S-PLUS Companion to Applied Regression*. R 통계 응용.
+* **Venables, Ripley (2002)** — *Modern Applied Statistics with S*, 4th ed. (MASS 패키지).
+
+### Stan
+
+* **Stan Development Team** — https://mc-stan.org/. 공식 documentation.
+* **Carpenter et al. (2017)** — Stan 논문 (JSS).
+* **Hoffman, Gelman (2014)** — NUTS sampler.
+* **Stan User's Guide** — 모델 작성 + best practice.
+
+### Modern Bayesian Workflow (BDA 이후)
+
+* **Gelman et al. (2020)** — "Bayesian Workflow" (arXiv:2011.01808).
+* **Gabry et al. (2019)** — "Visualization in Bayesian Workflow" (JRSS A).
+* **Talts et al. (2018)** — "Validating Bayesian Inference Algorithms with SBC".
+* **Vehtari, Gelman, Gabry (2017)** — "Practical Bayesian Model Evaluation Using LOO-CV and WAIC".
+
+### Python Probabilistic Programming
+
+* **Salvatier, Wiecki, Fonnesbeck (2016)** — PyMC3 paper.
+* **Bingham et al. (2019)** — Pyro (Uber).
+* **Phan, Pradhan, Jankowiak (2019)** — NumPyro.
+* **Lao et al. (2020)** — TensorFlow Probability.
+
+### HMC·VI Theoretical Foundations
+
+* **Neal (2011)** — *Handbook of MCMC* Ch.5 (HMC).
+* **Betancourt (2017)** — "A Conceptual Introduction to HMC" (arXiv).
+* **Blei, Kucukelbir, McAuliffe (2017)** — "Variational Inference: A Review for Statisticians".
+
+## Appendix C 시리즈 결산
+
+### 4 편의 핵심
+
+| 편 | 주제 | 핵심 |
+|:---|:------|:------|
+| Overview (05) | Appendix C 큰 그림 | NUTS·autodiff·HMC·workflow |
+| § C.1~C.2 (05-1) | Stan 으로 8 schools | NCP·R/Python 4 언어 |
+| § C.3~C.4 (05-2) | R+Python 직접 구현 | Grid·Gibbs·PX·Metropolis·HMC |
+| § C.5~C.6 (본 편) | Debugging·Workflow | 7 흔한 실수·numerical stability·modern workflow |
+
+### Appendix C 의 학습 사다리
+
+```
+C.1 환경 셋업
+  ↓
+C.2 Stan 으로 빠른 시작 (자동화)
+  ↓
+C.3 R 직접 Gibbs/Metropolis (이론 이해)
+  ↓
+C.4 R 직접 HMC (gradient 직접 계산)
+  ↓
+C.5 Debugging + numerical stability + modern workflow
+  ↓
+C.6 문헌 anchored
+```
+
+각 단계가 **이론 ↔ 실무 ↔ 검증** 의 점진적 통합.
+
+### 학습 결과
+
+본 시리즈를 마친 독자는:
+
+1. **베이즈 모델을 R + Python 양쪽** 에서 작성·실행 가능.
+2. **Stan 의 NUTS** 가 무엇을 자동화하는지 명확히 이해.
+3. **Gibbs/Metropolis/HMC** 를 직접 구현 가능.
+4. **흔한 실수 7 가지** 를 회피.
+5. **Numerical stability** 의 4 가지 도구 (log-scale·LogSumExp·Cholesky·adaptive) 활용.
+6. **Modern workflow** (prior predictive·SBC·LOO-PIT·sensitivity) 적용.
+7. **Cross-language reproducibility** (R + Python 동일 결과) 검증.
+
+→ BDA 본편 23 장의 이론을 **실제로 돌릴 수 있는** 베이즈 실무자.
+
+## Bayesian 시리즈 통합 — Part I~V + Appendix C
+
+### 전체 27 편 결산
+
+| 영역 | 편 수 | 주제 |
+|:---|:---:|:------|
+| Part I (Ch.1~5) | 5 | 기초·단일 모수·다모수·점근·계층 |
+| Part II (Ch.6~9) | 4 | 점검·비교·수집·결정 |
+| Part III (Ch.10~13) | 4 | 계산·MCMC·HMC·VI/EP |
+| Part IV (Ch.14~18) | 5 | 회귀·계층 회귀·GLM·robust·결측 |
+| Part V (Ch.19~23) | 5 | 비선형·basis·GP·mixture·DP |
+| Appendix C | 4 | R + Python 구현·debugging·workflow |
+
+→ 베이즈 데이터 분석의 **이론 + 응용 + 실무** 의 종합.
+
+## 통합 Python 코드 예제 — Modern Workflow
+
+```python
+"""8 schools — Modern Bayesian Workflow 예제."""
+import numpy as np
+import pymc as pm
+import arviz as az
+import matplotlib.pyplot as plt
+from scipy.special import logsumexp
+
+# Data
+J = 8
+y = np.array([28., 8., -3., 7., -1., 1., 18., 12.])
+sigma = np.array([15., 10., 16., 11., 9., 11., 10., 18.])
+
+# Step 1: Build model
+with pm.Model() as schools_model:
+    mu = pm.Normal("mu", 0, 10)
+    tau = pm.HalfCauchy("tau", 5)
+    eta = pm.Normal("eta", 0, 1, shape=J)
+    theta = pm.Deterministic("theta", mu + tau * eta)
+    pm.Normal("y", theta, sigma, observed=y)
+
+# Step 2: Prior predictive check
+with schools_model:
+    prior_pred = pm.sample_prior_predictive(samples=1000)
+print(f"Prior predictive y range: "
+      f"[{prior_pred.prior_predictive['y'].min().item():.0f}, "
+      f"{prior_pred.prior_predictive['y'].max().item():.0f}]")
+# 합리적이면 진행
+
+# Step 3: Fit
+with schools_model:
+    trace = pm.sample(2000, tune=2000, target_accept=0.95, chains=4)
+
+# Step 4: Convergence
+print(az.summary(trace, var_names=["mu", "tau", "theta"]))
+divergences = trace.sample_stats.diverging.sum().item()
+print(f"Divergences: {divergences}")
+
+# Step 5: Posterior predictive check
+with schools_model:
+    ppc = pm.sample_posterior_predictive(trace)
+
+# Step 6: LOO-PIT
+loo = az.loo(trace)
+print(f"LOO: {loo.elpd_loo:.2f} ± {loo.se:.2f}")
+
+# Step 7: Sensitivity analysis
+sensitivity_results = {}
+for prior_scale in [1, 5, 25]:
+    with pm.Model() as m_sens:
+        mu = pm.Normal("mu", 0, 10)
+        tau = pm.HalfCauchy("tau", prior_scale)
+        eta = pm.Normal("eta", 0, 1, shape=J)
+        theta = pm.Deterministic("theta", mu + tau * eta)
+        pm.Normal("y", theta, sigma, observed=y)
+        sensitivity_results[prior_scale] = pm.sample(
+            500, tune=500, chains=2, target_accept=0.95,
+            progressbar=False)
+
+print("\nSensitivity to tau prior scale:")
+for scale, t in sensitivity_results.items():
+    tau_mean = t.posterior["tau"].mean().item()
+    print(f"  HalfCauchy({scale}): tau mean = {tau_mean:.2f}")
+
+# Step 8: Visualization
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+az.plot_trace(trace, var_names=["mu", "tau"], axes=axes[:2].reshape(-1, 1))
+az.plot_pair(trace, var_names=["mu", "tau"], divergences=True, ax=axes[2])
+plt.tight_layout()
+plt.savefig("schools_workflow.png", dpi=100)
+print("Plot saved.")
+```
+
+## 실전 체크리스트 — § C.5~C.6
+
+**Computational Tips**
+
+1. **Incremental modeling**: 단순 → 복잡 점진적.
+2. **작은 데이터 / synthetic** 으로 시작.
+3. **Transparency 우선**, 효율은 나중.
+4. **이전 결과와 비교** 매 단계.
+
+**흔한 실수 7 가지 회피**
+
+5. Variance vs SD 명시적 변수명.
+6. $\nu$ vs $1/\nu$ proposal 선택.
+7. Log-posterior 모든 항 종이에 나열 후 코드와 1대1 비교.
+8. Metropolis acceptance: `np.log(uniform()) < log_r`.
+9. sims array 대신 dict / named array.
+10. Reparameterization 검증 (multi-implementation).
+11. Prior predictive check 로 prior 적절성.
+
+**Numerical Stability**
+
+12. Log-scale 계산 (probabilities, likelihoods).
+13. LogSumExp for log-sum-of-exp.
+14. Cholesky over direct inverse.
+15. Adaptive proposal (warmup 만).
+
+**Modern Workflow (Gelman 2020)**
+
+16. Prior predictive check.
+17. Fit + convergence (Rhat, n_eff, divergences).
+18. Posterior predictive check.
+19. LOO-PIT.
+20. Sensitivity analysis.
+21. SBC (advanced — 모델 검증).
+
+**Cross-Language**
+
+22. R + Python 동일 모델 결과 비교.
+23. Cross-check 다중 sampler.
+
+## 관련 주제
+
+**Appendix C 시리즈**
+
+* [Appendix C Overview (05)](./05-appendix-c-r-stan-overview.qmd)
+* [§ C.1~C.2 — Stan Getting Started](./05-1-appendix-c-getting-started-stan.qmd)
+* [§ C.3~C.4 — R + Python Direct Implementation](./05-2-appendix-c-direct-gibbs-hmc.qmd)
+
+**선행 지식**
+
+* [Ch.10 § 10.7 — Computational Tips](./02-10-3-debugging-exercises-wrapup.qmd)
+* [Ch.6 — Posterior Predictive Check](./01-6-1-posterior-predictive-newcomb.qmd)
+* [Ch.7 — Model Comparison (LOO/WAIC)](./01-7-0-evaluating-comparing-models.qmd)
+* [Ch.11 § 11.4 — Convergence (Rhat)](./02-11-2-convergence-ess-hierarchical-normal.qmd)
+
+**Bayesian 시리즈 결산**
+
+* [Part I (Ch.1~5)](./00-bayesian-part1-overview.qmd)
+* [Part II (Ch.6~9)](./01-bayesian-part2-overview.qmd)
+* [Part III (Ch.10~13)](./02-bayesian-part3-overview.qmd)
+* [Part IV (Ch.14~18)](./03-bayesian-part4-overview.qmd)
+* [Part V (Ch.19~23)](./04-bayesian-part5-overview.qmd)
+
+**관련 개념 (cross-category)**
+
+* [Logging in Python](../../Engineering/python-logging.qmd)
+* [Debugging Strategies](../../Engineering/debugging.qmd)
+* [Numerical Linear Algebra](../../Math/numerical-linear-algebra.qmd)
+* [Bayesian Workflow Best Practices](../../Data_Science/bayesian-workflow.qmd)
+* [Simulation-Based Calibration](../../Math/sbc.qmd)
+* [LogSumExp Trick](../../Math/logsumexp.qmd)
+
+## 참고문헌
+
+* Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.), Appendix C § C.5~C.6. CRC Press.
+* R Core Team (2024). *R: A Language and Environment for Statistical Computing*. https://www.r-project.org/.
+* Becker, R. A., Chambers, J. M., & Wilks, A. R. (1988). *The New S Language*. Wadsworth & Brooks/Cole.
+* Venables, W. N., & Ripley, B. D. (2002). *Modern Applied Statistics with S*, 4th ed. Springer.
+* Fox, J. (2002). *An R and S-PLUS Companion to Applied Regression*. Sage.
+* Stan Development Team (2024). *Stan User's Guide* and *Stan Reference Manual*. https://mc-stan.org/.
+* Gelman, A., Vehtari, A., Simpson, D., Margossian, C. C., Carpenter, B., Yao, Y., Kennedy, L., Gabry, J., Bürkner, P., & Modrák, M. (2020). Bayesian Workflow. *arXiv:2011.01808*.
+* Gabry, J., Simpson, D., Vehtari, A., Betancourt, M., & Gelman, A. (2019). Visualization in Bayesian Workflow. *JRSS A*, 182(2), 389-402.
+* Talts, S., Betancourt, M., Simpson, D., Vehtari, A., & Gelman, A. (2018). Validating Bayesian Inference Algorithms with Simulation-Based Calibration. *arXiv:1804.06788*.
+* Vehtari, A., Gelman, A., & Gabry, J. (2017). Practical Bayesian Model Evaluation Using Leave-One-Out Cross-Validation and WAIC. *Statistics and Computing*, 27(5), 1413-1432.
+* Carpenter, B., Gelman, A., Hoffman, M. D., et al. (2017). Stan: A Probabilistic Programming Language. *JSS*, 76(1), 1-32.
+* Hoffman, M. D., & Gelman, A. (2014). The No-U-Turn Sampler. *JMLR*, 15, 1593-1623.
+* Salvatier, J., Wiecki, T. V., & Fonnesbeck, C. (2016). Probabilistic Programming in Python Using PyMC3. *PeerJ Computer Science*, 2, e55.
+* Phan, D., Pradhan, N., & Jankowiak, M. (2019). Composable Effects for Flexible and Accelerated Probabilistic Programming in NumPyro. *arXiv:1912.11554*.
+* Bingham, E., Chen, J. P., Jankowiak, M., et al. (2019). Pyro: Deep Universal Probabilistic Programming. *JMLR*, 20(28), 1-6.
+* Nesterov, Y. (2009). Primal-Dual Subgradient Methods for Convex Problems. *Mathematical Programming*, 120(1), 221-259. (Dual averaging — Stan adaptation)
+* Robert, C. P., & Casella, G. (2004). *Monte Carlo Statistical Methods*, 2nd ed. Springer.
+* Knuth, D. E. (1974). Structured Programming with go to Statements. *Computing Surveys*, 6(4), 261-301. ("Premature optimization is the root of all evil")
+* Kucukelbir, A., Tran, D., Ranganath, R., Gelman, A., & Blei, D. M. (2017). Automatic Differentiation Variational Inference. *JMLR*, 18(14), 1-45.
